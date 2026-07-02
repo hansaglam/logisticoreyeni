@@ -217,8 +217,7 @@ export default function MapScreen() {
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
-  const generateNewContracts = useGameStore((state) => state.generateNewContracts);
-  const runEconomyTick = useGameStore((state) => state.runEconomyTick);
+  const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
   const { tabBarHeight, bottomInset } = useTabBarLayout();
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
@@ -299,11 +298,10 @@ export default function MapScreen() {
 
   const handleRefreshMarket = () => {
     try {
-      runEconomyTick();
-      generateNewContracts();
-      setStatusMessage('Piyasa yenilendi');
+      refreshMarketSnapshot();
+      setStatusMessage('Piyasa güncellendi');
     } catch {
-      setStatusMessage('Piyasa yenilenemedi');
+      setStatusMessage('Piyasa güncellenemedi');
     }
   };
 

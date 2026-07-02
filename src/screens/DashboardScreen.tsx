@@ -96,6 +96,22 @@ function getImportanceColor(importance: MarketNewsImportance | GameEventImportan
   }
 }
 
+function getEventAccentColor(event: GameEvent): string {
+  if (event.type === 'delivery' && event.title === 'Teslimat tamamlandı') {
+    return COLORS.success;
+  }
+  return getImportanceColor(event.importance);
+}
+
+function formatDeliveryEventSubtitle(message: string): string {
+  const profitMatch = message.match(/Net kâr:\s*(\$[\d,]+)/);
+  const routeMatch = message.match(/^(.+?)\s+teslimatı/);
+  if (routeMatch && profitMatch) {
+    return `${routeMatch[1]} · +${profitMatch[1]} net kâr`;
+  }
+  return message;
+}
+
 function getDeliveryStatusColor(status: Delivery['status']): string {
   switch (status) {
     case 'on_route':
@@ -109,7 +125,7 @@ function getDeliveryStatusColor(status: Delivery['status']): string {
   }
 }
 
-type NextActionType = 'refresh' | 'contracts' | 'map';
+type NextActionType = 'contracts' | 'map';
 
 interface NextAction {
   title: string;
@@ -148,10 +164,10 @@ function resolveNextAction(
     };
   }
   return {
-    title: 'Yeni iş bulunamadı',
-    subtitle: 'Piyasa verilerini yenileyerek yeni taşıma fırsatları oluşturabilirsin.',
-    buttonLabel: 'Piyasayı Yenile',
-    type: 'refresh',
+    title: 'Yeni iş bekleniyor',
+    subtitle: 'Piyasa yeni fırsatlar oluşturdukça işler burada görünecek.',
+    buttonLabel: 'İşleri Kontrol Et',
+    type: 'contracts',
   };
 }
 
@@ -202,8 +218,6 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
-  const runEconomyTick = useGameStore((state) => state.runEconomyTick);
-  const generateNewContracts = useGameStore((state) => state.generateNewContracts);
   const { scrollBottomPadding } = useTabBarLayout();
 
   const availableContracts = useMemo(
@@ -223,6 +237,10 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
   const recentNews = useMemo(() => marketNews.slice(0, 2), [marketNews]);
   const recentEvents = useMemo(() => getRecentGameEvents(eventLog, 3), [eventLog]);
+  const latestDeliveryCompletion = useMemo(
+    () => eventLog.find((event) => event.type === 'delivery' && event.title === 'Teslimat tamamlandı'),
+    [eventLog],
+  );
 
   const deliveryPreview = useMemo(() => runningDeliveries.slice(0, 2), [runningDeliveries]);
 
@@ -260,11 +278,6 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
   const handleNextAction = () => {
     try {
-      if (nextAction.type === 'refresh') {
-        runEconomyTick();
-        generateNewContracts();
-        return;
-      }
       if (nextAction.type === 'map') {
         onNavigate?.('map');
         return;
@@ -390,6 +403,15 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
         </Section>
 
         <Section title="Son Olaylar">
+          {latestDeliveryCompletion ? (
+            <View style={styles.deliverySuccessCard}>
+              <Text style={styles.deliverySuccessTitle}>Teslimat tamamlandı</Text>
+              <Text style={styles.deliverySuccessSubtitle}>
+                {formatDeliveryEventSubtitle(latestDeliveryCompletion.message)}
+              </Text>
+            </View>
+          ) : null}
+
           {recentEvents.length === 0 ? (
             <View style={styles.emptyCardCompact}>
               <Text style={styles.emptyText}>Henüz olay kaydı yok.</Text>
@@ -398,7 +420,7 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
             recentEvents.map((event: GameEvent) => (
               <View
                 key={event.id}
-                style={[styles.newsCard, { borderLeftColor: getImportanceColor(event.importance) }]}
+                style={[styles.newsCard, { borderLeftColor: getEventAccentColor(event) }]}
               >
                 <View style={styles.eventHeaderRow}>
                   <Text style={styles.newsTitle} numberOfLines={1}>
@@ -407,11 +429,11 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
                   <View
                     style={[
                       styles.eventBadge,
-                      { backgroundColor: `${getImportanceColor(event.importance)}22` },
+                      { backgroundColor: `${getEventAccentColor(event)}22` },
                     ]}
                   >
                     <Text
-                      style={[styles.eventBadgeText, { color: getImportanceColor(event.importance) }]}
+                      style={[styles.eventBadgeText, { color: getEventAccentColor(event) }]}
                     >
                       {event.type}
                     </Text>
@@ -677,6 +699,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     marginBottom: 8,
+  },
+
+  deliverySuccessCard: {
+    backgroundColor: '#0F1F17',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#166534',
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.success,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  deliverySuccessTitle: {
+    color: COLORS.success,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  deliverySuccessSubtitle: {
+    color: COLORS.textPrimary,
+    fontSize: 12,
+    lineHeight: 17,
   },
 
   newsCard: {

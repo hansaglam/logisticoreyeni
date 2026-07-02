@@ -550,10 +550,18 @@ export default function FleetScreen() {
   const buyTruck = useGameStore((state) => state.buyTruck);
   const hireDriver = useGameStore((state) => state.hireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
+  const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
+  const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
   const { scrollBottomPadding } = useTabBarLayout();
 
   const [activeTab, setActiveTab] = useState<FleetTab>('trucks');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
+
+  useEffect(() => {
+    if (!pendingFleetSubTab) return;
+    setActiveTab(pendingFleetSubTab);
+    clearPendingFleetSubTab();
+  }, [pendingFleetSubTab, clearPendingFleetSubTab]);
 
   useEffect(() => {
     if (!statusMessage) return;

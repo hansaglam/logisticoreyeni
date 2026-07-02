@@ -458,6 +458,7 @@ export default function DebugSimulationScreen() {
   const advanceTime = useGameStore((state) => state.advanceTime);
   const runEconomyTick = useGameStore((state) => state.runEconomyTick);
   const generateNewContracts = useGameStore((state) => state.generateNewContracts);
+  const addNotification = useGameStore((state) => state.addNotification);
   const expireContracts = useGameStore((state) => state.expireContracts);
   const refuelOrUpdateFuelPrice = useGameStore((state) => state.refuelOrUpdateFuelPrice);
   const { scrollBottomPadding } = useTabBarLayout();
@@ -469,6 +470,7 @@ export default function DebugSimulationScreen() {
   const saveStatus = useGameStore((state) => state.saveStatus);
   const refreshSaveStatus = useGameStore((state) => state.refreshSaveStatus);
   const startDelivery = useGameStore((state) => state.startDelivery);
+  const startDeliveryAutoAssign = useGameStore((state) => state.startDeliveryAutoAssign);
   const updateDeliveries = useGameStore((state) => state.updateDeliveries);
   const completeDeliveryById = useGameStore((state) => state.completeDeliveryById);
   const failDeliveryById = useGameStore((state) => state.failDeliveryById);
@@ -556,22 +558,31 @@ export default function DebugSimulationScreen() {
     }
   };
 
-  const handleStartTestDelivery = (contract: Contract) => {
-    const product = PRODUCT_BY_ID[contract.productId];
-    const truck = findIdleTruckForContract(trucks, contract, product);
-    const driver = findIdleDriver(drivers);
+  const handleTestDeliveryNotification = () => {
+    try {
+      addNotification({
+        time: currentTime,
+        type: 'success',
+        title: 'Teslimat tamamlandı',
+        message:
+          'İstanbul → Antalya teslimatı tamamlandı. Ödeme: $24,459 · Net kâr: $23,999',
+        actionLabel: 'Finansı Gör',
+        actionTarget: 'finance',
+        autoDismissMs: 6000,
+      });
+      setSuccess('Test delivery notification shown (Debug)');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Test notification failed');
+    }
+  };
 
-    if (!truck || !driver) {
-      setError('No idle truck or driver');
+  const handleStartTestDelivery = (contract: Contract) => {
+    const result = startDeliveryAutoAssign(contract.id);
+    if (!result.success) {
+      setError(result.message ?? 'Failed to start delivery');
       return;
     }
-
-    try {
-      startDelivery(contract.id, truck.id, driver.id);
-      setSuccess(`Started delivery ${contract.id}`);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to start delivery');
-    }
+    setSuccess(`Started delivery ${contract.id}`);
   };
 
   const handleCompleteNow = (delivery: Delivery) => {
@@ -715,7 +726,8 @@ export default function DebugSimulationScreen() {
             <DebugButton label="+1 Saat" onPress={() => handleAdvanceTime(1)} />
             <DebugButton label="+6 Saat" onPress={() => handleAdvanceTime(6)} />
             <DebugButton label="+24 Saat" onPress={() => handleAdvanceTime(24)} />
-            <DebugButton label="Sözleşme Üret" onPress={handleGenerateContracts} />
+            <DebugButton label="Sözleşme Üret (Debug)" onPress={handleGenerateContracts} />
+            <DebugButton label="Test Teslimat Bildirimi" onPress={handleTestDeliveryNotification} />
             <DebugButton label="Ekonomi Tick" onPress={handleRunEconomyTick} variant="primary" />
             <DebugButton label="Save Now" onPress={() => void handleSaveNow()} variant="primary" />
             <DebugButton label="Clear Save" onPress={() => void handleClearSave()} variant="danger" />

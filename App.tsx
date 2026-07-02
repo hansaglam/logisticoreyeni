@@ -9,6 +9,7 @@ import { ActivityIndicator, AppState, StatusBar, StyleSheet, Text, View } from '
 
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
 import BottomTabBar, { type TabKey } from './src/components/BottomTabBar';
+import GameToast from './src/components/GameToast';
 import { useGameLoop } from './src/hooks/useGameLoop';
 import { useGameStore } from './src/store/gameStore';
 
@@ -46,7 +47,7 @@ function renderActiveScreen(tab: TabKey, onNavigate: (tab: TabKey) => void): Rea
     case 'fleet':
       return <FleetScreen />;
     case 'market':
-      return <MarketScreen />;
+      return <MarketScreen onOpenContracts={() => onNavigate('contracts')} />;
     case 'more':
       return <MoreScreen />;
     default:
@@ -57,11 +58,20 @@ function renderActiveScreen(tab: TabKey, onNavigate: (tab: TabKey) => void): Rea
 function AppShell() {
   useGameLoop();
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const navigationRequest = useGameStore((state) => state.navigationRequest);
+  const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
+
+  useEffect(() => {
+    if (!navigationRequest) return;
+    setActiveTab(navigationRequest.tab);
+    clearNavigationRequest();
+  }, [navigationRequest, clearNavigationRequest]);
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={UI.colors.background} />
       <View style={styles.screenContainer}>{renderActiveScreen(activeTab, setActiveTab)}</View>
+      <GameToast />
       <BottomTabBar tabs={TABS} activeTab={activeTab} onTabPress={setActiveTab} />
     </View>
   );

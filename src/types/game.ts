@@ -217,8 +217,13 @@ export interface Contract {
   originCityId: string;
   destinationCityId: string;
   productId: ProductId;
-  /** Taşınacak miktar (ton) */
+  /** Taşınacak miktar (ton) — stok hareketinde kullanılır */
   amount: number;
+  /**
+   * Kamyon kapasitesi kontrolünde kullanılan toplam yük ağırlığı (ton).
+   * UI ve kapasite kontrollerinde tek kaynak budur.
+   */
+  cargoWeight: number;
   /** Tamamlama ödülü ($) */
   payment: number;
   /** Teslim süresi limiti (saat) */
@@ -362,6 +367,47 @@ export interface GameEvent {
   importance: GameEventImportance;
 }
 
+/** Geçici oyuncu bildirimi — save'e yazılmaz */
+export type GameNotificationType = 'success' | 'warning' | 'error' | 'info';
+
+export type GameNotificationActionTarget =
+  | 'dashboard'
+  | 'contracts'
+  | 'fleet'
+  | 'finance'
+  | 'map';
+
+export interface GameNotification {
+  id: string;
+  time: number;
+  type: GameNotificationType;
+  title: string;
+  message: string;
+  actionLabel?: string;
+  actionTarget?: GameNotificationActionTarget;
+  autoDismissMs?: number;
+}
+
+/** Piyasa ekranından İşler sekmesine aktarılan filtre — save'e yazılmaz */
+export interface MarketContractFilter {
+  fromCityId?: string;
+  toCityId?: string;
+  productId?: ProductId;
+  source?: 'market';
+}
+
+/** Piyasa fırsat tarayıcısı sonucu */
+export interface MarketOpportunity {
+  id: string;
+  fromCityId: string;
+  toCityId: string;
+  productId: ProductId;
+  productName: string;
+  priceGap: number;
+  distanceKm: number;
+  score: number;
+}
+
 /** Dinamik piyasa haberi */
 export interface MarketNews {
   id: string;
@@ -417,3 +463,22 @@ export interface SimulationGameState {
 
 /** @deprecated SimulationGameState kullanın */
 export type GameState = SimulationGameState;
+
+/** Teslimat başlatma sonucu */
+export type StartDeliveryErrorCode =
+  | 'CONTRACT_NOT_FOUND'
+  | 'TRUCK_NOT_FOUND'
+  | 'DRIVER_NOT_FOUND'
+  | 'TRUCK_BUSY'
+  | 'DRIVER_BUSY'
+  | 'CAPACITY_INSUFFICIENT'
+  | 'TRUCK_CONDITION_TOO_LOW'
+  | 'ROUTE_NOT_FOUND'
+  | 'INSUFFICIENT_FUNDS'
+  | 'DELIVERY_CREATE_FAILED';
+
+export interface StartDeliveryResult {
+  success: boolean;
+  errorCode?: StartDeliveryErrorCode;
+  message?: string;
+}

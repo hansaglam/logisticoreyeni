@@ -9,6 +9,8 @@ import type {
   City,
   Contract,
   GlobalEconomy,
+  MarketContractFilter,
+  MarketOpportunity,
   Product,
   ProductId,
   ProductMarket,
@@ -332,6 +334,104 @@ export function dedupeAvailableContracts(contracts: Contract[]): Contract[] {
   return Array.from(bestByKey.values());
 }
 
+/**
+ * Piyasa fırsatı ile sözleşme eşleşme önceliği (düşük = daha iyi).
+ * 0: birebir rota+ürün, 1: aynı ürün, 2: aynı rota, 3: aynı varış şehri, 99: eşleşme yok
+ */
+export function getMarketContractMatchTier(
+  contract: Contract,
+  filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
+): number {
+  const { fromCityId, toCityId, productId } = filter;
+  if (!fromCityId || !toCityId || !productId) {
+    return 99;
+  }
+
+  if (
+    contract.originCityId === fromCityId &&
+    contract.destinationCityId === toCityId &&
+    contract.productId === productId
+  ) {
+    return 0;
+  }
+
+  if (contract.productId === productId) {
+    return 1;
+  }
+
+  if (contract.originCityId === fromCityId && contract.destinationCityId === toCityId) {
+    return 2;
+  }
+
+  if (contract.destinationCityId === toCityId) {
+    return 3;
+  }
+
+  return 99;
+}
+
+/** Sözleşme üretimi ile aynı stok/fiyat mantığına dayalı piyasa fırsatları */
+export function findMarketOpportunities(
+  cities: City[],
+  routes: Route[],
+  products: Product[],
+  maxResults = 3,
+): MarketOpportunity[] {
+  const opportunities: MarketOpportunity[] = [];
+
+  for (const product of products) {
+    for (const originCity of cities) {
+      const originMarket = toProductMarket(originCity.products[product.id]);
+      const surplus = calculateSurplus(originMarket);
+
+      for (const destinationCity of cities) {
+        if (destinationCity.id === originCity.id) {
+          continue;
+        }
+
+        const destinationMarket = toProductMarket(destinationCity.products[product.id]);
+        const shortage = calculateShortage(destinationMarket);
+        const route = getRouteBetweenCities(routes, originCity.id, destinationCity.id);
+
+        if (
+          !route ||
+          !shouldGenerateContract({
+            originCityId: originCity.id,
+            destinationCityId: destinationCity.id,
+            originMarket,
+            destinationMarket,
+            surplus,
+            shortage,
+            existingAvailableCount: 0,
+          })
+        ) {
+          continue;
+        }
+
+        const priceGap = destinationMarket.currentPrice - originMarket.currentPrice;
+        const originTarget = Math.max(originMarket.targetStock, 1);
+        const destTarget = Math.max(destinationMarket.targetStock, 1);
+        const stockPressure = surplus / originTarget + shortage / destTarget;
+        const distancePenalty = route.distanceKm / 1000;
+        const score = priceGap * stockPressure - distancePenalty;
+
+        opportunities.push({
+          id: `${originCity.id}-${destinationCity.id}-${product.id}`,
+          fromCityId: originCity.id,
+          toCityId: destinationCity.id,
+          productId: product.id,
+          productName: product.name,
+          priceGap,
+          distanceKm: route.distanceKm,
+          score,
+        });
+      }
+    }
+  }
+
+  return opportunities.sort((a, b) => b.score - a.score).slice(0, maxResults);
+}
+
 /** Mevcut available sözleşmelerde aynı rota+ürün sayısını döndürür */
 export function countAvailableDuplicates(
   existingContracts: Contract[],
@@ -408,6 +508,7 @@ export function generateContractForProduct(
     destinationCityId: destinationCity.id,
     productId,
     amount,
+    cargoWeight: amount,
     payment,
     deadlineHours,
     distanceKm: route.distanceKm,
@@ -539,6 +640,83 @@ export function generateContracts(
   }
 
   return selected;
+}
+
+/** Müsait sözleşme sayısını döndürür */
+export function countAvailableContracts(contracts: Contract[] | undefined): number {
+  return (contracts ?? []).filter((contract) => contract.status === 'available').length;
+}
+
+/** Available sözleşmeleri birleştirirken duplicate rota+ürün+miktar tekrarlarını temizler */
+export function mergeContractLists(existing: Contract[], incoming: Contract[]): Contract[] {
+  const nonAvailable = existing.filter((contract) => contract.status !== 'available');
+  const dedupedAvailable = dedupeAvailableContracts([
+    ...existing.filter((contract) => contract.status === 'available'),
+    ...incoming.filter((contract) => contract.status === 'available'),
+  ]);
+  return [...nonAvailable, ...dedupedAvailable];
+}
+
+export interface ReplenishContractsParams {
+  cities: Record<string, City>;
+  routes: Route[];
+  products: Product[];
+  globalEconomy: GlobalEconomy;
+  contracts: Contract[];
+  currentTime: number;
+  maxTruckCapacity?: number;
+}
+
+export interface ReplenishContractsResult {
+  contracts: Contract[];
+  newContracts: Contract[];
+}
+
+/**
+ * Süresi dolmuş teklifleri temizler; müsait sözleşme sayısı minimumun altındaysa
+ * şehir ekonomisine göre yeni sözleşmeler üretir.
+ */
+export function replenishAvailableContracts(params: ReplenishContractsParams): ReplenishContractsResult {
+  const expired = expireOldContracts(params.contracts, params.currentTime);
+  const availableCount = countAvailableContracts(expired);
+
+  if (availableCount >= contractBalance.minAvailableContracts) {
+    return { contracts: expired, newContracts: [] };
+  }
+
+  const target = Math.floor(
+    randomBetween(
+      contractBalance.targetAvailableContractsMin,
+      contractBalance.targetAvailableContractsMax + 0.999,
+    ),
+  );
+  const needed = Math.min(
+    Math.max(0, target - availableCount),
+    contractBalance.maxAvailableContracts - availableCount,
+    contractBalance.maxContractsPerTick,
+  );
+
+  if (needed <= 0) {
+    return { contracts: expired, newContracts: [] };
+  }
+
+  const newContracts = generateContracts(
+    params.cities,
+    params.routes,
+    params.products,
+    params.globalEconomy,
+    expired,
+    {
+      currentTime: params.currentTime,
+      maxNewContracts: needed,
+      maxTruckCapacity: params.maxTruckCapacity,
+    },
+  );
+
+  return {
+    contracts: mergeContractLists(expired, newContracts),
+    newContracts,
+  };
 }
 
 /**

@@ -80,24 +80,36 @@ export function createDeliveryId(contractId: string, startedAt: number, sequence
 // ---------------------------------------------------------------------------
 
 /**
- * Taşınan kargo ağırlığını hesaplar (ton).
- * amount × weightPerUnit — kapasite kontrolünde kullanılır.
+ * Sözleşmenin kamyon kapasitesi için geçerli yük ağırlığı (ton).
+ * Tek kaynak: contract.cargoWeight
  */
-export function calculateCargoWeight(contract: Contract, product: Product): number {
-  return contract.amount * product.weightPerUnit;
+export function getContractCargoWeight(contract: Contract, product?: Product): number {
+  if (contract.cargoWeight != null && contract.cargoWeight > 0) {
+    return contract.cargoWeight;
+  }
+
+  // Eski kayıtlar: amount zaten ton cinsinden tutuluyordu
+  if (contract.amount != null && contract.amount > 0) {
+    return contract.amount;
+  }
+
+  const resolved = product ?? PRODUCT_BY_ID[contract.productId];
+  return resolved?.weightPerUnit ?? 0;
+}
+
+/**
+ * Taşınan kargo ağırlığını döndürür (ton).
+ * @deprecated getContractCargoWeight kullanın — aynı değeri döndürür.
+ */
+export function calculateCargoWeight(contract: Contract, product?: Product): number {
+  return getContractCargoWeight(contract, product);
 }
 
 /** Kamyon sözleşme yükünü taşıyabilir mi? */
-export function canTruckCarryContract(truck: Truck, contract: Contract, product: Product): boolean {
-  const cargoWeight = calculateCargoWeight(contract, product);
+// TODO: Add multi-truck or multi-trip contracts for cargoWeight greater than truck capacity.
+export function canTruckCarryContract(truck: Truck, contract: Contract, product?: Product): boolean {
+  const cargoWeight = getContractCargoWeight(contract, product);
   return cargoWeight <= (truck.capacity ?? 0) && cargoWeight > 0;
-}
-
-/** Sözleşmenin toplam kargo ağırlığı (ton) */
-export function getContractCargoWeight(contract: Contract, product?: Product): number {
-  const resolved = product ?? PRODUCT_BY_ID[contract.productId];
-  if (!resolved) return contract.amount ?? 0;
-  return calculateCargoWeight(contract, resolved);
 }
 
 /** Boşta kamyonlar arasındaki en yüksek kapasite (ton) */

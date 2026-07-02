@@ -4,12 +4,13 @@
  * Depo, Finans, Simülasyon Testi ve Ayarlar gibi ikincil ekranlara giriş noktası.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import ScreenHeader from '../components/ScreenHeader';
 import ScreenShell from '../components/ScreenShell';
 import InternalTestInfoPanel from '../components/InternalTestInfoPanel';
+import { useGameStore } from '../store/gameStore';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import WarehouseScreen from './WarehouseScreen';
 import FinanceScreen from './FinanceScreen';
@@ -45,6 +46,14 @@ const DEVELOPER_BADGE_COLOR = '#F59E0B';
 
 export default function MoreScreen() {
   const [route, setRoute] = useState<MoreRoute>('menu');
+  const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
+  const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
+
+  useEffect(() => {
+    if (!pendingMoreSubRoute) return;
+    setRoute(pendingMoreSubRoute);
+    clearPendingMoreSubRoute();
+  }, [pendingMoreSubRoute, clearPendingMoreSubRoute]);
 
   if (route === 'warehouse') {
     return (

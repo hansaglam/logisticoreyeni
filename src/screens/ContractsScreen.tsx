@@ -28,8 +28,9 @@ import {
   getMaxIdleTruckCapacity,
   selectIdleTruckForContract,
 } from '../simulation/delivery';
-import { dedupeAvailableContracts } from '../simulation/contracts';
+import { dedupeAvailableContracts, getMarketContractMatchTier } from '../simulation/contracts';
 import { deliveryBalance } from '../config/balance';
+import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import type { Contract, Driver, GlobalEconomy, Product, ProductId, Route, Truck } from '../types/game';
 
 const COLORS = {
@@ -99,7 +100,7 @@ function getCityName(cityId: string): string {
 }
 
 function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
+  return PRODUCT_BY_ID[productId as ProductId]?.name ?? 'Bilinmeyen yük';
 }
 
 function getProductById(productId: ProductId): Product {
@@ -396,7 +397,7 @@ function evaluateContractAccept(
 
   return {
     blockReason: 'none',
-    buttonLabel: 'İşi Al',
+    buttonLabel: 'Ekibi Seç',
     suggestedTruck,
     suggestedDriver,
     cargoWeight,
@@ -404,33 +405,6 @@ function evaluateContractAccept(
     capacityInsufficient: false,
     allTrucksOnMission: false,
   };
-}
-
-function showAcceptBlockAlert(acceptState: ContractAcceptState): void {
-  switch (acceptState.blockReason) {
-    case 'no_truck':
-      Alert.alert(
-        'Kamyon yok',
-        acceptState.allTrucksOnMission
-          ? 'Tüm kamyonların şu anda görevde.'
-          : 'Boşta kamyon yok. Bu işi almak için önce bir kamyonun müsait olması gerekiyor.',
-      );
-      break;
-    case 'no_driver':
-      Alert.alert(
-        'Şoför yok',
-        'Boşta şoför yok. Bu işi almak için müsait bir şoföre ihtiyacın var.',
-      );
-      break;
-    case 'capacity':
-      Alert.alert(
-        'Kapasite yetersiz',
-        `Bu iş için ${acceptState.cargoWeight.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyonun ${acceptState.maxIdleTruckCapacity.toFixed(1)} ton taşıyabiliyor.`,
-      );
-      break;
-    default:
-      break;
-  }
 }
 
 function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
@@ -451,6 +425,7 @@ interface ContractCardProps {
   trucks: Truck[];
   drivers: Driver[];
   globalEconomy: GlobalEconomy;
+  marketHighlight?: boolean;
   onToggle: () => void;
   onAccept: () => void;
 }
@@ -461,12 +436,14 @@ function ContractCard({
   trucks,
   drivers,
   globalEconomy,
+  marketHighlight = false,
   onToggle,
   onAccept,
 }: ContractCardProps) {
   const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
   const acceptState = evaluateContractAccept(contract, trucks, drivers);
   const { risk, financials, suggestedTruck, suggestedDriver, route } = analysis;
+  const cargoWeight = acceptState.cargoWeight;
   const capacityOk = getCapacityCheckText(suggestedTruck, contract) === 'Kapasite yeterli';
   const deadlineRisk = getDeadlineRiskText(contract, financials.travelHours);
   const isBlocked = acceptState.blockReason !== 'none';
@@ -481,7 +458,13 @@ function ContractCard({
   ];
 
   return (
-    <View style={[styles.contractCard, expanded && styles.contractCardExpanded]}>
+    <View
+      style={[
+        styles.contractCard,
+        expanded && styles.contractCardExpanded,
+        marketHighlight && styles.contractCardMarketHighlight,
+      ]}
+    >
       <TouchableOpacity activeOpacity={0.9} onPress={onToggle}>
         <View style={styles.contractTopRow}>
           <Text style={styles.contractRoute} numberOfLines={1}>
@@ -491,7 +474,7 @@ function ContractCard({
         </View>
 
         <Text style={styles.contractProduct}>
-          {getProductName(contract.productId)} · {formatTons(contract.amount)}
+          {getProductName(contract.productId)} · {formatTons(cargoWeight)}
         </Text>
 
         <View style={styles.contractMetaRow}>
@@ -531,15 +514,24 @@ function ContractCard({
         </View>
 
         {acceptState.capacityInsufficient && (
-          <Text style={styles.capacityWarning}>
-            Kapasite yetersiz: {acceptState.cargoWeight.toFixed(1)}t gerekli /{' '}
-            {acceptState.maxIdleTruckCapacity.toFixed(1)}t mevcut
-          </Text>
+          <>
+            <Text style={styles.capacityWarning}>
+              Kapasite yetersiz: {cargoWeight.toFixed(1)}t gerekli /{' '}
+              {acceptState.maxIdleTruckCapacity.toFixed(1)}t mevcut
+            </Text>
+            <Text style={styles.capacityHint}>
+              Bu yük tek seferde taşınamayacak kadar ağır. Daha yüksek kapasiteli kamyon gerekiyor.
+            </Text>
+          </>
         )}
       </TouchableOpacity>
 
       {expanded && (
         <View style={styles.expandedArea}>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Yük ağırlığı</Text>
+            <Text style={styles.detailValue}>{formatTons(cargoWeight)}</Text>
+          </View>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Uygun kamyon</Text>
             <Text
@@ -626,12 +618,18 @@ export default function ContractsScreen() {
   const globalEconomy = useGameStore((state) => state.globalEconomy);
 
   const startDelivery = useGameStore((state) => state.startDelivery);
-  const generateNewContracts = useGameStore((state) => state.generateNewContracts);
+  const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
+  const marketContractFilter = useGameStore((state) => state.marketContractFilter);
+  const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
+  const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
+  const replenishContractsIfNeeded = useGameStore((state) => state.replenishContractsIfNeeded);
   const { scrollBottomPadding } = useTabBarLayout();
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [expandedContractId, setExpandedContractId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
+  const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
+  const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -667,30 +665,64 @@ export default function ContractsScreen() {
   const filteredContracts = useMemo(() => {
     const list = [...availableContracts];
 
-    switch (activeFilter) {
-      case 'bestPayment':
-        return list.sort((a, b) => b.payment - a.payment);
-      case 'shortDistance':
-        return list.sort((a, b) => a.distanceKm - b.distanceKm);
-      case 'urgent':
-        return list
-          .filter(isUrgentContract)
-          .sort((a, b) => a.deadlineHours - b.deadlineHours || b.payment - a.payment);
-      case 'lowRisk':
-        return list
-          .filter((c) => analyzeContract(c, globalEconomy).risk.label === 'Düşük risk')
-          .sort(
+    const sortByFilter = (items: Contract[]) => {
+      switch (activeFilter) {
+        case 'bestPayment':
+          return items.sort((a, b) => b.payment - a.payment);
+        case 'shortDistance':
+          return items.sort((a, b) => a.distanceKm - b.distanceKm);
+        case 'urgent':
+          return items
+            .filter(isUrgentContract)
+            .sort((a, b) => a.deadlineHours - b.deadlineHours || b.payment - a.payment);
+        case 'lowRisk':
+          return items
+            .filter((c) => analyzeContract(c, globalEconomy).risk.label === 'Düşük risk')
+            .sort(
+              (a, b) =>
+                getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy),
+            );
+        default:
+          return items.sort(
             (a, b) =>
-              getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy),
+              getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy) ||
+              b.payment - a.payment,
           );
-      default:
-        return list.sort(
-          (a, b) =>
-            getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy) ||
-            b.payment - a.payment,
-        );
+      }
+    };
+
+    if (marketContractFilter?.source === 'market') {
+      return list.sort((a, b) => {
+        const tierA = getMarketContractMatchTier(a, marketContractFilter);
+        const tierB = getMarketContractMatchTier(b, marketContractFilter);
+        if (tierA !== tierB) return tierA - tierB;
+        return getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy);
+      });
     }
-  }, [availableContracts, activeFilter, globalEconomy]);
+
+    return sortByFilter(list);
+  }, [availableContracts, activeFilter, globalEconomy, marketContractFilter]);
+
+  const marketMatchStats = useMemo(() => {
+    if (!marketContractFilter || marketContractFilter.source !== 'market') {
+      return { exact: 0, related: 0 };
+    }
+
+    let exact = 0;
+    let related = 0;
+    for (const contract of availableContracts) {
+      const tier = getMarketContractMatchTier(contract, marketContractFilter);
+      if (tier === 0) exact += 1;
+      else if (tier < 99) related += 1;
+    }
+
+    if (__DEV__) {
+      // TODO: remove verbose market-contract debug logs before release.
+      console.log('Matching contracts count', { exact, related, total: availableContracts.length });
+    }
+
+    return { exact, related };
+  }, [availableContracts, marketContractFilter]);
 
   if (!player) {
     return (
@@ -702,35 +734,55 @@ export default function ContractsScreen() {
     );
   }
 
-  const handleAccept = (contract: Contract) => {
-    const acceptState = evaluateContractAccept(contract, player.trucks, player.drivers);
+  const openAssignmentModal = (contract: Contract) => {
+    setAssignmentContract(contract);
+    setAssignmentModalVisible(true);
+  };
 
-    if (acceptState.blockReason !== 'none') {
-      showAcceptBlockAlert(acceptState);
-      return;
-    }
+  const closeAssignmentModal = () => {
+    setAssignmentModalVisible(false);
+    setAssignmentContract(null);
+  };
 
-    const suggestedTruck = acceptState.suggestedTruck;
-    const suggestedDriver = acceptState.suggestedDriver;
-    if (!suggestedTruck || !suggestedDriver) {
-      setStatusMessage({ type: 'error', text: 'Uygun kamyon veya şoför bulunamadı' });
-      return;
-    }
+  const handleConfirmAssignment = (truckId: string, driverId: string) => {
+    if (!assignmentContract) return;
 
-    const { fuelCost } = analyzeContract(contract, globalEconomy, player.trucks, player.drivers).financials;
+    const { fuelCost } = analyzeContract(
+      assignmentContract,
+      globalEconomy,
+      player.trucks,
+      player.drivers,
+    ).financials;
+
     if (player.money < fuelCost) {
-      setStatusMessage({ type: 'error', text: 'Nakit yetersiz' });
+      Alert.alert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
       return;
     }
 
-    try {
-      startDelivery(contract.id, suggestedTruck.id, suggestedDriver.id);
-      setStatusMessage({ type: 'success', text: 'Teslimat başlatıldı' });
-      setExpandedContractId(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Teslimat başlatılamadı';
-      setStatusMessage({ type: 'error', text: message });
+    const result = startDelivery(assignmentContract.id, truckId, driverId);
+    if (!result.success) {
+      Alert.alert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
+      return;
     }
+
+    closeAssignmentModal();
+    setStatusMessage({ type: 'success', text: 'Teslimat başlatıldı' });
+    setExpandedContractId(null);
+  };
+
+  const handleGoToFleet = (subTab?: 'trucks' | 'drivers' | 'shop') => {
+    closeAssignmentModal();
+    requestNavigationToFleet(subTab ?? 'shop');
+  };
+
+  const handleClearMarketFilter = () => {
+    clearMarketContractFilter();
+  };
+
+  const handleRefreshMarketOpportunities = () => {
+    refreshMarketSnapshot();
+    replenishContractsIfNeeded();
+    setStatusMessage({ type: 'success', text: 'Piyasa verileri güncellendi' });
   };
 
   const toggleExpanded = (contractId: string) => {
@@ -778,6 +830,53 @@ export default function ContractsScreen() {
           </View>
         )}
 
+        {marketContractFilter?.source === 'market' ? (
+          <View style={styles.marketFilterCard}>
+            <View style={styles.marketFilterHeaderRow}>
+              <View style={styles.marketFilterTextWrap}>
+                <Text style={styles.marketFilterTitle}>Piyasa fırsatına göre gösteriliyor</Text>
+                <Text style={styles.marketFilterSubtitle}>
+                  {getCityName(marketContractFilter.fromCityId ?? '')} →{' '}
+                  {getCityName(marketContractFilter.toCityId ?? '')} ·{' '}
+                  {getProductName(marketContractFilter.productId ?? '')}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
+                <Text style={styles.marketFilterClear}>Filtreyi Temizle</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
+        {marketContractFilter?.source === 'market' &&
+        marketMatchStats.exact === 0 &&
+        marketMatchStats.related === 0 ? (
+          <View style={styles.marketNoMatchCard}>
+            <Text style={styles.marketNoMatchTitle}>
+              Bu fırsata uygun aktif sözleşme şu anda yok.
+            </Text>
+            <Text style={styles.marketNoMatchSubtitle}>
+              Piyasa güncellendikçe bu rota için yeni işler oluşabilir.
+            </Text>
+            <View style={styles.marketNoMatchActions}>
+              <TouchableOpacity
+                style={styles.marketNoMatchButton}
+                onPress={handleRefreshMarketOpportunities}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.marketNoMatchButtonText}>Piyasayı Yenile</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.marketNoMatchButtonSecondary}
+                onPress={handleClearMarketFilter}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.marketNoMatchButtonSecondaryText}>Tüm Sözleşmeleri Göster</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
         <View style={styles.summaryCard}>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryValue}>{availableContracts.length}</Text>
@@ -823,15 +922,8 @@ export default function ContractsScreen() {
             <Text style={styles.emptyIcon}>📄</Text>
             <Text style={styles.emptyTitle}>Müsait sözleşme yok</Text>
             <Text style={styles.emptySubtitle}>
-              Şehir ekonomisi yeni taşıma talepleri oluşturduğunda işler burada görünür.
+              Şu anda uygun sözleşme yok. Piyasa yeni fırsatlar oluşturdukça burada görünecek.
             </Text>
-            <TouchableOpacity
-              style={styles.emptyButton}
-              onPress={() => generateNewContracts()}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.emptyButtonText}>Sözleşme Oluştur</Text>
-            </TouchableOpacity>
           </View>
         ) : filteredContracts.length === 0 ? (
           <View style={styles.emptyState}>
@@ -848,12 +940,26 @@ export default function ContractsScreen() {
               trucks={player.trucks}
               drivers={player.drivers}
               globalEconomy={globalEconomy}
+              marketHighlight={
+                !!marketContractFilter &&
+                getMarketContractMatchTier(contract, marketContractFilter) <= 1
+              }
               onToggle={() => toggleExpanded(contract.id)}
-              onAccept={() => handleAccept(contract)}
+              onAccept={() => openAssignmentModal(contract)}
             />
           ))
         )}
       </ScrollView>
+
+      <ContractAssignmentModal
+        visible={assignmentModalVisible}
+        contract={assignmentContract}
+        trucks={player.trucks}
+        drivers={player.drivers}
+        onClose={closeAssignmentModal}
+        onConfirm={handleConfirmAssignment}
+        onGoToFleet={handleGoToFleet}
+      />
     </SafeAreaView>
   );
 }
@@ -998,6 +1104,10 @@ const styles = StyleSheet.create({
   contractCardExpanded: {
     borderColor: COLORS.primary,
   },
+  contractCardMarketHighlight: {
+    borderColor: COLORS.secondary,
+    borderWidth: 1.5,
+  },
   contractTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1133,6 +1243,93 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: '#FB923C',
     fontSize: 11,
+    fontWeight: '700',
+  },
+  capacityHint: {
+    marginTop: 4,
+    color: COLORS.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+
+  marketFilterCard: {
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.secondary,
+    padding: 12,
+    marginBottom: 12,
+  },
+  marketFilterHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  marketFilterTextWrap: {
+    flex: 1,
+  },
+  marketFilterTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  marketFilterSubtitle: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+  },
+  marketFilterClear: {
+    color: COLORS.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  marketNoMatchCard: {
+    backgroundColor: '#1C1410',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#7C2D12',
+    padding: 12,
+    marginBottom: 12,
+  },
+  marketNoMatchTitle: {
+    color: COLORS.primary,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  marketNoMatchSubtitle: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  marketNoMatchActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  marketNoMatchButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  marketNoMatchButtonText: {
+    color: '#0B1220',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  marketNoMatchButtonSecondary: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  marketNoMatchButtonSecondaryText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
     fontWeight: '700',
   },
 

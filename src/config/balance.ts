@@ -33,6 +33,18 @@ export const contractBalance = {
   fuelAdjustmentMultiplier: 0.05,
   /** Ekonomi tick başına maksimum yeni sözleşme */
   maxContractsPerTick: 10,
+  /** Müsait sözleşme sayısı bu değerin altına düşerse otomatik üretim tetiklenir */
+  minAvailableContracts: 10,
+  /** Müsait sözleşme üst sınırı */
+  maxAvailableContracts: 24,
+  /** Otomatik üretim hedefi — alt sınır */
+  targetAvailableContractsMin: 15,
+  /** Otomatik üretim hedefi — üst sınır */
+  targetAvailableContractsMax: 20,
+  /** Yeni oyun başlangıcı sözleşme sayısı — alt sınır */
+  initialContractsMin: 12,
+  /** Yeni oyun başlangıcı sözleşme sayısı — üst sınır */
+  initialContractsMax: 20,
   /** Aynı rota + ürün için izin verilen available sözleşme sayısı */
   maxDuplicateContractsPerRouteProduct: 1,
   /** expiresAt = createdAt + deadlineHours × çarpan */

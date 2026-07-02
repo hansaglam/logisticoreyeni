@@ -19,7 +19,8 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import type { City, CityProductState, Product, ProductId, Route } from '../types/game';
+import { findMarketOpportunities } from '../simulation/contracts';
+import type { City, CityProductState, MarketOpportunity, Product, ProductId, Route } from '../types/game';
 
 const COLORS = {
   background: '#070A12',
@@ -42,8 +43,6 @@ const SHORTAGE_THRESHOLD = 0.7;
 const SURPLUS_THRESHOLD = 1.2;
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
 
-const OPPORTUNITY_ORIGIN_SURPLUS_THRESHOLD = 1.3;
-const OPPORTUNITY_DESTINATION_SHORTAGE_THRESHOLD = 0.7;
 const MAX_OPPORTUNITIES = 3;
 
 type MarketStatus = 'Kritik Kıtlık' | 'Kıtlık' | 'Dengeli' | 'Fazla' | 'Yüksek Fazla';
@@ -56,20 +55,6 @@ interface NormalizedProductMarket {
   basePrice: number;
   productionPerDay: number;
   consumptionPerDay: number;
-}
-
-interface MarketOpportunity {
-  id: string;
-  productId: ProductId;
-  originCityId: string;
-  destinationCityId: string;
-  originStockRatio: number;
-  destinationStockRatio: number;
-  originPrice: number;
-  destinationPrice: number;
-  priceGap: number;
-  distanceKm: number;
-  score: number;
 }
 
 interface MarketHighlight {
@@ -202,65 +187,6 @@ function getOpportunityStrength(score: number): { label: string; color: string }
   return { label: 'Zayıf fırsat', color: COLORS.textMuted };
 }
 
-function findRouteBetween(routes: Route[], fromCityId: string, toCityId: string): Route | undefined {
-  return routes.find((r) => r.fromCityId === fromCityId && r.toCityId === toCityId);
-}
-
-function findMarketOpportunities(
-  cities: City[],
-  routes: Route[],
-  products: Product[],
-): MarketOpportunity[] {
-  const opportunities: MarketOpportunity[] = [];
-
-  for (const product of products) {
-    for (const originCity of cities) {
-      const originMarket = getProductMarket(originCity, product.id);
-      if (!originMarket) continue;
-
-      const originStockRatio = calculateStockRatio(originMarket);
-      if (originStockRatio <= OPPORTUNITY_ORIGIN_SURPLUS_THRESHOLD) continue;
-
-      for (const destinationCity of cities) {
-        if (destinationCity.id === originCity.id) continue;
-
-        const destinationMarket = getProductMarket(destinationCity, product.id);
-        if (!destinationMarket) continue;
-
-        const destinationStockRatio = calculateStockRatio(destinationMarket);
-        if (destinationStockRatio >= OPPORTUNITY_DESTINATION_SHORTAGE_THRESHOLD) continue;
-
-        const route = findRouteBetween(routes, originCity.id, destinationCity.id);
-        if (!route) continue;
-
-        const priceGap = destinationMarket.currentPrice - originMarket.currentPrice;
-        const originSurplusRatio = originStockRatio - 1;
-        const destinationShortageRatio = 1 - destinationStockRatio;
-        const stockPressure = originSurplusRatio + destinationShortageRatio;
-        const distancePenalty = route.distanceKm / 1000;
-
-        const score = priceGap * stockPressure - distancePenalty;
-
-        opportunities.push({
-          id: `${originCity.id}-${destinationCity.id}-${product.id}`,
-          productId: product.id,
-          originCityId: originCity.id,
-          destinationCityId: destinationCity.id,
-          originStockRatio,
-          destinationStockRatio,
-          originPrice: originMarket.currentPrice,
-          destinationPrice: destinationMarket.currentPrice,
-          priceGap,
-          distanceKm: route.distanceKm,
-          score,
-        });
-      }
-    }
-  }
-
-  return opportunities.sort((a, b) => b.score - a.score).slice(0, MAX_OPPORTUNITIES);
-}
-
 function findMarketHighlights(cities: City[], products: Product[]): {
   criticalShortage: MarketHighlight | null;
   highestSurplus: MarketHighlight | null;
@@ -300,7 +226,7 @@ function buildMarketAlert(
   routes: Route[],
 ): MarketAlert {
   const { criticalShortage, highestSurplus } = findMarketHighlights(cities, products);
-  const opportunities = findMarketOpportunities(cities, routes, products);
+  const opportunities = findMarketOpportunities(cities, routes, products, MAX_OPPORTUNITIES);
   const bestOpportunity = opportunities[0] ?? null;
 
   const isStable = !criticalShortage && !highestSurplus && !bestOpportunity;
@@ -354,9 +280,9 @@ function MarketAlertCard({
       {alert.bestOpportunity ? (
         <Text style={[styles.alertBodyText, styles.alertBodyTextSpaced]}>
           <Text style={styles.alertBodyLabel}>En iyi fırsat: </Text>
-          {getCityName(alert.bestOpportunity.originCityId)} →{' '}
-          {getCityName(alert.bestOpportunity.destinationCityId)} ·{' '}
-          {getProductName(alert.bestOpportunity.productId)} ·{' '}
+          {getCityName(alert.bestOpportunity.fromCityId)} →{' '}
+          {getCityName(alert.bestOpportunity.toCityId)} ·{' '}
+          {alert.bestOpportunity.productName} ·{' '}
           {formatMoney(alert.bestOpportunity.priceGap)} fiyat farkı
         </Text>
       ) : (
@@ -446,7 +372,7 @@ function OpportunityCard({
   onViewContracts,
 }: {
   opportunity: MarketOpportunity;
-  onViewContracts: () => void;
+  onViewContracts: (opportunity: MarketOpportunity) => void;
 }) {
   const strength = getOpportunityStrength(opportunity.score);
 
@@ -455,9 +381,9 @@ function OpportunityCard({
       <View style={styles.opportunityHeaderRow}>
         <View style={styles.opportunityHeaderMain}>
           <Text style={styles.opportunityRoute}>
-            {getCityName(opportunity.originCityId)} → {getCityName(opportunity.destinationCityId)}
+            {getCityName(opportunity.fromCityId)} → {getCityName(opportunity.toCityId)}
           </Text>
-          <Text style={styles.opportunityProduct}>{getProductName(opportunity.productId)}</Text>
+          <Text style={styles.opportunityProduct}>{opportunity.productName}</Text>
         </View>
         <View style={[styles.opportunityStrengthBadge, { borderColor: strength.color }]}>
           <Text style={[styles.opportunityStrengthText, { color: strength.color }]}>{strength.label}</Text>
@@ -477,14 +403,22 @@ function OpportunityCard({
         </Text>
       </Text>
 
-      <TouchableOpacity style={styles.opportunityActionButton} onPress={onViewContracts} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={styles.opportunityActionButton}
+        onPress={() => onViewContracts(opportunity)}
+        activeOpacity={0.85}
+      >
         <Text style={styles.opportunityActionButtonText}>Sözleşmeleri Gör</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
-export default function MarketScreen() {
+interface MarketScreenProps {
+  onOpenContracts?: () => void;
+}
+
+export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const player = useGameStore((state) => state.player);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
@@ -492,8 +426,10 @@ export default function MarketScreen() {
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
 
-  const runEconomyTick = useGameStore((state) => state.runEconomyTick);
-  const generateNewContracts = useGameStore((state) => state.generateNewContracts);
+  const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
+  const openContractsForMarketOpportunity = useGameStore(
+    (state) => state.openContractsForMarketOpportunity,
+  );
   const { scrollBottomPadding } = useTabBarLayout();
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
@@ -517,7 +453,7 @@ export default function MarketScreen() {
   );
 
   const opportunities = useMemo(
-    () => findMarketOpportunities(cities, routes, products),
+    () => findMarketOpportunities(cities, routes, products, MAX_OPPORTUNITIES),
     [cities, routes, products],
   );
 
@@ -556,13 +492,25 @@ export default function MarketScreen() {
   }, [selectedCity, products]);
 
   const handleRefreshMarket = () => {
-    runEconomyTick();
-    generateNewContracts();
-    setStatusMessage('Piyasa yenilendi');
+    refreshMarketSnapshot();
+    setStatusMessage('Piyasa güncellendi');
   };
 
-  const handleViewContracts = () => {
-    setStatusMessage('Bu rota için İşler ekranındaki sözleşmeleri kontrol et.');
+  const handleOpenContractsForOpportunity = (opportunity: MarketOpportunity) => {
+    if (!opportunity.fromCityId || !opportunity.toCityId || !opportunity.productId) {
+      if (__DEV__) {
+        console.warn('[MarketScreen] Opportunity missing route ids', opportunity.id);
+      }
+      return;
+    }
+
+    openContractsForMarketOpportunity({
+      fromCityId: opportunity.fromCityId,
+      toCityId: opportunity.toCityId,
+      productId: opportunity.productId,
+    });
+    onOpenContracts?.();
+    setStatusMessage('İşler ekranında ilgili sözleşmeler öne çıkarıldı.');
   };
 
   if (!player) {
@@ -672,7 +620,7 @@ export default function MarketScreen() {
               <OpportunityCard
                 key={opportunity.id}
                 opportunity={opportunity}
-                onViewContracts={handleViewContracts}
+                onViewContracts={handleOpenContractsForOpportunity}
               />
             ))
           )}

@@ -19,7 +19,7 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { findMarketOpportunities } from '../simulation/contracts';
+import { countExactMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
 import type { City, CityProductState, MarketOpportunity, Product, ProductId, Route } from '../types/game';
 
 const COLORS = {
@@ -41,7 +41,7 @@ const CRITICAL_SHORTAGE_RATIO = 0.35;
 const HIGH_SURPLUS_RATIO = 1.5;
 const SHORTAGE_THRESHOLD = 0.7;
 const SURPLUS_THRESHOLD = 1.2;
-const STATUS_MESSAGE_TIMEOUT_MS = 3000;
+const STATUS_MESSAGE_TIMEOUT_MS = 2000;
 
 const MAX_OPPORTUNITIES = 3;
 
@@ -151,7 +151,7 @@ function getMarketStatusColor(status: MarketStatus): string {
     case 'Kritik Kıtlık':
       return COLORS.danger;
     case 'Kıtlık':
-      return COLORS.primary;
+      return COLORS.warning;
     case 'Dengeli':
       return COLORS.secondary;
     case 'Fazla':
@@ -167,24 +167,23 @@ function getOpportunityHint(market: NormalizedProductMarket): string {
   const stockRatio = calculateStockRatio(market);
 
   if (stockRatio < 0.5) {
-    return 'Bu şehir bu ürüne ihtiyaç duyuyor.';
+    return 'Bu şehirde ürün ihtiyacı duyuluyor.';
   }
   if (stockRatio > 1.4) {
     return 'Bu şehirde ürün fazlası var.';
   }
-  if (market.currentPrice > market.basePrice * 1.25) {
-    return 'Yüksek fiyat: kârlı varış noktası.';
-  }
-  if (market.currentPrice < market.basePrice * 0.85) {
-    return 'Düşük fiyat: ucuz kaynak olabilir.';
-  }
-  return 'Piyasa dengeli.';
+  return 'Bu ürün dengeli seviyede.';
 }
 
-function getOpportunityStrength(score: number): { label: string; color: string } {
-  if (score > 1200) return { label: 'Güçlü fırsat', color: COLORS.success };
-  if (score >= 700) return { label: 'Orta fırsat', color: COLORS.primary };
-  return { label: 'Zayıf fırsat', color: COLORS.textMuted };
+function getDemandLevelLabel(level: MarketOpportunity['demandLevel']): string {
+  switch (level) {
+    case 'high':
+      return 'yüksek';
+    case 'medium':
+      return 'orta';
+    default:
+      return 'düşük';
+  }
 }
 
 function findMarketHighlights(cities: City[], products: Product[]): {
@@ -309,15 +308,15 @@ function CityOverviewCard({
 }) {
   return (
     <View style={styles.cityOverviewCard}>
-      <Text style={styles.sectionTitle}>{cityName}</Text>
+      <Text style={styles.sectionTitle}>{cityName} Piyasa Özeti</Text>
       <View style={styles.cityOverviewRow}>
         <View style={styles.cityOverviewItem}>
           <Text style={[styles.cityOverviewValue, { color: COLORS.danger }]}>{shortages}</Text>
-          <Text style={styles.cityOverviewLabel}>Kıtlık</Text>
+          <Text style={styles.cityOverviewLabel}>Kritik kıtlık</Text>
         </View>
         <View style={styles.cityOverviewItem}>
           <Text style={[styles.cityOverviewValue, { color: COLORS.success }]}>{surpluses}</Text>
-          <Text style={styles.cityOverviewLabel}>Fazla</Text>
+          <Text style={styles.cityOverviewLabel}>Fazla stok</Text>
         </View>
         <View style={styles.cityOverviewItem}>
           <Text style={[styles.cityOverviewValue, { color: COLORS.primary }]}>{formatMoney(avgPrice)}</Text>
@@ -330,6 +329,9 @@ function CityOverviewCard({
           <Text style={styles.cityOverviewLabel}>Yakıt etkisi</Text>
         </View>
       </View>
+      <Text style={styles.cityOverviewHint}>
+        Bu şehirde eksik ürünler daha pahalı, fazla ürünler daha ucuz olur.
+      </Text>
     </View>
   );
 }
@@ -354,7 +356,7 @@ function ProductMarketCard({ market }: { market: NormalizedProductMarket }) {
         <Text style={styles.productMeta}>
           Stok: {market.stock.toFixed(1)} / {market.targetStock.toFixed(1)} ton
         </Text>
-        <Text style={styles.productMeta}>{formatPercent(stockRatio)}</Text>
+        <Text style={styles.productMeta}>Doluluk: {formatPercent(stockRatio)}</Text>
       </View>
 
       <Text style={styles.productPrice}>{formatMoney(market.currentPrice)}</Text>
@@ -369,24 +371,24 @@ function ProductMarketCard({ market }: { market: NormalizedProductMarket }) {
 
 function OpportunityCard({
   opportunity,
+  matchingContractsCount,
   onViewContracts,
 }: {
   opportunity: MarketOpportunity;
+  matchingContractsCount: number;
   onViewContracts: (opportunity: MarketOpportunity) => void;
 }) {
-  const strength = getOpportunityStrength(opportunity.score);
+  const hasActiveContracts = matchingContractsCount > 0;
 
   return (
     <View style={styles.opportunityCard}>
       <View style={styles.opportunityHeaderRow}>
         <View style={styles.opportunityHeaderMain}>
           <Text style={styles.opportunityRoute}>
-            {getCityName(opportunity.fromCityId)} → {getCityName(opportunity.toCityId)}
+            {opportunity.fromCityName || getCityName(opportunity.fromCityId)} →{' '}
+            {opportunity.toCityName || getCityName(opportunity.toCityId)}
           </Text>
-          <Text style={styles.opportunityProduct}>{opportunity.productName}</Text>
-        </View>
-        <View style={[styles.opportunityStrengthBadge, { borderColor: strength.color }]}>
-          <Text style={[styles.opportunityStrengthText, { color: strength.color }]}>{strength.label}</Text>
+          <Text style={styles.opportunityProduct}>Ürün: {opportunity.productName}</Text>
         </View>
       </View>
 
@@ -397,11 +399,19 @@ function OpportunityCard({
         Mesafe: <Text style={styles.opportunityLineValue}>{Math.round(opportunity.distanceKm)} km</Text>
       </Text>
       <Text style={styles.opportunityLine}>
-        Fırsat skoru:{' '}
-        <Text style={[styles.opportunityLineValue, { color: COLORS.primary }]}>
-          {opportunity.score.toFixed(1)}
+        Tahmini talep:{' '}
+        <Text style={styles.opportunityLineValue}>{getDemandLevelLabel(opportunity.demandLevel)}</Text>
+      </Text>
+      <Text style={styles.opportunityLine}>
+        Aktif sözleşme:{' '}
+        <Text style={[styles.opportunityLineValue, { color: hasActiveContracts ? COLORS.success : COLORS.textMuted }]}>
+          {matchingContractsCount}
         </Text>
       </Text>
+
+      {!hasActiveContracts ? (
+        <Text style={styles.opportunityPendingHint}>Bu rota için aktif sözleşme bekleniyor</Text>
+      ) : null}
 
       <TouchableOpacity
         style={styles.opportunityActionButton}
@@ -423,6 +433,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const routes = useGameStore((state) => state.routes) ?? [];
+  const contracts = useGameStore((state) => state.contracts) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
 
@@ -456,6 +467,26 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     () => findMarketOpportunities(cities, routes, products, MAX_OPPORTUNITIES),
     [cities, routes, products],
   );
+
+  const availableContracts = useMemo(
+    () => contracts.filter((contract) => contract.status === 'available'),
+    [contracts],
+  );
+
+  const opportunityMatchCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const opportunity of opportunities) {
+      counts.set(
+        opportunity.id,
+        countExactMarketContractMatches(availableContracts, {
+          fromCityId: opportunity.fromCityId,
+          toCityId: opportunity.toCityId,
+          productId: opportunity.productId,
+        }),
+      );
+    }
+    return counts;
+  }, [opportunities, availableContracts]);
 
   const selectedCity = useMemo(
     () => cities.find((c) => c.id === selectedCityId) ?? null,
@@ -493,22 +524,29 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const handleRefreshMarket = () => {
     refreshMarketSnapshot();
-    setStatusMessage('Piyasa güncellendi');
+    setStatusMessage('Piyasa yenilendi');
   };
 
   const handleOpenContractsForOpportunity = (opportunity: MarketOpportunity) => {
+    if (__DEV__) {
+      // TODO: remove verbose market-contract debug logs before release.
+      console.log('Market opportunity pressed', opportunity);
+    }
+
     if (!opportunity.fromCityId || !opportunity.toCityId || !opportunity.productId) {
-      if (__DEV__) {
-        console.warn('[MarketScreen] Opportunity missing route ids', opportunity.id);
-      }
+      console.warn('[MarketScreen] Opportunity missing route ids', opportunity.id);
       return;
     }
 
-    openContractsForMarketOpportunity({
-      fromCityId: opportunity.fromCityId,
-      toCityId: opportunity.toCityId,
-      productId: opportunity.productId,
-    });
+    const normalizedOpportunity: MarketOpportunity = {
+      ...opportunity,
+      fromCityName: opportunity.fromCityName || getCityName(opportunity.fromCityId),
+      toCityName: opportunity.toCityName || getCityName(opportunity.toCityId),
+      productName: opportunity.productName || getProductName(opportunity.productId),
+      demandLevel: opportunity.demandLevel ?? 'medium',
+    };
+
+    openContractsForMarketOpportunity(normalizedOpportunity);
     onOpenContracts?.();
     setStatusMessage('İşler ekranında ilgili sözleşmeler öne çıkarıldı.');
   };
@@ -620,6 +658,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               <OpportunityCard
                 key={opportunity.id}
                 opportunity={opportunity}
+                matchingContractsCount={opportunityMatchCounts.get(opportunity.id) ?? 0}
                 onViewContracts={handleOpenContractsForOpportunity}
               />
             ))
@@ -814,6 +853,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: 'center',
   },
+  cityOverviewHint: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 10,
+  },
 
   section: {
     marginBottom: 18,
@@ -971,6 +1016,12 @@ const styles = StyleSheet.create({
   opportunityLineValue: {
     color: COLORS.textPrimary,
     fontWeight: '700',
+  },
+  opportunityPendingHint: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   opportunityActionButton: {
     alignSelf: 'flex-start',

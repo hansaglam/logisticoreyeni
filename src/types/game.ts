@@ -388,12 +388,35 @@ export interface GameNotification {
   autoDismissMs?: number;
 }
 
+/** Toast otomatik kapanma süreleri (ms) — type bazlı varsayılanlar */
+export const DEFAULT_TOAST_DURATION: Record<GameNotificationType, number> = {
+  success: 3000,
+  info: 2500,
+  warning: 4000,
+  error: 5000,
+};
+
+export function resolveNotificationDismissMs(
+  type: GameNotificationType,
+  autoDismissMs?: number,
+): number {
+  if (autoDismissMs != null && autoDismissMs > 0) {
+    return autoDismissMs;
+  }
+  return DEFAULT_TOAST_DURATION[type] ?? 3000;
+}
+
 /** Piyasa ekranından İşler sekmesine aktarılan filtre — save'e yazılmaz */
 export interface MarketContractFilter {
-  fromCityId?: string;
-  toCityId?: string;
-  productId?: ProductId;
-  source?: 'market';
+  fromCityId: string;
+  toCityId: string;
+  productId: ProductId;
+  fromCityName: string;
+  toCityName: string;
+  productName: string;
+  opportunityId?: string;
+  source: 'market';
+  createdAt: number;
 }
 
 /** Piyasa fırsat tarayıcısı sonucu */
@@ -402,10 +425,13 @@ export interface MarketOpportunity {
   fromCityId: string;
   toCityId: string;
   productId: ProductId;
+  fromCityName: string;
+  toCityName: string;
   productName: string;
   priceGap: number;
   distanceKm: number;
   score: number;
+  demandLevel: 'high' | 'medium' | 'low';
 }
 
 /** Dinamik piyasa haberi */
@@ -476,6 +502,24 @@ export type StartDeliveryErrorCode =
   | 'ROUTE_NOT_FOUND'
   | 'INSUFFICIENT_FUNDS'
   | 'DELIVERY_CREATE_FAILED';
+
+export type ContractAvailabilityReason =
+  | 'NO_TRUCKS'
+  | 'NO_IDLE_TRUCKS'
+  | 'NO_DRIVERS'
+  | 'NO_IDLE_DRIVERS'
+  | 'CAPACITY_INSUFFICIENT'
+  | 'OK';
+
+export interface ContractAvailability {
+  canStart: boolean;
+  reason: ContractAvailabilityReason;
+  buttonLabel: string;
+  title?: string;
+  message?: string;
+  maxIdleTruckCapacity?: number;
+  requiredCapacity?: number;
+}
 
 export interface StartDeliveryResult {
   success: boolean;

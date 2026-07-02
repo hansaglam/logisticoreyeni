@@ -15,7 +15,7 @@ import {
 
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { getContractCargoWeight, getMaxIdleTruckCapacity } from '../simulation/delivery';
+import { getContractAvailability, getContractCargoWeight } from '../simulation/delivery';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import type { Contract, Driver, ProductId, Truck } from '../types/game';
 
@@ -180,6 +180,13 @@ export default function ContractAssignmentModal({
     return getContractCargoWeight(contract);
   }, [contract]);
 
+  const availability = useMemo(() => {
+    if (!contract) {
+      return null;
+    }
+    return getContractAvailability(contract, trucks, drivers);
+  }, [contract, trucks, drivers]);
+
   const truckOptions = useMemo(
     () => (trucks ?? []).map((truck) => evaluateTruckOption(truck, cargoWeight)),
     [trucks, cargoWeight],
@@ -192,15 +199,6 @@ export default function ContractAssignmentModal({
 
   const eligibleTrucks = truckOptions.filter((option) => option.selectable);
   const eligibleDrivers = driverOptions.filter((option) => option.selectable);
-  const maxIdleTruckCapacity = useMemo(() => getMaxIdleTruckCapacity(trucks), [trucks]);
-
-  const hasCapacityIssue =
-    eligibleTrucks.length === 0 &&
-    (trucks ?? []).some((truck) => truck.status === 'idle') &&
-    cargoWeight > maxIdleTruckCapacity;
-
-  const noIdleTrucks = (trucks ?? []).filter((truck) => truck.status === 'idle').length === 0;
-  const noIdleDrivers = (drivers ?? []).filter((driver) => driver.status === 'idle').length === 0;
 
   const selectedTruckOption = truckOptions.find((option) => option.truck.id === selectedTruckId);
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
@@ -228,84 +226,38 @@ export default function ContractAssignmentModal({
   const productLabel = `${getProductName(contract.productId)} · ${cargoWeight.toFixed(1)} ton · ${Math.round(contract.distanceKm)} km`;
 
   const renderWarningCard = () => {
-    if (noIdleTrucks && noIdleDrivers) {
-      return (
-        <View style={styles.warningCard}>
-          <Text style={styles.warningTitle}>Teslimat ekibi eksik</Text>
-          <Text style={styles.warningMessage}>
-            Bu işi başlatmak için uygun bir kamyon ve boşta bir şoför gerekiyor.
-          </Text>
-          <Text style={styles.warningHint}>• Filo ekranından kamyon satın al</Text>
-          <Text style={styles.warningHint}>• Şoför havuzundan şoför işe al</Text>
-          {onGoToFleet ? (
-            <TouchableOpacity style={styles.warningButton} onPress={() => onGoToFleet('shop')} activeOpacity={0.85}>
-              <Text style={styles.warningButtonText}>Filo / Mağaza</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      );
+    if (!availability || availability.canStart) {
+      return null;
     }
 
-    if (noIdleTrucks || (eligibleTrucks.length === 0 && !hasCapacityIssue && !noIdleDrivers)) {
-      return (
-        <View style={styles.warningCard}>
-          <Text style={styles.warningTitle}>Uygun kamyon yok</Text>
-          <Text style={styles.warningMessage}>
-            {noIdleTrucks
-              ? 'Tüm kamyonların şu anda görevde. Mevcut teslimatın bitmesini bekle.'
-              : 'Boşta kamyon var ancak bu iş için uygun değil.'}
-          </Text>
-          {onGoToFleet ? (
-            <TouchableOpacity style={styles.warningButton} onPress={() => onGoToFleet('shop')} activeOpacity={0.85}>
-              <Text style={styles.warningButtonText}>Filo / Mağaza</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      );
-    }
+    const showFleetButton =
+      availability.reason === 'NO_TRUCKS' ||
+      availability.reason === 'NO_IDLE_TRUCKS' ||
+      availability.reason === 'CAPACITY_INSUFFICIENT';
 
-    if (hasCapacityIssue) {
-      return (
-        <View style={styles.warningCard}>
-          <Text style={styles.warningTitle}>Uygun kamyon yok</Text>
-          <Text style={styles.warningMessage}>
-            Bu iş için {cargoWeight.toFixed(1)} ton kapasite gerekiyor. En yüksek boşta kamyon kapasiten{' '}
-            {maxIdleTruckCapacity.toFixed(1)} ton.
-          </Text>
-          <Text style={styles.warningHint}>
-            Daha yüksek kapasiteli kamyon satın al veya daha düşük tonajlı sözleşme seç.
-          </Text>
-          {onGoToFleet ? (
-            <TouchableOpacity style={styles.warningButton} onPress={() => onGoToFleet('shop')} activeOpacity={0.85}>
-              <Text style={styles.warningButtonText}>Filo / Mağaza</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      );
-    }
+    const showDriverButton =
+      availability.reason === 'NO_DRIVERS' || availability.reason === 'NO_IDLE_DRIVERS';
 
-    if (noIdleDrivers) {
-      return (
-        <View style={styles.warningCard}>
-          <Text style={styles.warningTitle}>Boşta şoför yok</Text>
-          <Text style={styles.warningMessage}>
-            Tüm şoförlerin şu anda görevde. Yeni şoför işe alabilir veya mevcut teslimatın bitmesini
-            bekleyebilirsin.
-          </Text>
-          {onGoToFleet ? (
-            <TouchableOpacity
-              style={styles.warningButton}
-              onPress={() => onGoToFleet('drivers')}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.warningButtonText}>Şoför Havuzuna Git</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      );
-    }
-
-    return null;
+    return (
+      <View style={styles.warningCard}>
+        <Text style={styles.warningTitle}>{availability.title ?? availability.buttonLabel}</Text>
+        <Text style={styles.warningMessage}>{availability.message}</Text>
+        {showFleetButton && onGoToFleet ? (
+          <TouchableOpacity style={styles.warningButton} onPress={() => onGoToFleet('shop')} activeOpacity={0.85}>
+            <Text style={styles.warningButtonText}>Filo / Mağaza</Text>
+          </TouchableOpacity>
+        ) : null}
+        {showDriverButton && onGoToFleet ? (
+          <TouchableOpacity
+            style={styles.warningButton}
+            onPress={() => onGoToFleet('drivers')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.warningButtonText}>Şoför Havuzuna Git</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    );
   };
 
   return (

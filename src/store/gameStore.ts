@@ -20,12 +20,14 @@ import type {
   GameNotificationActionTarget,
   MarketContractFilter,
   MarketNews,
+  MarketOpportunity,
   ProductId,
   SimulationGameState,
   StartDeliveryResult,
   StoreGameState,
   Truck,
 } from '../types/game';
+import { resolveNotificationDismissMs } from '../types/game';
 import { CITIES, CITIES_BY_ID } from '../data/cities';
 import { PRODUCTS, PRODUCT_BY_ID } from '../data/products';
 import { ROUTES } from '../data/routes';
@@ -45,11 +47,13 @@ import {
   replenishAvailableContracts,
 } from '../simulation/contracts';
 import {
+  availabilityReasonToStartDeliveryErrorCode,
   calculateLatePenalty,
   calculateTruckRepairCost,
   canTruckCarryContract,
   completeDelivery as completeDeliverySim,
   createDelivery,
+  getContractAvailability,
   getContractCargoWeight,
   getMaxIdleTruckCapacity,
   DeliveryError,
@@ -451,6 +455,7 @@ export interface GameStore extends StoreGameState {
   pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | null;
   pendingFleetSubTab: FleetSubTab | null;
   marketContractFilter: MarketContractFilter | null;
+  highlightedContractId: string | null;
   addNotification: (notification: Omit<GameNotification, 'id'> & { id?: string }) => void;
   dismissNotification: (notificationId: string) => void;
   clearNotifications: () => void;
@@ -461,11 +466,8 @@ export interface GameStore extends StoreGameState {
   clearPendingFleetSubTab: () => void;
   setMarketContractFilter: (filter: MarketContractFilter | null) => void;
   clearMarketContractFilter: () => void;
-  openContractsForMarketOpportunity: (params: {
-    fromCityId: string;
-    toCityId: string;
-    productId: ProductId;
-  }) => void;
+  setHighlightedContractId: (contractId: string | null) => void;
+  openContractsForMarketOpportunity: (opportunity: MarketOpportunity) => void;
   /** Kayıt varsa yükler, yoksa yeni oyun başlatır */
   initializeGame: () => Promise<void>;
   resetGame: () => void;
@@ -517,6 +519,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   pendingMoreSubRoute: null,
   pendingFleetSubTab: null,
   marketContractFilter: null,
+  highlightedContractId: null,
   saveStatus: createSaveStatusSnapshot(false),
   isGameReady: false,
 
@@ -524,7 +527,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const entry: GameNotification = {
       ...notification,
       id: notification.id ?? createNotificationId(`${Math.random().toString(36).slice(2, 8)}`),
-      autoDismissMs: notification.autoDismissMs ?? 6000,
+      autoDismissMs: resolveNotificationDismissMs(notification.type, notification.autoDismissMs),
     };
     set({ notifications: [entry, ...get().notifications].slice(0, 8) });
   },
@@ -578,36 +581,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   setMarketContractFilter: (filter) => {
+    if (__DEV__ && filter) {
+      // TODO: remove verbose market-contract debug logs before release.
+      console.log('Market contract filter set', filter);
+    }
     set({ marketContractFilter: filter });
   },
 
   clearMarketContractFilter: () => {
-    set({ marketContractFilter: null });
+    set({ marketContractFilter: null, highlightedContractId: null });
   },
 
-  openContractsForMarketOpportunity: ({ fromCityId, toCityId, productId }) => {
+  setHighlightedContractId: (contractId) => {
+    set({ highlightedContractId: contractId });
+  },
+
+  openContractsForMarketOpportunity: (opportunity) => {
     if (__DEV__) {
       // TODO: remove verbose market-contract debug logs before release.
-      console.log('Market opportunity button pressed — opening contracts', {
-        fromCityId,
-        toCityId,
-        productId,
-      });
+      console.log('Market opportunity pressed', opportunity);
     }
 
+    const fromCityId = opportunity.fromCityId;
+    const toCityId = opportunity.toCityId;
+    const productId = opportunity.productId;
+
+    if (!fromCityId || !toCityId || !productId) {
+      console.warn('[gameStore] Market opportunity missing route ids', opportunity.id);
+      return;
+    }
+
+    const filter: MarketContractFilter = {
+      fromCityId,
+      toCityId,
+      productId,
+      fromCityName: opportunity.fromCityName || CITIES_BY_ID[fromCityId]?.name || fromCityId,
+      toCityName: opportunity.toCityName || CITIES_BY_ID[toCityId]?.name || toCityId,
+      productName: opportunity.productName || PRODUCT_BY_ID[productId]?.name || productId,
+      opportunityId: opportunity.id,
+      source: 'market',
+      createdAt: Date.now(),
+    };
+
     set({
-      marketContractFilter: {
-        fromCityId,
-        toCityId,
-        productId,
-        source: 'market',
-      },
+      marketContractFilter: filter,
       navigationRequest: { tab: 'contracts' },
     });
 
-    if (__DEV__) {
-      console.log('Market filter set — navigated to Contracts');
-    }
+    get().replenishContractsIfNeeded();
   },
 
   initializeGame: () => {
@@ -634,6 +655,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           pendingMoreSubRoute: null,
           pendingFleetSubTab: null,
           marketContractFilter: null,
+          highlightedContractId: null,
         });
         resetAutoSaveTracking(0);
         await get().saveGame();
@@ -648,6 +670,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           pendingMoreSubRoute: null,
           pendingFleetSubTab: null,
           marketContractFilter: null,
+          highlightedContractId: null,
         });
         resetAutoSaveTracking(0);
       } finally {
@@ -667,6 +690,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       pendingMoreSubRoute: null,
       pendingFleetSubTab: null,
       marketContractFilter: null,
+      highlightedContractId: null,
     });
     resetAutoSaveTracking(0);
     get().autoSave('reset');
@@ -708,6 +732,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         pendingMoreSubRoute: null,
         pendingFleetSubTab: null,
         marketContractFilter: null,
+        highlightedContractId: null,
       });
       resetAutoSaveTracking(saved.currentTime);
       patchSaveStatus(set, {
@@ -1072,7 +1097,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message:
           truck.status === 'maintenance'
             ? 'Kamyon bakımda. Teslimat için boşta bir kamyon seç.'
-            : 'Kamyon şu anda görevde.',
+            : 'Seçilen kamyon şu anda teslimatta.',
       };
     }
 
@@ -1089,7 +1114,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return {
         success: false,
         errorCode: 'DRIVER_BUSY',
-        message: 'Şoför şu anda görevde.',
+        message: 'Seçilen şoför şu anda görevde.',
       };
     }
 
@@ -1214,7 +1239,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         type: 'info',
         title: 'Teslimat başladı',
         message: `${truck.name} · ${driver.name} — ${routeLabel}`,
-        autoDismissMs: 5000,
+        autoDismissMs: 2500,
       });
     } catch (error) {
       console.warn('[gameStore] delivery start notification failed:', error);
@@ -1235,17 +1260,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    const availability = getContractAvailability(
+      contract,
+      state.player.trucks,
+      state.player.drivers,
+    );
+
+    if (!availability.canStart) {
+      return {
+        success: false,
+        errorCode: availabilityReasonToStartDeliveryErrorCode(availability.reason),
+        message: availability.message ?? availability.buttonLabel,
+      };
+    }
+
     const product = PRODUCT_BY_ID[contract.productId];
     const truck = selectIdleTruckForContract(state.player.trucks, contract, product);
     const driver = (state.player.drivers ?? []).find((candidate) => candidate.status === 'idle');
 
     if (!truck) {
-      const cargoWeight = getContractCargoWeight(contract, product);
-      const maxIdle = getMaxIdleTruckCapacity(state.player.trucks);
       return {
         success: false,
         errorCode: 'CAPACITY_INSUFFICIENT',
-        message: formatCapacityExceededMessage(cargoWeight, maxIdle),
+        message: availability.message ?? formatCapacityExceededMessage(
+          availability.requiredCapacity ?? getContractCargoWeight(contract, product),
+          availability.maxIdleTruckCapacity ?? getMaxIdleTruckCapacity(state.player.trucks),
+        ),
       };
     }
 
@@ -1261,7 +1301,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return {
         success: false,
         errorCode: 'DRIVER_BUSY',
-        message: 'Boşta şoför bulunamadı.',
+        message: 'Seçilen şoför şu anda görevde.',
       };
     }
 
@@ -1419,7 +1459,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: notificationMessage,
         actionLabel: 'Finansı Gör',
         actionTarget: 'finance',
-        autoDismissMs: 6000,
+        autoDismissMs: 3000,
       });
     } catch (error) {
       console.warn('[gameStore] addNotification failed:', error);

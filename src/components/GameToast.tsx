@@ -11,6 +11,7 @@ import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { useGameStore } from '../store/gameStore';
 import type { GameNotification, GameNotificationType } from '../types/game';
+import { resolveNotificationDismissMs } from '../types/game';
 
 const TYPE_COLORS: Record<GameNotificationType, string> = {
   success: '#22C55E',
@@ -66,13 +67,13 @@ export default function GameToast() {
   useEffect(() => {
     if (!notification) return undefined;
 
-    const dismissMs = notification.autoDismissMs ?? 6000;
+    const duration = resolveNotificationDismissMs(notification.type, notification.autoDismissMs);
     const timeout = setTimeout(() => {
       dismissNotification(notification.id);
-    }, dismissMs);
+    }, duration);
 
     return () => clearTimeout(timeout);
-  }, [notification, dismissNotification]);
+  }, [notification?.id, dismissNotification]);
 
   if (!notification) {
     return null;

@@ -568,7 +568,7 @@ export default function DebugSimulationScreen() {
           'İstanbul → Antalya teslimatı tamamlandı. Ödeme: $24,459 · Net kâr: $23,999',
         actionLabel: 'Finansı Gör',
         actionTarget: 'finance',
-        autoDismissMs: 6000,
+        autoDismissMs: 3000,
       });
       setSuccess('Test delivery notification shown (Debug)');
     } catch (error) {

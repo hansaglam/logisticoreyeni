@@ -7,6 +7,8 @@
 
 import type {
   Contract,
+  ContractAvailability,
+  ContractAvailabilityReason,
   Delivery,
   DeliveryFailureReason,
   Driver,
@@ -112,9 +114,27 @@ export function canTruckCarryContract(truck: Truck, contract: Contract, product?
   return cargoWeight <= (truck.capacity ?? 0) && cargoWeight > 0;
 }
 
+/** Kamyon teslimat için boşta mı? */
+export function isTruckIdle(truck: Truck): boolean {
+  return truck.status === 'idle';
+}
+
+/** Şoför görev için boşta mı? */
+export function isDriverIdle(driver: Driver): boolean {
+  return driver.status === 'idle';
+}
+
+export function getIdleTrucks(trucks: Truck[] | undefined): Truck[] {
+  return (trucks ?? []).filter(isTruckIdle);
+}
+
+export function getIdleDrivers(drivers: Driver[] | undefined): Driver[] {
+  return (drivers ?? []).filter(isDriverIdle);
+}
+
 /** Boşta kamyonlar arasındaki en yüksek kapasite (ton) */
 export function getMaxIdleTruckCapacity(trucks: Truck[] | undefined): number {
-  const idle = (trucks ?? []).filter((truck) => truck.status === 'idle');
+  const idle = getIdleTrucks(trucks);
   if (idle.length === 0) return 0;
   return Math.max(...idle.map((truck) => truck.capacity ?? 0));
 }
@@ -132,10 +152,130 @@ export function selectIdleTruckForContract(
   if (!resolved) return undefined;
 
   return (trucks ?? [])
-    .filter(
-      (truck) => truck.status === 'idle' && canTruckCarryContract(truck, contract, resolved),
-    )
+    .filter((truck) => isTruckIdle(truck) && canTruckCarryContract(truck, contract, resolved))
     .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0))[0];
+}
+
+export function getContractAvailability(
+  contract: Contract,
+  trucks: Truck[] | undefined,
+  drivers: Driver[] | undefined,
+): ContractAvailability {
+  const truckList = trucks ?? [];
+  const driverList = drivers ?? [];
+  const product = PRODUCT_BY_ID[contract.productId];
+  const requiredCapacity = getContractCargoWeight(contract, product);
+  const idleTrucks = getIdleTrucks(truckList);
+  const idleDrivers = getIdleDrivers(driverList);
+  const maxIdleTruckCapacity =
+    idleTrucks.length > 0 ? Math.max(...idleTrucks.map((truck) => truck.capacity ?? 0)) : 0;
+
+  if (truckList.length === 0) {
+    return {
+      canStart: false,
+      reason: 'NO_TRUCKS',
+      buttonLabel: 'Kamyon Yok',
+      title: 'Kamyon yok',
+      message: 'Bu işi almak için önce bir kamyon satın almalısın.',
+      requiredCapacity,
+    };
+  }
+
+  if (idleTrucks.length === 0) {
+    return {
+      canStart: false,
+      reason: 'NO_IDLE_TRUCKS',
+      buttonLabel: 'Müsait Kamyon Yok',
+      title: 'Müsait kamyon yok',
+      message:
+        'Tüm kamyonların şu anda teslimatta. Yeni bir kamyon satın alabilir veya mevcut teslimatın bitmesini bekleyebilirsin.',
+      requiredCapacity,
+    };
+  }
+
+  if (driverList.length === 0) {
+    return {
+      canStart: false,
+      reason: 'NO_DRIVERS',
+      buttonLabel: 'Şoför Yok',
+      title: 'Şoför yok',
+      message: 'Bu işi almak için önce bir şoför işe almalısın.',
+      maxIdleTruckCapacity,
+      requiredCapacity,
+    };
+  }
+
+  if (idleDrivers.length === 0) {
+    return {
+      canStart: false,
+      reason: 'NO_IDLE_DRIVERS',
+      buttonLabel: 'Müsait Şoför Yok',
+      title: 'Müsait şoför yok',
+      message:
+        'Tüm şoförlerin şu anda görevde. Yeni bir şoför işe alabilir veya mevcut teslimatın bitmesini bekleyebilirsin.',
+      maxIdleTruckCapacity,
+      requiredCapacity,
+    };
+  }
+
+  const fittingTruck = selectIdleTruckForContract(truckList, contract, product);
+  if (!fittingTruck) {
+    return {
+      canStart: false,
+      reason: 'CAPACITY_INSUFFICIENT',
+      buttonLabel: 'Kapasite Yetersiz',
+      title: 'Kapasite yetersiz',
+      message: `Bu iş için ${requiredCapacity.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyon kapasiten ${maxIdleTruckCapacity.toFixed(1)} ton.`,
+      maxIdleTruckCapacity,
+      requiredCapacity,
+    };
+  }
+
+  return {
+    canStart: true,
+    reason: 'OK',
+    buttonLabel: 'Ekibi Seç',
+    maxIdleTruckCapacity,
+    requiredCapacity,
+  };
+}
+
+export function getContractAvailabilityWarningText(
+  availability: ContractAvailability,
+): string | null {
+  switch (availability.reason) {
+    case 'NO_TRUCKS':
+      return 'Kamyon yok';
+    case 'NO_IDLE_TRUCKS':
+      return 'Müsait kamyon yok';
+    case 'NO_DRIVERS':
+      return 'Şoför yok';
+    case 'NO_IDLE_DRIVERS':
+      return 'Müsait şoför yok';
+    case 'CAPACITY_INSUFFICIENT':
+      return `Kapasite yetersiz: ${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t mevcut`;
+    default:
+      return null;
+  }
+}
+
+export function availabilityReasonToStartDeliveryErrorCode(
+  reason: ContractAvailabilityReason,
+): import('../types/game').StartDeliveryErrorCode {
+  switch (reason) {
+    case 'NO_TRUCKS':
+      return 'TRUCK_NOT_FOUND';
+    case 'NO_IDLE_TRUCKS':
+      return 'TRUCK_BUSY';
+    case 'NO_DRIVERS':
+      return 'DRIVER_NOT_FOUND';
+    case 'NO_IDLE_DRIVERS':
+      return 'DRIVER_BUSY';
+    case 'CAPACITY_INSUFFICIENT':
+      return 'CAPACITY_INSUFFICIENT';
+    default:
+      return 'DELIVERY_CREATE_FAILED';
+  }
 }
 
 export function formatCapacityExceededMessage(

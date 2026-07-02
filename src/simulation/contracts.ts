@@ -336,16 +336,13 @@ export function dedupeAvailableContracts(contracts: Contract[]): Contract[] {
 
 /**
  * Piyasa fırsatı ile sözleşme eşleşme önceliği (düşük = daha iyi).
- * 0: birebir rota+ürün, 1: aynı ürün, 2: aynı rota, 3: aynı varış şehri, 99: eşleşme yok
+ * 0: birebir · 1: aynı ürün · 2: aynı varış · 3: aynı çıkış · 4: ters rota · 99: eşleşme yok
  */
 export function getMarketContractMatchTier(
   contract: Contract,
   filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
 ): number {
   const { fromCityId, toCityId, productId } = filter;
-  if (!fromCityId || !toCityId || !productId) {
-    return 99;
-  }
 
   if (
     contract.originCityId === fromCityId &&
@@ -359,15 +356,51 @@ export function getMarketContractMatchTier(
     return 1;
   }
 
-  if (contract.originCityId === fromCityId && contract.destinationCityId === toCityId) {
+  if (contract.destinationCityId === toCityId) {
     return 2;
   }
 
-  if (contract.destinationCityId === toCityId) {
+  if (contract.originCityId === fromCityId) {
     return 3;
   }
 
+  if (contract.originCityId === toCityId && contract.destinationCityId === fromCityId) {
+    return 4;
+  }
+
   return 99;
+}
+
+export function countExactMarketContractMatches(
+  contracts: Contract[] | undefined,
+  filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
+): number {
+  return (contracts ?? []).filter(
+    (contract) =>
+      contract.status === 'available' &&
+      contract.originCityId === filter.fromCityId &&
+      contract.destinationCityId === filter.toCityId &&
+      contract.productId === filter.productId,
+  ).length;
+}
+
+export function findFirstExactMarketContractMatch(
+  contracts: Contract[] | undefined,
+  filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
+): Contract | undefined {
+  return (contracts ?? []).find(
+    (contract) =>
+      contract.status === 'available' &&
+      contract.originCityId === filter.fromCityId &&
+      contract.destinationCityId === filter.toCityId &&
+      contract.productId === filter.productId,
+  );
+}
+
+function getOpportunityDemandLevel(score: number): MarketOpportunity['demandLevel'] {
+  if (score > 1200) return 'high';
+  if (score >= 700) return 'medium';
+  return 'low';
 }
 
 /** Sözleşme üretimi ile aynı stok/fiyat mantığına dayalı piyasa fırsatları */
@@ -420,10 +453,13 @@ export function findMarketOpportunities(
           fromCityId: originCity.id,
           toCityId: destinationCity.id,
           productId: product.id,
+          fromCityName: originCity.name,
+          toCityName: destinationCity.name,
           productName: product.name,
           priceGap,
           distanceKm: route.distanceKm,
           score,
+          demandLevel: getOpportunityDemandLevel(score),
         });
       }
     }
@@ -542,6 +578,11 @@ export function generateContracts(
   const { currentTime } = options;
 
   const cityList = Object.values(cities);
+  const priorityOpportunityKeys = new Set(
+    findMarketOpportunities(cityList, routes, products, 12).map(
+      (opportunity) => `${opportunity.fromCityId}-${opportunity.toCityId}-${opportunity.productId}`,
+    ),
+  );
   const candidates: ContractCandidate[] = [];
   let sequenceCounter = existingContracts.length;
   const existingDedupeKeys = new Set(
@@ -613,12 +654,15 @@ export function generateContracts(
         }
 
         const priceDiffRatio = calculatePriceDiffRatio(originMarket, destinationMarket);
-        const score = calculateContractScore(
-          contract.payment,
-          contract.urgency,
-          contract.amount,
-          priceDiffRatio,
-        );
+        const routeKey = `${originCity.id}-${destinationCity.id}-${product.id}`;
+        const marketPriorityBonus = priorityOpportunityKeys.has(routeKey) ? 60 : 0;
+        const score =
+          calculateContractScore(
+            contract.payment,
+            contract.urgency,
+            contract.amount,
+            priceDiffRatio,
+          ) + marketPriorityBonus;
 
         candidates.push({ score, contract });
       }

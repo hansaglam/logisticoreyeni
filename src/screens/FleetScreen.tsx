@@ -44,7 +44,7 @@ const RISKY_ATTENTION_THRESHOLD = 50;
 const LOW_MORALE_THRESHOLD = 50;
 const FUEL_EFFICIENT_THRESHOLD = 50;
 const FAST_SPEED_THRESHOLD = 15;
-const STATUS_MESSAGE_TIMEOUT_MS = 3000;
+const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 
 type FleetTab = 'trucks' | 'drivers' | 'shop';

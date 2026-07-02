@@ -90,7 +90,51 @@ export function calculateCargoWeight(contract: Contract, product: Product): numb
 /** Kamyon sözleşme yükünü taşıyabilir mi? */
 export function canTruckCarryContract(truck: Truck, contract: Contract, product: Product): boolean {
   const cargoWeight = calculateCargoWeight(contract, product);
-  return cargoWeight <= truck.capacity && cargoWeight > 0;
+  return cargoWeight <= (truck.capacity ?? 0) && cargoWeight > 0;
+}
+
+/** Sözleşmenin toplam kargo ağırlığı (ton) */
+export function getContractCargoWeight(contract: Contract, product?: Product): number {
+  const resolved = product ?? PRODUCT_BY_ID[contract.productId];
+  if (!resolved) return contract.amount ?? 0;
+  return calculateCargoWeight(contract, resolved);
+}
+
+/** Boşta kamyonlar arasındaki en yüksek kapasite (ton) */
+export function getMaxIdleTruckCapacity(trucks: Truck[] | undefined): number {
+  const idle = (trucks ?? []).filter((truck) => truck.status === 'idle');
+  if (idle.length === 0) return 0;
+  return Math.max(...idle.map((truck) => truck.capacity ?? 0));
+}
+
+/**
+ * İşi taşıyabilen boşta kamyonlar içinden en küçük uygun kamyonu seçer.
+ * Gereksiz yere büyük kamyonu küçük işe göndermemek için kapasiteye göre sıralanır.
+ */
+export function selectIdleTruckForContract(
+  trucks: Truck[] | undefined,
+  contract: Contract,
+  product?: Product,
+): Truck | undefined {
+  const resolved = product ?? PRODUCT_BY_ID[contract.productId];
+  if (!resolved) return undefined;
+
+  return (trucks ?? [])
+    .filter(
+      (truck) => truck.status === 'idle' && canTruckCarryContract(truck, contract, resolved),
+    )
+    .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0))[0];
+}
+
+export function formatCapacityExceededMessage(
+  cargoWeight: number,
+  maxIdleTruckCapacity: number,
+): string {
+  return (
+    `Bu iş için ${cargoWeight.toFixed(1)} ton kapasite gerekiyor. ` +
+    `Boşta en yüksek kamyon kapasiten ${maxIdleTruckCapacity.toFixed(1)} ton. ` +
+    `Daha büyük kamyon satın al veya daha düşük tonajlı bir iş seç.`
+  );
 }
 
 /** Yük doluluk çarpanı — ağır yük yakıt ve aşınmayı artırır */

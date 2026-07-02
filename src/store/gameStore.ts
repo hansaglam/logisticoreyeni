@@ -41,10 +41,14 @@ import {
 import {
   calculateLatePenalty,
   calculateTruckRepairCost,
+  canTruckCarryContract,
   completeDelivery as completeDeliverySim,
   createDelivery,
+  calculateCargoWeight,
   DeliveryError,
   failDelivery as failDeliverySim,
+  formatCapacityExceededMessage,
+  getMaxIdleTruckCapacity,
   randomBetween as deliveryRandomBetween,
   updateDeliveryProgress,
 } from '../simulation/delivery';
@@ -800,6 +804,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const product = PRODUCT_BY_ID[contract.productId];
+
+    if (!canTruckCarryContract(truck, contract, product)) {
+      const cargoWeight = calculateCargoWeight(contract, product);
+      const maxIdleTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
+      throw new Error(formatCapacityExceededMessage(cargoWeight, maxIdleTruckCapacity));
+    }
 
     let delivery: Delivery;
     try {

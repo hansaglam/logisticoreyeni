@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   SafeAreaView,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,6 +24,9 @@ import { getRoute as findRoute } from '../data/routes';
 import {
   calculateTravelHours,
   canTruckCarryContract,
+  getContractCargoWeight,
+  getMaxIdleTruckCapacity,
+  selectIdleTruckForContract,
 } from '../simulation/delivery';
 import { dedupeAvailableContracts } from '../simulation/contracts';
 import { deliveryBalance } from '../config/balance';
@@ -247,7 +251,9 @@ function analyzeContract(
   trucks?: Truck[],
   drivers?: Driver[],
 ): ContractAnalysis {
-  const suggestedTruck = trucks ? findSuggestedTruck(trucks, contract) : undefined;
+  const suggestedTruck = trucks
+    ? selectIdleTruckForContract(trucks, contract, getProductById(contract.productId))
+    : undefined;
   const suggestedDriver = drivers ? findSuggestedDriver(drivers) : undefined;
   const route = getRoute(contract.originCityId, contract.destinationCityId);
   const travelHours = estimateContractTravelHours(contract, suggestedTruck, suggestedDriver);
@@ -292,14 +298,6 @@ function getEstimatedProfit(contract: Contract, globalEconomy: GlobalEconomy): n
   return analyzeContract(contract, globalEconomy).financials.estimatedProfit;
 }
 
-function hasIdleTruck(trucks: Truck[]): boolean {
-  return trucks.some((truck) => truck.status === 'idle');
-}
-
-function hasIdleDriver(drivers: Driver[]): boolean {
-  return drivers.some((driver) => driver.status === 'idle');
-}
-
 function getCapacityCheckText(truck: Truck | undefined, contract: Contract): string {
   if (!truck) return 'Uygun kamyon yok';
   const product = getProductById(contract.productId);
@@ -318,13 +316,121 @@ function getDeadlineRiskText(contract: Contract, travelHours: number): string {
   return 'Teslim süresi yeterli';
 }
 
-function findSuggestedTruck(trucks: Truck[], contract: Contract): Truck | undefined {
-  const product = getProductById(contract.productId);
-  return trucks.find((truck) => truck.status === 'idle' && canTruckCarryContract(truck, contract, product));
+function findSuggestedDriver(drivers: Driver[]): Driver | undefined {
+  return (drivers ?? []).find((driver) => driver.status === 'idle');
 }
 
-function findSuggestedDriver(drivers: Driver[]): Driver | undefined {
-  return drivers.find((driver) => driver.status === 'idle');
+type AcceptBlockReason = 'none' | 'no_truck' | 'no_driver' | 'capacity';
+
+interface ContractAcceptState {
+  blockReason: AcceptBlockReason;
+  buttonLabel: string;
+  suggestedTruck?: Truck;
+  suggestedDriver?: Driver;
+  cargoWeight: number;
+  maxIdleTruckCapacity: number;
+  capacityInsufficient: boolean;
+  allTrucksOnMission: boolean;
+}
+
+function evaluateContractAccept(
+  contract: Contract,
+  trucks: Truck[] | undefined,
+  drivers: Driver[] | undefined,
+): ContractAcceptState {
+  const truckList = trucks ?? [];
+  const driverList = drivers ?? [];
+  const product = getProductById(contract.productId);
+  const cargoWeight = getContractCargoWeight(contract, product);
+  const maxIdleTruckCapacity = getMaxIdleTruckCapacity(truckList);
+  const idleTruckCount = truckList.filter((truck) => truck.status === 'idle').length;
+  const idleDriverCount = driverList.filter((driver) => driver.status === 'idle').length;
+  const allTrucksOnMission = truckList.length > 0 && idleTruckCount === 0;
+
+  if (idleTruckCount === 0) {
+    return {
+      blockReason: 'no_truck',
+      buttonLabel: 'Kamyon Yok',
+      cargoWeight,
+      maxIdleTruckCapacity: 0,
+      capacityInsufficient: false,
+      allTrucksOnMission,
+    };
+  }
+
+  if (idleDriverCount === 0) {
+    return {
+      blockReason: 'no_driver',
+      buttonLabel: 'Şoför Yok',
+      cargoWeight,
+      maxIdleTruckCapacity,
+      capacityInsufficient: false,
+      allTrucksOnMission: false,
+    };
+  }
+
+  const suggestedTruck = selectIdleTruckForContract(truckList, contract, product);
+  if (!suggestedTruck) {
+    return {
+      blockReason: 'capacity',
+      buttonLabel: 'Kapasite Yetersiz',
+      cargoWeight,
+      maxIdleTruckCapacity,
+      capacityInsufficient: true,
+      allTrucksOnMission: false,
+    };
+  }
+
+  const suggestedDriver = findSuggestedDriver(driverList);
+  if (!suggestedDriver) {
+    return {
+      blockReason: 'no_driver',
+      buttonLabel: 'Şoför Yok',
+      suggestedTruck,
+      cargoWeight,
+      maxIdleTruckCapacity,
+      capacityInsufficient: false,
+      allTrucksOnMission: false,
+    };
+  }
+
+  return {
+    blockReason: 'none',
+    buttonLabel: 'İşi Al',
+    suggestedTruck,
+    suggestedDriver,
+    cargoWeight,
+    maxIdleTruckCapacity,
+    capacityInsufficient: false,
+    allTrucksOnMission: false,
+  };
+}
+
+function showAcceptBlockAlert(acceptState: ContractAcceptState): void {
+  switch (acceptState.blockReason) {
+    case 'no_truck':
+      Alert.alert(
+        'Kamyon yok',
+        acceptState.allTrucksOnMission
+          ? 'Tüm kamyonların şu anda görevde.'
+          : 'Boşta kamyon yok. Bu işi almak için önce bir kamyonun müsait olması gerekiyor.',
+      );
+      break;
+    case 'no_driver':
+      Alert.alert(
+        'Şoför yok',
+        'Boşta şoför yok. Bu işi almak için müsait bir şoföre ihtiyacın var.',
+      );
+      break;
+    case 'capacity':
+      Alert.alert(
+        'Kapasite yetersiz',
+        `Bu iş için ${acceptState.cargoWeight.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyonun ${acceptState.maxIdleTruckCapacity.toFixed(1)} ton taşıyabiliyor.`,
+      );
+      break;
+    default:
+      break;
+  }
 }
 
 function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
@@ -359,9 +465,20 @@ function ContractCard({
   onAccept,
 }: ContractCardProps) {
   const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
+  const acceptState = evaluateContractAccept(contract, trucks, drivers);
   const { risk, financials, suggestedTruck, suggestedDriver, route } = analysis;
   const capacityOk = getCapacityCheckText(suggestedTruck, contract) === 'Kapasite yeterli';
   const deadlineRisk = getDeadlineRiskText(contract, financials.travelHours);
+  const isBlocked = acceptState.blockReason !== 'none';
+  const acceptButtonStyle = [styles.acceptButton, isBlocked && styles.acceptButtonBlocked];
+  const acceptButtonExpandedStyle = [
+    styles.acceptButtonExpanded,
+    isBlocked && styles.acceptButtonBlocked,
+  ];
+  const acceptButtonTextStyle = [
+    styles.acceptButtonText,
+    isBlocked && styles.acceptButtonTextBlocked,
+  ];
 
   return (
     <View style={[styles.contractCard, expanded && styles.contractCardExpanded]}>
@@ -412,6 +529,13 @@ function ContractCard({
             {risk.primaryReason}
           </Text>
         </View>
+
+        {acceptState.capacityInsufficient && (
+          <Text style={styles.capacityWarning}>
+            Kapasite yetersiz: {acceptState.cargoWeight.toFixed(1)}t gerekli /{' '}
+            {acceptState.maxIdleTruckCapacity.toFixed(1)}t mevcut
+          </Text>
+        )}
       </TouchableOpacity>
 
       {expanded && (
@@ -478,14 +602,18 @@ function ContractCard({
             <Text style={styles.detailLabel}>Rota zorluğu</Text>
             <Text style={styles.detailValue}>{formatPercent(route?.difficulty ?? 0.5)}</Text>
           </View>
-          <TouchableOpacity style={styles.acceptButtonExpanded} onPress={onAccept} activeOpacity={0.85}>
-            <Text style={styles.acceptButtonText}>İşi Al</Text>
+          <TouchableOpacity
+            style={acceptButtonExpandedStyle}
+            onPress={onAccept}
+            activeOpacity={0.85}
+          >
+            <Text style={acceptButtonTextStyle}>{acceptState.buttonLabel}</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      <TouchableOpacity style={styles.acceptButton} onPress={onAccept} activeOpacity={0.85}>
-        <Text style={styles.acceptButtonText}>İşi Al</Text>
+      <TouchableOpacity style={acceptButtonStyle} onPress={onAccept} activeOpacity={0.85}>
+        <Text style={acceptButtonTextStyle}>{acceptState.buttonLabel}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -575,25 +703,17 @@ export default function ContractsScreen() {
   }
 
   const handleAccept = (contract: Contract) => {
-    if (!hasIdleTruck(player.trucks)) {
-      setStatusMessage({ type: 'error', text: 'Boşta kamyon yok' });
+    const acceptState = evaluateContractAccept(contract, player.trucks, player.drivers);
+
+    if (acceptState.blockReason !== 'none') {
+      showAcceptBlockAlert(acceptState);
       return;
     }
 
-    if (!hasIdleDriver(player.drivers)) {
-      setStatusMessage({ type: 'error', text: 'Boşta şoför yok' });
-      return;
-    }
-
-    const suggestedTruck = findSuggestedTruck(player.trucks, contract);
-    if (!suggestedTruck) {
-      setStatusMessage({ type: 'error', text: 'Kapasite yetersiz' });
-      return;
-    }
-
-    const suggestedDriver = findSuggestedDriver(player.drivers);
-    if (!suggestedDriver) {
-      setStatusMessage({ type: 'error', text: 'Boşta şoför yok' });
+    const suggestedTruck = acceptState.suggestedTruck;
+    const suggestedDriver = acceptState.suggestedDriver;
+    if (!suggestedTruck || !suggestedDriver) {
+      setStatusMessage({ type: 'error', text: 'Uygun kamyon veya şoför bulunamadı' });
       return;
     }
 
@@ -1000,6 +1120,20 @@ const styles = StyleSheet.create({
     color: '#0B1220',
     fontSize: 14,
     fontWeight: '800',
+  },
+  acceptButtonBlocked: {
+    backgroundColor: '#1C1917',
+    borderWidth: 1,
+    borderColor: '#EA580C',
+  },
+  acceptButtonTextBlocked: {
+    color: '#FB923C',
+  },
+  capacityWarning: {
+    marginTop: 8,
+    color: '#FB923C',
+    fontSize: 11,
+    fontWeight: '700',
   },
 
   emptyState: {

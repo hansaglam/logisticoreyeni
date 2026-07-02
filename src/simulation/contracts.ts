@@ -1,0 +1,586 @@
+/**
+ * LogistiCore - Dinamik sözleşme oluşturma motoru
+ *
+ * Şehirlerin stok, fiyat ve üretim/tüketim dengesine göre taşıma sözleşmeleri
+ * otomatik üretilir. Hiçbir sözleşme elle yazılmaz; ekonomi verisi kaynak alınır.
+ */
+
+import type {
+  City,
+  Contract,
+  GlobalEconomy,
+  Product,
+  ProductId,
+  ProductMarket,
+  Route,
+} from '../types/game';
+import { contractBalance } from '../config/balance';
+import { toProductMarket } from './economy';
+
+// ---------------------------------------------------------------------------
+// Yapılandırma sabitleri
+// ---------------------------------------------------------------------------
+
+/** Sözleşme oluşması için minimum kaynak fazlası (ton) */
+const MIN_SURPLUS_TONS = 20;
+
+/** Sözleşme oluşması için minimum hedef açığı (ton) */
+const MIN_SHORTAGE_TONS = 20;
+
+/** Hedef fiyatın kaynak fiyatından en az bu kadar yüksek olması gerekir */
+const MIN_PRICE_DIFF_RATIO = 0.08;
+
+/** Birleşik stok ihtiyacı eşiği — düşükse sözleşme üretilmez */
+const MIN_NEED_SCORE = 0.12;
+
+// TODO: contractBalance'e taşınabilir — üretim eşik sabitleri
+/** Varsayılan kamyon kapasitesi (ton) — miktar hesabında üst sınır */
+const DEFAULT_MAX_TRUCK_CAPACITY = 25;
+
+// ---------------------------------------------------------------------------
+// Parametre tipleri
+// ---------------------------------------------------------------------------
+
+export interface ContractPaymentParams {
+  amount: number;
+  product: Product;
+  originMarket: ProductMarket;
+  destinationMarket: ProductMarket;
+  route: Route;
+  urgency: number;
+  globalEconomy: GlobalEconomy;
+}
+
+export interface ContractDeadlineParams {
+  route: Route;
+  product: Product;
+  urgency: number;
+}
+
+export interface ShouldGenerateContractParams {
+  originCityId: string;
+  destinationCityId: string;
+  originMarket: ProductMarket;
+  destinationMarket: ProductMarket;
+  surplus: number;
+  shortage: number;
+  existingAvailableCount: number;
+}
+
+export interface GenerateContractForProductParams {
+  originCity: City;
+  destinationCity: City;
+  productId: ProductId;
+  product: Product;
+  route: Route;
+  globalEconomy: GlobalEconomy;
+  currentTime: number;
+  maxTruckCapacity?: number;
+  /** Testlerde deterministik ID için sıra numarası */
+  sequence?: number;
+}
+
+export interface GenerateContractsOptions {
+  maxNewContracts?: number;
+  maxTruckCapacity?: number;
+  currentTime: number;
+}
+
+/** Dahili: aday sözleşme skoru — en kârlı rotalar önce seçilir */
+interface ContractCandidate {
+  score: number;
+  contract: Contract;
+}
+
+// ---------------------------------------------------------------------------
+// Temel yardımcılar
+// ---------------------------------------------------------------------------
+
+/** Değeri [min, max] aralığına sıkıştırır */
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** [min, max] aralığında uniform rastgele sayı üretir */
+export function randomBetween(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+/** Benzersiz sözleşme kimliği üretir */
+export function createContractId(
+  originCityId: string,
+  destinationCityId: string,
+  productId: ProductId,
+  createdAt: number,
+  sequence: number,
+): string {
+  return `contract_${originCityId}_${destinationCityId}_${productId}_${Math.floor(createdAt)}_${sequence}`;
+}
+
+/** Rota listesinden iki şehir arası hattı bulur */
+export function getRouteBetweenCities(
+  routes: Route[],
+  originCityId: string,
+  destinationCityId: string,
+): Route | undefined {
+  return routes.find(
+    (route) => route.fromCityId === originCityId && route.toCityId === destinationCityId,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stok analizi
+// ---------------------------------------------------------------------------
+
+/**
+ * Kaynak şehirdeki taşınabilir ürün fazlasını hesaplar (ton).
+ * stock > targetStock olduğunda pozitif değer döner.
+ */
+export function calculateSurplus(cityProductMarket: ProductMarket): number {
+  return Math.max(0, cityProductMarket.stock - cityProductMarket.targetStock);
+}
+
+/**
+ * Hedef şehirdeki ürün açığını hesaplar (ton).
+ * targetStock > stock olduğunda pozitif değer döner.
+ */
+export function calculateShortage(cityProductMarket: ProductMarket): number {
+  return Math.max(0, cityProductMarket.targetStock - cityProductMarket.stock);
+}
+
+/**
+ * Taşınacak sözleşme miktarını belirler (ton).
+ * Fazla ve açığın minimumu alınır; kamyon kapasitesi üst sınır olur.
+ * Gerçekçi seviye için %70 oranında güvenlik payı bırakılır.
+ */
+export function calculateContractAmount(
+  surplus: number,
+  shortage: number,
+  maxTruckCapacity: number = DEFAULT_MAX_TRUCK_CAPACITY,
+): number {
+  const transferable = Math.min(surplus, shortage) * 0.7;
+  return clamp(transferable, 0, maxTruckCapacity);
+}
+
+// ---------------------------------------------------------------------------
+// Aciliyet, ödeme ve deadline
+// ---------------------------------------------------------------------------
+
+/**
+ * Hedef şehirdeki aciliyet skorunu hesaplar (0–1).
+ * Stok açığı, tüketim hızı ve fiyat baskısı birleştirilir.
+ */
+export function calculateUrgency(destinationProductMarket: ProductMarket): number {
+  const safeTarget = Math.max(destinationProductMarket.targetStock, 1);
+  const shortageRatio = calculateShortage(destinationProductMarket) / safeTarget;
+  const consumptionPressure = clamp(
+    destinationProductMarket.consumptionPerDay / safeTarget,
+    0,
+    1,
+  );
+  const pricePressure = clamp(
+    destinationProductMarket.currentPrice / destinationProductMarket.basePrice - 1,
+    0,
+    1,
+  );
+
+  const rawUrgency = shortageRatio * 0.5 + consumptionPressure * 0.25 + pricePressure * 0.25;
+  return clamp(rawUrgency, 0, 1);
+}
+
+/**
+ * Sözleşme ödemesini hesaplar ($).
+ *
+ * basePayment = amount × product.basePrice × 0.15
+ * distancePayment = distanceKm × amount × distanceRate
+ * urgencyBonus = basePayment × urgency × 0.35
+ * difficultyBonus = basePayment × route.difficulty × 0.20
+ * fuelAdjustment = fuelPrice × distanceKm × 0.05
+ */
+export function calculateContractPayment(params: ContractPaymentParams): number {
+  const { amount, originMarket, destinationMarket, route, urgency, globalEconomy } = params;
+
+  // Kaynak taban fiyatı birincil referans; hedef fiyat prim etkisini yansıtır
+  const referencePrice = (originMarket.basePrice + destinationMarket.basePrice) / 2;
+
+  const basePayment = amount * referencePrice * contractBalance.baseTransportRate;
+  const distancePayment = route.distanceKm * amount * contractBalance.distancePaymentRate;
+  const urgencyBonus = basePayment * urgency * contractBalance.urgencyBonusMultiplier;
+  const difficultyBonus = basePayment * route.difficulty * contractBalance.difficultyBonusMultiplier;
+  const fuelAdjustment =
+    globalEconomy.fuelPrice * route.distanceKm * contractBalance.fuelAdjustmentMultiplier;
+
+  const rawPayment =
+    basePayment + distancePayment + urgencyBonus + difficultyBonus + fuelAdjustment;
+
+  const floor = amount * referencePrice * contractBalance.minContractPayment;
+  const ceiling = amount * referencePrice * contractBalance.maxContractPaymentMultiplier;
+
+  return clamp(rawPayment, floor, ceiling);
+}
+
+/**
+ * Teslim süresi limitini hesaplar (saat).
+ *
+ * baseTravelHours = distanceKm / averageSpeed
+ * Zor rota → deadline uzar; acil/bozulabilir ürün → deadline kısalır.
+ */
+export function calculateDeadlineHours(params: ContractDeadlineParams): number {
+  const { route, product, urgency } = params;
+
+  const baseTravelHours = route.distanceKm / contractBalance.averageSpeedKmh;
+
+  // Zor rotalarda ek süre tanınır
+  const routeDifficultyMultiplier = 1 + route.difficulty * 0.35;
+
+  // Aciliyet arttıkça süre kısalır
+  const urgencyMultiplier = clamp(1 - urgency * 0.4, 0.55, 1);
+
+  // Bozulabilir ürünlerde süre kısalır
+  const productPerishabilityMultiplier = clamp(1 - product.perishability * 0.45, 0.5, 1);
+
+  const rawDeadline =
+    baseTravelHours * routeDifficultyMultiplier * urgencyMultiplier * productPerishabilityMultiplier;
+
+  return clamp(rawDeadline, contractBalance.minDeadlineHours, contractBalance.maxDeadlineHours);
+}
+
+// ---------------------------------------------------------------------------
+// Sözleşme üretim kararı
+// ---------------------------------------------------------------------------
+
+/** Birleşik stok ihtiyacı skoru — shouldGenerateContract içinde kullanılır */
+export function calculateNeedScore(
+  originMarket: ProductMarket,
+  destinationMarket: ProductMarket,
+  surplus: number,
+  shortage: number,
+): number {
+  const originTarget = Math.max(originMarket.targetStock, 1);
+  const destTarget = Math.max(destinationMarket.targetStock, 1);
+  return surplus / originTarget + shortage / destTarget;
+}
+
+/** Fiyat farkı oranı — hedef şehir fiyatının kaynak şehre göre primi */
+export function calculatePriceDiffRatio(
+  originMarket: ProductMarket,
+  destinationMarket: ProductMarket,
+): number {
+  const safeOriginPrice = Math.max(originMarket.currentPrice, 1);
+  return (destinationMarket.currentPrice - safeOriginPrice) / safeOriginPrice;
+}
+
+/**
+ * Bu rota/ürün kombinasyonu için sözleşme oluşturulmalı mı?
+ * Tüm ön koşullar sağlanmazsa false döner.
+ */
+export function shouldGenerateContract(params: ShouldGenerateContractParams): boolean {
+  const {
+    originCityId,
+    destinationCityId,
+    originMarket,
+    destinationMarket,
+    surplus,
+    shortage,
+    existingAvailableCount,
+  } = params;
+
+  if (originCityId === destinationCityId) {
+    return false;
+  }
+
+  if (surplus < MIN_SURPLUS_TONS || shortage < MIN_SHORTAGE_TONS) {
+    return false;
+  }
+
+  if (calculatePriceDiffRatio(originMarket, destinationMarket) < MIN_PRICE_DIFF_RATIO) {
+    return false;
+  }
+
+  const needScore = calculateNeedScore(originMarket, destinationMarket, surplus, shortage);
+  if (needScore < MIN_NEED_SCORE) {
+    return false;
+  }
+
+  if (existingAvailableCount >= contractBalance.maxDuplicateContractsPerRouteProduct) {
+    return false;
+  }
+
+  return true;
+}
+
+/** UI ve üretim tarafında duplicate kontrolü için benzersiz anahtar */
+export function getContractDedupeKey(
+  contract: Pick<Contract, 'originCityId' | 'destinationCityId' | 'productId' | 'amount'>,
+): string {
+  return `${contract.originCityId}-${contract.destinationCityId}-${contract.productId}-${contract.amount.toFixed(1)}`;
+}
+
+/** Available listede aynı rota + ürün + miktar tekrarlarını temizler (yüksek ödemeli kalır) */
+export function dedupeAvailableContracts(contracts: Contract[]): Contract[] {
+  const bestByKey = new Map<string, Contract>();
+
+  for (const contract of contracts) {
+    if (contract.status !== 'available') continue;
+    const key = getContractDedupeKey(contract);
+    const existing = bestByKey.get(key);
+    if (!existing || contract.payment > existing.payment) {
+      bestByKey.set(key, contract);
+    }
+  }
+
+  return Array.from(bestByKey.values());
+}
+
+/** Mevcut available sözleşmelerde aynı rota+ürün sayısını döndürür */
+export function countAvailableDuplicates(
+  existingContracts: Contract[],
+  originCityId: string,
+  destinationCityId: string,
+  productId: ProductId,
+): number {
+  return existingContracts.filter(
+    (contract) =>
+      contract.status === 'available' &&
+      contract.originCityId === originCityId &&
+      contract.destinationCityId === destinationCityId &&
+      contract.productId === productId,
+  ).length;
+}
+
+/** Aday sözleşmenin öncelik skoru — yüksek = daha kârlı / acil */
+export function calculateContractScore(
+  payment: number,
+  urgency: number,
+  amount: number,
+  priceDiffRatio: number,
+): number {
+  return payment * 0.4 + urgency * 100 * 0.25 + amount * 0.15 + priceDiffRatio * 100 * 0.2;
+}
+
+/**
+ * Tek bir ürün için sözleşme nesnesi oluşturur.
+ * Ön koşullar sağlanmazsa null döner.
+ */
+export function generateContractForProduct(
+  params: GenerateContractForProductParams,
+): Contract | null {
+  const {
+    originCity,
+    destinationCity,
+    productId,
+    product,
+    route,
+    globalEconomy,
+    currentTime,
+    maxTruckCapacity = DEFAULT_MAX_TRUCK_CAPACITY,
+    sequence = Math.floor(randomBetween(1, 999_999)),
+  } = params;
+
+  const originMarket = toProductMarket(originCity.products[productId]);
+  const destinationMarket = toProductMarket(destinationCity.products[productId]);
+
+  const surplus = calculateSurplus(originMarket);
+  const shortage = calculateShortage(destinationMarket);
+  const amount = calculateContractAmount(surplus, shortage, maxTruckCapacity);
+
+  if (amount <= 0) {
+    return null;
+  }
+
+  const urgency = calculateUrgency(destinationMarket);
+
+  const payment = calculateContractPayment({
+    amount,
+    product,
+    originMarket,
+    destinationMarket,
+    route,
+    urgency,
+    globalEconomy,
+  });
+
+  const deadlineHours = calculateDeadlineHours({ route, product, urgency });
+
+  return {
+    id: createContractId(originCity.id, destinationCity.id, productId, currentTime, sequence),
+    originCityId: originCity.id,
+    destinationCityId: destinationCity.id,
+    productId,
+    amount,
+    payment,
+    deadlineHours,
+    distanceKm: route.distanceKm,
+    urgency,
+    status: 'available',
+    createdAt: currentTime,
+    expiresAt: currentTime + deadlineHours * contractBalance.contractExpiryHours,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Toplu üretim ve süre dolumu
+// ---------------------------------------------------------------------------
+
+/**
+ * Tüm şehir çiftleri ve ürünler için sözleşme adaylarını tarar,
+ * en yüksek skorlu olanları seçerek yeni sözleşme listesi döndürür.
+ *
+ * Mevcut sözleşmeler mutate edilmez; yalnızca yeni üretilenler döner.
+ */
+export function generateContracts(
+  cities: Record<string, City>,
+  routes: Route[],
+  products: Product[],
+  globalEconomy: GlobalEconomy,
+  existingContracts: Contract[],
+  options: GenerateContractsOptions,
+): Contract[] {
+  const maxNewContracts = options.maxNewContracts ?? contractBalance.maxContractsPerTick;
+  const maxTruckCapacity = options.maxTruckCapacity ?? DEFAULT_MAX_TRUCK_CAPACITY;
+  const { currentTime } = options;
+
+  const cityList = Object.values(cities);
+  const candidates: ContractCandidate[] = [];
+  let sequenceCounter = existingContracts.length;
+  const existingDedupeKeys = new Set(
+    existingContracts
+      .filter((contract) => contract.status === 'available')
+      .map((contract) => getContractDedupeKey(contract)),
+  );
+
+  for (const originCity of cityList) {
+    for (const destinationCity of cityList) {
+      if (originCity.id === destinationCity.id) {
+        continue;
+      }
+
+      const route = getRouteBetweenCities(routes, originCity.id, destinationCity.id);
+      if (!route) {
+        continue;
+      }
+
+      for (const product of products) {
+        const originMarket = toProductMarket(originCity.products[product.id]);
+        const destinationMarket = toProductMarket(destinationCity.products[product.id]);
+
+        const surplus = calculateSurplus(originMarket);
+        const shortage = calculateShortage(destinationMarket);
+
+        const existingAvailableCount = countAvailableDuplicates(
+          existingContracts,
+          originCity.id,
+          destinationCity.id,
+          product.id,
+        );
+
+        const canGenerate = shouldGenerateContract({
+          originCityId: originCity.id,
+          destinationCityId: destinationCity.id,
+          originMarket,
+          destinationMarket,
+          surplus,
+          shortage,
+          existingAvailableCount,
+        });
+
+        if (!canGenerate) {
+          continue;
+        }
+
+        sequenceCounter += 1;
+
+        const contract = generateContractForProduct({
+          originCity,
+          destinationCity,
+          productId: product.id,
+          product,
+          route,
+          globalEconomy,
+          currentTime,
+          maxTruckCapacity,
+          sequence: sequenceCounter,
+        });
+
+        if (!contract) {
+          continue;
+        }
+
+        const dedupeKey = getContractDedupeKey(contract);
+        if (existingDedupeKeys.has(dedupeKey)) {
+          continue;
+        }
+
+        const priceDiffRatio = calculatePriceDiffRatio(originMarket, destinationMarket);
+        const score = calculateContractScore(
+          contract.payment,
+          contract.urgency,
+          contract.amount,
+          priceDiffRatio,
+        );
+
+        candidates.push({ score, contract });
+      }
+    }
+  }
+
+  // En yüksek skorlu adaylar önce; tick başına üst sınır uygulanır
+  candidates.sort((a, b) => b.score - a.score);
+
+  const selected: Contract[] = [];
+  const batchDedupeKeys = new Set(existingDedupeKeys);
+
+  for (const candidate of candidates) {
+    if (selected.length >= maxNewContracts) break;
+    const key = getContractDedupeKey(candidate.contract);
+    if (batchDedupeKeys.has(key)) continue;
+    batchDedupeKeys.add(key);
+    selected.push(candidate.contract);
+  }
+
+  return selected;
+}
+
+/**
+ * Süresi dolmuş available sözleşmeleri expired olarak işaretler.
+ * Orijinal dizi mutate edilmez; yeni dizi döndürülür.
+ */
+export function expireOldContracts(contracts: Contract[], currentTime: number): Contract[] {
+  return contracts.map((contract) => {
+    if (contract.status === 'available' && currentTime >= contract.expiresAt) {
+      return { ...contract, status: 'expired' as const };
+    }
+    return contract;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Örnek kullanım (yorum — çalıştırılmaz)
+// ---------------------------------------------------------------------------
+
+/*
+import { CITIES_BY_ID } from '../data/cities';
+import { PRODUCTS } from '../data/products';
+import { ROUTES } from '../data/routes';
+import { DEFAULT_GLOBAL_ECONOMY } from './economy';
+import { expireOldContracts, generateContracts } from './contracts';
+
+const currentTime = 48; // oyun saati
+const existingContracts: Contract[] = [];
+
+// Süresi dolmuş teklifleri temizle
+const activeOffers = expireOldContracts(existingContracts, currentTime);
+
+// Yeni sözleşmeler üret
+const newContracts = generateContracts(
+  CITIES_BY_ID,
+  ROUTES,
+  PRODUCTS,
+  DEFAULT_GLOBAL_ECONOMY,
+  activeOffers,
+  { currentTime, maxNewContracts: 8 },
+);
+
+// Mevcut listeye ekle (immutable birleştirme)
+const allContracts = [...activeOffers, ...newContracts];
+*/

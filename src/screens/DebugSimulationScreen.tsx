@@ -1,0 +1,1322 @@
+/**
+ * LogistiCore - Debug Simulation Ekranı
+ *
+ * Geliştirme ve test amaçlı panel. Ekonomi tick'leri, sözleşme üretimi,
+ * teslimat akışı ve store bütünlüğünü hızlıca doğrulamak için kullanılır.
+ * Final oyunda oyuncuya gösterilmemelidir.
+ */
+
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+import { useGameStore, getRecentGameEvents } from '../store/gameStore';
+import InternalTestInfoPanel from '../components/InternalTestInfoPanel';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
+import { CITIES_BY_ID } from '../data/cities';
+import { PRODUCT_BY_ID } from '../data/products';
+import { canTruckCarryContract } from '../simulation/delivery';
+import type {
+  City,
+  CityProductState,
+  Contract,
+  ContractStatus,
+  Delivery,
+  DeliveryFailureReason,
+  Driver,
+  GameEvent,
+  GameEventImportance,
+  Product,
+  ProductId,
+  StoreGameState,
+  Truck,
+} from '../types/game';
+
+// ---------------------------------------------------------------------------
+// Renk paleti — diğer ekranlarla aynı koyu lojistik tema
+// ---------------------------------------------------------------------------
+
+const COLORS = {
+  background: '#070A12',
+  card: '#111827',
+  cardAlt: '#121826',
+  border: '#1F2A3C',
+  primary: '#F59E0B',
+  secondary: '#38BDF8',
+  success: '#22C55E',
+  danger: '#EF4444',
+  textPrimary: '#F9FAFB',
+  textSecondary: '#9CA3AF',
+  textMuted: '#64748B',
+};
+
+// ---------------------------------------------------------------------------
+// Sabitler
+// ---------------------------------------------------------------------------
+
+const CRITICAL_SHORTAGE_RATIO = 0.35;
+const HIGH_SURPLUS_RATIO = 1.5;
+const CITY_SNAPSHOT_COUNT = 5;
+const AVAILABLE_CONTRACT_PREVIEW = 5;
+
+type IntegrityStatus = 'PASS' | 'WARN' | 'FAIL';
+type MessageType = 'success' | 'error' | 'info';
+
+interface StatusMessage {
+  type: MessageType;
+  text: string;
+}
+
+interface IntegrityCheck {
+  label: string;
+  status: IntegrityStatus;
+  detail?: string;
+}
+
+interface CriticalProductRow {
+  productId: ProductId;
+  stock: number;
+  targetStock: number;
+  stockRatio: number;
+  price: number;
+}
+
+// ---------------------------------------------------------------------------
+// Format yardımcıları
+// ---------------------------------------------------------------------------
+
+function formatMoney(value: number): string {
+  const rounded = Math.round(value);
+  const sign = rounded < 0 ? '-' : '';
+  return `${sign}$${Math.abs(rounded)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+function formatTime(hours: number): string {
+  const totalHours = Math.max(0, Math.floor(hours));
+  const day = Math.floor(totalHours / 24) + 1;
+  const hourOfDay = totalHours % 24;
+  return `Gün ${day} • ${hourOfDay.toString().padStart(2, '0')}:00`;
+}
+
+function formatSavedAt(timestamp: number | null): string {
+  if (!timestamp) {
+    return 'Never';
+  }
+  return new Date(timestamp).toLocaleString('tr-TR');
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatTons(value: number): string {
+  return `${value.toFixed(1)} ton`;
+}
+
+function getCityName(cityId: string): string {
+  return CITIES_BY_ID[cityId]?.name ?? cityId;
+}
+
+function getProductName(productId: string): string {
+  return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
+}
+
+// ---------------------------------------------------------------------------
+// Şehir / sözleşme yardımcıları
+// ---------------------------------------------------------------------------
+
+function calculateProductStockRatio(state: CityProductState): number {
+  const target = state.targetStock && state.targetStock > 0 ? state.targetStock : Math.max(state.stock, 1);
+  return state.stock / target;
+}
+
+function getProductPrice(state: CityProductState & { price?: number }): number {
+  return state.currentPrice ?? state.price ?? state.basePrice ?? 0;
+}
+
+function countContractsByStatus(contracts: Contract[], status: ContractStatus): number {
+  return contracts.filter((c) => c.status === status).length;
+}
+
+function countCityShortages(city: City): number {
+  if (!city?.products) return 0;
+  return Object.values(city.products).filter(
+    (state) => calculateProductStockRatio(state) < CRITICAL_SHORTAGE_RATIO,
+  ).length;
+}
+
+function countCitySurpluses(city: City): number {
+  if (!city?.products) return 0;
+  return Object.values(city.products).filter(
+    (state) => calculateProductStockRatio(state) > HIGH_SURPLUS_RATIO,
+  ).length;
+}
+
+function calculateCityAveragePriceMultiplier(city: City): number {
+  const states = Object.values(city.products ?? {});
+  if (states.length === 0) return 1;
+  const ratios = states.map((state) => {
+    const base = Math.max(state.basePrice, 1);
+    return getProductPrice(state) / base;
+  });
+  return ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
+}
+
+function calculateCityTotalStock(city: City): number {
+  return Object.values(city.products ?? {}).reduce((sum, state) => sum + (state.stock ?? 0), 0);
+}
+
+function calculateCityTotalTargetStock(city: City): number {
+  return Object.values(city.products ?? {}).reduce((sum, state) => sum + (state.targetStock ?? 0), 0);
+}
+
+/** Stok oranı en düşük 3 ürün — kritik piyasa durumu için */
+function getCriticalProducts(city: City): CriticalProductRow[] {
+  return Object.entries(city.products ?? {})
+    .map(([productId, state]) => ({
+      productId: productId as ProductId,
+      stock: state.stock ?? 0,
+      targetStock: state.targetStock ?? 0,
+      stockRatio: calculateProductStockRatio(state),
+      price: getProductPrice(state),
+    }))
+    .sort((a, b) => a.stockRatio - b.stockRatio)
+    .slice(0, 3);
+}
+
+function findIdleTruckForContract(trucks: Truck[], contract: Contract, product: Product): Truck | undefined {
+  return trucks.find(
+    (truck) => truck.status === 'idle' && canTruckCarryContract(truck, contract, product),
+  );
+}
+
+function findIdleDriver(drivers: Driver[]): Driver | undefined {
+  return drivers.find((driver) => driver.status === 'idle');
+}
+
+function getIntegrityColor(status: IntegrityStatus): string {
+  switch (status) {
+    case 'PASS':
+      return COLORS.success;
+    case 'WARN':
+      return COLORS.primary;
+    case 'FAIL':
+      return COLORS.danger;
+    default:
+      return COLORS.textSecondary;
+  }
+}
+
+function getMessageColor(type: MessageType): string {
+  switch (type) {
+    case 'success':
+      return COLORS.success;
+    case 'error':
+      return COLORS.danger;
+    default:
+      return COLORS.secondary;
+  }
+}
+
+function getImportanceColor(importance: GameEventImportance): string {
+  switch (importance) {
+    case 'high':
+      return COLORS.danger;
+    case 'medium':
+      return COLORS.secondary;
+    default:
+      return COLORS.textMuted;
+  }
+}
+
+/**
+ * Store durumuna göre basit bütünlük kontrolleri.
+ * PASS = sağlıklı, WARN = dikkat, FAIL = kritik sorun.
+ */
+function runIntegrityChecks(state: {
+  player: StoreGameState['player'] | null | undefined;
+  cities: City[];
+  products: Product[];
+  routes: StoreGameState['routes'];
+  contracts: Contract[];
+  activeDeliveries: Delivery[];
+}): IntegrityCheck[] {
+  const checks: IntegrityCheck[] = [];
+  const { player, cities, products, routes, contracts, activeDeliveries } = state;
+
+  checks.push({
+    label: 'Player exists',
+    status: player ? 'PASS' : 'FAIL',
+    detail: player ? undefined : 'player is null',
+  });
+
+  checks.push({
+    label: 'Cities loaded',
+    status: cities.length > 0 ? 'PASS' : 'FAIL',
+    detail: `${cities.length} cities`,
+  });
+
+  checks.push({
+    label: 'Products loaded',
+    status: products.length > 0 ? 'PASS' : 'FAIL',
+    detail: `${products.length} products`,
+  });
+
+  checks.push({
+    label: 'Routes loaded',
+    status: routes.length > 0 ? 'PASS' : 'FAIL',
+    detail: `${routes.length} routes`,
+  });
+
+  const trucks = player?.trucks ?? [];
+  checks.push({
+    label: 'At least one truck exists',
+    status: trucks.length > 0 ? 'PASS' : 'FAIL',
+    detail: `${trucks.length} trucks`,
+  });
+
+  const drivers = player?.drivers ?? [];
+  checks.push({
+    label: 'At least one driver exists',
+    status: drivers.length > 0 ? 'PASS' : 'FAIL',
+    detail: `${drivers.length} drivers`,
+  });
+
+  checks.push({
+    label: 'Contracts generated',
+    status: contracts.length > 0 ? 'PASS' : 'WARN',
+    detail: `${contracts.length} contracts`,
+  });
+
+  const negativeStockCities = cities.filter((city) =>
+    Object.values(city.products ?? {}).some((p) => (p.stock ?? 0) < 0),
+  );
+  checks.push({
+    label: 'No negative city stock',
+    status: negativeStockCities.length === 0 ? 'PASS' : 'FAIL',
+    detail:
+      negativeStockCities.length === 0
+        ? undefined
+        : `${negativeStockCities.length} cities with negative stock`,
+  });
+
+  const cash = player?.money ?? 0;
+  checks.push({
+    label: 'No negative player cash warning',
+    status: cash >= 0 ? (cash < 5000 ? 'WARN' : 'PASS') : 'FAIL',
+    detail: formatMoney(cash),
+  });
+
+  const contractIds = new Set(contracts.map((c) => c.id));
+  const truckIds = new Set(trucks.map((t) => t.id));
+  const driverIds = new Set(drivers.map((d) => d.id));
+
+  const invalidContractRefs = activeDeliveries.filter((d) => !contractIds.has(d.contractId));
+  checks.push({
+    label: 'Active deliveries have valid contractId',
+    status: invalidContractRefs.length === 0 ? 'PASS' : 'FAIL',
+    detail:
+      invalidContractRefs.length === 0 ? undefined : `${invalidContractRefs.length} invalid refs`,
+  });
+
+  const invalidTruckRefs = activeDeliveries.filter((d) => !truckIds.has(d.truckId));
+  checks.push({
+    label: 'Active deliveries have valid truckId',
+    status: invalidTruckRefs.length === 0 ? 'PASS' : 'FAIL',
+    detail: invalidTruckRefs.length === 0 ? undefined : `${invalidTruckRefs.length} invalid refs`,
+  });
+
+  const invalidDriverRefs = activeDeliveries.filter((d) => !driverIds.has(d.driverId));
+  checks.push({
+    label: 'Active deliveries have valid driverId',
+    status: invalidDriverRefs.length === 0 ? 'PASS' : 'FAIL',
+    detail: invalidDriverRefs.length === 0 ? undefined : `${invalidDriverRefs.length} invalid refs`,
+  });
+
+  return checks;
+}
+
+// ---------------------------------------------------------------------------
+// Küçük yeniden kullanılabilir alt bileşenler
+// ---------------------------------------------------------------------------
+
+interface SectionProps {
+  title: string;
+  children: React.ReactNode;
+}
+
+function Section({ title, children }: SectionProps) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
+interface KpiCardProps {
+  label: string;
+  value: string;
+  accentColor?: string;
+}
+
+function KpiCard({ label, value, accentColor = COLORS.primary }: KpiCardProps) {
+  return (
+    <View style={[styles.kpiCard, { borderColor: accentColor }]}>
+      <Text style={styles.kpiLabel}>{label}</Text>
+      <Text style={[styles.kpiValue, { color: accentColor }]} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+interface StatItemProps {
+  label: string;
+  value: string;
+  color?: string;
+}
+
+function StatItem({ label, value, color = COLORS.textPrimary }: StatItemProps) {
+  return (
+    <View style={styles.statItem}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, { color }]} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+interface ProgressBarProps {
+  progress: number;
+  color: string;
+}
+
+function ProgressBar({ progress, color }: ProgressBarProps) {
+  const clamped = Math.max(0, Math.min(1, progress));
+  return (
+    <View style={styles.progressTrack}>
+      <View style={[styles.progressFill, { width: `${clamped * 100}%`, backgroundColor: color }]} />
+    </View>
+  );
+}
+
+interface DebugButtonProps {
+  label: string;
+  onPress: () => void;
+  variant?: 'primary' | 'secondary' | 'danger';
+  disabled?: boolean;
+}
+
+function DebugButton({ label, onPress, variant = 'secondary', disabled = false }: DebugButtonProps) {
+  const borderColor =
+    variant === 'danger' ? COLORS.danger : variant === 'primary' ? COLORS.primary : COLORS.secondary;
+
+  return (
+    <TouchableOpacity
+      style={[styles.debugButton, { borderColor }, disabled && styles.debugButtonDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.8}
+    >
+      <Text style={[styles.debugButtonText, disabled && styles.debugButtonTextDisabled]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Ana ekran
+// ---------------------------------------------------------------------------
+
+export default function DebugSimulationScreen() {
+  const player = useGameStore((state) => state.player);
+  const cities = useGameStore((state) => state.cities) ?? [];
+  const products = useGameStore((state) => state.products) ?? [];
+  const routes = useGameStore((state) => state.routes) ?? [];
+  const contracts = useGameStore((state) => state.contracts) ?? [];
+  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const marketNews = useGameStore((state) => state.marketNews) ?? [];
+  const eventLog = useGameStore((state) => state.eventLog) ?? [];
+  const currentTime = useGameStore((state) => state.currentTime);
+  const isPaused = useGameStore((state) => state.isPaused);
+  const gameSpeed = useGameStore((state) => state.gameSpeed);
+  const isGameReady = useGameStore((state) => state.isGameReady);
+
+  const resetGame = useGameStore((state) => state.resetGame);
+  const pauseGame = useGameStore((state) => state.pauseGame);
+  const resumeGame = useGameStore((state) => state.resumeGame);
+  const advanceTime = useGameStore((state) => state.advanceTime);
+  const runEconomyTick = useGameStore((state) => state.runEconomyTick);
+  const generateNewContracts = useGameStore((state) => state.generateNewContracts);
+  const expireContracts = useGameStore((state) => state.expireContracts);
+  const refuelOrUpdateFuelPrice = useGameStore((state) => state.refuelOrUpdateFuelPrice);
+  const { scrollBottomPadding } = useTabBarLayout();
+  const clearOldMarketNews = useGameStore((state) => state.clearOldMarketNews);
+  const clearOldGameEvents = useGameStore((state) => state.clearOldGameEvents);
+  const saveGame = useGameStore((state) => state.saveGame);
+  const loadGame = useGameStore((state) => state.loadGame);
+  const clearSave = useGameStore((state) => state.clearSave);
+  const saveStatus = useGameStore((state) => state.saveStatus);
+  const refreshSaveStatus = useGameStore((state) => state.refreshSaveStatus);
+  const startDelivery = useGameStore((state) => state.startDelivery);
+  const updateDeliveries = useGameStore((state) => state.updateDeliveries);
+  const completeDeliveryById = useGameStore((state) => state.completeDeliveryById);
+  const failDeliveryById = useGameStore((state) => state.failDeliveryById);
+
+  const [lastMessage, setLastMessage] = useState<StatusMessage>({
+    type: 'info',
+    text: 'Debug panel ready.',
+  });
+
+  const trucks = player?.trucks ?? [];
+  const drivers = player?.drivers ?? [];
+  const warehouses = player?.warehouses ?? [];
+  const cash = player?.money ?? 0;
+
+  useEffect(() => {
+    void refreshSaveStatus();
+  }, [refreshSaveStatus]);
+
+  const availableContracts = useMemo(
+    () => contracts.filter((c) => c.status === 'available'),
+    [contracts],
+  );
+
+  const previewContracts = availableContracts.slice(0, AVAILABLE_CONTRACT_PREVIEW);
+  const citySnapshot = cities.slice(0, CITY_SNAPSHOT_COUNT);
+  const recentEvents = useMemo(() => getRecentGameEvents(eventLog, 8), [eventLog]);
+
+  const integrityChecks = useMemo(
+    () =>
+      runIntegrityChecks({
+        player,
+        cities,
+        products,
+        routes,
+        contracts,
+        activeDeliveries,
+      }),
+    [player, cities, products, routes, contracts, activeDeliveries],
+  );
+
+  const setSuccess = (text: string) => setLastMessage({ type: 'success', text });
+  const setError = (text: string) => setLastMessage({ type: 'error', text });
+  const setInfo = (text: string) => setLastMessage({ type: 'info', text });
+
+  const handleAdvanceTime = (hours: number) => {
+    try {
+      advanceTime(hours);
+      setSuccess(`Advanced ${hours} hour${hours === 1 ? '' : 's'} successfully`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : `Failed to advance ${hours} hours`);
+    }
+  };
+
+  const handleRun7Days = () => {
+    try {
+      // Basit senkron döngü — async gerekmez; store action'ları sırayla çalıştırır.
+      for (let day = 0; day < 7; day += 1) {
+        advanceTime(24);
+      }
+      setSuccess('Ran 7-day simulation (7 × advanceTime(24))');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '7-day simulation failed');
+    }
+  };
+
+  const handleRunEconomyTick = () => {
+    try {
+      const beforeCount = contracts.length;
+      runEconomyTick();
+      const afterCount = useGameStore.getState().contracts.length;
+      setSuccess(`Economy tick completed. Contracts: ${beforeCount} → ${afterCount}`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Economy tick failed');
+    }
+  };
+
+  const handleGenerateContracts = () => {
+    try {
+      const before = useGameStore.getState().contracts.filter((c) => c.status === 'available').length;
+      generateNewContracts();
+      const after = useGameStore.getState().contracts.filter((c) => c.status === 'available').length;
+      setSuccess(`Generated contracts. Available: ${before} → ${after}`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Generate contracts failed');
+    }
+  };
+
+  const handleStartTestDelivery = (contract: Contract) => {
+    const product = PRODUCT_BY_ID[contract.productId];
+    const truck = findIdleTruckForContract(trucks, contract, product);
+    const driver = findIdleDriver(drivers);
+
+    if (!truck || !driver) {
+      setError('No idle truck or driver');
+      return;
+    }
+
+    try {
+      startDelivery(contract.id, truck.id, driver.id);
+      setSuccess(`Started delivery ${contract.id}`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to start delivery');
+    }
+  };
+
+  const handleCompleteNow = (delivery: Delivery) => {
+    try {
+      // completeDeliveryById progress >= 1 gerektirir; debug için kalan süreyi simüle et.
+      if (delivery.progress < 1) {
+        const hoursNeeded = Math.max(0.1, delivery.travelHours * (1 - delivery.progress));
+        updateDeliveries(hoursNeeded);
+      }
+
+      const updated = useGameStore.getState().activeDeliveries.find((d) => d.id === delivery.id);
+      if (updated && updated.progress >= 1 && updated.status === 'on_route') {
+        completeDeliveryById(delivery.id);
+        setSuccess(`Completed delivery ${delivery.id}`);
+      } else if (!useGameStore.getState().activeDeliveries.find((d) => d.id === delivery.id)) {
+        setSuccess(`Delivery ${delivery.id} auto-completed via updateDeliveries`);
+      } else {
+        setError(`Could not complete delivery ${delivery.id} — check progress/status`);
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Complete delivery failed');
+    }
+  };
+
+  const handleFailNow = (delivery: Delivery) => {
+    try {
+      // Store tipi debug_manual_fail kabul etmez; manuel iptal için 'cancelled' kullanılır.
+      const reason: DeliveryFailureReason = 'cancelled';
+      failDeliveryById(delivery.id, reason);
+      setSuccess(`Failed delivery ${delivery.id} (debug manual fail → cancelled)`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Fail delivery failed');
+    }
+  };
+
+  const handleSaveNow = async () => {
+    try {
+      await saveGame();
+      await refreshSaveStatus();
+      setSuccess('Manual save completed (debug only)');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Save failed');
+    }
+  };
+
+  const handleLoadSave = async () => {
+    try {
+      const loaded = await loadGame();
+      await refreshSaveStatus();
+      if (loaded) {
+        setSuccess('Save loaded successfully (debug only)');
+      } else {
+        setError('No valid save found to load');
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Load save failed');
+    }
+  };
+
+  const handleClearSave = async () => {
+    try {
+      await clearSave();
+      await refreshSaveStatus();
+      setSuccess('Save cleared and fresh game started (debug only)');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Clear save failed');
+    }
+  };
+
+  const handleResetGame = () => {
+    try {
+      resetGame();
+      void refreshSaveStatus();
+      setSuccess('Game reset to initial state');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Reset game failed');
+    }
+  };
+
+  if (!isGameReady || !player) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>Simülasyon Testi</Text>
+          <Text style={styles.subtitle}>Internal test araçları — geliştirici kullanımı</Text>
+          <View style={styles.headerStatsRow}>
+            <View style={styles.headerStatBadge}>
+              <Text style={[styles.headerStatValue, { color: COLORS.primary }]}>
+                {formatTime(currentTime)}
+              </Text>
+              <Text style={styles.headerStatLabel}>Game Time</Text>
+            </View>
+            <View style={styles.headerStatBadge}>
+              <Text style={[styles.headerStatValue, { color: COLORS.success }]}>
+                {formatMoney(cash)}
+              </Text>
+              <Text style={styles.headerStatLabel}>Cash</Text>
+            </View>
+            <View style={styles.headerStatBadge}>
+              <Text style={[styles.headerStatValue, { color: isPaused ? COLORS.danger : COLORS.success }]}>
+                {isPaused ? 'PAUSED' : 'RUNNING'}
+              </Text>
+              <Text style={styles.headerStatLabel}>Status</Text>
+            </View>
+            <View style={styles.headerStatBadge}>
+              <Text style={[styles.headerStatValue, { color: COLORS.secondary }]}>
+                {gameSpeed.toFixed(2)}x
+              </Text>
+              <Text style={styles.headerStatLabel}>Speed</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Debug Log / Last Action Message */}
+        <View style={[styles.messageBanner, { borderColor: getMessageColor(lastMessage.type) }]}>
+          <Text style={[styles.messageText, { color: getMessageColor(lastMessage.type) }]}>
+            {lastMessage.text}
+          </Text>
+        </View>
+
+        <InternalTestInfoPanel />
+
+        {/* TODO: Hide Internal Test Tools in production builds. */}
+        <Section title="Internal Test Tools">
+          <View style={styles.buttonGrid}>
+            <DebugButton label="+1 Saat" onPress={() => handleAdvanceTime(1)} />
+            <DebugButton label="+6 Saat" onPress={() => handleAdvanceTime(6)} />
+            <DebugButton label="+24 Saat" onPress={() => handleAdvanceTime(24)} />
+            <DebugButton label="Sözleşme Üret" onPress={handleGenerateContracts} />
+            <DebugButton label="Ekonomi Tick" onPress={handleRunEconomyTick} variant="primary" />
+            <DebugButton label="Save Now" onPress={() => void handleSaveNow()} variant="primary" />
+            <DebugButton label="Clear Save" onPress={() => void handleClearSave()} variant="danger" />
+            <DebugButton label="Reset Game" onPress={handleResetGame} variant="danger" />
+          </View>
+        </Section>
+
+        {/* Game State Summary */}
+        <View style={styles.kpiGrid}>
+          <KpiCard label="Current Time" value={formatTime(currentTime)} accentColor={COLORS.primary} />
+          <KpiCard label="Cash" value={formatMoney(cash)} accentColor={COLORS.success} />
+          <KpiCard label="Cities Count" value={`${cities.length}`} accentColor={COLORS.secondary} />
+          <KpiCard label="Products Count" value={`${products.length}`} accentColor={COLORS.secondary} />
+          <KpiCard label="Routes Count" value={`${routes.length}`} accentColor={COLORS.secondary} />
+          <KpiCard label="Total Contracts" value={`${contracts.length}`} accentColor={COLORS.primary} />
+          <KpiCard
+            label="Available Contracts"
+            value={`${countContractsByStatus(contracts, 'available')}`}
+            accentColor={COLORS.primary}
+          />
+          <KpiCard
+            label="Active Contracts"
+            value={`${countContractsByStatus(contracts, 'active')}`}
+            accentColor={COLORS.secondary}
+          />
+          <KpiCard
+            label="Completed Contracts"
+            value={`${countContractsByStatus(contracts, 'completed')}`}
+            accentColor={COLORS.success}
+          />
+          <KpiCard
+            label="Expired Contracts"
+            value={`${countContractsByStatus(contracts, 'expired')}`}
+            accentColor={COLORS.textMuted}
+          />
+          <KpiCard
+            label="Failed Contracts"
+            value={`${countContractsByStatus(contracts, 'failed')}`}
+            accentColor={COLORS.danger}
+          />
+          <KpiCard label="Active Deliveries" value={`${activeDeliveries.length}`} accentColor={COLORS.secondary} />
+          <KpiCard label="Trucks" value={`${trucks.length}`} accentColor={COLORS.primary} />
+          <KpiCard label="Drivers" value={`${drivers.length}`} accentColor={COLORS.primary} />
+          <KpiCard label="Warehouses" value={`${warehouses.length}`} accentColor={COLORS.primary} />
+          <KpiCard label="Market News Count" value={`${marketNews.length}`} accentColor={COLORS.secondary} />
+          <KpiCard label="Event Log Count" value={`${eventLog.length}`} accentColor={COLORS.primary} />
+        </View>
+
+        <Section title={`Game Event Log (${recentEvents.length}/${eventLog.length})`}>
+          {recentEvents.length === 0 ? (
+            <Text style={styles.emptyText}>No game events recorded yet.</Text>
+          ) : (
+            recentEvents.map((event: GameEvent) => (
+              <View
+                key={event.id}
+                style={[styles.itemCard, { borderLeftColor: getImportanceColor(event.importance), borderLeftWidth: 3 }]}
+              >
+                <View style={styles.eventHeaderRow}>
+                  <Text style={styles.itemTitle} numberOfLines={1}>
+                    {event.title}
+                  </Text>
+                  <Text style={[styles.eventTypeBadge, { color: getImportanceColor(event.importance) }]}>
+                    {event.type}
+                  </Text>
+                </View>
+                <Text style={styles.itemSubtext} numberOfLines={2}>
+                  {event.message}
+                </Text>
+                <Text style={styles.eventMetaText}>
+                  t={formatTime(event.time)} · {event.importance}
+                </Text>
+              </View>
+            ))
+          )}
+        </Section>
+
+        {/* TODO: Hide Save Status debug panel in production builds. */}
+        <Section title="Save Status">
+          <View style={styles.saveStatusCard}>
+            <View style={styles.statGrid}>
+              <StatItem
+                label="Save Exists"
+                value={saveStatus.hasSave ? 'Yes' : 'No'}
+                color={saveStatus.hasSave ? COLORS.success : COLORS.textMuted}
+              />
+              <StatItem
+                label="Last Save"
+                value={formatSavedAt(saveStatus.lastSavedAt)}
+                color={saveStatus.lastSavedAt ? COLORS.secondary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Auto Save"
+                value={saveStatus.autoSaveEnabled ? 'ON' : 'OFF'}
+                color={saveStatus.autoSaveEnabled ? COLORS.success : COLORS.danger}
+              />
+              <StatItem
+                label="Dirty State"
+                value={saveStatus.isDirty ? 'Yes' : 'No'}
+                color={saveStatus.isDirty ? COLORS.primary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Save Version"
+                value={`v${saveStatus.saveVersion}`}
+                color={COLORS.secondary}
+              />
+            </View>
+          </View>
+          <Text style={styles.debugNoteText}>
+            Manual save/load controls are debug-only. Player screens use automatic save only.
+          </Text>
+          <View style={styles.buttonGrid}>
+            <DebugButton label="Save Now" onPress={() => void handleSaveNow()} variant="primary" />
+            <DebugButton label="Load Save" onPress={() => void handleLoadSave()} />
+            <DebugButton label="Clear Save" onPress={() => void handleClearSave()} variant="danger" />
+          </View>
+        </Section>
+
+        {/* Time Controls */}
+        <Section title="Time Controls">
+          <View style={styles.buttonGrid}>
+            <DebugButton label="Advance 1 Hour" onPress={() => handleAdvanceTime(1)} />
+            <DebugButton label="Advance 6 Hours" onPress={() => handleAdvanceTime(6)} />
+            <DebugButton label="Advance 12 Hours" onPress={() => handleAdvanceTime(12)} />
+            <DebugButton label="Advance 24 Hours" onPress={() => handleAdvanceTime(24)} />
+            <DebugButton label="Run 7 Days Simulation" onPress={handleRun7Days} variant="primary" />
+            <DebugButton label="Pause" onPress={() => { pauseGame(); setInfo('Game paused'); }} />
+            <DebugButton label="Resume" onPress={() => { resumeGame(); setInfo('Game resumed'); }} />
+            <DebugButton
+              label="Reset Game"
+              onPress={handleResetGame}
+              variant="danger"
+            />
+          </View>
+        </Section>
+
+        {/* Economy Controls */}
+        <Section title="Economy Controls">
+          <View style={styles.buttonGrid}>
+            <DebugButton label="Run Economy Tick" onPress={handleRunEconomyTick} variant="primary" />
+            <DebugButton label="Generate Contracts" onPress={handleGenerateContracts} />
+            <DebugButton
+              label="Expire Contracts"
+              onPress={() => {
+                expireContracts();
+                setSuccess('Expired old contracts');
+              }}
+            />
+            <DebugButton
+              label="Update Fuel Price"
+              onPress={() => {
+                refuelOrUpdateFuelPrice();
+                const price = useGameStore.getState().globalEconomy.fuelPrice;
+                setSuccess(`Fuel price updated: $${price.toFixed(2)}/L`);
+              }}
+            />
+            <DebugButton
+              label="Clear Old Market News"
+              onPress={() => {
+                clearOldMarketNews();
+                setSuccess('Cleared old market news');
+              }}
+            />
+            <DebugButton
+              label="Clear Old Game Events"
+              onPress={() => {
+                clearOldGameEvents();
+                setSuccess('Cleared old game events');
+              }}
+            />
+          </View>
+        </Section>
+
+        {/* Contract Test Panel */}
+        <Section title={`Contract Test Panel (${previewContracts.length}/${availableContracts.length})`}>
+          {previewContracts.length === 0 ? (
+            <Text style={styles.emptyText}>No available contracts. Run economy tick or generate contracts.</Text>
+          ) : (
+            previewContracts.map((contract) => (
+              <View key={contract.id} style={styles.itemCard}>
+                <Text style={styles.itemTitle}>
+                  {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
+                </Text>
+                <View style={styles.statGrid}>
+                  <StatItem label="Product" value={getProductName(contract.productId)} />
+                  <StatItem label="Amount" value={formatTons(contract.amount)} />
+                  <StatItem label="Payment" value={formatMoney(contract.payment ?? 0)} color={COLORS.success} />
+                  <StatItem label="Deadline" value={`${contract.deadlineHours.toFixed(0)}h`} />
+                  <StatItem label="Distance" value={formatDistance(contract.distanceKm)} />
+                  <StatItem label="Status" value={contract.status.toUpperCase()} />
+                </View>
+                <DebugButton
+                  label="Start Test Delivery"
+                  onPress={() => handleStartTestDelivery(contract)}
+                  variant="primary"
+                />
+              </View>
+            ))
+          )}
+        </Section>
+
+        {/* Active Delivery Test Panel */}
+        <Section title={`Active Delivery Test Panel (${activeDeliveries.length})`}>
+          {activeDeliveries.length === 0 ? (
+            <Text style={styles.emptyText}>No active deliveries.</Text>
+          ) : (
+            activeDeliveries.map((delivery) => (
+              <View key={delivery.id} style={styles.itemCard}>
+                <Text style={styles.itemTitle}>
+                  {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
+                </Text>
+                <Text style={styles.itemSubtext}>
+                  {getProductName(delivery.productId)} • {formatTons(delivery.amount)}
+                </Text>
+                <ProgressBar progress={delivery.progress} color={COLORS.secondary} />
+                <View style={styles.statGrid}>
+                  <StatItem label="Progress" value={formatPercent(delivery.progress)} />
+                  <StatItem label="Status" value={delivery.status.toUpperCase()} />
+                  <StatItem label="Fuel Cost" value={formatMoney(delivery.fuelCost ?? 0)} color={COLORS.danger} />
+                  <StatItem
+                    label="Est. Profit"
+                    value={formatMoney(delivery.estimatedProfit ?? 0)}
+                    color={COLORS.success}
+                  />
+                  <StatItem
+                    label="Breakdown"
+                    value={formatPercent(delivery.breakdownChance ?? 0)}
+                  />
+                  <StatItem label="Accident" value={formatPercent(delivery.accidentChance ?? 0)} />
+                </View>
+                <View style={styles.inlineActionsRow}>
+                  <DebugButton label="Complete Now" onPress={() => handleCompleteNow(delivery)} variant="primary" />
+                  <DebugButton label="Fail Now" onPress={() => handleFailNow(delivery)} variant="danger" />
+                </View>
+              </View>
+            ))
+          )}
+        </Section>
+
+        {/* City Economy Snapshot */}
+        <Section title={`City Economy Snapshot (${citySnapshot.length})`}>
+          {citySnapshot.map((city) => {
+            const criticalProducts = getCriticalProducts(city);
+            return (
+              <View key={city.id} style={styles.itemCard}>
+                <Text style={styles.itemTitle}>{city.name}</Text>
+                <View style={styles.statGrid}>
+                  <StatItem
+                    label="Critical Shortages"
+                    value={`${countCityShortages(city)}`}
+                    color={COLORS.danger}
+                  />
+                  <StatItem
+                    label="High Surpluses"
+                    value={`${countCitySurpluses(city)}`}
+                    color={COLORS.success}
+                  />
+                  <StatItem
+                    label="Avg Price Mult."
+                    value={`${calculateCityAveragePriceMultiplier(city).toFixed(2)}x`}
+                  />
+                  <StatItem label="Total Stock" value={formatTons(calculateCityTotalStock(city))} />
+                  <StatItem label="Total Target" value={formatTons(calculateCityTotalTargetStock(city))} />
+                </View>
+
+                <Text style={styles.subSectionTitle}>Most Critical Products</Text>
+                {criticalProducts.map((row) => (
+                  <View key={row.productId} style={styles.productRow}>
+                    <Text style={styles.productRowName}>{getProductName(row.productId)}</Text>
+                    <Text style={styles.productRowMeta}>
+                      {formatTons(row.stock)} / {formatTons(row.targetStock)} • {formatPercent(row.stockRatio)} •{' '}
+                      {formatMoney(row.price)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })}
+        </Section>
+
+        {/* Store Integrity Checks */}
+        <Section title="Store Integrity Checks">
+          {integrityChecks.map((check) => (
+            <View key={check.label} style={styles.integrityRow}>
+              <Text style={styles.integrityLabel}>{check.label}</Text>
+              <View style={styles.integrityRight}>
+                {check.detail ? <Text style={styles.integrityDetail}>{check.detail}</Text> : null}
+                <Text style={[styles.integrityStatus, { color: getIntegrityColor(check.status) }]}>
+                  {check.status}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </Section>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+/** Mesafe formatı — helper listesinde ayrıca istenmedi ama contract kartında kullanılır */
+function formatDistance(km: number): string {
+  return `${Math.round(km)} km`;
+}
+
+// ---------------------------------------------------------------------------
+// Stiller
+// ---------------------------------------------------------------------------
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    paddingTop: STATUS_BAR_HEIGHT,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  loadingText: {
+    color: COLORS.textSecondary,
+    fontSize: 16,
+  },
+
+  // Header
+  header: {
+    marginBottom: 12,
+  },
+  title: {
+    color: COLORS.primary,
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  subtitle: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    marginTop: 2,
+  },
+  headerStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 12,
+  },
+  headerStatBadge: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginRight: 8,
+    marginBottom: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  headerStatValue: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  headerStatLabel: {
+    color: COLORS.textMuted,
+    fontSize: 10,
+    marginTop: 2,
+  },
+
+  // Message banner
+  messageBanner: {
+    backgroundColor: COLORS.cardAlt,
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 10,
+    marginBottom: 14,
+  },
+  messageText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // KPI grid
+  kpiGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  kpiCard: {
+    width: '48%',
+    backgroundColor: COLORS.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  kpiLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  kpiValue: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  // Section
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  subSectionTitle: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 8,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  emptyText: {
+    color: COLORS.textMuted,
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  debugNoteText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  saveStatusCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+
+  // Stat grid
+  statGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  statItem: {
+    width: '33%',
+    marginBottom: 10,
+  },
+  statLabel: {
+    color: COLORS.textMuted,
+    fontSize: 10,
+    marginBottom: 2,
+  },
+  statValue: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // Progress bar
+  progressTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#1E293B',
+    overflow: 'hidden',
+    marginTop: 6,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+
+  // Item card
+  itemCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  itemTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  itemSubtext: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  eventHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  eventTypeBadge: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  eventMetaText: {
+    color: COLORS.textMuted,
+    fontSize: 10,
+    marginTop: 6,
+  },
+
+  // Buttons
+  buttonGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  debugButton: {
+    width: '48%',
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  debugButtonDisabled: {
+    opacity: 0.45,
+  },
+  debugButtonText: {
+    color: COLORS.textPrimary,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  debugButtonTextDisabled: {
+    color: COLORS.textMuted,
+  },
+  inlineActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+
+  // Product row
+  productRow: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingVertical: 6,
+  },
+  productRowName: {
+    color: COLORS.textPrimary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  productRowMeta: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+
+  // Integrity checks
+  integrityRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  integrityLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    flex: 1,
+    marginRight: 8,
+  },
+  integrityRight: {
+    alignItems: 'flex-end',
+  },
+  integrityDetail: {
+    color: COLORS.textMuted,
+    fontSize: 10,
+    marginBottom: 2,
+  },
+  integrityStatus: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+});

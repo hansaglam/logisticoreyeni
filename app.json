@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "LogistiCore",
+    "slug": "logisticore",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.anonymous.logisticore"
+    },
+    "ios": {
+      "bundleIdentifier": "com.anonymous.logisticore"
+    }
+  }
+}

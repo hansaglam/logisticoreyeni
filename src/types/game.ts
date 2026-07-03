@@ -235,8 +235,10 @@ export interface Contract {
   status: ContractStatus;
   /** Sözleşmenin oluşturulduğu oyun zamanı (saat) */
   createdAt: number;
-  /** Teklifin geçerlilik süresi sonu (saat) — available iken expire kontrolü */
+  /** Geçerlilik süresi sonu (saat) — available iken expire kontrolü */
   expiresAt: number;
+  /** Bu sözleşmeyi almak için gereken şirket seviyesi */
+  requiredLevel?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,13 +306,64 @@ export interface Delivery {
 // ---------------------------------------------------------------------------
 
 /** Oyuncuya ait depo — belirli bir şehirde stok tutar */
+export interface WarehouseInventoryItem {
+  productId: ProductId;
+  /** Depodaki miktar (ton) */
+  quantity: number;
+  /** Ağırlıklı ortalama alış fiyatı ($/ton) */
+  averageBuyPrice: number;
+}
+
+/** Oyuncuya ait depo — belirli bir şehirde stok tutar */
 export interface Warehouse {
   id: string;
   cityId: string;
   /** Toplam depolama kapasitesi (ton) */
   capacityTons: number;
-  /** Depodaki ürün miktarları (ton) — tanımsız ürün = 0 kabul edilir */
-  storedProducts: Partial<Record<ProductId, number>>;
+  /**
+   * Depodaki ürün envanteri.
+   * Eski kayıtlar için storedProducts fallback olarak kullanılır.
+   */
+  inventory?: WarehouseInventoryItem[];
+  /** @deprecated inventory kullanın — eski kayıt uyumluluğu */
+  storedProducts?: Partial<Record<ProductId, number>>;
+  /** Önbellek — yoksa inventory toplamından hesaplanır */
+  usedCapacityTon?: number;
+}
+
+/** Finans defteri kategorileri */
+export type FinanceLedgerCategory =
+  | 'trade_purchase'
+  | 'trade_sale'
+  | 'delivery_income'
+  | 'delivery_expense'
+  | 'fleet_purchase'
+  | 'warehouse_open'
+  | 'other';
+
+/** Gelir/gider kaydı — save'e yazılır */
+export interface FinanceLedgerEntry {
+  id: string;
+  time: number;
+  type: 'income' | 'expense';
+  category: FinanceLedgerCategory;
+  amount: number;
+  description?: string;
+}
+
+/** Ticaret işlemi sonucu */
+export interface TradeActionResult {
+  success: boolean;
+  message?: string;
+  errorCode?:
+    | 'INVALID_QUANTITY'
+    | 'WAREHOUSE_NOT_FOUND'
+    | 'PRODUCT_NOT_FOUND'
+    | 'INSUFFICIENT_STOCK'
+    | 'INSUFFICIENT_CAPACITY'
+    | 'INSUFFICIENT_FUNDS'
+    | 'INSUFFICIENT_INVENTORY'
+    | 'CITY_NOT_FOUND';
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +377,14 @@ export interface Player {
   money: number;
   /** Şirket seviyesi — filo limiti ve kilit açmalar için kullanılır */
   companyLevel: number;
+  /** Şirket seviyesi (XP tabanlı) */
+  level: number;
+  /** Mevcut seviye içindeki XP */
+  xp: number;
+  /** Sonraki seviyeye kalan XP eşiği */
+  xpToNextLevel: number;
+  /** Kariyer boyu kazanılan toplam XP */
+  totalXp: number;
   /** Ana merkez şehri */
   homeCityId: string;
   /** İtibar (0–100) */
@@ -469,6 +530,8 @@ export interface StoreGameState {
   marketNews: MarketNews[];
   /** Oyuncu ve geliştirici olay günlüğü */
   eventLog: GameEvent[];
+  /** Gelir/gider defteri — ticaret ve diğer finans hareketleri */
+  financeLedger: FinanceLedgerEntry[];
 }
 
 /**
@@ -504,6 +567,7 @@ export type StartDeliveryErrorCode =
   | 'DELIVERY_CREATE_FAILED';
 
 export type ContractAvailabilityReason =
+  | 'LEVEL_INSUFFICIENT'
   | 'NO_TRUCKS'
   | 'NO_IDLE_TRUCKS'
   | 'NO_DRIVERS'
@@ -519,6 +583,8 @@ export interface ContractAvailability {
   message?: string;
   maxIdleTruckCapacity?: number;
   requiredCapacity?: number;
+  requiredLevel?: number;
+  playerLevel?: number;
 }
 
 export interface StartDeliveryResult {

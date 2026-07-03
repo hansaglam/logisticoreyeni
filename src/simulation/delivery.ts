@@ -160,7 +160,10 @@ export function getContractAvailability(
   contract: Contract,
   trucks: Truck[] | undefined,
   drivers: Driver[] | undefined,
+  playerLevel: number = 1,
 ): ContractAvailability {
+  const safePlayerLevel = Math.max(1, playerLevel);
+  const requiredLevel = contract.requiredLevel ?? 1;
   const truckList = trucks ?? [];
   const driverList = drivers ?? [];
   const product = PRODUCT_BY_ID[contract.productId];
@@ -169,6 +172,19 @@ export function getContractAvailability(
   const idleDrivers = getIdleDrivers(driverList);
   const maxIdleTruckCapacity =
     idleTrucks.length > 0 ? Math.max(...idleTrucks.map((truck) => truck.capacity ?? 0)) : 0;
+
+  if (requiredLevel > safePlayerLevel) {
+    return {
+      canStart: false,
+      reason: 'LEVEL_INSUFFICIENT',
+      buttonLabel: 'Seviye Yetersiz',
+      title: 'Seviye yetersiz',
+      message: `Bu sözleşme için şirket seviyen Level ${requiredLevel} olmalı.`,
+      requiredLevel,
+      playerLevel: safePlayerLevel,
+      requiredCapacity,
+    };
+  }
 
   if (truckList.length === 0) {
     return {
@@ -244,6 +260,8 @@ export function getContractAvailabilityWarningText(
   availability: ContractAvailability,
 ): string | null {
   switch (availability.reason) {
+    case 'LEVEL_INSUFFICIENT':
+      return `Level ${availability.requiredLevel ?? 1} gerekli`;
     case 'NO_TRUCKS':
       return 'Kamyon yok';
     case 'NO_IDLE_TRUCKS':
@@ -263,6 +281,8 @@ export function availabilityReasonToStartDeliveryErrorCode(
   reason: ContractAvailabilityReason,
 ): import('../types/game').StartDeliveryErrorCode {
   switch (reason) {
+    case 'LEVEL_INSUFFICIENT':
+      return 'DELIVERY_CREATE_FAILED';
     case 'NO_TRUCKS':
       return 'TRUCK_NOT_FOUND';
     case 'NO_IDLE_TRUCKS':

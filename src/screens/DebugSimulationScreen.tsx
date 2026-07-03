@@ -23,6 +23,8 @@ import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { canTruckCarryContract } from '../simulation/delivery';
+import { getTotalInventoryTons, summarizeFinanceLedger } from '../simulation/trading';
+import { getLevelProgress } from '../simulation/leveling';
 import type {
   City,
   CityProductState,
@@ -447,6 +449,7 @@ export default function DebugSimulationScreen() {
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const marketNews = useGameStore((state) => state.marketNews) ?? [];
   const eventLog = useGameStore((state) => state.eventLog) ?? [];
+  const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
   const isPaused = useGameStore((state) => state.isPaused);
   const gameSpeed = useGameStore((state) => state.gameSpeed);
@@ -474,6 +477,8 @@ export default function DebugSimulationScreen() {
   const updateDeliveries = useGameStore((state) => state.updateDeliveries);
   const completeDeliveryById = useGameStore((state) => state.completeDeliveryById);
   const failDeliveryById = useGameStore((state) => state.failDeliveryById);
+  const addCompanyXp = useGameStore((state) => state.addCompanyXp);
+  const getLevelBenefits = useGameStore((state) => state.getLevelBenefits);
 
   const [lastMessage, setLastMessage] = useState<StatusMessage>({
     type: 'info',
@@ -484,6 +489,11 @@ export default function DebugSimulationScreen() {
   const drivers = player?.drivers ?? [];
   const warehouses = player?.warehouses ?? [];
   const cash = player?.money ?? 0;
+  const levelProgress = useMemo(
+    () => (player ? getLevelProgress(player) : null),
+    [player],
+  );
+  const levelBenefits = getLevelBenefits(player?.level ?? player?.companyLevel ?? 1);
 
   useEffect(() => {
     void refreshSaveStatus();
@@ -497,6 +507,12 @@ export default function DebugSimulationScreen() {
   const previewContracts = availableContracts.slice(0, AVAILABLE_CONTRACT_PREVIEW);
   const citySnapshot = cities.slice(0, CITY_SNAPSHOT_COUNT);
   const recentEvents = useMemo(() => getRecentGameEvents(eventLog, 8), [eventLog]);
+  const tradeSummary = useMemo(() => summarizeFinanceLedger(financeLedger), [financeLedger]);
+  const totalInventoryTons = useMemo(() => getTotalInventoryTons(warehouses), [warehouses]);
+  const totalUsedCapacity = useMemo(
+    () => warehouses.reduce((sum, warehouse) => sum + (warehouse.usedCapacityTon ?? 0), 0),
+    [warehouses],
+  );
 
   const integrityChecks = useMemo(
     () =>
@@ -732,8 +748,25 @@ export default function DebugSimulationScreen() {
             <DebugButton label="Save Now" onPress={() => void handleSaveNow()} variant="primary" />
             <DebugButton label="Clear Save" onPress={() => void handleClearSave()} variant="danger" />
             <DebugButton label="Reset Game" onPress={handleResetGame} variant="danger" />
+            <DebugButton label="+50 XP" onPress={() => { addCompanyXp(50, 'debug'); setInfo('+50 XP eklendi'); }} />
+            <DebugButton label="+250 XP" onPress={() => { addCompanyXp(250, 'debug'); setInfo('+250 XP eklendi'); }} variant="primary" />
           </View>
         </Section>
+
+        {levelProgress ? (
+          <Section title="Şirket Seviyesi (Debug)">
+            <View style={styles.levelDebugPanel}>
+              <Text style={styles.levelDebugLine}>Level: {levelProgress.level}</Text>
+              <Text style={styles.levelDebugLine}>
+                XP: {levelProgress.xp} / {levelProgress.xpToNextLevel}
+              </Text>
+              <Text style={styles.levelDebugLine}>Toplam XP: {levelProgress.totalXp}</Text>
+              <Text style={styles.levelDebugLine}>
+                Max tonaj: {levelBenefits.maxContractTonnage}t
+              </Text>
+            </View>
+          </Section>
+        ) : null}
 
         {/* Game State Summary */}
         <View style={styles.kpiGrid}>
@@ -772,6 +805,11 @@ export default function DebugSimulationScreen() {
           <KpiCard label="Trucks" value={`${trucks.length}`} accentColor={COLORS.primary} />
           <KpiCard label="Drivers" value={`${drivers.length}`} accentColor={COLORS.primary} />
           <KpiCard label="Warehouses" value={`${warehouses.length}`} accentColor={COLORS.primary} />
+          <KpiCard label="Inventory Tons" value={`${totalInventoryTons.toFixed(1)}`} accentColor={COLORS.secondary} />
+          <KpiCard label="Warehouse Used Cap." value={`${totalUsedCapacity.toFixed(1)}t`} accentColor={COLORS.secondary} />
+          <KpiCard label="Trade Purchases" value={`$${Math.round(tradeSummary.tradePurchaseTotal)}`} accentColor={COLORS.danger} />
+          <KpiCard label="Trade Sales" value={`$${Math.round(tradeSummary.tradeSaleTotal)}`} accentColor={COLORS.success} />
+          <KpiCard label="Trade Net Profit" value={`$${Math.round(tradeSummary.tradeNetProfit)}`} accentColor={COLORS.primary} />
           <KpiCard label="Market News Count" value={`${marketNews.length}`} accentColor={COLORS.secondary} />
           <KpiCard label="Event Log Count" value={`${eventLog.length}`} accentColor={COLORS.primary} />
         </View>
@@ -1248,6 +1286,20 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     fontSize: 10,
     marginTop: 6,
+  },
+
+  levelDebugPanel: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 14,
+    gap: 6,
+  },
+  levelDebugLine: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    fontWeight: '600',
   },
 
   // Buttons

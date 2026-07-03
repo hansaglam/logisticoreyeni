@@ -15,10 +15,10 @@ import {
   View,
 } from 'react-native';
 
-import NetworkMapCanvas, { type NetworkFilterKey } from '../components/map/NetworkMapCanvas';
+import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useGameStore } from '../store/gameStore';
-import { getNetworkCityPosition } from '../data/networkPositions';
+import { getWorldMapCityPosition } from '../data/worldMapPositions';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
@@ -254,14 +254,16 @@ export default function MapScreen() {
   }, [runningDeliveries, selectedDeliveryId]);
 
   const mapCities = useMemo(
-    () => cities.filter((city) => getNetworkCityPosition(city.id) != null),
+    () => cities.filter((city) => getWorldMapCityPosition(city.id) != null),
     [cities],
   );
 
   const routeCount = useMemo(() => {
     const keys = new Set<string>();
     for (const route of routes) {
-      if (!getNetworkCityPosition(route.fromCityId) || !getNetworkCityPosition(route.toCityId)) continue;
+      if (!getWorldMapCityPosition(route.fromCityId) || !getWorldMapCityPosition(route.toCityId)) {
+        continue;
+      }
       keys.add([route.fromCityId, route.toCityId].sort().join('|'));
     }
     return keys.size;
@@ -410,7 +412,8 @@ export default function MapScreen() {
           </View>
         ) : null}
 
-        <NetworkMapCanvas
+        <WorldMapCanvas
+          calibrationMode={__DEV__}
           cities={cities}
           routes={routes}
           contracts={contracts}

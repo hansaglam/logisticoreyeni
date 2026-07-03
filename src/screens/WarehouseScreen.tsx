@@ -6,6 +6,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,11 +14,19 @@ import {
   View,
 } from 'react-native';
 
+import TradeProductModal from '../components/TradeProductModal';
 import { useGameStore } from '../store/gameStore';
 import { warehouseBalance } from '../config/balance';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
+import {
+  calculateTradeProfit,
+  getCityProductMarketPrice,
+  getWarehouseUsedCapacityTon,
+  normalizeWarehouse,
+} from '../simulation/trading';
+import { getMinLevelForWarehouseCount } from '../simulation/leveling';
 import type { City, CityProductState, ProductId, Warehouse } from '../types/game';
 
 const COLORS = {
@@ -127,9 +136,13 @@ function getWarehouseStocks(warehouse: WarehouseLike): Record<string, number> {
 }
 
 function calculateWarehouseUsedCapacity(warehouse: WarehouseLike): number {
-  if (typeof warehouse.usedCapacity === 'number') return warehouse.usedCapacity;
-  const stocks = getWarehouseStocks(warehouse);
-  return Object.values(stocks).reduce((sum, amount) => sum + amount, 0);
+  if (typeof warehouse.usedCapacity === 'number') {
+    return warehouse.usedCapacity;
+  }
+  if (typeof warehouse.usedCapacityTon === 'number') {
+    return warehouse.usedCapacityTon;
+  }
+  return getWarehouseUsedCapacityTon(warehouse);
 }
 
 function calculateWarehouseFreeCapacity(warehouse: WarehouseLike): number {
@@ -267,24 +280,23 @@ function SummaryCard({
 
 function WarehouseCard({
   warehouse,
-  getCityMarketPrice,
+  city,
+  onSellProduct,
   onUpgrade,
-  onManageStock,
 }: {
   warehouse: WarehouseLike;
-  getCityMarketPrice: (cityId: string, productId: string) => number;
+  city?: City;
+  onSellProduct: (warehouse: Warehouse, productId: ProductId) => void;
   onUpgrade: (warehouse: WarehouseLike) => void;
-  onManageStock: (warehouse: WarehouseLike) => void;
 }) {
-  const city = getWarehouseCity(warehouse);
+  const normalized = normalizeWarehouse(warehouse);
   const capacity = getWarehouseCapacity(warehouse);
   const used = calculateWarehouseUsedCapacity(warehouse);
   const free = calculateWarehouseFreeCapacity(warehouse);
   const cost = calculateWarehouseDailyCost(warehouse);
   const warehouseUtilization = capacity > 0 ? used / capacity : 0;
   const utilizationColor = getUtilizationColor(warehouseUtilization);
-  const stocks = getWarehouseStocks(warehouse);
-  const stockEntries = Object.entries(stocks);
+  const inventory = normalized.inventory ?? [];
 
   return (
     <View style={styles.warehouseCard}>
@@ -309,16 +321,34 @@ function WarehouseCard({
         </Text>
       </View>
 
-      {stockEntries.length > 0 ? (
+      {inventory.length > 0 ? (
         <View style={styles.stockBox}>
-          {stockEntries.map(([productId, amount]) => {
-            const marketPrice = getCityMarketPrice(warehouse.cityId, productId);
+          {inventory.map((item) => {
+            const currentPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
+            const estimatedProfit = calculateTradeProfit(
+              currentPrice,
+              item.averageBuyPrice,
+              item.quantity,
+            );
+            const profitColor = estimatedProfit >= 0 ? COLORS.success : COLORS.danger;
+
             return (
-              <View key={productId} style={styles.stockRow}>
-                <Text style={styles.stockProductName}>{getProductName(productId)}</Text>
-                <Text style={styles.stockValue}>
-                  {formatTons(amount)} · {formatMoney(amount * marketPrice)}
+              <View key={item.productId} style={styles.inventoryCard}>
+                <Text style={styles.stockProductName}>{getProductName(item.productId)}</Text>
+                <Text style={styles.stockValue}>{formatTons(item.quantity)}</Text>
+                <Text style={styles.inventoryMeta}>
+                  Alış ort.: {formatMoney(item.averageBuyPrice)} · Güncel: {formatMoney(currentPrice)}
                 </Text>
+                <Text style={[styles.inventoryProfit, { color: profitColor }]}>
+                  Tahmini kâr: {formatMoney(estimatedProfit)}
+                </Text>
+                <TouchableOpacity
+                  style={styles.sellButton}
+                  onPress={() => onSellProduct(normalized, item.productId)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.sellButtonText}>Sat</Text>
+                </TouchableOpacity>
               </View>
             );
           })}
@@ -327,7 +357,7 @@ function WarehouseCard({
         <View style={styles.emptyStockBlock}>
           <Text style={styles.emptyStockTitle}>Depo boş.</Text>
           <Text style={styles.emptyStockHint}>
-            Ucuz ürünleri burada stoklayarak ileride kârlı taşıma fırsatları yakalayabilirsin.
+            Piyasa ekranından ucuz ürün alıp burada stoklayabilir, fiyat yükselince satabilirsin.
           </Text>
         </View>
       )}
@@ -335,13 +365,6 @@ function WarehouseCard({
       <View style={styles.warehouseActionsRow}>
         <TouchableOpacity style={styles.secondaryActionButton} onPress={() => onUpgrade(warehouse)} activeOpacity={0.85}>
           <Text style={styles.secondaryActionText}>Yükselt</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.secondaryActionButton}
-          onPress={() => onManageStock(warehouse)}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.secondaryActionText}>Stok Yönet</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -373,9 +396,14 @@ export default function WarehouseScreen() {
   const player = useGameStore((state) => state.player);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
+  const openWarehouse = useGameStore((state) => state.openWarehouse);
+  const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
 
   const warehouses: WarehouseLike[] = player?.warehouses ?? [];
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [tradeModalVisible, setTradeModalVisible] = useState(false);
+  const [sellWarehouse, setSellWarehouse] = useState<Warehouse | null>(null);
+  const [sellProductId, setSellProductId] = useState<ProductId | null>(null);
   const { scrollBottomPadding } = useTabBarLayout();
 
   useEffect(() => {
@@ -384,16 +412,14 @@ export default function WarehouseScreen() {
     return () => clearTimeout(timeout);
   }, [statusMessage]);
 
-  const getCityMarketPrice = (cityId: string, productId: string): number => {
-    const city = cities.find((c) => c.id === cityId);
-    return getCityProductPrice(city, productId);
-  };
-
   const totalCapacity = useMemo(() => calculateTotalWarehouseCapacity(warehouses), [warehouses]);
   const usedCapacity = useMemo(() => calculateTotalUsedCapacity(warehouses), [warehouses]);
   const dailyCost = useMemo(() => calculateTotalDailyWarehouseCost(warehouses), [warehouses]);
 
   const warehouseCityIds = useMemo(() => new Set(warehouses.map((w) => w.cityId)), [warehouses]);
+  const playerLevel = player?.level ?? player?.companyLevel ?? 1;
+  const nextWarehouseMinLevel = getMinLevelForWarehouseCount(warehouses.length);
+  const canOpenNextWarehouse = playerLevel >= nextWarehouseMinLevel;
   const topCityOpportunities = useMemo(
     () =>
       cities
@@ -407,19 +433,54 @@ export default function WarehouseScreen() {
     setStatusMessage('Bu özellik yakında eklenecek.');
   };
 
-  const handleManageStock = () => {
-    setStatusMessage('Stok yönetimi sonraki sürümde aktif olacak.');
-  };
-
   const handleOpenWarehouse = (cityId: string) => {
-    const storeState = useGameStore.getState() as unknown as {
-      openWarehouse?: (cityId: string) => void;
-    };
-    if (typeof storeState.openWarehouse === 'function') {
-      storeState.openWarehouse(cityId);
+    const result = openWarehouse(cityId);
+    if (!result.success) {
+      Alert.alert('Depo açılamadı', result.message ?? 'İşlem tamamlanamadı.');
       return;
     }
-    setStatusMessage('Depo açma sistemi yakında eklenecek.');
+    setStatusMessage(result.message ?? 'Depo açıldı');
+  };
+
+  const handleSellProduct = (warehouse: Warehouse, productId: ProductId) => {
+    setSellWarehouse(warehouse);
+    setSellProductId(productId);
+    setTradeModalVisible(true);
+  };
+
+  const sellCity = useMemo(
+    () => cities.find((city) => city.id === sellWarehouse?.cityId) ?? null,
+    [cities, sellWarehouse?.cityId],
+  );
+
+  const sellProduct = useMemo(
+    () => products.find((product) => product.id === sellProductId) ?? null,
+    [products, sellProductId],
+  );
+
+  const sellInventoryItem = useMemo(() => {
+    if (!sellWarehouse || !sellProductId) return null;
+    return normalizeWarehouse(sellWarehouse).inventory?.find((item) => item.productId === sellProductId);
+  }, [sellWarehouse, sellProductId]);
+
+  const handleConfirmSell = (quantity: number) => {
+    if (!sellWarehouse || !sellProductId) return;
+
+    const result = sellProductFromWarehouse({
+      warehouseId: sellWarehouse.id,
+      productId: sellProductId,
+      quantity,
+    });
+
+    if (!result.success) {
+      Alert.alert('Satış başarısız', result.message ?? 'İşlem tamamlanamadı.');
+      return;
+    }
+
+    setTradeModalVisible(false);
+    setSellWarehouse(null);
+    setSellProductId(null);
+    setStatusMessage(result.message ?? 'Ürün satıldı');
   };
 
   const handleShowMoreTips = () => {
@@ -477,9 +538,9 @@ export default function WarehouseScreen() {
               <WarehouseCard
                 key={warehouse.id}
                 warehouse={warehouse}
-                getCityMarketPrice={getCityMarketPrice}
+                city={cities.find((city) => city.id === warehouse.cityId)}
+                onSellProduct={handleSellProduct}
                 onUpgrade={handleUpgradeWarehouse}
-                onManageStock={handleManageStock}
               />
             ))
           )}
@@ -514,12 +575,23 @@ export default function WarehouseScreen() {
                     Günlük kira:{' '}
                     <Text style={styles.opportunityCostValue}>{formatMoney(estimatedDailyRent)}</Text>
                   </Text>
+                  {!canOpenNextWarehouse ? (
+                    <Text style={styles.levelLockText}>
+                      Yeni depo için Level {nextWarehouseMinLevel} gerekli
+                    </Text>
+                  ) : null}
                   <TouchableOpacity
-                    style={styles.openWarehouseButton}
+                    style={[
+                      styles.openWarehouseButton,
+                      !canOpenNextWarehouse && styles.openWarehouseButtonDisabled,
+                    ]}
                     onPress={() => handleOpenWarehouse(city.id)}
+                    disabled={!canOpenNextWarehouse}
                     activeOpacity={0.85}
                   >
-                    <Text style={styles.openWarehouseButtonText}>Depo Aç</Text>
+                    <Text style={styles.openWarehouseButtonText}>
+                      {canOpenNextWarehouse ? 'Depo Aç' : `Level ${nextWarehouseMinLevel} gerekli`}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -529,6 +601,26 @@ export default function WarehouseScreen() {
 
         <StrategyTipsSection onShowMore={handleShowMoreTips} />
       </ScrollView>
+
+      <TradeProductModal
+        visible={tradeModalVisible}
+        mode="sell"
+        city={sellCity}
+        product={sellProduct}
+        currentPrice={
+          sellCity && sellProductId ? getCityProductMarketPrice(sellCity, sellProductId) : 0
+        }
+        availableStock={0}
+        inventoryQuantity={sellInventoryItem?.quantity ?? 0}
+        averageBuyPrice={sellInventoryItem?.averageBuyPrice ?? 0}
+        playerCash={player.money}
+        onConfirm={handleConfirmSell}
+        onClose={() => {
+          setTradeModalVisible(false);
+          setSellWarehouse(null);
+          setSellProductId(null);
+        }}
+      />
     </View>
   );
 }
@@ -689,6 +781,35 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+  inventoryCard: {
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    paddingVertical: 8,
+    marginBottom: 4,
+  },
+  inventoryMeta: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  inventoryProfit: {
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  sellButton: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    backgroundColor: COLORS.primary,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  sellButtonText: {
+    color: '#0B1220',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   emptyStockBlock: {
     marginTop: 10,
   },
@@ -756,6 +877,12 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: '700',
   },
+  levelLockText: {
+    color: COLORS.danger,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
+  },
   openWarehouseButton: {
     backgroundColor: COLORS.primary,
     height: 42,
@@ -763,6 +890,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 10,
+  },
+  openWarehouseButtonDisabled: {
+    backgroundColor: COLORS.border,
   },
   openWarehouseButtonText: {
     color: '#0B1220',

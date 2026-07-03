@@ -1,6 +1,8 @@
 /**
  * Türkiye Lojistik Ağı — mobil tycoon network overview.
  * Zoom/pan yok; normalized layout + SVG.
+ *
+ * TODO: Yeni WorldMapCanvas doğrulandıktan sonra bu dosya silinecek.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';

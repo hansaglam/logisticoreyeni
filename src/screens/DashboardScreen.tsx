@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 import { useGameStore, getRecentGameEvents } from '../store/gameStore';
+import { getLevelProgress, getLevelBenefits } from '../simulation/leveling';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
@@ -275,6 +276,8 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
   }
 
   const nextAction = resolveNextAction(player.money, runningDeliveries, availableContracts);
+  const levelProgress = getLevelProgress(player);
+  const levelBenefits = getLevelBenefits(levelProgress.level);
 
   const handleNextAction = () => {
     try {
@@ -307,7 +310,12 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
           </View>
 
           <View style={styles.headerRight}>
-            <Text style={styles.headerMoney}>{formatMoney(player.money)}</Text>
+            <View style={styles.headerMoneyRow}>
+              <Text style={styles.headerMoney}>{formatMoney(player.money)}</Text>
+              <View style={styles.levelBadge}>
+                <Text style={styles.levelBadgeText}>Lv. {levelProgress.level}</Text>
+              </View>
+            </View>
             <View style={styles.headerMetaRow}>
               <Text style={styles.headerTime}>{formatTime(currentTime)}</Text>
               <TouchableOpacity
@@ -324,6 +332,20 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
         <View style={styles.companyCard}>
           <Text style={styles.companyCardTitle}>Şirket Özeti</Text>
+          <CompanyStatRow
+            label="Şirket Seviyesi"
+            value={`Level ${levelProgress.level}`}
+            valueColor={COLORS.primary}
+          />
+          <View style={styles.xpSection}>
+            <Text style={styles.xpLabel}>
+              {levelProgress.isMaxLevel
+                ? 'Maksimum seviye'
+                : `${levelProgress.xp} / ${levelProgress.xpToNextLevel} XP`}
+            </Text>
+            <ProgressBar progress={levelProgress.progressRatio} color={COLORS.primary} />
+            <Text style={styles.xpHint}>Sonraki seviye: {levelBenefits.nextLevelHint}</Text>
+          </View>
           <CompanyStatRow label="Nakit" value={formatMoney(player.money)} valueColor={COLORS.primary} />
           <CompanyStatRow
             label="İtibar"
@@ -542,6 +564,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
+  headerMoneyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  levelBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  levelBadgeText: {
+    color: COLORS.primary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
   headerMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -587,6 +627,23 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     marginBottom: 4,
+  },
+  xpSection: {
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(31, 42, 60, 0.7)',
+    marginBottom: 4,
+  },
+  xpLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  xpHint: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    marginTop: 6,
   },
   companyStatRow: {
     flexDirection: 'row',

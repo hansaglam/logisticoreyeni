@@ -16,8 +16,9 @@ import type {
   ProductMarket,
   Route,
 } from '../types/game';
-import { contractBalance } from '../config/balance';
+import { contractBalance, levelBalance } from '../config/balance';
 import { toProductMarket } from './economy';
+import { getMaxTonnageForLevel, getRequiredLevelForTonnage } from './leveling';
 
 // ---------------------------------------------------------------------------
 // Yapılandırma sabitleri
@@ -85,6 +86,7 @@ export interface GenerateContractForProductParams {
 export interface GenerateContractsOptions {
   maxNewContracts?: number;
   maxTruckCapacity?: number;
+  playerLevel?: number;
   currentTime: number;
 }
 
@@ -552,6 +554,7 @@ export function generateContractForProduct(
     status: 'available',
     createdAt: currentTime,
     expiresAt: currentTime + deadlineHours * contractBalance.contractExpiryHours,
+    requiredLevel: getRequiredLevelForTonnage(amount),
   };
 }
 
@@ -574,7 +577,8 @@ export function generateContracts(
   options: GenerateContractsOptions,
 ): Contract[] {
   const maxNewContracts = options.maxNewContracts ?? contractBalance.maxContractsPerTick;
-  const maxTruckCapacity = options.maxTruckCapacity ?? DEFAULT_MAX_TRUCK_CAPACITY;
+  const playerLevel = Math.max(1, options.playerLevel ?? 1);
+  const maxTruckCapacity = options.maxTruckCapacity ?? getMaxTonnageForLevel(playerLevel);
   const { currentTime } = options;
 
   const cityList = Object.values(cities);
@@ -648,7 +652,33 @@ export function generateContracts(
           continue;
         }
 
-        const dedupeKey = getContractDedupeKey(contract);
+        let finalContract = contract;
+
+        if (Math.random() < 0.08 && playerLevel < levelBalance.maxLevel) {
+          const tiers = [...levelBalance.contractTonnageByLevel].sort((a, b) => a.level - b.level);
+          const nextTier = tiers.find((tier) => tier.level > playerLevel);
+          if (nextTier) {
+            const teaser = generateContractForProduct({
+              originCity,
+              destinationCity,
+              productId: product.id,
+              product,
+              route,
+              globalEconomy,
+              currentTime,
+              maxTruckCapacity: nextTier.maxTonnage,
+              sequence: sequenceCounter + 10_000,
+            });
+            if (teaser && (teaser.amount ?? 0) > (contract.amount ?? 0)) {
+              finalContract = {
+                ...teaser,
+                requiredLevel: nextTier.level,
+              };
+            }
+          }
+        }
+
+        const dedupeKey = getContractDedupeKey(finalContract);
         if (existingDedupeKeys.has(dedupeKey)) {
           continue;
         }
@@ -658,13 +688,13 @@ export function generateContracts(
         const marketPriorityBonus = priorityOpportunityKeys.has(routeKey) ? 60 : 0;
         const score =
           calculateContractScore(
-            contract.payment,
-            contract.urgency,
-            contract.amount,
+            finalContract.payment,
+            finalContract.urgency,
+            finalContract.amount,
             priceDiffRatio,
           ) + marketPriorityBonus;
 
-        candidates.push({ score, contract });
+        candidates.push({ score, contract: finalContract });
       }
     }
   }
@@ -709,6 +739,7 @@ export interface ReplenishContractsParams {
   contracts: Contract[];
   currentTime: number;
   maxTruckCapacity?: number;
+  playerLevel?: number;
 }
 
 export interface ReplenishContractsResult {
@@ -744,6 +775,9 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
     return { contracts: expired, newContracts: [] };
   }
 
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const maxTruckCapacity = params.maxTruckCapacity ?? getMaxTonnageForLevel(playerLevel);
+
   const newContracts = generateContracts(
     params.cities,
     params.routes,
@@ -753,7 +787,8 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
     {
       currentTime: params.currentTime,
       maxNewContracts: needed,
-      maxTruckCapacity: params.maxTruckCapacity,
+      maxTruckCapacity,
+      playerLevel,
     },
   );
 

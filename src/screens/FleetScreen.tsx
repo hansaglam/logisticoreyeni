@@ -20,6 +20,7 @@ import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { AVAILABLE_TRUCKS, type TruckTemplate } from '../data/trucks';
+import { getTruckUnlockLevel } from '../simulation/leveling';
 import { AVAILABLE_DRIVERS, type DriverTemplate } from '../data/drivers';
 import { calculateTruckRepairCost } from '../simulation/delivery';
 import type { Delivery, DeliveryStatus, Driver, ProductId, Truck } from '../types/game';
@@ -420,27 +421,32 @@ function DriverCard({
 function AvailableTruckCard({
   template,
   playerMoney,
+  playerLevel,
   alreadyOwned,
   canBuy,
   onBuy,
 }: {
   template: TruckTemplate;
   playerMoney: number;
+  playerLevel: number;
   alreadyOwned: boolean;
   canBuy: boolean;
   onBuy: (truckId: string) => void;
 }) {
+  const requiredLevel = getTruckUnlockLevel(template.id);
+  const isLevelLocked = playerLevel < requiredLevel;
   const canAfford = playerMoney >= template.purchasePrice;
-  const disabled = !canBuy || alreadyOwned || !canAfford;
+  const disabled = !canBuy || alreadyOwned || !canAfford || isLevelLocked;
   const tags = getTruckShopTags(template);
 
   let buttonLabel = 'Satın Al';
-  if (!canBuy) buttonLabel = 'Yakında';
+  if (isLevelLocked) buttonLabel = `Level ${requiredLevel} gerekli`;
+  else if (!canBuy) buttonLabel = 'Yakında';
   else if (alreadyOwned) buttonLabel = 'Sahipsin';
   else if (!canAfford) buttonLabel = 'Nakit yetersiz';
 
   return (
-    <View style={styles.shopCard}>
+    <View style={[styles.shopCard, isLevelLocked && styles.shopCardLocked]}>
       <View style={styles.shopCardHeaderRow}>
         <Text style={styles.shopItemName} numberOfLines={1}>
           {template.name}
@@ -451,6 +457,10 @@ function AvailableTruckCard({
       <Text style={styles.shopShortMeta}>
         {template.capacity} ton · {template.speed} km/h
       </Text>
+
+      {isLevelLocked ? (
+        <Text style={styles.shopLockHint}>Daha yüksek seviyede açılır.</Text>
+      ) : null}
 
       <View style={styles.shopStatGrid}>
         <ShopStatRow label="Kapasite" value={`${template.capacity} ton`} />
@@ -787,6 +797,7 @@ export default function FleetScreen() {
                   key={template.id}
                   template={template}
                   playerMoney={player.money}
+                  playerLevel={player.level ?? player.companyLevel ?? 1}
                   alreadyOwned={trucks.some((t) => t.id === template.id)}
                   canBuy={typeof buyTruck === 'function'}
                   onBuy={handleBuyTruck}
@@ -1183,6 +1194,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
+  shopCardLocked: {
+    opacity: 0.72,
+    borderColor: COLORS.border,
+  },
   shopCardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1212,6 +1227,12 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: 12,
     marginBottom: 10,
+  },
+  shopLockHint: {
+    color: COLORS.danger,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 8,
   },
   shopStatGrid: {
     borderTopWidth: 1,

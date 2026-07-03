@@ -39,6 +39,7 @@ export type ContractAssignmentModalProps = {
   contract: Contract | null;
   trucks: Truck[];
   drivers: Driver[];
+  playerLevel?: number;
   onClose: () => void;
   onConfirm: (truckId: string, driverId: string) => void;
   onGoToFleet?: (subTab?: 'trucks' | 'drivers' | 'shop') => void;
@@ -167,6 +168,7 @@ export default function ContractAssignmentModal({
   contract,
   trucks,
   drivers,
+  playerLevel = 1,
   onClose,
   onConfirm,
   onGoToFleet,
@@ -184,8 +186,8 @@ export default function ContractAssignmentModal({
     if (!contract) {
       return null;
     }
-    return getContractAvailability(contract, trucks, drivers);
-  }, [contract, trucks, drivers]);
+    return getContractAvailability(contract, trucks, drivers, playerLevel);
+  }, [contract, trucks, drivers, playerLevel]);
 
   const truckOptions = useMemo(
     () => (trucks ?? []).map((truck) => evaluateTruckOption(truck, cargoWeight)),

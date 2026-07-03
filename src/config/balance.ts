@@ -118,6 +118,18 @@ export const warehouseBalance = {
   staffCostPerLevel: 140,
 } as const;
 
+export const tradingBalance = {
+  minTradeQuantity: 5,
+  defaultTradeQuantity: 10,
+  maxTradeQuantity: 50,
+  warehouseBuyFeeRate: 0.02,
+  warehouseSellFeeRate: 0.02,
+  minProfitHintPercent: 8,
+  highProfitHintPercent: 20,
+  /** Yeni depo varsayılan kapasitesi (ton) */
+  defaultWarehouseCapacityTons: 80,
+} as const;
+
 export const financeBalance = {
   /** Kritik nakit eşiği ($) */
   lowCashThreshold: 5000,
@@ -143,6 +155,34 @@ export const financeBalance = {
   reputationValuePerPoint: 100,
 } as const;
 
+export const levelBalance = {
+  maxLevel: 30,
+  contractTonnageByLevel: [
+    { level: 1, maxTonnage: 25 },
+    { level: 2, maxTonnage: 40 },
+    { level: 3, maxTonnage: 60 },
+    { level: 5, maxTonnage: 90 },
+    { level: 8, maxTonnage: 120 },
+  ],
+  truckUnlockLevels: {
+    'truck-starter-1': 1,
+    'truck-ford-cargo': 1,
+    'truck-volvo-fh': 2,
+    'truck-mercedes-actros': 3,
+  },
+  warehouseUnlockLevels: {
+    openSecondWarehouse: 2,
+    openThirdWarehouse: 4,
+    largeWarehouse: 5,
+  },
+  xpRewards: {
+    truckPurchase: 30,
+    driverHire: 10,
+    warehouseOpen: 40,
+    warehouseUpgrade: 25,
+  },
+} as const;
+
 /** Tüm denge grupları — tek import noktası */
 export const balanceConfig = {
   economy: economyBalance,
@@ -151,6 +191,8 @@ export const balanceConfig = {
   truck: truckBalance,
   warehouse: warehouseBalance,
   finance: financeBalance,
+  trading: tradingBalance,
+  level: levelBalance,
 } as const;
 
 export type EconomyBalance = typeof economyBalance;
@@ -159,4 +201,6 @@ export type DeliveryBalance = typeof deliveryBalance;
 export type TruckBalance = typeof truckBalance;
 export type WarehouseBalance = typeof warehouseBalance;
 export type FinanceBalance = typeof financeBalance;
+export type TradingBalance = typeof tradingBalance;
+export type LevelBalance = typeof levelBalance;
 export type BalanceConfig = typeof balanceConfig;

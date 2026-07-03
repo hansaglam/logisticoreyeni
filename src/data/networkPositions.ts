@@ -1,6 +1,8 @@
 /**
  * Türkiye Lojistik Ağı — mobil tycoon network layout (normalized 0–1).
  * Gerçek coğrafya yok; tüm cihazlarda aynı oranlarla ölçeklenir.
+ *
+ * TODO: Yeni WorldMapCanvas doğrulandıktan sonra bu dosya silinecek.
  */
 
 export interface NormalizedPoint {

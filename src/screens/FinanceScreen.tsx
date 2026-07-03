@@ -17,6 +17,7 @@ import { economyBalance, financeBalance, warehouseBalance } from '../config/bala
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
+import { summarizeFinanceLedger } from '../simulation/trading';
 import type { Contract, Delivery, Driver, ProductId, Truck, Warehouse } from '../types/game';
 
 const COLORS = {
@@ -211,6 +212,7 @@ export default function FinanceScreen() {
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
 
   const trucks: Truck[] = player?.trucks ?? [];
   const drivers: Driver[] = player?.drivers ?? [];
@@ -284,13 +286,14 @@ export default function FinanceScreen() {
   };
 
   const totalRevenue = useMemo(calculateTotalRevenue, [contracts]);
+  const tradeSummary = useMemo(() => summarizeFinanceLedger(financeLedger), [financeLedger]);
   const totalExpenses = useMemo(calculateTotalExpenses, [
     activeDeliveries,
     trucks,
     drivers,
     warehouses,
   ]);
-  const netProfit = totalRevenue - totalExpenses;
+  const netProfit = totalRevenue + tradeSummary.tradeSaleTotal - totalExpenses - tradeSummary.tradePurchaseTotal;
   const dailyFixedCosts = useMemo(
     () => calculateDailyDriverSalary() + calculateDailyWarehouseCost(),
     [drivers, warehouses],
@@ -402,18 +405,51 @@ export default function FinanceScreen() {
         />
 
         <View style={styles.breakdownSection}>
+          <Text style={styles.sectionTitle}>Şirket İlerlemesi</Text>
+          <View style={styles.breakdownCard}>
+            <BreakdownRow
+              label="Seviye"
+              value={`Level ${player.level ?? player.companyLevel ?? 1}`}
+              color={COLORS.primary}
+            />
+            <BreakdownRow
+              label="Toplam XP"
+              value={`${player.totalXp ?? player.xp ?? 0}`}
+              color={COLORS.secondary}
+            />
+            <BreakdownRow
+              label="Tamamlanan sözleşme"
+              value={`${player.completedContracts}`}
+              color={COLORS.textPrimary}
+            />
+            <BreakdownRow label="Kamyon" value={`${trucks.length}`} color={COLORS.textPrimary} />
+            <BreakdownRow label="Depo" value={`${warehouses.length}`} color={COLORS.textPrimary} />
+            <BreakdownRow
+              label="İtibar"
+              value={`${Math.round(player.reputation)}/100`}
+              color={COLORS.success}
+              isLast
+            />
+          </View>
+        </View>
+
+        <View style={styles.breakdownSection}>
           <Text style={styles.sectionTitle}>Gelir Dağılımı</Text>
           {showRevenueHint ? (
             <Text style={styles.sectionHint}>Gelirler teslimat tamamlandığında işlenir.</Text>
           ) : null}
           <View style={styles.breakdownCard}>
             <BreakdownRow label="Sözleşme gelirleri" value={formatMoney(totalRevenue)} color={COLORS.success} />
-            <BreakdownRow label="Teslimat bonusları (yakında)" value={formatMoney(0)} color={COLORS.textMuted} />
-            <BreakdownRow label="Depo satışları (yakında)" value={formatMoney(0)} color={COLORS.textMuted} />
             <BreakdownRow
-              label="Ticaret kârı (yakında)"
-              value={formatMoney(0)}
-              color={COLORS.textMuted}
+              label="Ticaret satışları"
+              value={formatMoney(tradeSummary.tradeSaleTotal)}
+              color={COLORS.success}
+            />
+            <BreakdownRow label="Teslimat bonusları (yakında)" value={formatMoney(0)} color={COLORS.textMuted} />
+            <BreakdownRow
+              label="Ticaret kârı"
+              value={formatMoney(tradeSummary.tradeNetProfit)}
+              color={tradeSummary.tradeNetProfit >= 0 ? COLORS.success : COLORS.danger}
               isLast
             />
           </View>
@@ -430,6 +466,11 @@ export default function FinanceScreen() {
             />
             <BreakdownRow label="Şoför maaşları" value={formatMoney(driverSalaries)} color={COLORS.danger} />
             <BreakdownRow label="Depo giderleri" value={formatMoney(warehouseCosts)} color={COLORS.danger} />
+            <BreakdownRow
+              label="Ürün alımları"
+              value={formatMoney(tradeSummary.tradePurchaseTotal)}
+              color={COLORS.danger}
+            />
             <BreakdownRow label="Gecikme cezaları (yakında)" value={formatMoney(0)} color={COLORS.textMuted} />
             <BreakdownRow
               label="Başarısız teslimat cezaları (yakında)"

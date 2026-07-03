@@ -14,13 +14,17 @@ import type {
   Contract,
   Delivery,
   GameEvent,
+  FinanceLedgerEntry,
   GlobalEconomy,
   MarketNews,
   Player,
   Product,
   Route,
   StoreGameState,
+  Warehouse,
 } from '../types/game';
+import { normalizeWarehouse } from '../simulation/trading';
+import { normalizePlayerProgress } from '../simulation/leveling';
 
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
 export const SAVE_GAME_VERSION = 1;
@@ -50,6 +54,7 @@ export interface SaveGamePayload {
   globalEconomy: GlobalEconomy;
   marketNews: MarketNews[];
   eventLog: GameEvent[];
+  financeLedger?: FinanceLedgerEntry[];
   gameSpeed: number;
   isPaused: boolean;
 }
@@ -123,6 +128,11 @@ export function getSaveProvider(): SaveProvider {
 }
 
 export function serializeGameState(state: StoreGameState): SaveGamePayload {
+  const player: Player = normalizePlayerProgress({
+    ...structuredClone(state.player),
+    warehouses: normalizePlayerWarehouses(state.player.warehouses),
+  });
+
   return {
     version: SAVE_GAME_VERSION,
     meta: {
@@ -135,7 +145,7 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
       saveVersion: SAVE_GAME_VERSION,
     },
     currentTime: state.currentTime,
-    player: structuredClone(state.player),
+    player,
     cities: structuredClone(state.cities),
     products: structuredClone(state.products),
     routes: structuredClone(state.routes),
@@ -144,9 +154,14 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     globalEconomy: structuredClone(state.globalEconomy),
     marketNews: structuredClone(state.marketNews),
     eventLog: structuredClone(state.eventLog),
+    financeLedger: structuredClone(state.financeLedger ?? []),
     gameSpeed: state.gameSpeed,
     isPaused: state.isPaused,
   };
+}
+
+function normalizePlayerWarehouses(warehouses: Warehouse[]): Warehouse[] {
+  return (warehouses ?? []).map((warehouse) => normalizeWarehouse(warehouse));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -245,13 +260,18 @@ export function validateSavePayload(payload: unknown): payload is SaveGamePayloa
 
 export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
   const economyTickInterval = 24;
+  const player: Player = normalizePlayerProgress({
+    ...payload.player,
+    warehouses: normalizePlayerWarehouses(payload.player.warehouses ?? []),
+  });
+
   return {
     currentTime: payload.currentTime,
     isPaused: payload.isPaused,
     gameSpeed: payload.gameSpeed,
     lastEconomyTickTime:
       Math.floor(payload.currentTime / economyTickInterval) * economyTickInterval,
-    player: payload.player,
+    player,
     cities: payload.cities,
     products: payload.products,
     routes: payload.routes,
@@ -260,6 +280,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     globalEconomy: payload.globalEconomy,
     marketNews: payload.marketNews,
     eventLog: payload.eventLog,
+    financeLedger: payload.financeLedger ?? [],
   };
 }
 

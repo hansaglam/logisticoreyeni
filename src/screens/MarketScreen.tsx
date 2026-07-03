@@ -6,6 +6,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -14,12 +15,19 @@ import {
   View,
 } from 'react-native';
 
+import TradeProductModal from '../components/TradeProductModal';
 import { useGameStore } from '../store/gameStore';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { countExactMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
+import {
+  getCityProductMarketPrice,
+  getCityProductStock,
+  getWarehouseFreeCapacityTon,
+  normalizeWarehouse,
+} from '../simulation/trading';
 import type { City, CityProductState, MarketOpportunity, Product, ProductId, Route } from '../types/game';
 
 const COLORS = {
@@ -336,7 +344,17 @@ function CityOverviewCard({
   );
 }
 
-function ProductMarketCard({ market }: { market: NormalizedProductMarket }) {
+function ProductMarketCard({
+  market,
+  cityStock,
+  hasWarehouse,
+  onBuyPress,
+}: {
+  market: NormalizedProductMarket;
+  cityStock: number;
+  hasWarehouse: boolean;
+  onBuyPress: () => void;
+}) {
   const stockRatio = calculateStockRatio(market);
   const status = getMarketStatus(stockRatio);
   const statusColor = getMarketStatusColor(status);
@@ -360,11 +378,20 @@ function ProductMarketCard({ market }: { market: NormalizedProductMarket }) {
       </View>
 
       <Text style={styles.productPrice}>{formatMoney(market.currentPrice)}</Text>
+      <Text style={styles.productMeta}>Şehir stoğu: {cityStock.toFixed(1)} ton</Text>
       <Text style={styles.opportunityHint}>{hint}</Text>
       <Text style={styles.productDetail}>
         Üretim: {market.productionPerDay.toFixed(1)} ton/gün · Tüketim:{' '}
         {market.consumptionPerDay.toFixed(1)} ton/gün
       </Text>
+
+      <TouchableOpacity
+        style={[styles.tradeActionButton, !hasWarehouse && styles.tradeActionButtonMuted]}
+        onPress={onBuyPress}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.tradeActionButtonText}>{hasWarehouse ? 'Satın Al' : 'Depo Gerekli'}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -441,10 +468,13 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const openContractsForMarketOpportunity = useGameStore(
     (state) => state.openContractsForMarketOpportunity,
   );
+  const buyProductForWarehouse = useGameStore((state) => state.buyProductForWarehouse);
   const { scrollBottomPadding } = useTabBarLayout();
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [tradeModalVisible, setTradeModalVisible] = useState(false);
+  const [tradeProductId, setTradeProductId] = useState<ProductId | null>(null);
 
   useEffect(() => {
     if (!selectedCityId && cities.length > 0) {
@@ -521,6 +551,52 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       fuelModifier: selectedCity.fuelPriceModifier ?? 1,
     };
   }, [selectedCity, products]);
+
+  const selectedCityWarehouse = useMemo(() => {
+    if (!selectedCity) return null;
+    const warehouse = (player?.warehouses ?? []).find((item) => item.cityId === selectedCity.id);
+    return warehouse ? normalizeWarehouse(warehouse) : null;
+  }, [player?.warehouses, selectedCity]);
+
+  const tradeProduct = useMemo(
+    () => products.find((item) => item.id === tradeProductId) ?? null,
+    [products, tradeProductId],
+  );
+
+  const handleBuyProductPress = (productId: ProductId) => {
+    if (!selectedCity) return;
+
+    if (!selectedCityWarehouse) {
+      Alert.alert(
+        'Depo gerekli',
+        'Bu şehirden ürün almak için önce burada depo açmalısın.',
+      );
+      return;
+    }
+
+    setTradeProductId(productId);
+    setTradeModalVisible(true);
+  };
+
+  const handleConfirmBuy = (quantity: number) => {
+    if (!selectedCity || !tradeProductId) return;
+
+    const result = buyProductForWarehouse({
+      cityId: selectedCity.id,
+      productId: tradeProductId,
+      quantity,
+      warehouseId: selectedCityWarehouse?.id,
+    });
+
+    if (!result.success) {
+      Alert.alert('Satın alma başarısız', result.message ?? 'İşlem tamamlanamadı.');
+      return;
+    }
+
+    setTradeModalVisible(false);
+    setTradeProductId(null);
+    setStatusMessage(result.message ?? 'Ürün satın alındı');
+  };
 
   const handleRefreshMarket = () => {
     refreshMarketSnapshot();
@@ -641,7 +717,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
             {products.map((product) => {
               const market = getProductMarket(selectedCity, product.id);
               if (!market) return null;
-              return <ProductMarketCard key={product.id} market={market} />;
+              return (
+                <ProductMarketCard
+                  key={product.id}
+                  market={market}
+                  cityStock={getCityProductStock(selectedCity, product.id)}
+                  hasWarehouse={!!selectedCityWarehouse}
+                  onBuyPress={() => handleBuyProductPress(product.id)}
+                />
+              );
             })}
           </View>
         ) : null}
@@ -665,6 +749,28 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           )}
         </View>
       </ScrollView>
+
+      <TradeProductModal
+        visible={tradeModalVisible}
+        mode="buy"
+        city={selectedCity}
+        product={tradeProduct}
+        currentPrice={
+          selectedCity && tradeProductId
+            ? getCityProductMarketPrice(selectedCity, tradeProductId)
+            : 0
+        }
+        availableStock={
+          selectedCity && tradeProductId ? getCityProductStock(selectedCity, tradeProductId) : 0
+        }
+        warehouseFreeCapacity={selectedCityWarehouse ? getWarehouseFreeCapacityTon(selectedCityWarehouse) : 0}
+        playerCash={player?.money ?? 0}
+        onConfirm={handleConfirmBuy}
+        onClose={() => {
+          setTradeModalVisible(false);
+          setTradeProductId(null);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1032,6 +1138,22 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   opportunityActionButtonText: {
+    color: '#0B1220',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  tradeActionButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    backgroundColor: COLORS.secondary,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  tradeActionButtonMuted: {
+    backgroundColor: '#334155',
+  },
+  tradeActionButtonText: {
     color: '#0B1220',
     fontSize: 12,
     fontWeight: '800',

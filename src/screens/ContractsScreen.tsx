@@ -29,6 +29,7 @@ import {
   selectIdleTruckForContract,
 } from '../simulation/delivery';
 import { dedupeAvailableContracts, getMarketContractMatchTier } from '../simulation/contracts';
+import { getContractRequiredLevel } from '../simulation/leveling';
 import { deliveryBalance } from '../config/balance';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import type { Contract, Driver, GlobalEconomy, Product, ProductId, Route, Truck } from '../types/game';
@@ -304,6 +305,9 @@ function getTruckDetailText(
   availability: ReturnType<typeof getContractAvailability>,
   suggestedTruck?: Truck,
 ): string {
+  if (availability.reason === 'LEVEL_INSUFFICIENT') {
+    return `Level ${availability.requiredLevel ?? 1} gerekli`;
+  }
   if (availability.reason === 'NO_TRUCKS' || availability.reason === 'NO_IDLE_TRUCKS') {
     return 'Müsait kamyon yok';
   }
@@ -350,6 +354,7 @@ interface ContractCardProps {
   expanded: boolean;
   trucks: Truck[];
   drivers: Driver[];
+  playerLevel: number;
   globalEconomy: GlobalEconomy;
   marketHighlight?: boolean;
   isPinnedMarketMatch?: boolean;
@@ -362,6 +367,7 @@ function ContractCard({
   expanded,
   trucks,
   drivers,
+  playerLevel,
   globalEconomy,
   marketHighlight = false,
   isPinnedMarketMatch = false,
@@ -369,7 +375,9 @@ function ContractCard({
   onAccept,
 }: ContractCardProps) {
   const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
-  const availability = getContractAvailability(contract, trucks, drivers);
+  const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
+  const requiredLevel = getContractRequiredLevel(contract);
+  const isLevelLocked = requiredLevel > playerLevel;
   const { risk, financials, suggestedTruck, suggestedDriver, route } = analysis;
   const cargoWeight = availability.requiredCapacity ?? getContractCargoWeight(contract);
   const capacityOk = availability.reason === 'OK';
@@ -403,6 +411,11 @@ function ContractCard({
       {isPinnedMarketMatch ? (
         <View style={styles.marketMatchBadge}>
           <Text style={styles.marketMatchBadgeText}>Piyasa fırsatıyla eşleşiyor</Text>
+        </View>
+      ) : null}
+      {isLevelLocked ? (
+        <View style={styles.levelLockBadge}>
+          <Text style={styles.levelLockBadgeText}>Level {requiredLevel} gerekli</Text>
         </View>
       ) : null}
       <TouchableOpacity activeOpacity={0.9} onPress={onToggle}>
@@ -913,6 +926,7 @@ export default function ContractsScreen() {
                 expanded={expandedContractId === contract.id}
                 trucks={player.trucks}
                 drivers={player.drivers}
+                playerLevel={player.level ?? player.companyLevel ?? 1}
                 globalEconomy={globalEconomy}
                 marketHighlight={matchTier > 0 && matchTier < 99}
                 isPinnedMarketMatch={highlightedContractId === contract.id}
@@ -929,6 +943,7 @@ export default function ContractsScreen() {
         contract={assignmentContract}
         trucks={player.trucks}
         drivers={player.drivers}
+        playerLevel={player.level ?? player.companyLevel ?? 1}
         onClose={closeAssignmentModal}
         onConfirm={handleConfirmAssignment}
         onGoToFleet={handleGoToFleet}
@@ -1096,6 +1111,20 @@ const styles = StyleSheet.create({
   },
   marketMatchBadgeText: {
     color: COLORS.primary,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  levelLockBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginBottom: 8,
+  },
+  levelLockBadgeText: {
+    color: COLORS.danger,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.2,

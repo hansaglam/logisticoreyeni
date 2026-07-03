@@ -1,0 +1,280 @@
+Harita ekranındaki alt fırsat kartını şirket durumuna bağlı gerçek öneri sistemine dönüştür.
+
+Sorun:
+Harita ekranında "En İyi Fırsat" kartındaki "Sözleşmeyi Gör" butonuna basınca İşler sayfasına gidiyor ama önerilen iş aşağıda kalabiliyor veya tam eşleşen sözleşme en üstte görünmüyor.
+
+Amaç:
+Harita ekranı rastgele/en yüksek piyasa fırsatı göstermek yerine şirketin mevcut durumuna göre gerçek ve uygulanabilir öneri göstersin.
+Butona basıldığında ilgili gerçek sözleşme İşler ekranında en üstte highlight edilerek görünsün.
+
+Kontrol edilecek dosyalar:
+- src/screens/MapScreen.tsx
+- src/screens/ContractsScreen.tsx
+- src/store/gameStore.ts
+- src/types/game.ts
+- src/simulation/contracts.ts
+- App.tsx veya tab yönetimi nerede ise
+
+ÖNEMLİ:
+Harita görseline, node'lara, route çizgilerine ve mevcut harita tasarımına dokunma.
+Sadece alt öneri kartı ve yönlendirme mantığını değiştir.
+
+1. Harita için gerçek önerilen sözleşme seçimi oluştur
+
+Yeni helper oluştur veya MapScreen içinde hesapla:
+
+getRecommendedContractForCompany(params)
+
+Girdi:
+- contracts
+- player
+- trucks
+- drivers
+- activeDeliveries
+- market opportunities
+
+Çıktı:
+RecommendedMapAction tipi:
+
+type RecommendedMapAction =
+  | {
+      type: "contract";
+      contractId: string;
+      title: "Önerilen İş";
+      reason: string;
+    }
+  | {
+      type: "active_delivery";
+      deliveryId: string;
+      title: "Aktif Teslimat";
+      reason: string;
+    }
+  | {
+      type: "fleet_upgrade";
+      title: "Filo Geliştir";
+      reason: string;
+    }
+  | {
+      type: "warehouse_trade";
+      title: "Ticaret Fırsatı";
+      reason: string;
+    }
+  | {
+      type: "none";
+      title: "Fırsat Bekleniyor";
+      reason: string;
+    };
+
+2. Önerilen iş seçim kriteri
+
+Contract önerisi şu önceliklere göre yapılsın:
+
+A) Oyuncunun şirket seviyesi yetmeli
+contract.requiredLevel <= player.level
+
+B) En az bir boşta kamyon olmalı
+
+C) En az bir boşta şoför olmalı
+
+D) Boşta kamyonlardan en az biri contract.cargoWeight değerini taşıyabilmeli
+
+E) Kâr pozitif olmalı
+
+F) Risk çok yüksekse ama kâr çok düşükse önerilmesin
+
+Skor hesabı örneği:
+score =
+estimatedProfit * 1
++ payment * 0.2
+- riskPenalty
+- distancePenalty
++ marketOpportunityBonus
+
+Risk penalty:
+low: 0
+medium: 1000
+high: 3000
+
+Eğer "Piyasa fırsatıyla eşleşen" contract varsa bonus ver.
+
+3. Eğer uygun contract varsa Map alt kartı
+
+Alt kart başlığı:
+"ÖNERİLEN İŞ"
+
+İçerik:
+- Rota: Bursa → İzmir
+- Ürün · ton · km
+- Tahmini kâr
+- Risk
+- Neden önerildi?
+
+Örnek reason:
+"Boşta kamyonun bu işe uygun ve kâr oranı yüksek."
+
+Buton:
+"İşi Gör"
+
+4. "İşi Gör" butonu contractId ile yönlendirsin
+
+Butona basınca:
+
+setMarketContractFilter({
+  fromCityId: contract.fromCityId,
+  toCityId: contract.toCityId,
+  productId: contract.productId,
+  contractId: contract.id,
+  source: "map",
+  createdAt: Date.now()
+});
+
+setHighlightedContractId(contract.id);
+
+Sonra İşler tabına geç.
+
+Eğer tab local state ile App.tsx içinde ise:
+MapScreen’e onOpenContracts prop’u ver.
+onOpenContracts?.()
+
+5. Store filter tipini contractId destekleyecek şekilde genişlet
+
+marketContractFilter içine contractId opsiyonel ekle:
+
+contractId?: string;
+
+Source:
+"market" | "map"
+
+6. ContractsScreen sıralamasını contractId öncelikli yap
+
+ContractsScreen’de marketContractFilter.contractId varsa:
+
+- Bu contractId’ye sahip sözleşme kesinlikle listenin en üstünde olsun.
+- Kart highlight edilsin.
+- Üst bilgi kartında yazsın:
+
+"Haritadaki önerilen iş gösteriliyor"
+
+Alt metin:
+"{fromCityName} → {toCityName} · {productName}"
+
+Açıklama:
+"Harita ekranındaki önerilen iş en üste taşındı."
+
+Sonra diğer sözleşmeler normal sıralansın.
+
+Öncelik sırası:
+1. contractId exact match
+2. same route + product exact match
+3. nearby matches
+4. diğer alınabilir işler
+5. kilitli/yetersiz işler
+
+7. Eğer uygun contract yoksa alternatif öneri göster
+
+Eğer uygun sözleşme yoksa Map alt kartı boş kalmasın.
+
+A) Boşta kamyon yoksa:
+Başlık:
+"Teslimatlar Yolda"
+
+Mesaj:
+"Tüm kamyonların görevde. Yeni iş almak için teslimatın bitmesini bekle veya yeni kamyon satın al."
+
+Buton:
+"Filo'yu Aç"
+
+B) Boşta şoför yoksa:
+Başlık:
+"Şoför Gerekli"
+
+Mesaj:
+"Yeni teslimat için boşta şoförün yok."
+
+Buton:
+"Şoför Havuzu"
+
+C) Kapasite yetmiyorsa:
+Başlık:
+"Daha Büyük Kamyon Gerekli"
+
+Mesaj:
+"Mevcut işler için daha yüksek kapasiteli kamyon gerekiyor."
+
+Buton:
+"Kamyon Mağazası"
+
+D) Depoda ticaret fırsatı varsa:
+Başlık:
+"Ticaret Fırsatı"
+
+Mesaj:
+"Depodaki ürünlerden biri kârlı satış seviyesine ulaştı."
+
+Buton:
+"Depoları Aç"
+
+E) Hiç fırsat yoksa:
+Başlık:
+"Fırsat Bekleniyor"
+
+Mesaj:
+"Piyasa yeni sözleşmeler oluşturdukça burada öneriler görünür."
+
+Buton:
+"Piyasayı Gör"
+
+8. Harita alt kart başlığını değiştir
+
+Eski:
+"EN İYİ FIRSAT"
+
+Yeni:
+"ÖNERİLEN AKSİYON"
+
+Eğer type contract ise:
+"ÖNERİLEN İŞ"
+
+Eğer active delivery ise:
+"AKTİF TESLİMAT"
+
+Eğer fleet upgrade ise:
+"FİLO GELİŞTİR"
+
+9. Aktif teslimat varsa isteğe bağlı gösterim
+
+Eğer oyuncunun aktif teslimatları varsa ama boşta kamyonu da yoksa, harita kartı aktif teslimatı gösterebilir:
+
+"En yakın teslimat"
+"Bursa → Antalya · %91"
+Buton:
+"Dashboard'a Git" veya "Filo'yu Aç"
+
+Bu da oyuncuya haritada takip hissi verir.
+
+10. ContractsScreen highlight kaybolmasın
+
+İşler ekranına geçince highlighted contract en azından kullanıcı görene kadar kalsın.
+İstersen 8 saniye sonra kalkabilir.
+Ama ilk açılışta kesin görünür olsun.
+
+11. Debug log
+
+Internal test için ekle:
+
+MapScreen:
+console.log("Recommended map action", recommendedAction);
+
+ContractsScreen:
+console.log("Map filter contractId", marketContractFilter?.contractId);
+
+12. TypeScript güvenliği
+
+- contracts undefined ise []
+- player.level undefined ise 1
+- trucks/drivers undefined ise []
+- contractId bulunamazsa crash yapma
+- onOpenContracts undefined olabilir
+- Store/simulation akışını bozma
+- Harita UI tasarımına dokunma
+- TypeScript hatası oluşturma

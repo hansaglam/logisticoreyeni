@@ -28,11 +28,14 @@ import {
   getContractCargoWeight,
   selectIdleTruckForContract,
 } from '../simulation/delivery';
-import { dedupeAvailableContracts, getMarketContractMatchTier } from '../simulation/contracts';
+import { dedupeAvailableContracts, getContractFilterSortTier, getMarketContractMatchTier } from '../simulation/contracts';
+import { contractBalance } from '../config/balance';
+import { getMaxContractTonnageForLevel } from '../config/levelConfig';
 import { getContractRequiredLevel } from '../simulation/leveling';
+import { getContractLevelUnlockHint } from '../config/levelConfig';
 import { deliveryBalance } from '../config/balance';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
-import type { Contract, Driver, GlobalEconomy, Product, ProductId, Route, Truck } from '../types/game';
+import type { Contract, Driver, GlobalEconomy, MarketContractFilter, Product, ProductId, Route, Truck } from '../types/game';
 
 const COLORS = {
   background: '#070A12',
@@ -55,7 +58,7 @@ const URGENT_URGENCY_THRESHOLD = 0.75;
 const URGENT_FALLBACK_DEADLINE_HOURS = 10;
 const LONG_ROUTE_KM = 350;
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
-const MARKET_HIGHLIGHT_TIMEOUT_MS = 7000;
+const MARKET_HIGHLIGHT_TIMEOUT_MS = 8000;
 
 type FilterKey = 'all' | 'bestPayment' | 'shortDistance' | 'urgent' | 'lowRisk';
 
@@ -301,6 +304,108 @@ function getEstimatedProfit(contract: Contract, globalEconomy: GlobalEconomy): n
   return analyzeContract(contract, globalEconomy).financials.estimatedProfit;
 }
 
+function isRouteContractFilter(
+  filter: MarketContractFilter | null | undefined,
+): filter is MarketContractFilter {
+  return filter?.source === 'market' || filter?.source === 'map';
+}
+
+function getContractSortPriority(
+  contract: Contract,
+  trucks: Truck[],
+  drivers: Driver[],
+  playerLevel: number,
+  marketFilter?: MarketContractFilter | null,
+): number {
+  if (marketFilter?.contractId && contract.id === marketFilter.contractId) {
+    return -1000;
+  }
+
+  const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
+  let priority = 0;
+
+  if (isRouteContractFilter(marketFilter)) {
+    const tier = getContractFilterSortTier(contract, marketFilter);
+    priority += tier * 20;
+  }
+
+  if (availability.canStart) {
+    return priority;
+  }
+  if (availability.reason === 'LEVEL_INSUFFICIENT') {
+    return priority + 100;
+  }
+  if (availability.reason === 'NO_TRUCKS' || availability.reason === 'NO_IDLE_TRUCKS') {
+    return priority + 110;
+  }
+  if (availability.reason === 'NO_DRIVERS' || availability.reason === 'NO_IDLE_DRIVERS') {
+    return priority + 120;
+  }
+  if (availability.reason === 'CAPACITY_INSUFFICIENT') {
+    return priority + 130;
+  }
+  return priority + 140;
+}
+
+function sortContractsForDisplay(
+  items: Contract[],
+  trucks: Truck[],
+  drivers: Driver[],
+  playerLevel: number,
+  globalEconomy: GlobalEconomy,
+  activeFilter: FilterKey,
+  marketFilter?: MarketContractFilter | null,
+): Contract[] {
+  const list = [...items];
+
+  if (activeFilter === 'shortDistance') {
+    return list.sort((a, b) => {
+      const priorityDiff =
+        getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
+        getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
+      if (priorityDiff !== 0) return priorityDiff;
+      return a.distanceKm - b.distanceKm;
+    });
+  }
+
+  if (activeFilter === 'urgent') {
+    return list
+      .filter(isUrgentContract)
+      .sort((a, b) => {
+        const priorityDiff =
+          getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
+          getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
+        if (priorityDiff !== 0) return priorityDiff;
+        return a.deadlineHours - b.deadlineHours || b.payment - a.payment;
+      });
+  }
+
+  if (activeFilter === 'lowRisk') {
+    return list
+      .filter((c) => analyzeContract(c, globalEconomy).risk.label === 'Düşük risk')
+      .sort((a, b) => {
+        const priorityDiff =
+          getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
+          getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
+        if (priorityDiff !== 0) return priorityDiff;
+        return getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy);
+      });
+  }
+
+  return list.sort((a, b) => {
+    const priorityDiff =
+      getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
+      getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
+    if (activeFilter === 'bestPayment' || activeFilter === 'all') {
+      return b.payment - a.payment || getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy);
+    }
+    return getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy) || b.payment - a.payment;
+  });
+}
+
 function getTruckDetailText(
   availability: ReturnType<typeof getContractAvailability>,
   suggestedTruck?: Truck,
@@ -311,8 +416,11 @@ function getTruckDetailText(
   if (availability.reason === 'NO_TRUCKS' || availability.reason === 'NO_IDLE_TRUCKS') {
     return 'Müsait kamyon yok';
   }
+  if (availability.reason === 'TRUCK_CONDITION_TOO_LOW') {
+    return 'Kamyon tamir gerekli';
+  }
   if (availability.reason === 'CAPACITY_INSUFFICIENT') {
-    return `Kapasite yetersiz (${(availability.requiredCapacity ?? 0).toFixed(1)}t / ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t)`;
+    return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
   }
   if (!suggestedTruck) {
     return 'Uygun kamyon yok';
@@ -358,6 +466,7 @@ interface ContractCardProps {
   globalEconomy: GlobalEconomy;
   marketHighlight?: boolean;
   isPinnedMarketMatch?: boolean;
+  pinnedMatchBadgeLabel?: string;
   onToggle: () => void;
   onAccept: () => void;
 }
@@ -371,13 +480,18 @@ function ContractCard({
   globalEconomy,
   marketHighlight = false,
   isPinnedMarketMatch = false,
+  pinnedMatchBadgeLabel = 'Piyasa fırsatıyla eşleşiyor',
   onToggle,
   onAccept,
 }: ContractCardProps) {
+  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
   const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
-  const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
+  const availability = getContractAvailability(contract, trucks, drivers, safePlayerLevel);
   const requiredLevel = getContractRequiredLevel(contract);
-  const isLevelLocked = requiredLevel > playerLevel;
+  const isLevelLocked = requiredLevel > safePlayerLevel;
+  const levelUnlockHint = isLevelLocked
+    ? getContractLevelUnlockHint(safePlayerLevel, requiredLevel)
+    : null;
   const { risk, financials, suggestedTruck, suggestedDriver, route } = analysis;
   const cargoWeight = availability.requiredCapacity ?? getContractCargoWeight(contract);
   const capacityOk = availability.reason === 'OK';
@@ -406,17 +520,21 @@ function ContractCard({
         expanded && styles.contractCardExpanded,
         marketHighlight && styles.contractCardMarketHighlight,
         isPinnedMarketMatch && styles.contractCardPinnedMarket,
+        isLevelLocked && styles.contractCardLevelLocked,
       ]}
     >
       {isPinnedMarketMatch ? (
         <View style={styles.marketMatchBadge}>
-          <Text style={styles.marketMatchBadgeText}>Piyasa fırsatıyla eşleşiyor</Text>
+          <Text style={styles.marketMatchBadgeText}>{pinnedMatchBadgeLabel}</Text>
         </View>
       ) : null}
       {isLevelLocked ? (
         <View style={styles.levelLockBadge}>
-          <Text style={styles.levelLockBadgeText}>Level {requiredLevel} gerekli</Text>
+          <Text style={styles.levelLockBadgeText}>Level {requiredLevel} işi</Text>
         </View>
+      ) : null}
+      {levelUnlockHint ? (
+        <Text style={styles.levelUnlockHint}>{levelUnlockHint}</Text>
       ) : null}
       <TouchableOpacity activeOpacity={0.9} onPress={onToggle}>
         <View style={styles.contractTopRow}>
@@ -466,7 +584,7 @@ function ContractCard({
           </Text>
         </View>
 
-        {availabilityWarning ? (
+        {availabilityWarning && !isLevelLocked ? (
           <Text style={styles.capacityWarning}>{availabilityWarning}</Text>
         ) : null}
       </TouchableOpacity>
@@ -540,17 +658,32 @@ function ContractCard({
             <Text style={styles.detailValue}>{formatPercent(route?.difficulty ?? 0.5)}</Text>
           </View>
           <TouchableOpacity
-            style={acceptButtonExpandedStyle}
+            style={[acceptButtonExpandedStyle, !availability.canStart && styles.acceptButtonBlocked]}
             onPress={handleAcceptPress}
             activeOpacity={0.85}
           >
-            <Text style={acceptButtonTextStyle}>{availability.buttonLabel}</Text>
+            <Text
+              style={[
+                acceptButtonTextStyle,
+                !availability.canStart && styles.acceptButtonTextBlocked,
+              ]}
+            >
+              {availability.buttonLabel}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
 
-      <TouchableOpacity style={acceptButtonStyle} onPress={handleAcceptPress} activeOpacity={0.85}>
-        <Text style={acceptButtonTextStyle}>{availability.buttonLabel}</Text>
+      <TouchableOpacity
+        style={[acceptButtonStyle, !availability.canStart && styles.acceptButtonBlocked]}
+        onPress={handleAcceptPress}
+        activeOpacity={0.85}
+      >
+        <Text
+          style={[acceptButtonTextStyle, !availability.canStart && styles.acceptButtonTextBlocked]}
+        >
+          {availability.buttonLabel}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -568,11 +701,18 @@ export default function ContractsScreen() {
   const highlightedContractId = useGameStore((state) => state.highlightedContractId);
   const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
   const setHighlightedContractId = useGameStore((state) => state.setHighlightedContractId);
+  const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
+  const getContractRefreshRemainingSeconds = useGameStore(
+    (state) => state.getContractRefreshRemainingSeconds,
+  );
   const { scrollBottomPadding } = useTabBarLayout();
 
   const scrollRef = useRef<ScrollView>(null);
 
-  const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
+  const [activeFilter, setActiveFilter] = useState<FilterKey>('bestPayment');
+  const [refreshCountdown, setRefreshCountdown] = useState(
+    contractBalance.contractRefreshIntervalMs / 1000,
+  );
   const [expandedContractId, setExpandedContractId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
@@ -583,6 +723,25 @@ export default function ContractsScreen() {
     const timeout = setTimeout(() => setStatusMessage(null), STATUS_MESSAGE_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [statusMessage]);
+
+  useEffect(() => {
+    refreshContractsFromMarket();
+    const refreshInterval = setInterval(() => {
+      refreshContractsFromMarket();
+    }, contractBalance.contractRefreshIntervalMs);
+    return () => clearInterval(refreshInterval);
+  }, [refreshContractsFromMarket]);
+
+  useEffect(() => {
+    const countdownInterval = setInterval(() => {
+      setRefreshCountdown(getContractRefreshRemainingSeconds());
+    }, 1000);
+    return () => clearInterval(countdownInterval);
+  }, [getContractRefreshRemainingSeconds]);
+
+  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const trucks = player?.trucks ?? [];
+  const drivers = player?.drivers ?? [];
 
   const availableContracts = useMemo(
     () => dedupeAvailableContracts(contracts.filter((c) => c.status === 'available')),
@@ -610,102 +769,67 @@ export default function ContractsScreen() {
   }, [availableContracts]);
 
   const filteredContracts = useMemo(() => {
-    const list = [...availableContracts];
-
-    const sortByFilter = (items: Contract[]) => {
-      switch (activeFilter) {
-        case 'bestPayment':
-          return items.sort((a, b) => b.payment - a.payment);
-        case 'shortDistance':
-          return items.sort((a, b) => a.distanceKm - b.distanceKm);
-        case 'urgent':
-          return items
-            .filter(isUrgentContract)
-            .sort((a, b) => a.deadlineHours - b.deadlineHours || b.payment - a.payment);
-        case 'lowRisk':
-          return items
-            .filter((c) => analyzeContract(c, globalEconomy).risk.label === 'Düşük risk')
-            .sort(
-              (a, b) =>
-                getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy),
-            );
-        default:
-          return items.sort(
-            (a, b) =>
-              getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy) ||
-              b.payment - a.payment,
-          );
-      }
-    };
-
-    if (marketContractFilter?.source === 'market') {
-      return list.sort((a, b) => {
-        const tierA = getMarketContractMatchTier(a, marketContractFilter);
-        const tierB = getMarketContractMatchTier(b, marketContractFilter);
-        if (tierA !== tierB) return tierA - tierB;
-        return getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy);
-      });
-    }
-
-    return sortByFilter(list);
-  }, [availableContracts, activeFilter, globalEconomy, marketContractFilter]);
+    return sortContractsForDisplay(
+      availableContracts,
+      trucks,
+      drivers,
+      playerLevel,
+      globalEconomy,
+      activeFilter,
+      marketContractFilter,
+    );
+  }, [
+    availableContracts,
+    trucks,
+    drivers,
+    playerLevel,
+    globalEconomy,
+    activeFilter,
+    marketContractFilter,
+  ]);
 
   const marketMatchStats = useMemo(() => {
-    if (!marketContractFilter || marketContractFilter.source !== 'market') {
+    if (!isRouteContractFilter(marketContractFilter)) {
       return { exact: 0, related: 0 };
     }
 
     let exact = 0;
     let related = 0;
     for (const contract of availableContracts) {
-      const tier = getMarketContractMatchTier(contract, marketContractFilter);
-      if (tier === 0) exact += 1;
+      const tier = getContractFilterSortTier(contract, marketContractFilter);
+      if (tier === -1 || tier === 0) exact += 1;
       else if (tier < 99) related += 1;
-    }
-
-    if (__DEV__) {
-      // TODO: remove verbose market-contract debug logs before release.
-      console.log('Matching contracts count', { exact, related, total: availableContracts.length });
     }
 
     return { exact, related };
   }, [availableContracts, marketContractFilter]);
 
   useEffect(() => {
-    if (!marketContractFilter || marketContractFilter.source !== 'market') {
+    if (!isRouteContractFilter(marketContractFilter)) {
       return;
     }
 
-    if (__DEV__) {
-      // TODO: remove verbose market-contract debug logs before release.
-      console.log('Market filter active', marketContractFilter);
-    }
-
-    let exactCount = 0;
-    let nearbyCount = 0;
     let firstExactId: string | null = null;
+    const pinnedContractId = marketContractFilter.contractId ?? null;
 
     for (const contract of availableContracts) {
-      const tier = getMarketContractMatchTier(contract, marketContractFilter);
-      if (tier === 0) {
-        exactCount += 1;
+      const tier = getContractFilterSortTier(contract, marketContractFilter);
+      if (tier === -1 || tier === 0) {
         if (!firstExactId) {
           firstExactId = contract.id;
         }
-      } else if (tier < 99) {
-        nearbyCount += 1;
       }
     }
 
-    if (__DEV__) {
-      // TODO: remove verbose market-contract debug logs before release.
-      console.log('Exact matching contracts', exactCount);
-      console.log('Nearby matching contracts', nearbyCount);
-    }
+    const highlightId =
+      pinnedContractId &&
+      availableContracts.some((contract) => contract.id === pinnedContractId)
+        ? pinnedContractId
+        : firstExactId;
 
-    if (firstExactId) {
-      setHighlightedContractId(firstExactId);
-      setExpandedContractId(firstExactId);
+    if (highlightId) {
+      setHighlightedContractId(highlightId);
+      setExpandedContractId(highlightId);
     } else {
       setHighlightedContractId(null);
     }
@@ -792,7 +916,13 @@ export default function ContractsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Sözleşmeler</Text>
+          <View style={styles.headerTextBlock}>
+            <Text style={styles.title}>Sözleşmeler</Text>
+            <Text style={styles.refreshHint}>
+              Fırsatlar 30 sn aralıklarla güncellenir
+              {refreshCountdown > 0 ? ` · Sonraki yenileme: ${refreshCountdown}sn` : ''}
+            </Text>
+          </View>
           <View style={styles.headerBadges}>
             <View style={styles.headerBadge}>
               <Text style={styles.headerBadgeValue}>{availableContracts.length}</Text>
@@ -825,17 +955,27 @@ export default function ContractsScreen() {
           </View>
         )}
 
-        {marketContractFilter?.source === 'market' ? (
+        {isRouteContractFilter(marketContractFilter) ? (
           <View style={styles.marketFilterCard}>
             <View style={styles.marketFilterHeaderRow}>
               <View style={styles.marketFilterTextWrap}>
-                <Text style={styles.marketFilterTitle}>Piyasa fırsatına göre gösteriliyor</Text>
+                <Text style={styles.marketFilterTitle}>
+                  {marketContractFilter.source === 'map' && marketContractFilter.contractId
+                    ? 'Haritadaki önerilen iş gösteriliyor'
+                    : marketContractFilter.source === 'map'
+                      ? 'Haritadaki fırsata göre gösteriliyor'
+                      : 'Piyasa fırsatına göre gösteriliyor'}
+                </Text>
                 <Text style={styles.marketFilterSubtitle}>
                   {marketContractFilter.fromCityName} → {marketContractFilter.toCityName} ·{' '}
                   {marketContractFilter.productName}
                 </Text>
                 <Text style={styles.marketFilterHint}>
-                  Piyasa sayfasındaki fiyat farkına göre ilgili işler üstte listelendi.
+                  {marketContractFilter.source === 'map' && marketContractFilter.contractId
+                    ? 'Harita ekranındaki önerilen iş en üste taşındı.'
+                    : marketContractFilter.source === 'map'
+                      ? 'Harita ekranındaki en iyi fırsata ait sözleşmeler üstte listelendi.'
+                      : 'Piyasa sayfasındaki fiyat farkına göre ilgili işler üstte listelendi.'}
                 </Text>
               </View>
               <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
@@ -845,7 +985,7 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        {marketContractFilter?.source === 'market' &&
+        {isRouteContractFilter(marketContractFilter) &&
         marketMatchStats.exact === 0 &&
         marketMatchStats.related === 0 ? (
           <View style={styles.marketNoMatchCard}>
@@ -914,10 +1054,17 @@ export default function ContractsScreen() {
           </View>
         ) : (
           filteredContracts.map((contract) => {
-            const matchTier =
-              marketContractFilter?.source === 'market'
-                ? getMarketContractMatchTier(contract, marketContractFilter)
-                : 99;
+            const matchTier = isRouteContractFilter(marketContractFilter)
+              ? getContractFilterSortTier(contract, marketContractFilter)
+              : 99;
+            const isPinnedRecommended =
+              marketContractFilter?.contractId === contract.id &&
+              highlightedContractId === contract.id;
+            const pinnedMatchBadgeLabel = isPinnedRecommended
+              ? 'Harita önerisi'
+              : marketContractFilter?.source === 'map'
+                ? 'Harita fırsatıyla eşleşiyor'
+                : 'Piyasa fırsatıyla eşleşiyor';
 
             return (
               <ContractCard
@@ -930,6 +1077,7 @@ export default function ContractsScreen() {
                 globalEconomy={globalEconomy}
                 marketHighlight={matchTier > 0 && matchTier < 99}
                 isPinnedMarketMatch={highlightedContractId === contract.id}
+                pinnedMatchBadgeLabel={pinnedMatchBadgeLabel}
                 onToggle={() => toggleExpanded(contract.id)}
                 onAccept={() => openAssignmentModal(contract)}
               />
@@ -978,13 +1126,23 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 14,
+  },
+  headerTextBlock: {
+    flex: 1,
+    marginRight: 12,
   },
   title: {
     color: COLORS.textPrimary,
     fontSize: 26,
     fontWeight: '800',
+  },
+  refreshHint: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 16,
   },
   headerBadges: {
     flexDirection: 'row',
@@ -1101,6 +1259,9 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     backgroundColor: 'rgba(245, 158, 11, 0.1)',
   },
+  contractCardLevelLocked: {
+    opacity: 0.62,
+  },
   marketMatchBadge: {
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(245, 158, 11, 0.18)',
@@ -1128,6 +1289,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+  levelUnlockHint: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 8,
   },
   contractTopRow: {
     flexDirection: 'row',

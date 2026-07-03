@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 
-import TradeProductModal from '../components/TradeProductModal';
+import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
 import { useGameStore } from '../store/gameStore';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
@@ -28,6 +28,14 @@ import {
   getWarehouseFreeCapacityTon,
   normalizeWarehouse,
 } from '../simulation/trading';
+import {
+  cityHasWarehouseType,
+  evaluateStorageSuitability,
+  getStorageRiskWarning,
+  getSuitabilityLabel,
+  getWarehouseTypeLabel,
+  resolveWarehouseType,
+} from '../simulation/warehouseStorage';
 import type { City, CityProductState, MarketOpportunity, Product, ProductId, Route } from '../types/game';
 
 const COLORS = {
@@ -552,10 +560,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     };
   }, [selectedCity, products]);
 
-  const selectedCityWarehouse = useMemo(() => {
-    if (!selectedCity) return null;
-    const warehouse = (player?.warehouses ?? []).find((item) => item.cityId === selectedCity.id);
-    return warehouse ? normalizeWarehouse(warehouse) : null;
+  const selectedCityWarehouses = useMemo(() => {
+    if (!selectedCity) return [];
+    return (player?.warehouses ?? [])
+      .filter((item) => item.cityId === selectedCity.id)
+      .map((item) => normalizeWarehouse(item));
   }, [player?.warehouses, selectedCity]);
 
   const tradeProduct = useMemo(
@@ -563,10 +572,41 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     [products, tradeProductId],
   );
 
+  const tradeWarehouseOptions = useMemo((): TradeWarehouseOption[] => {
+    if (!tradeProduct || !selectedCity) return [];
+
+    return selectedCityWarehouses.map((warehouse) => {
+      const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+      const suitability = evaluateStorageSuitability(tradeProduct, warehouseType);
+      const cityName = selectedCity.name;
+      const typeLabel = getWarehouseTypeLabel(warehouseType);
+      return {
+        id: warehouse.id,
+        name: `${cityName} · ${typeLabel}`,
+        warehouseType,
+        freeCapacity: getWarehouseFreeCapacityTon(warehouse),
+        suitability,
+        suitabilityLabel: getSuitabilityLabel(suitability),
+        warning: getStorageRiskWarning(tradeProduct, warehouseType),
+        disabled: suitability === 'blocked',
+      };
+    });
+  }, [selectedCityWarehouses, tradeProduct, selectedCity]);
+
+  const showColdWarehouseSuggestion = useMemo(() => {
+    if (!selectedCity || !tradeProduct) return false;
+    return !cityHasWarehouseType(player?.warehouses ?? [], selectedCity.id, 'cold');
+  }, [player?.warehouses, selectedCity, tradeProduct]);
+
+  const selectedCityTotalFreeCapacity = useMemo(
+    () => selectedCityWarehouses.reduce((sum, warehouse) => sum + getWarehouseFreeCapacityTon(warehouse), 0),
+    [selectedCityWarehouses],
+  );
+
   const handleBuyProductPress = (productId: ProductId) => {
     if (!selectedCity) return;
 
-    if (!selectedCityWarehouse) {
+    if (selectedCityWarehouses.length === 0) {
       Alert.alert(
         'Depo gerekli',
         'Bu şehirden ürün almak için önce burada depo açmalısın.',
@@ -578,14 +618,14 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     setTradeModalVisible(true);
   };
 
-  const handleConfirmBuy = (quantity: number) => {
-    if (!selectedCity || !tradeProductId) return;
+  const handleConfirmBuy = (quantity: number, warehouseId?: string) => {
+    if (!selectedCity || !tradeProductId || !warehouseId) return;
 
     const result = buyProductForWarehouse({
       cityId: selectedCity.id,
       productId: tradeProductId,
       quantity,
-      warehouseId: selectedCityWarehouse?.id,
+      warehouseId,
     });
 
     if (!result.success) {
@@ -596,6 +636,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     setTradeModalVisible(false);
     setTradeProductId(null);
     setStatusMessage(result.message ?? 'Ürün satın alındı');
+  };
+
+  const handleOpenWarehouses = () => {
+    useGameStore.setState({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: 'warehouse',
+    });
+    setTradeModalVisible(false);
+    setTradeProductId(null);
   };
 
   const handleRefreshMarket = () => {
@@ -722,7 +771,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                   key={product.id}
                   market={market}
                   cityStock={getCityProductStock(selectedCity, product.id)}
-                  hasWarehouse={!!selectedCityWarehouse}
+                  hasWarehouse={selectedCityWarehouses.length > 0}
                   onBuyPress={() => handleBuyProductPress(product.id)}
                 />
               );
@@ -763,9 +812,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         availableStock={
           selectedCity && tradeProductId ? getCityProductStock(selectedCity, tradeProductId) : 0
         }
-        warehouseFreeCapacity={selectedCityWarehouse ? getWarehouseFreeCapacityTon(selectedCityWarehouse) : 0}
+        warehouseFreeCapacity={selectedCityTotalFreeCapacity}
+        cityWarehouses={tradeWarehouseOptions}
+        showColdWarehouseSuggestion={showColdWarehouseSuggestion}
         playerCash={player?.money ?? 0}
         onConfirm={handleConfirmBuy}
+        onOpenWarehouses={handleOpenWarehouses}
         onClose={() => {
           setTradeModalVisible(false);
           setTradeProductId(null);

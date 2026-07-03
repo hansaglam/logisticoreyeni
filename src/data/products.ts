@@ -15,6 +15,13 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 1,
     description: 'Taze meyve ve sebze — tarım bölgelerinden tüketim merkezlerine taşınır.',
     perishability: 0.9,
+    storageRequirement: {
+      preferredWarehouseTypes: ['cold'],
+      allowedWarehouseTypes: ['cold', 'standard'],
+      spoilageSensitive: true,
+      spoilageRatePerDay: 0.08,
+      valueLossRatePerDay: 0.1,
+    },
   },
   {
     id: 'steel',
@@ -22,6 +29,12 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 2.5,
     description: 'Ham ve işlenmiş çelik — sanayi ve inşaat sektörünün temel girdisi.',
     perishability: 0.05,
+    storageRequirement: {
+      preferredWarehouseTypes: ['heavy', 'standard'],
+      allowedWarehouseTypes: ['heavy', 'standard'],
+      spoilageSensitive: false,
+      valueLossRatePerDay: 0,
+    },
   },
   {
     id: 'electronics',
@@ -29,6 +42,12 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 0.5,
     description: 'Tüketici ve endüstriyel elektronik ürünler.',
     perishability: 0.15,
+    storageRequirement: {
+      preferredWarehouseTypes: ['secure', 'standard'],
+      allowedWarehouseTypes: ['secure', 'standard'],
+      spoilageSensitive: false,
+      valueLossRatePerDay: 0.02,
+    },
   },
   {
     id: 'machinery',
@@ -36,6 +55,12 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 3,
     description: 'Ağır sanayi makineleri ve ekipmanları.',
     perishability: 0.05,
+    storageRequirement: {
+      preferredWarehouseTypes: ['heavy', 'standard'],
+      allowedWarehouseTypes: ['heavy', 'standard', 'secure'],
+      spoilageSensitive: false,
+      valueLossRatePerDay: 0.01,
+    },
   },
   {
     id: 'textile',
@@ -43,6 +68,12 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 0.8,
     description: 'Kumaş, konfeksiyon ve ev tekstili ürünleri.',
     perishability: 0.2,
+    storageRequirement: {
+      preferredWarehouseTypes: ['standard'],
+      allowedWarehouseTypes: ['standard', 'secure'],
+      spoilageSensitive: false,
+      valueLossRatePerDay: 0.01,
+    },
   },
   {
     id: 'furniture',
@@ -50,6 +81,12 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 1.5,
     description: 'Ev ve ofis mobilyaları — turizm ve konut talebiyle hareket eder.',
     perishability: 0.1,
+    storageRequirement: {
+      preferredWarehouseTypes: ['standard'],
+      allowedWarehouseTypes: ['standard'],
+      spoilageSensitive: false,
+      valueLossRatePerDay: 0.005,
+    },
   },
   {
     id: 'beverage',
@@ -57,6 +94,13 @@ export const PRODUCTS: Product[] = [
     weightPerUnit: 1.2,
     description: 'Alkolsüz içecekler, su ve meşrubat.',
     perishability: 0.75,
+    storageRequirement: {
+      preferredWarehouseTypes: ['cold'],
+      allowedWarehouseTypes: ['cold', 'standard'],
+      spoilageSensitive: true,
+      spoilageRatePerDay: 0.06,
+      valueLossRatePerDay: 0.08,
+    },
   },
 ];
 

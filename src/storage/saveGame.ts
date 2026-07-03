@@ -37,6 +37,12 @@ export interface SaveGameMeta {
   cash: number;
   companyName: string;
   completedContracts: number;
+  /** Şirket seviyesi — player.level ile senkron */
+  level: number;
+  /** Mevcut seviye XP'si */
+  xp: number;
+  /** Kariyer boyu toplam XP */
+  totalXp: number;
   appVersion: string;
   saveVersion: number;
 }
@@ -141,6 +147,9 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
       cash: state.player.money,
       companyName: state.player.companyName,
       completedContracts: state.player.completedContracts,
+      level: player.level,
+      xp: player.xp,
+      totalXp: player.totalXp,
       appVersion: APP_VERSION,
       saveVersion: SAVE_GAME_VERSION,
     },
@@ -212,6 +221,19 @@ export function validateSavePayload(payload: unknown): payload is SaveGamePayloa
 
   if (typeof payload.meta.companyName !== 'string' || payload.meta.companyName.length === 0) {
     return false;
+  }
+
+  // level/xp meta alanları eski kayıtlarda olmayabilir — player normalize edilir
+  const optionalMetaNumbers: Array<[unknown, string]> = [
+    [payload.meta.level, 'meta.level'],
+    [payload.meta.xp, 'meta.xp'],
+    [payload.meta.totalXp, 'meta.totalXp'],
+  ];
+  for (const [value, label] of optionalMetaNumbers) {
+    if (value !== undefined && (typeof value !== 'number' || Number.isNaN(value))) {
+      console.warn(`[saveGame] Invalid save field: ${label}`);
+      return false;
+    }
   }
 
   if (typeof payload.meta.appVersion !== 'string') {

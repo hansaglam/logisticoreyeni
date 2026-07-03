@@ -35,6 +35,7 @@ function product(
 }
 
 /** Başlangıç şehir listesi — GDD Bölüm 6 ve 7'ye göre */
+/** TODO: Level 4+ depo şehirleri — konya, adana, samsun, gaziantep eklenecek */
 export const CITIES: City[] = [
   // -------------------------------------------------------------------------
   // İzmir — tarım ve tekstil merkezi; elektronik ve makine ithal eder

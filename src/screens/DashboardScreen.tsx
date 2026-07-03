@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 
 import { useGameStore, getRecentGameEvents } from '../store/gameStore';
-import { getLevelProgress, getLevelBenefits } from '../simulation/leveling';
+import { getLevelProgress, getNextUnlockForLevel } from '../simulation/leveling';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
@@ -36,17 +36,18 @@ interface DashboardScreenProps {
 }
 
 const COLORS = {
-  background: '#070A12',
+  background: '#0F172A',
   card: '#111827',
   cardAlt: '#121826',
-  border: '#1F2A3C',
+  border: '#1E293B',
   primary: '#F59E0B',
   secondary: '#38BDF8',
   success: '#22C55E',
   danger: '#EF4444',
   textPrimary: '#F8FAFC',
-  textSecondary: '#9CA3AF',
-  textMuted: '#64748B',
+  textSecondary: '#94A3B8',
+  textMuted: '#94A3B8',
+  progressTrack: '#1E293B',
 };
 
 const LOW_CASH_THRESHOLD = 8_000;
@@ -98,10 +99,24 @@ function getImportanceColor(importance: MarketNewsImportance | GameEventImportan
 }
 
 function getEventAccentColor(event: GameEvent): string {
+  if (event.type === 'system' && event.title === 'Şirket seviye atladı') {
+    return COLORS.primary;
+  }
   if (event.type === 'delivery' && event.title === 'Teslimat tamamlandı') {
     return COLORS.success;
   }
   return getImportanceColor(event.importance);
+}
+
+function getNextUnlockLabel(level: number): string {
+  const nextUnlock = getNextUnlockForLevel(level);
+  if (!nextUnlock) {
+    return 'Tüm temel açılımlar tamamlandı';
+  }
+  if (nextUnlock.status === 'coming_soon') {
+    return `${nextUnlock.title} · Yakında`;
+  }
+  return nextUnlock.title;
 }
 
 function formatDeliveryEventSubtitle(message: string): string {
@@ -186,6 +201,36 @@ function ProgressBar({ progress, color }: { progress: number; color: string }) {
   return (
     <View style={styles.progressTrack}>
       <View style={[styles.progressFill, { width: `${clamped * 100}%`, backgroundColor: color }]} />
+    </View>
+  );
+}
+
+function LevelProgressCard({
+  level,
+  xp,
+  xpToNextLevel,
+  progressRatio,
+  isMaxLevel,
+  nextUnlockLabel,
+}: {
+  level: number;
+  xp: number;
+  xpToNextLevel: number;
+  progressRatio: number;
+  isMaxLevel: boolean;
+  nextUnlockLabel: string;
+}) {
+  return (
+    <View style={styles.levelProgressCard}>
+      <View style={styles.levelProgressHeader}>
+        <Text style={styles.levelProgressTitle}>Şirket Seviyesi</Text>
+        <Text style={styles.levelProgressValue}>Level {level}</Text>
+      </View>
+      <Text style={styles.xpLabel}>
+        {isMaxLevel ? 'Maksimum seviye' : `XP: ${xp} / ${xpToNextLevel} XP`}
+      </Text>
+      <ProgressBar progress={isMaxLevel ? 1 : progressRatio} color={COLORS.primary} />
+      <Text style={styles.xpHint}>Sıradaki açılım: {nextUnlockLabel}</Text>
     </View>
   );
 }
@@ -277,7 +322,7 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
   const nextAction = resolveNextAction(player.money, runningDeliveries, availableContracts);
   const levelProgress = getLevelProgress(player);
-  const levelBenefits = getLevelBenefits(levelProgress.level);
+  const nextUnlockLabel = getNextUnlockLabel(levelProgress.level);
 
   const handleNextAction = () => {
     try {
@@ -332,20 +377,16 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
         <View style={styles.companyCard}>
           <Text style={styles.companyCardTitle}>Şirket Özeti</Text>
-          <CompanyStatRow
-            label="Şirket Seviyesi"
-            value={`Level ${levelProgress.level}`}
-            valueColor={COLORS.primary}
+
+          <LevelProgressCard
+            level={levelProgress.level}
+            xp={levelProgress.xp}
+            xpToNextLevel={levelProgress.xpToNextLevel}
+            progressRatio={levelProgress.progressRatio}
+            isMaxLevel={levelProgress.isMaxLevel}
+            nextUnlockLabel={nextUnlockLabel}
           />
-          <View style={styles.xpSection}>
-            <Text style={styles.xpLabel}>
-              {levelProgress.isMaxLevel
-                ? 'Maksimum seviye'
-                : `${levelProgress.xp} / ${levelProgress.xpToNextLevel} XP`}
-            </Text>
-            <ProgressBar progress={levelProgress.progressRatio} color={COLORS.primary} />
-            <Text style={styles.xpHint}>Sonraki seviye: {levelBenefits.nextLevelHint}</Text>
-          </View>
+
           <CompanyStatRow label="Nakit" value={formatMoney(player.money)} valueColor={COLORS.primary} />
           <CompanyStatRow
             label="İtibar"
@@ -626,24 +667,46 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: 15,
     fontWeight: '800',
+    marginBottom: 12,
+  },
+  levelProgressCard: {
+    backgroundColor: COLORS.cardAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     marginBottom: 4,
   },
-  xpSection: {
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(31, 42, 60, 0.7)',
-    marginBottom: 4,
+  levelProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
-  xpLabel: {
+  levelProgressTitle: {
     color: COLORS.textSecondary,
     fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  levelProgressValue: {
+    color: COLORS.primary,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  xpLabel: {
+    color: COLORS.textPrimary,
+    fontSize: 13,
     fontWeight: '600',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   xpHint: {
     color: COLORS.textMuted,
-    fontSize: 11,
-    marginTop: 6,
+    fontSize: 12,
+    marginTop: 8,
+    lineHeight: 17,
   },
   companyStatRow: {
     flexDirection: 'row',
@@ -821,9 +884,11 @@ const styles = StyleSheet.create({
   },
 
   progressTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#1E293B',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.progressTrack,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     overflow: 'hidden',
   },
   progressFill: {

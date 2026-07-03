@@ -2,8 +2,13 @@
  * LogistiCore - Merkezi oyun dengeleme ayarları
  *
  * Yakıt, sözleşme, teslimat, kamyon, depo ve finans sabitleri burada toplanır.
- * Davranış değişikliği yapmadan mevcut magic number değerleri korunmuştur.
+ * Seviye kilitleri levelConfig.ts üzerinden türetilir.
  */
+
+import {
+  getMinLevelForWarehouseCount,
+  levelConfig,
+} from './levelConfig';
 
 export const economyBalance = {
   /** Varsayılan yakıt fiyatı ($/L) */
@@ -41,6 +46,10 @@ export const contractBalance = {
   targetAvailableContractsMin: 15,
   /** Otomatik üretim hedefi — üst sınır */
   targetAvailableContractsMax: 20,
+  /** Piyasa yenileme aralığı (gerçek ms) — Contracts ekranı */
+  contractRefreshIntervalMs: 30_000,
+  /** Her piyasa yenilemesinde eklenebilecek maksimum yeni sözleşme */
+  contractsPerMarketRefresh: 2,
   /** Yeni oyun başlangıcı sözleşme sayısı — alt sınır */
   initialContractsMin: 12,
   /** Yeni oyun başlangıcı sözleşme sayısı — üst sınır */
@@ -116,6 +125,23 @@ export const warehouseBalance = {
   electricityPerTon: 0.25,
   /** Günlük personel maliyeti (seviye başına) */
   staffCostPerLevel: 140,
+  /** Soğuk depo açılış maliyeti çarpanı */
+  coldOpenCostMultiplier: 1.6,
+  /** Soğuk depo günlük elektrik çarpanı */
+  coldElectricityMultiplier: 2.5,
+} as const;
+
+export const warehouseStorageBalance = {
+  standardProtection: 0.5,
+  coldProtection: 1,
+  secureProtection: 0.9,
+  heavyProtection: 0.8,
+  minQuality: 0,
+  maxQuality: 100,
+  lowQualityWarningThreshold: 70,
+  criticalQualityWarningThreshold: 40,
+  /** Aynı ürün için kalite uyarısı tekrar aralığı (oyun saati) */
+  qualityWarningCooldownHours: 24,
 } as const;
 
 export const tradingBalance = {
@@ -156,30 +182,22 @@ export const financeBalance = {
 } as const;
 
 export const levelBalance = {
-  maxLevel: 30,
-  contractTonnageByLevel: [
-    { level: 1, maxTonnage: 25 },
-    { level: 2, maxTonnage: 40 },
-    { level: 3, maxTonnage: 60 },
-    { level: 5, maxTonnage: 90 },
-    { level: 8, maxTonnage: 120 },
-  ],
-  truckUnlockLevels: {
-    'truck-starter-1': 1,
-    'truck-ford-cargo': 1,
-    'truck-volvo-fh': 2,
-    'truck-mercedes-actros': 3,
-  },
+  maxLevel: levelConfig.maxLevel,
+  contractTonnageByLevel: levelConfig.contractUnlocks.map(({ level, maxTonnage }) => ({
+    level,
+    maxTonnage,
+  })),
+  truckUnlockLevels: { ...levelConfig.truckUnlocks },
   warehouseUnlockLevels: {
-    openSecondWarehouse: 2,
-    openThirdWarehouse: 4,
-    largeWarehouse: 5,
+    openSecondWarehouse: getMinLevelForWarehouseCount(1),
+    openThirdWarehouse: getMinLevelForWarehouseCount(2),
+    largeWarehouse: levelConfig.warehouseUnlocks.largeWarehouseLevel,
   },
   xpRewards: {
-    truckPurchase: 30,
-    driverHire: 10,
-    warehouseOpen: 40,
-    warehouseUpgrade: 25,
+    truckPurchase: levelConfig.xpRewards.truckPurchase,
+    driverHire: levelConfig.xpRewards.driverHire,
+    warehouseOpen: levelConfig.xpRewards.warehouseOpen,
+    warehouseUpgrade: levelConfig.xpRewards.warehouseUpgrade,
   },
 } as const;
 

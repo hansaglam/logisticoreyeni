@@ -6,6 +6,13 @@
 
 import { tradingBalance } from '../config/balance';
 import { PRODUCT_BY_ID } from '../data/products';
+import {
+  getEffectiveSellPrice,
+  getInventoryQuality,
+  mergeInventoryOnBuyWithQuality,
+  normalizeInventoryItem,
+  resolveWarehouseType,
+} from './warehouseStorage';
 import type {
   City,
   FinanceLedgerEntry,
@@ -29,30 +36,44 @@ export function getCityProductStock(city: City | undefined, productId: ProductId
 }
 
 /** Eski storedProducts kayıtlarını inventory'ye dönüştürür */
-export function normalizeWarehouseInventory(warehouse: Warehouse): WarehouseInventoryItem[] {
+export function normalizeWarehouseInventory(
+  warehouse: Warehouse,
+  currentTime = 0,
+): WarehouseInventoryItem[] {
   if (warehouse.inventory && warehouse.inventory.length > 0) {
-    return warehouse.inventory.map((item) => ({
-      productId: item.productId,
-      quantity: Math.max(0, item.quantity ?? 0),
-      averageBuyPrice: Math.max(0, item.averageBuyPrice ?? 0),
-    }));
+    return warehouse.inventory.map((item) => normalizeInventoryItem(item, warehouse, currentTime));
   }
 
   const legacy = warehouse.storedProducts ?? {};
+  const warehouseType = resolveWarehouseType(warehouse.warehouseType);
   return Object.entries(legacy)
     .filter(([, quantity]) => (quantity ?? 0) > 0)
-    .map(([productId, quantity]) => ({
-      productId: productId as ProductId,
-      quantity: quantity ?? 0,
-      averageBuyPrice: 0,
-    }));
+    .map(([productId, quantity]) =>
+      normalizeInventoryItem(
+        {
+          productId: productId as ProductId,
+          quantity: quantity ?? 0,
+          averageBuyPrice: 0,
+          quality: 100,
+          storedAt: currentTime,
+          lastQualityUpdateAt: currentTime,
+          warehouseType,
+        },
+        warehouse,
+        currentTime,
+      ),
+    );
 }
 
-export function normalizeWarehouse(warehouse: Warehouse): Warehouse {
-  const inventory = normalizeWarehouseInventory(warehouse);
+export function normalizeWarehouse(warehouse: Warehouse, currentTime = 0): Warehouse {
+  const inventory = normalizeWarehouseInventory(warehouse, currentTime);
   const usedCapacityTon = inventory.reduce((sum, item) => sum + item.quantity, 0);
   return {
     ...warehouse,
+    warehouseType: resolveWarehouseType(warehouse.warehouseType),
+    qualityProtection:
+      warehouse.qualityProtection ??
+      (resolveWarehouseType(warehouse.warehouseType) === 'cold' ? 1 : 0.5),
     inventory,
     usedCapacityTon,
     storedProducts: inventory.reduce<Partial<Record<ProductId, number>>>((acc, item) => {
@@ -87,8 +108,13 @@ export function calculateTradeBuyCost(unitPrice: number, quantity: number): numb
   return base + fee;
 }
 
-export function calculateTradeSellRevenue(unitPrice: number, quantity: number): number {
-  const base = unitPrice * quantity;
+export function calculateTradeSellRevenue(
+  unitPrice: number,
+  quantity: number,
+  quality = 100,
+): number {
+  const effectiveUnitPrice = getEffectiveSellPrice(unitPrice, quality);
+  const base = effectiveUnitPrice * quantity;
   const fee = base * tradingBalance.warehouseSellFeeRate;
   return Math.max(0, base - fee);
 }
@@ -97,8 +123,9 @@ export function calculateTradeProfit(
   sellUnitPrice: number,
   averageBuyPrice: number,
   quantity: number,
+  quality = 100,
 ): number {
-  const revenue = calculateTradeSellRevenue(sellUnitPrice, quantity);
+  const revenue = calculateTradeSellRevenue(sellUnitPrice, quantity, quality);
   const costBasis = averageBuyPrice * quantity;
   return revenue - costBasis;
 }
@@ -108,12 +135,27 @@ export function mergeInventoryOnBuy(
   productId: ProductId,
   quantity: number,
   unitPrice: number,
+  warehouse?: Warehouse,
+  currentTime = 0,
+  storageWarning?: string,
 ): WarehouseInventoryItem[] {
+  if (warehouse) {
+    return mergeInventoryOnBuyWithQuality(
+      inventory,
+      productId,
+      quantity,
+      unitPrice,
+      warehouse,
+      currentTime,
+      storageWarning,
+    );
+  }
+
   const next = [...inventory];
   const index = next.findIndex((item) => item.productId === productId);
 
   if (index < 0) {
-    next.push({ productId, quantity, averageBuyPrice: unitPrice });
+    next.push({ productId, quantity, averageBuyPrice: unitPrice, quality: 100 });
     return next;
   }
 
@@ -128,6 +170,7 @@ export function mergeInventoryOnBuy(
     productId,
     quantity: totalQuantity,
     averageBuyPrice: weightedAverage,
+    quality: getInventoryQuality(existing),
   };
   return next;
 }

@@ -41,7 +41,7 @@ function renderActiveScreen(tab: TabKey, onNavigate: (tab: TabKey) => void): Rea
     case 'dashboard':
       return <DashboardScreen onNavigate={onNavigate} />;
     case 'map':
-      return <MapScreen />;
+      return <MapScreen onOpenContracts={() => onNavigate('contracts')} />;
     case 'contracts':
       return <ContractsScreen />;
     case 'fleet':

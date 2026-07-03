@@ -19,6 +19,24 @@ export type ProductId =
   | 'furniture' // Mobilya
   | 'beverage'; // İçecek
 
+/** Depo türleri — ürün saklama uyumluluğu için */
+export type WarehouseType =
+  | 'standard'
+  | 'cold'
+  | 'secure'
+  | 'heavy'
+  | 'port'
+  | 'airport';
+
+/** Ürünün depo türü gereksinimleri */
+export interface ProductStorageRequirement {
+  preferredWarehouseTypes: WarehouseType[];
+  allowedWarehouseTypes: WarehouseType[];
+  spoilageSensitive?: boolean;
+  spoilageRatePerDay?: number;
+  valueLossRatePerDay?: number;
+}
+
 /** Statik ürün tanımı — piyasa verisinden bağımsız meta bilgiler */
 export interface Product {
   id: ProductId;
@@ -33,6 +51,8 @@ export interface Product {
    * Yüksek değer daha kısa teslim süresi gerektirir (meyve, içecek vb.).
    */
   perishability: number;
+  /** Depo türü uyumluluğu ve bozulma/kalite kuralları */
+  storageRequirement?: ProductStorageRequirement;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,10 +184,18 @@ export interface Truck {
   condition: number;
   /** Satın alma fiyatı ($) */
   purchasePrice: number;
+  /** Mağaza katalog kimliği — aynı modelden birden fazla alımda instance id'den ayrılır */
+  catalogId?: string;
   /** Kamyonun bulunduğu şehir */
   currentCityId: string;
   status: TruckStatus;
 }
+
+/** Şoför kalite kademesi — levelConfig.driverUnlocks ile eşleşir */
+export type DriverTier = 'rookie' | 'standard' | 'experienced' | 'expert' | 'international';
+
+/** Gelecek özellik önizleme durumu */
+export type FutureUnlockStatus = 'coming_soon' | 'available';
 
 /** Şoför durumu */
 export type DriverStatus = 'idle' | 'driving' | 'resting';
@@ -176,6 +204,12 @@ export type DriverStatus = 'idle' | 'driving' | 'resting';
 export interface Driver {
   id: string;
   name: string;
+  /** Kalite kademesi — eski kayıtlarda yoksa rookie kabul edilir */
+  tier?: DriverTier;
+  /** İşe alım / havuz kilidi için gereken şirket seviyesi */
+  requiredLevel?: number;
+  /** Havuz katalog kimliği — işe alındığı şablon */
+  poolId?: string;
   /** Deneyim seviyesi (0–100) */
   experience: number;
   /** Dikkat seviyesi (0–100) — düşük değer kaza/arıza riskini artırır */
@@ -312,6 +346,16 @@ export interface WarehouseInventoryItem {
   quantity: number;
   /** Ağırlıklı ortalama alış fiyatı ($/ton) */
   averageBuyPrice: number;
+  /** Ürün kalitesi (0–100) */
+  quality?: number;
+  /** Depoya konulduğu oyun zamanı (saat) */
+  storedAt?: number;
+  /** Son kalite güncellemesi (saat) */
+  lastQualityUpdateAt?: number;
+  /** Saklandığı depo türü */
+  warehouseType?: WarehouseType;
+  /** Uyumsuz depo uyarısı */
+  storageWarning?: string;
 }
 
 /** Oyuncuya ait depo — belirli bir şehirde stok tutar */
@@ -329,6 +373,12 @@ export interface Warehouse {
   storedProducts?: Partial<Record<ProductId, number>>;
   /** Önbellek — yoksa inventory toplamından hesaplanır */
   usedCapacityTon?: number;
+  /** Depo yükseltme kademesi: 1=küçük, 2=orta, 3=büyük */
+  upgradeTier?: number;
+  /** Depo türü — eski kayıtlarda yoksa standard kabul edilir */
+  warehouseType?: WarehouseType;
+  /** Kalite koruma katsayısı (0–1) */
+  qualityProtection?: number;
 }
 
 /** Finans defteri kategorileri */
@@ -363,6 +413,7 @@ export interface TradeActionResult {
     | 'INSUFFICIENT_CAPACITY'
     | 'INSUFFICIENT_FUNDS'
     | 'INSUFFICIENT_INVENTORY'
+    | 'INCOMPATIBLE_WAREHOUSE'
     | 'CITY_NOT_FOUND';
 }
 
@@ -370,8 +421,22 @@ export interface TradeActionResult {
 // Oyuncu ve oyun durumu
 // ---------------------------------------------------------------------------
 
+/** XP / seviye alanları — eski kayıtlarda eksik olabilir */
+export type PlayerProgressFields = {
+  /** Şirket seviyesi — filo limiti ve kilit açmalar için kullanılır */
+  companyLevel?: number;
+  /** Şirket seviyesi (XP tabanlı) */
+  level?: number;
+  /** Mevcut seviye içindeki XP */
+  xp?: number;
+  /** Sonraki seviyeye kalan XP eşiği */
+  xpToNextLevel?: number;
+  /** Kariyer boyu kazanılan toplam XP */
+  totalXp?: number;
+};
+
 /** Oyuncu / şirket profili */
-export interface Player {
+export interface Player extends PlayerProgressFields {
   companyName: string;
   /** Nakit ($) */
   money: number;
@@ -426,6 +491,8 @@ export interface GameEvent {
   title: string;
   message: string;
   importance: GameEventImportance;
+  /** Dahili meta — kalite uyarısı tekrar kontrolü vb. */
+  meta?: Record<string, unknown>;
 }
 
 /** Geçici oyuncu bildirimi — save'e yazılmaz */
@@ -476,7 +543,9 @@ export interface MarketContractFilter {
   toCityName: string;
   productName: string;
   opportunityId?: string;
-  source: 'market';
+  /** Harita önerisinden gelen belirli sözleşme — liste sıralamasında en üstte */
+  contractId?: string;
+  source: 'market' | 'map';
   createdAt: number;
 }
 
@@ -494,6 +563,46 @@ export interface MarketOpportunity {
   score: number;
   demandLevel: 'high' | 'medium' | 'low';
 }
+
+/** Harita alt kartında gösterilen şirket durumuna göre öneri */
+export type RecommendedMapAction =
+  | {
+      type: 'contract';
+      contractId: string;
+      title: 'Önerilen İş';
+      reason: string;
+      estimatedProfit: number;
+      riskLabel: string;
+      buttonLabel: 'İşi Gör';
+    }
+  | {
+      type: 'active_delivery';
+      deliveryId: string;
+      title: 'Aktif Teslimat';
+      reason: string;
+      buttonLabel: "Dashboard'a Git" | "Filo'yu Aç";
+    }
+  | {
+      type: 'fleet_upgrade';
+      title: 'Teslimatlar Yolda' | 'Şoför Gerekli' | 'Daha Büyük Kamyon Gerekli' | 'Filo Geliştir';
+      reason: string;
+      buttonLabel: "Filo'yu Aç" | 'Şoför Havuzu' | 'Kamyon Mağazası';
+      fleetTarget: 'trucks' | 'shop' | 'hire_drivers';
+    }
+  | {
+      type: 'warehouse_trade';
+      title: 'Ticaret Fırsatı';
+      reason: string;
+      buttonLabel: 'Depoları Aç';
+      warehouseId?: string;
+      productId?: ProductId;
+    }
+  | {
+      type: 'none';
+      title: 'Fırsat Bekleniyor';
+      reason: string;
+      buttonLabel: 'Piyasayı Gör';
+    };
 
 /** Dinamik piyasa haberi */
 export interface MarketNews {
@@ -573,6 +682,7 @@ export type ContractAvailabilityReason =
   | 'NO_DRIVERS'
   | 'NO_IDLE_DRIVERS'
   | 'CAPACITY_INSUFFICIENT'
+  | 'TRUCK_CONDITION_TOO_LOW'
   | 'OK';
 
 export interface ContractAvailability {

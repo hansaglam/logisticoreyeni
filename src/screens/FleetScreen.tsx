@@ -1,7 +1,7 @@
 /**
  * LogistiCore - Filo Ekranı
  *
- * Kamyon, şoför ve mağaza içerikleri iç sekmelerle ayrılmış sade filo yönetimi.
+ * Sahip olunan varlıklar ile mağaza net ayrılmış iki seviyeli filo yönetimi.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -19,9 +19,19 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { AVAILABLE_TRUCKS, type TruckTemplate } from '../data/trucks';
-import { getTruckUnlockLevel } from '../simulation/leveling';
-import { AVAILABLE_DRIVERS, type DriverTemplate } from '../data/drivers';
+import {
+  countOwnedTrucksOfCatalog,
+  resolveTruckMarketRequiredLevel,
+  TRUCK_MARKET,
+  type TruckMarketItem,
+} from '../data/trucks';
+import {
+  getDriverPoolForLevel,
+  getDriverTierLabel,
+  isDriverPoolItemHired,
+  resolveDriverRequiredLevel,
+  type DriverMarketItem,
+} from '../data/drivers';
 import { calculateTruckRepairCost } from '../simulation/delivery';
 import type { Delivery, DeliveryStatus, Driver, ProductId, Truck } from '../types/game';
 
@@ -48,13 +58,23 @@ const FAST_SPEED_THRESHOLD = 15;
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 
-type FleetTab = 'trucks' | 'drivers' | 'shop';
+type FleetMainTab = 'owned' | 'shop';
+type FleetSubTab = 'trucks' | 'drivers';
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
 
-const TABS: { key: FleetTab; label: string }[] = [
+const MAIN_TABS: { key: FleetMainTab; label: string }[] = [
+  { key: 'owned', label: 'Sahip Olunanlar' },
+  { key: 'shop', label: 'Mağaza' },
+];
+
+const OWNED_SUB_TABS: { key: FleetSubTab; label: string }[] = [
   { key: 'trucks', label: 'Kamyonlar' },
   { key: 'drivers', label: 'Şoförler' },
-  { key: 'shop', label: 'Mağaza' },
+];
+
+const SHOP_SUB_TABS: { key: FleetSubTab; label: string }[] = [
+  { key: 'trucks', label: 'Kamyon' },
+  { key: 'drivers', label: 'Şoför' },
 ];
 
 function getCityName(cityId: string): string {
@@ -181,7 +201,7 @@ function ShopTag({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' 
   );
 }
 
-function getTruckShopTags(template: TruckTemplate): { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] {
+function getTruckShopTags(template: TruckMarketItem): { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] {
   const tags: { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] = [];
   if (template.capacity >= 28) tags.push({ label: 'Yüksek kapasite', tone: 'success' });
   if (template.fuelConsumptionPerKm <= 0.3) tags.push({ label: 'Yakıt tasarruflu', tone: 'success' });
@@ -190,12 +210,14 @@ function getTruckShopTags(template: TruckTemplate): { label: string; tone: 'succ
   return tags;
 }
 
-function getDriverShopTags(template: DriverTemplate): { label: string; tone: 'success' | 'warning' | 'neutral' }[] {
-  const tags: { label: string; tone: 'success' | 'warning' | 'neutral' }[] = [];
+function getDriverShopTags(template: DriverMarketItem): { label: string; tone: 'success' | 'warning' | 'neutral' }[] {
+  const tags: { label: string; tone: 'success' | 'warning' | 'neutral' }[] = [
+    { label: getDriverTierLabel(template.tier), tone: 'neutral' },
+  ];
+  if (template.comingSoon) tags.push({ label: 'Yakında', tone: 'warning' });
   if (template.fuelSaving >= 50) tags.push({ label: 'Yakıt tasarruflu', tone: 'success' });
   if (template.attention >= 80) tags.push({ label: 'Güvenli sürücü', tone: 'success' });
   if (template.speed >= 15) tags.push({ label: 'Hızlı sürücü', tone: 'warning' });
-  if (tags.length === 0) tags.push({ label: 'Dengeli şoför', tone: 'neutral' });
   return tags;
 }
 
@@ -243,19 +265,215 @@ function FleetTabButton({
   label,
   active,
   onPress,
+  compact = false,
 }: {
   label: string;
   active: boolean;
   onPress: () => void;
+  compact?: boolean;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.tabButton, active && styles.tabButtonActive]}
+      style={[
+        styles.tabButton,
+        compact && styles.tabButtonCompact,
+        active && styles.tabButtonActive,
+      ]}
       onPress={onPress}
       activeOpacity={0.85}
     >
-      <Text style={[styles.tabButtonText, active && styles.tabButtonTextActive]}>{label}</Text>
+      <Text
+        style={[
+          styles.tabButtonText,
+          compact && styles.tabButtonTextCompact,
+          active && styles.tabButtonTextActive,
+        ]}
+      >
+        {label}
+      </Text>
     </TouchableOpacity>
+  );
+}
+
+function FleetStats({
+  idleTrucks,
+  onRouteTrucks,
+  averageCondition,
+  idleDrivers,
+}: {
+  idleTrucks: number;
+  onRouteTrucks: number;
+  averageCondition: number;
+  idleDrivers: number;
+}) {
+  return (
+    <View style={styles.summaryCard}>
+      <View style={styles.summaryItem}>
+        <Text style={[styles.summaryValue, { color: COLORS.success }]}>{idleTrucks}</Text>
+        <Text style={styles.summaryLabel}>Boşta</Text>
+      </View>
+      <View style={styles.summaryItem}>
+        <Text style={[styles.summaryValue, { color: COLORS.secondary }]}>{onRouteTrucks}</Text>
+        <Text style={styles.summaryLabel}>Yolda</Text>
+      </View>
+      <View style={styles.summaryItem}>
+        <Text style={[styles.summaryValue, { color: getConditionColor(averageCondition) }]}>
+          {Math.round(averageCondition)}%
+        </Text>
+        <Text style={styles.summaryLabel}>Ort. kondisyon</Text>
+      </View>
+      <View style={styles.summaryItem}>
+        <Text style={[styles.summaryValue, { color: COLORS.success }]}>{idleDrivers}</Text>
+        <Text style={styles.summaryLabel}>Boşta şoför</Text>
+      </View>
+    </View>
+  );
+}
+
+function OwnedTruckList({
+  trucks,
+  drivers,
+  activeDeliveries,
+  currentTime,
+  playerMoney,
+  showFleetTip,
+  onRepair,
+}: {
+  trucks: Truck[];
+  drivers: Driver[];
+  activeDeliveries: Delivery[];
+  currentTime: number;
+  playerMoney: number;
+  showFleetTip: boolean;
+  onRepair: (truck: Truck) => void;
+}) {
+  if (trucks.length === 0) {
+    return (
+      <View style={styles.emptyCard}>
+        <Text style={styles.emptyText}>Henüz filonda kamyon yok.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <>
+      {trucks.map((truck) => (
+        <TruckCard
+          key={truck.id}
+          truck={truck}
+          playerMoney={playerMoney}
+          drivers={drivers}
+          delivery={findActiveDeliveryForTruck(truck.id, activeDeliveries)}
+          currentTime={currentTime}
+          onRepair={onRepair}
+        />
+      ))}
+      {showFleetTip ? (
+        <View style={styles.tipCard}>
+          <Text style={styles.tipTitle}>Filo önerisi</Text>
+          <Text style={styles.tipText}>
+            Boşta kamyonun yok. Yeni sözleşme almak için teslimatın bitmesini bekle veya Mağaza
+            bölümünden yeni kamyon satın al.
+          </Text>
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+function OwnedDriverList({
+  drivers,
+  trucks,
+  activeDeliveries,
+  currentTime,
+}: {
+  drivers: Driver[];
+  trucks: Truck[];
+  activeDeliveries: Delivery[];
+  currentTime: number;
+}) {
+  if (drivers.length === 0) {
+    return (
+      <View style={styles.emptyCard}>
+        <Text style={styles.emptyText}>Henüz şoför işe alınmadı.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <>
+      {drivers.map((driver) => (
+        <DriverCard
+          key={driver.id}
+          driver={driver}
+          trucks={trucks}
+          activeDeliveries={activeDeliveries}
+          currentTime={currentTime}
+        />
+      ))}
+    </>
+  );
+}
+
+function TruckShopList({
+  trucks,
+  playerMoney,
+  playerLevel,
+  canBuy,
+  onBuy,
+}: {
+  trucks: Truck[];
+  playerMoney: number;
+  playerLevel: number;
+  canBuy: boolean;
+  onBuy: (catalogId: string) => void;
+}) {
+  return (
+    <>
+      {[...TRUCK_MARKET]
+        .sort((a, b) => resolveTruckMarketRequiredLevel(a) - resolveTruckMarketRequiredLevel(b))
+        .map((template) => (
+          <AvailableTruckCard
+            key={template.id}
+            template={template}
+            playerMoney={playerMoney}
+            playerLevel={playerLevel}
+            ownedCount={countOwnedTrucksOfCatalog(trucks, template.id)}
+            canBuy={canBuy}
+            onBuy={onBuy}
+          />
+        ))}
+    </>
+  );
+}
+
+function DriverShopList({
+  drivers,
+  playerMoney,
+  playerLevel,
+  canHire,
+  onHire,
+}: {
+  drivers: Driver[];
+  playerMoney: number;
+  playerLevel: number;
+  canHire: boolean;
+  onHire: (poolId: string) => void;
+}) {
+  return (
+    <>
+      {getDriverPoolForLevel(playerLevel).map((template) => (
+        <AvailableDriverCard
+          key={template.id}
+          template={template}
+          playerMoney={playerMoney}
+          playerLevel={playerLevel}
+          alreadyHired={isDriverPoolItemHired(drivers, template.id)}
+          canHire={canHire}
+          onHire={onHire}
+        />
+      ))}
+    </>
   );
 }
 
@@ -422,28 +640,34 @@ function AvailableTruckCard({
   template,
   playerMoney,
   playerLevel,
-  alreadyOwned,
+  ownedCount,
   canBuy,
   onBuy,
 }: {
-  template: TruckTemplate;
+  template: TruckMarketItem;
   playerMoney: number;
   playerLevel: number;
-  alreadyOwned: boolean;
+  ownedCount: number;
   canBuy: boolean;
-  onBuy: (truckId: string) => void;
+  onBuy: (catalogId: string) => void;
 }) {
-  const requiredLevel = getTruckUnlockLevel(template.id);
-  const isLevelLocked = playerLevel < requiredLevel;
+  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
+  const requiredLevel = resolveTruckMarketRequiredLevel(template);
+  const isLevelLocked = safePlayerLevel < requiredLevel;
   const canAfford = playerMoney >= template.purchasePrice;
-  const disabled = !canBuy || alreadyOwned || !canAfford || isLevelLocked;
+  const disabled = !canBuy || !canAfford || isLevelLocked;
   const tags = getTruckShopTags(template);
 
   let buttonLabel = 'Satın Al';
-  if (isLevelLocked) buttonLabel = `Level ${requiredLevel} gerekli`;
-  else if (!canBuy) buttonLabel = 'Yakında';
-  else if (alreadyOwned) buttonLabel = 'Sahipsin';
-  else if (!canAfford) buttonLabel = 'Nakit yetersiz';
+  if (isLevelLocked) {
+    buttonLabel = `Level ${requiredLevel} gerekli`;
+  } else if (!canBuy) {
+    buttonLabel = 'Yakında';
+  } else if (!canAfford) {
+    buttonLabel = 'Nakit yetersiz';
+  } else if (ownedCount > 0) {
+    buttonLabel = 'Tekrar Satın Al';
+  }
 
   return (
     <View style={[styles.shopCard, isLevelLocked && styles.shopCardLocked]}>
@@ -451,7 +675,14 @@ function AvailableTruckCard({
         <Text style={styles.shopItemName} numberOfLines={1}>
           {template.name}
         </Text>
-        <Text style={styles.shopPriceSuccess}>{formatMoney(template.purchasePrice)}</Text>
+        <View style={styles.shopCardHeaderBadges}>
+          {isLevelLocked ? (
+            <View style={styles.levelLockBadge}>
+              <Text style={styles.levelLockBadgeText}>Level {requiredLevel}</Text>
+            </View>
+          ) : null}
+          <Text style={styles.shopPriceSuccess}>{formatMoney(template.purchasePrice)}</Text>
+        </View>
       </View>
 
       <Text style={styles.shopShortMeta}>
@@ -459,7 +690,9 @@ function AvailableTruckCard({
       </Text>
 
       {isLevelLocked ? (
-        <Text style={styles.shopLockHint}>Daha yüksek seviyede açılır.</Text>
+        <Text style={styles.shopLockHint}>Bu kamyon şirket seviyen yükselince açılır.</Text>
+      ) : ownedCount > 0 ? (
+        <Text style={styles.shopOwnedHint}>Filonda {ownedCount} adet mevcut</Text>
       ) : null}
 
       <View style={styles.shopStatGrid}>
@@ -494,33 +727,62 @@ function AvailableTruckCard({
 function AvailableDriverCard({
   template,
   playerMoney,
+  playerLevel,
   alreadyHired,
   canHire,
   onHire,
 }: {
-  template: DriverTemplate;
+  template: DriverMarketItem;
   playerMoney: number;
+  playerLevel: number;
   alreadyHired: boolean;
   canHire: boolean;
-  onHire: (driverId: string) => void;
+  onHire: (poolId: string) => void;
 }) {
+  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
+  const requiredLevel = resolveDriverRequiredLevel(template);
+  const isLevelLocked = safePlayerLevel < requiredLevel;
+  const isComingSoon = template.comingSoon === true;
   const canAfford = playerMoney >= template.hiringFee;
-  const disabled = !canHire || alreadyHired || !canAfford;
+  const disabled = !canHire || alreadyHired || !canAfford || isLevelLocked || isComingSoon;
   const tags = getDriverShopTags(template);
 
   let buttonLabel = `İşe Al ${formatMoney(template.hiringFee)}`;
-  if (!canHire) buttonLabel = 'Yakında';
-  else if (alreadyHired) buttonLabel = 'İşe alındı';
-  else if (!canAfford) buttonLabel = 'Nakit yetersiz';
+  if (isComingSoon) {
+    buttonLabel = 'Yakında';
+  } else if (isLevelLocked) {
+    buttonLabel = 'Seviye gerekli';
+  } else if (!canHire) {
+    buttonLabel = 'Yakında';
+  } else if (alreadyHired) {
+    buttonLabel = 'İşe alındı';
+  } else if (!canAfford) {
+    buttonLabel = 'Nakit yetersiz';
+  }
 
   return (
-    <View style={styles.shopCard}>
+    <View style={[styles.shopCard, (isLevelLocked || isComingSoon) && styles.shopCardLocked]}>
       <View style={styles.shopCardHeaderRow}>
         <Text style={styles.shopItemName} numberOfLines={1}>
           {template.name}
         </Text>
-        <Text style={styles.shopPricePrimary}>{formatMoney(template.hiringFee)} işe alım</Text>
+        <View style={styles.shopCardHeaderBadges}>
+          {isLevelLocked || isComingSoon ? (
+            <View style={styles.levelLockBadge}>
+              <Text style={styles.levelLockBadgeText}>Level {requiredLevel}</Text>
+            </View>
+          ) : null}
+          <Text style={styles.shopPricePrimary}>{formatMoney(template.hiringFee)} işe alım</Text>
+        </View>
       </View>
+
+      {isComingSoon ? (
+        <Text style={styles.shopLockHint}>Yurt dışı taşımacılık için yakında eklenecek.</Text>
+      ) : isLevelLocked ? (
+        <Text style={styles.shopLockHint}>
+          Bu şoför şirket seviyen Level {requiredLevel} olunca açılır.
+        </Text>
+      ) : null}
 
       <View style={styles.shopStatGrid}>
         <ShopStatRow label="Deneyim" value={`${template.experience}/100`} />
@@ -553,7 +815,6 @@ function AvailableDriverCard({
 
 export default function FleetScreen() {
   const player = useGameStore((state) => state.player);
-  const cities = useGameStore((state) => state.cities) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
 
@@ -564,12 +825,28 @@ export default function FleetScreen() {
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
   const { scrollBottomPadding } = useTabBarLayout();
 
-  const [activeTab, setActiveTab] = useState<FleetTab>('trucks');
+  const [fleetMainTab, setFleetMainTab] = useState<FleetMainTab>('owned');
+  const [ownedSubTab, setOwnedSubTab] = useState<FleetSubTab>('trucks');
+  const [shopSubTab, setShopSubTab] = useState<FleetSubTab>('trucks');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
 
   useEffect(() => {
     if (!pendingFleetSubTab) return;
-    setActiveTab(pendingFleetSubTab);
+
+    if (pendingFleetSubTab === 'shop') {
+      setFleetMainTab('shop');
+      setShopSubTab('trucks');
+    } else if (pendingFleetSubTab === 'trucks') {
+      setFleetMainTab('owned');
+      setOwnedSubTab('trucks');
+    } else if (pendingFleetSubTab === 'drivers') {
+      setFleetMainTab('owned');
+      setOwnedSubTab('drivers');
+    } else if (pendingFleetSubTab === 'hire_drivers') {
+      setFleetMainTab('shop');
+      setShopSubTab('drivers');
+    }
+
     clearPendingFleetSubTab();
   }, [pendingFleetSubTab, clearPendingFleetSubTab]);
 
@@ -581,6 +858,7 @@ export default function FleetScreen() {
 
   const trucks = useMemo(() => player?.trucks ?? [], [player]);
   const drivers = useMemo(() => player?.drivers ?? [], [player]);
+  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
 
   const fleetSummary = useMemo(
     () => ({
@@ -591,6 +869,13 @@ export default function FleetScreen() {
     }),
     [trucks, drivers],
   );
+
+  const handleMainTabChange = (tab: FleetMainTab) => {
+    setFleetMainTab(tab);
+    if (tab === 'shop') {
+      setShopSubTab('trucks');
+    }
+  };
 
   if (!player) {
     return (
@@ -604,6 +889,7 @@ export default function FleetScreen() {
 
   const translateErrorMessage = (error: unknown, fallback: string): string => {
     if (!(error instanceof Error)) return fallback;
+    if (error.message.includes('Level')) return error.message;
     if (error.message.includes('Yetersiz')) return 'Nakit yetersiz';
     if (error.message.includes('zaten')) return 'Zaten mevcut';
     if (error.message.includes('bulunamadı')) return 'Bulunamadı';
@@ -624,34 +910,46 @@ export default function FleetScreen() {
     }
   };
 
-  const handleBuyTruck = (truckId: string) => {
+  const handleBuyTruck = (catalogId: string) => {
     if (typeof buyTruck !== 'function') {
       setStatusMessage({ type: 'error', text: 'Yakında' });
       return;
     }
-    try {
-      buyTruck(truckId);
-      setStatusMessage({ type: 'success', text: 'Kamyon satın alındı' });
-    } catch (error) {
-      setStatusMessage({ type: 'error', text: translateErrorMessage(error, 'İşlem başarısız') });
+    const result = buyTruck(catalogId);
+    if (!result.success) {
+      setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
+      return;
     }
+    setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon satın alındı' });
   };
 
-  const handleHireDriver = (driverId: string) => {
+  const handleHireDriver = (poolId: string) => {
     if (typeof hireDriver !== 'function') {
       setStatusMessage({ type: 'error', text: 'Yakında' });
       return;
     }
-    try {
-      hireDriver(driverId);
-      setStatusMessage({ type: 'success', text: 'Şoför işe alındı' });
-    } catch (error) {
-      setStatusMessage({ type: 'error', text: translateErrorMessage(error, 'İşlem başarısız') });
+    const result = hireDriver(poolId);
+    if (!result.success) {
+      setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
+      return;
     }
+    setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işe alındı' });
   };
 
   const showFleetTip =
-    activeTab === 'trucks' && fleetSummary.idleTrucks === 0 && fleetSummary.onRouteTrucks > 0;
+    fleetMainTab === 'owned' &&
+    ownedSubTab === 'trucks' &&
+    fleetSummary.idleTrucks === 0 &&
+    fleetSummary.onRouteTrucks > 0;
+
+  const sectionTitle =
+    fleetMainTab === 'owned'
+      ? ownedSubTab === 'trucks'
+        ? 'Sahip Olduğun Kamyonlar'
+        : 'Sahip Olduğun Şoförler'
+      : shopSubTab === 'trucks'
+        ? 'Kamyon Pazarı'
+        : 'Şoför Havuzu';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -694,136 +992,88 @@ export default function FleetScreen() {
           </View>
         )}
 
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: COLORS.success }]}>
-              {fleetSummary.idleTrucks}
-            </Text>
-            <Text style={styles.summaryLabel}>Boşta</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: COLORS.secondary }]}>
-              {fleetSummary.onRouteTrucks}
-            </Text>
-            <Text style={styles.summaryLabel}>Yolda</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text
-              style={[
-                styles.summaryValue,
-                { color: getConditionColor(fleetSummary.averageCondition) },
-              ]}
-            >
-              {Math.round(fleetSummary.averageCondition)}%
-            </Text>
-            <Text style={styles.summaryLabel}>Ort. kondisyon</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: COLORS.success }]}>
-              {fleetSummary.idleDrivers}
-            </Text>
-            <Text style={styles.summaryLabel}>Boşta şoför</Text>
-          </View>
-        </View>
+        <FleetStats
+          idleTrucks={fleetSummary.idleTrucks}
+          onRouteTrucks={fleetSummary.onRouteTrucks}
+          averageCondition={fleetSummary.averageCondition}
+          idleDrivers={fleetSummary.idleDrivers}
+        />
 
-        <View style={styles.tabRow}>
-          {TABS.map((tab) => (
+        <View style={styles.mainTabRow}>
+          {MAIN_TABS.map((tab) => (
             <FleetTabButton
               key={tab.key}
               label={tab.label}
-              active={activeTab === tab.key}
-              onPress={() => setActiveTab(tab.key)}
+              active={fleetMainTab === tab.key}
+              onPress={() => handleMainTabChange(tab.key)}
             />
           ))}
         </View>
 
-        {activeTab === 'trucks' &&
-          (trucks.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyText}>Henüz filonda kamyon yok.</Text>
-            </View>
-          ) : (
-            <>
-              {trucks.map((truck) => (
-                <TruckCard
-                  key={truck.id}
-                  truck={truck}
-                  playerMoney={player.money}
-                  drivers={drivers}
-                  delivery={findActiveDeliveryForTruck(truck.id, activeDeliveries)}
-                  currentTime={currentTime}
-                  onRepair={handleRepair}
-                />
-              ))}
-              {showFleetTip ? (
-                <View style={styles.tipCard}>
-                  <Text style={styles.tipTitle}>Filo önerisi</Text>
-                  <Text style={styles.tipText}>
-                    Boşta kamyonun yok. Yeni sözleşme almak için teslimatın bitmesini bekle veya yeni
-                    kamyon satın al.
-                  </Text>
-                </View>
-              ) : null}
-            </>
-          ))}
-
-        {activeTab === 'drivers' &&
-          (drivers.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyText}>Henüz şoför işe alınmadı.</Text>
-            </View>
-          ) : (
-            drivers.map((driver) => (
-              <DriverCard
-                key={driver.id}
-                driver={driver}
-                trucks={trucks}
-                activeDeliveries={activeDeliveries}
-                currentTime={currentTime}
+        <View style={styles.subTabRow}>
+          {(fleetMainTab === 'owned' ? OWNED_SUB_TABS : SHOP_SUB_TABS).map((tab) => {
+            const isActive =
+              fleetMainTab === 'owned' ? ownedSubTab === tab.key : shopSubTab === tab.key;
+            return (
+              <FleetTabButton
+                key={tab.key}
+                label={tab.label}
+                active={isActive}
+                compact
+                onPress={() => {
+                  if (fleetMainTab === 'owned') {
+                    setOwnedSubTab(tab.key);
+                  } else {
+                    setShopSubTab(tab.key);
+                  }
+                }}
               />
-            ))
-          ))}
+            );
+          })}
+        </View>
 
-        {activeTab === 'shop' && (
-          <>
-            <Text style={styles.shopSectionHeader}>Kamyon Pazarı</Text>
-            {AVAILABLE_TRUCKS.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyText}>Satın alınabilir kamyon yok.</Text>
-              </View>
-            ) : (
-              AVAILABLE_TRUCKS.map((template) => (
-                <AvailableTruckCard
-                  key={template.id}
-                  template={template}
-                  playerMoney={player.money}
-                  playerLevel={player.level ?? player.companyLevel ?? 1}
-                  alreadyOwned={trucks.some((t) => t.id === template.id)}
-                  canBuy={typeof buyTruck === 'function'}
-                  onBuy={handleBuyTruck}
-                />
-              ))
-            )}
+        <Text style={styles.sectionTitle}>{sectionTitle}</Text>
 
-            <Text style={[styles.shopSectionHeader, styles.shopSectionHeaderSpaced]}>Şoför Havuzu</Text>
-            {AVAILABLE_DRIVERS.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyText}>İşe alınabilir şoför yok.</Text>
-              </View>
-            ) : (
-              AVAILABLE_DRIVERS.map((template) => (
-                <AvailableDriverCard
-                  key={template.id}
-                  template={template}
-                  playerMoney={player.money}
-                  alreadyHired={drivers.some((d) => d.id === template.id)}
-                  canHire={typeof hireDriver === 'function'}
-                  onHire={handleHireDriver}
-                />
-              ))
-            )}
-          </>
-        )}
+        {fleetMainTab === 'owned' && ownedSubTab === 'trucks' ? (
+          <OwnedTruckList
+            trucks={trucks}
+            drivers={drivers}
+            activeDeliveries={activeDeliveries}
+            currentTime={currentTime}
+            playerMoney={player.money}
+            showFleetTip={showFleetTip}
+            onRepair={handleRepair}
+          />
+        ) : null}
+
+        {fleetMainTab === 'owned' && ownedSubTab === 'drivers' ? (
+          <OwnedDriverList
+            drivers={drivers}
+            trucks={trucks}
+            activeDeliveries={activeDeliveries}
+            currentTime={currentTime}
+          />
+        ) : null}
+
+        {fleetMainTab === 'shop' && shopSubTab === 'trucks' ? (
+          <TruckShopList
+            trucks={trucks}
+            playerMoney={player.money}
+            playerLevel={playerLevel}
+            canBuy={typeof buyTruck === 'function'}
+            onBuy={handleBuyTruck}
+          />
+        ) : null}
+
+        {fleetMainTab === 'shop' && shopSubTab === 'drivers' ? (
+          <DriverShopList
+            drivers={drivers}
+            playerMoney={player.money}
+            playerLevel={playerLevel}
+            canHire={typeof hireDriver === 'function'}
+            onHire={handleHireDriver}
+          />
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -936,11 +1186,32 @@ const styles = StyleSheet.create({
     padding: 4,
     marginBottom: 14,
   },
+  mainTabRow: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.cardAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 4,
+    marginBottom: 10,
+  },
+  subTabRow: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 3,
+    marginBottom: 12,
+  },
   tabButton: {
     flex: 1,
     paddingVertical: 9,
     borderRadius: 8,
     alignItems: 'center',
+  },
+  tabButtonCompact: {
+    paddingVertical: 7,
   },
   tabButtonActive: {
     backgroundColor: COLORS.primary,
@@ -950,8 +1221,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  tabButtonTextCompact: {
+    fontSize: 11,
+  },
   tabButtonTextActive: {
     color: '#0B1220',
+  },
+  sectionTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 10,
   },
 
   itemCard: {
@@ -1195,8 +1475,24 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   shopCardLocked: {
-    opacity: 0.72,
+    opacity: 0.62,
     borderColor: COLORS.border,
+  },
+  shopCardHeaderBadges: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  levelLockBadge: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  levelLockBadgeText: {
+    color: COLORS.danger,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   shopCardHeaderRow: {
     flexDirection: 'row',
@@ -1230,6 +1526,12 @@ const styles = StyleSheet.create({
   },
   shopLockHint: {
     color: COLORS.danger,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  shopOwnedHint: {
+    color: COLORS.textMuted,
     fontSize: 11,
     fontWeight: '600',
     marginBottom: 8,

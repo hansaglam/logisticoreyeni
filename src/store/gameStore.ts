@@ -29,13 +29,21 @@ import type {
   TradeActionResult,
   Truck,
   Warehouse,
+  WarehouseType,
 } from '../types/game';
 import { resolveNotificationDismissMs } from '../types/game';
 import { CITIES, CITIES_BY_ID } from '../data/cities';
 import { PRODUCTS, PRODUCT_BY_ID } from '../data/products';
 import { ROUTES } from '../data/routes';
-import { AVAILABLE_DRIVERS, STARTER_DRIVER } from '../data/drivers';
-import { AVAILABLE_TRUCKS, STARTER_TRUCK } from '../data/trucks';
+import {
+  findDriverPoolItem,
+  getDriverPoolForLevel,
+  getDriverTierLabel,
+  isDriverPoolItemHired,
+  resolveDriverRequiredLevel,
+  STARTER_DRIVER,
+} from '../data/drivers';
+import { findTruckMarketItem, resolveTruckMarketRequiredLevel, STARTER_TRUCK } from '../data/trucks';
 import {
   DEFAULT_GLOBAL_ECONOMY,
   randomBetween,
@@ -47,6 +55,7 @@ import {
   getRouteBetweenCities,
   mergeContractLists,
   randomBetween as contractRandomBetween,
+  refreshContractsFromMarket,
   replenishAvailableContracts,
 } from '../simulation/contracts';
 import {
@@ -58,6 +67,7 @@ import {
   createDelivery,
   getContractAvailability,
   getContractCargoWeight,
+  getHighestOwnedTruckCapacity,
   getMaxIdleTruckCapacity,
   DeliveryError,
   failDelivery as failDeliverySim,
@@ -79,19 +89,35 @@ import {
   normalizeWarehouse,
   reduceInventoryOnSell,
 } from '../simulation/trading';
+import {
+  buildStorageWarningForPurchase,
+  evaluateStorageSuitability,
+  getWarehouseTypeLabel,
+  processWarehouseQualityDegradation,
+  resolveWarehouseType,
+} from '../simulation/warehouseStorage';
 import { contractBalance, economyBalance, levelBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { getMaxContractTonnageForLevel } from '../config/levelConfig';
+import {
+  canOpenMoreWarehouses,
+  getMaxWarehousesForLevel,
+  getNextLevelForMoreWarehouses,
+  getWarehouseUpgradeCapacityGain,
+  getWarehouseUpgradeRequiredLevel,
+  isWarehouseCityUnlocked,
+  levelConfig,
+} from '../config/levelConfig';
 import {
   applyXpToPlayer,
   calculateDeliveryXp,
   calculateTradeSaleXp,
+  calculateXpToNextLevel,
   getDeliveryRiskTier,
   getLevelBenefits as resolveLevelBenefits,
   getMaxTonnageForLevel,
-  getMinLevelForWarehouseCount,
-  getTruckUnlockLevel,
   normalizePlayerProgress,
 } from '../simulation/leveling';
-import type { LevelBenefits } from '../simulation/leveling';
+import type { ApplyXpResult, LevelBenefits } from '../simulation/leveling';
 import {
   clearSavedGame,
   hasSavedGame,
@@ -106,7 +132,7 @@ import {
 
 const STARTING_MONEY = 20_000;
 const AUTO_SAVE_MIN_INTERVAL_MS = 15_000;
-const AUTO_SAVE_GAME_HOURS_THRESHOLD = 6;
+const ENABLE_SAVE_LOGS = false;
 const ECONOMY_TICK_INTERVAL_HOURS = 24;
 const MARKET_NEWS_MAX_AGE_HOURS = 72;
 const MARKET_NEWS_MAX_COUNT = 30;
@@ -126,6 +152,8 @@ let lastAutoSaveAt = 0;
 let lastSavedGameTime = 0;
 let saveDirty = false;
 let autoSaveEnabled = true;
+let isSavingGame = false;
+let lastSaveReason: AutoSaveReason | null = null;
 let gameInitPromise: Promise<void> | null = null;
 
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
@@ -138,7 +166,7 @@ export interface NavigationRequest {
   moreSubRoute?: 'finance' | 'warehouse' | 'debug';
 }
 
-export type FleetSubTab = 'trucks' | 'drivers' | 'shop';
+export type FleetSubTab = 'trucks' | 'drivers' | 'shop' | 'hire_drivers';
 
 export type AutoSaveReason =
   | 'critical'
@@ -155,7 +183,9 @@ export type AutoSaveReason =
   | 'warehouse'
   | 'clear_save'
   | 'background'
-  | 'manual';
+  | 'manual'
+  | 'debug_cash_change'
+  | 'time_tick';
 
 const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'critical',
@@ -167,10 +197,9 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'repair',
   'reset',
   'new_game',
-  'economy_tick',
-  'contracts_generated',
-  'warehouse',
   'clear_save',
+  'background',
+  'manual',
 ]);
 
 function resetAutoSaveTracking(gameTime = 0): void {
@@ -184,6 +213,8 @@ export interface SaveStatusSnapshot {
   lastSavedAt: number | null;
   autoSaveEnabled: boolean;
   isDirty: boolean;
+  isSaving: boolean;
+  lastSaveReason: AutoSaveReason | null;
   saveVersion: number;
 }
 
@@ -193,6 +224,8 @@ function createSaveStatusSnapshot(hasSave = false): SaveStatusSnapshot {
     lastSavedAt: lastAutoSaveAt > 0 ? lastAutoSaveAt : null,
     autoSaveEnabled,
     isDirty: saveDirty,
+    isSaving: isSavingGame,
+    lastSaveReason,
     saveVersion: SAVE_GAME_VERSION,
   };
 }
@@ -248,21 +281,38 @@ function shouldLogContractMarketEvent(eventLog: GameEvent[], currentTime: number
   );
 }
 
+let lastContractMarketRefreshAt = Date.now();
+
+function buildContractRefreshParams(state: StoreGameState) {
+  const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+  const ownedMaxTruckCapacity = getHighestOwnedTruckCapacity(state.player.trucks);
+  const idleMaxTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
+
+  return {
+    cities: citiesToRecord(state.cities),
+    routes: state.routes,
+    products: state.products,
+    globalEconomy: state.globalEconomy,
+    contracts: state.contracts,
+    currentTime: state.currentTime,
+    playerLevel,
+    maxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
+    ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
+    idleMaxTruckCapacity,
+  };
+}
+
 function applyContractReplenishment(
   state: StoreGameState,
   cities: Record<string, City>,
   globalEconomy: GlobalEconomy,
 ): { contracts: Contract[]; newContracts: Contract[] } {
-  const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+  const params = buildContractRefreshParams(state);
   return replenishAvailableContracts({
+    ...params,
     cities,
-    routes: state.routes,
-    products: state.products,
     globalEconomy,
     contracts: state.contracts,
-    currentTime: state.currentTime,
-    playerLevel,
-    maxTruckCapacity: getMaxTonnageForLevel(playerLevel),
   });
 }
 
@@ -279,13 +329,34 @@ function appendLevelUpEvents(
         time: currentTime,
         type: 'system',
         title: 'Şirket seviye atladı',
-        message: `LogistiCore Level ${level} oldu. Daha büyük sözleşmeler açıldı.`,
+        message: `Şirket Level ${level} seviyesine ulaştı.`,
         importance: 'high',
       },
       currentTime,
     );
   }
   return log;
+}
+
+function commitXpResult(
+  get: () => GameStore,
+  set: (partial: Partial<GameStore>) => void,
+  xpResult: ApplyXpResult,
+): void {
+  const state = get();
+  const eventLog = xpResult.leveledUp
+    ? appendLevelUpEvents(state.eventLog, state.currentTime, xpResult.newLevels)
+    : state.eventLog;
+
+  set({
+    player: xpResult.player,
+    eventLog,
+  });
+
+  if (xpResult.leveledUp) {
+    notifyLevelUps(get, state.currentTime, xpResult.newLevels);
+    get().autoSave('level_up');
+  }
 }
 
 function notifyLevelUps(get: () => GameStore, currentTime: number, newLevels: number[]): void {
@@ -510,7 +581,13 @@ export function createInitialGameState(): StoreGameState {
     PRODUCTS,
     globalEconomy,
     [],
-    { currentTime: 0, maxNewContracts: initialContractCount, playerLevel: 1 },
+    {
+      currentTime: 0,
+      maxNewContracts: initialContractCount,
+      playerLevel: 1,
+      ownedMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
+      idleMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
+    },
   );
 
   return {
@@ -524,7 +601,7 @@ export function createInitialGameState(): StoreGameState {
       companyLevel: 1,
       level: 1,
       xp: 0,
-      xpToNextLevel: 100,
+      xpToNextLevel: calculateXpToNextLevel(1),
       totalXp: 0,
       homeCityId: 'izmir',
       reputation: 50,
@@ -536,6 +613,9 @@ export function createInitialGameState(): StoreGameState {
           id: 'warehouse-starter-1',
           cityId: 'izmir',
           capacityTons: 100,
+          upgradeTier: 1,
+          warehouseType: 'standard',
+          qualityProtection: 0.5,
           inventory: [],
           storedProducts: {},
           usedCapacityTon: 0,
@@ -596,6 +676,7 @@ export interface GameStore extends StoreGameState {
   clearMarketContractFilter: () => void;
   setHighlightedContractId: (contractId: string | null) => void;
   openContractsForMarketOpportunity: (opportunity: MarketOpportunity) => void;
+  openContractsForMapContract: (contract: Contract) => void;
   /** Kayıt varsa yükler, yoksa yeni oyun başlatır */
   initializeGame: () => Promise<void>;
   resetGame: () => void;
@@ -618,6 +699,8 @@ export interface GameStore extends StoreGameState {
   runEconomyTick: () => void;
   /** Oyuncu ekranları: süresi dolmuş teklifleri temizler, yeni sözleşme üretmez */
   refreshMarketSnapshot: () => void;
+  refreshContractsFromMarket: () => void;
+  getContractRefreshRemainingSeconds: () => number;
   /** Debug: manuel sözleşme üretimi */
   generateNewContracts: () => void;
   expireContracts: () => void;
@@ -626,20 +709,21 @@ export interface GameStore extends StoreGameState {
   updateDeliveries: (hoursPassed: number) => void;
   completeDeliveryById: (deliveryId: string) => void;
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => void;
-  buyTruck: (truckId: string) => void;
-  hireDriver: (driverId: string) => void;
+  buyTruck: (catalogId: string) => TradeActionResult;
+  hireDriver: (poolId: string) => TradeActionResult;
   repairTruck: (truckId: string) => void;
   refuelOrUpdateFuelPrice: () => void;
   addMarketNews: (news: Omit<MarketNews, 'id'> & { id?: string }) => void;
   clearOldMarketNews: () => void;
   addGameEvent: (event: Omit<GameEvent, 'id'> & { id?: string }) => void;
   clearOldGameEvents: () => void;
-  openWarehouse: (cityId: string) => TradeActionResult;
+  openWarehouse: (cityId: string, warehouseType?: WarehouseType) => TradeActionResult;
+  upgradeWarehouse: (warehouseId: string) => TradeActionResult;
   buyProductForWarehouse: (params: {
     cityId: string;
     productId: ProductId;
     quantity: number;
-    warehouseId?: string;
+    warehouseId: string;
   }) => TradeActionResult;
   sellProductFromWarehouse: (params: {
     warehouseId: string;
@@ -649,6 +733,10 @@ export interface GameStore extends StoreGameState {
   addCompanyXp: (amount: number, reason?: string) => void;
   checkLevelUp: () => void;
   getLevelBenefits: (level?: number) => LevelBenefits;
+  /** Debug/test — production'da gizlenmeli */
+  debugAddCash: (amount: number) => void;
+  debugRemoveCash: (amount: number) => void;
+  debugSetCash: (amount: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -724,10 +812,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   setMarketContractFilter: (filter) => {
-    if (__DEV__ && filter) {
-      // TODO: remove verbose market-contract debug logs before release.
-      console.log('Market contract filter set', filter);
-    }
     set({ marketContractFilter: filter });
   },
 
@@ -740,11 +824,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   openContractsForMarketOpportunity: (opportunity) => {
-    if (__DEV__) {
-      // TODO: remove verbose market-contract debug logs before release.
-      console.log('Market opportunity pressed', opportunity);
-    }
-
     const fromCityId = opportunity.fromCityId;
     const toCityId = opportunity.toCityId;
     const productId = opportunity.productId;
@@ -774,34 +853,61 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().replenishContractsIfNeeded();
   },
 
+  openContractsForMapContract: (contract: Contract) => {
+    const { originCityId, destinationCityId, productId } = contract;
+    if (!originCityId || !destinationCityId || !productId) {
+      console.warn('[gameStore] Map contract missing route ids', contract.id);
+      return;
+    }
+
+    const filter: MarketContractFilter = {
+      fromCityId: originCityId,
+      toCityId: destinationCityId,
+      productId,
+      fromCityName: CITIES_BY_ID[originCityId]?.name ?? originCityId,
+      toCityName: CITIES_BY_ID[destinationCityId]?.name ?? destinationCityId,
+      productName: PRODUCT_BY_ID[productId]?.name ?? productId,
+      contractId: contract.id,
+      source: 'map',
+      createdAt: Date.now(),
+    };
+
+    set({
+      marketContractFilter: filter,
+      highlightedContractId: contract.id,
+      navigationRequest: { tab: 'contracts' },
+    });
+
+    get().replenishContractsIfNeeded();
+  },
+
   addCompanyXp: (amount: number, _reason?: string) => {
-    if (amount < 0) {
+    if (amount <= 0) {
       return;
     }
 
     const state = get();
     const xpResult = applyXpToPlayer(normalizePlayerProgress(state.player), amount);
-    if (amount === 0 && !xpResult.leveledUp) {
-      return;
-    }
-
-    const eventLog = xpResult.leveledUp
-      ? appendLevelUpEvents(state.eventLog, state.currentTime, xpResult.newLevels)
-      : state.eventLog;
-
-    set({
-      player: xpResult.player,
-      eventLog,
-    });
-
-    if (xpResult.leveledUp) {
-      notifyLevelUps(get, state.currentTime, xpResult.newLevels);
-      get().autoSave('level_up');
-    }
+    commitXpResult(get, set, xpResult);
   },
 
   checkLevelUp: () => {
-    get().addCompanyXp(0);
+    const state = get();
+    const normalized = normalizePlayerProgress(state.player);
+
+    if (normalized.level >= levelConfig.maxLevel) {
+      return;
+    }
+    if (normalized.xp < normalized.xpToNextLevel) {
+      return;
+    }
+
+    const xpResult = applyXpToPlayer(normalized, 0);
+    if (!xpResult.leveledUp) {
+      return;
+    }
+
+    commitXpResult(get, set, xpResult);
   },
 
   getLevelBenefits: (level?: number) => {
@@ -853,6 +959,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         resetAutoSaveTracking(0);
       } finally {
         set({ isGameReady: true });
+        get().refreshContractsFromMarket();
       }
     })();
 
@@ -885,9 +992,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
         hasSave: true,
         lastSavedAt: lastAutoSaveAt,
         isDirty: false,
+        isSaving: false,
+        lastSaveReason,
         autoSaveEnabled,
       });
-      if (__DEV__) {
+      if (__DEV__ && ENABLE_SAVE_LOGS) {
         console.log('[gameStore] Game saved at game time', state.currentTime);
       }
     } catch (error) {
@@ -947,28 +1056,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    const now = Date.now();
     const state = get();
-    const isImmediate = reason !== undefined && IMMEDIATE_SAVE_REASONS.has(reason);
-    const realTimeElapsed = now - lastAutoSaveAt;
-    const gameTimeElapsed = state.currentTime - lastSavedGameTime;
-
-    if (
-      !isImmediate &&
-      realTimeElapsed < AUTO_SAVE_MIN_INTERVAL_MS &&
-      gameTimeElapsed < AUTO_SAVE_GAME_HOURS_THRESHOLD &&
-      !saveDirty
-    ) {
+    if (!state.isGameReady || isSavingGame) {
       return;
     }
 
+    const now = Date.now();
+    const isImmediate = reason !== undefined && IMMEDIATE_SAVE_REASONS.has(reason);
+
+    if (!isImmediate) {
+      if (lastAutoSaveAt > 0 && now - lastAutoSaveAt < AUTO_SAVE_MIN_INTERVAL_MS) {
+        return;
+      }
+      if (!saveDirty) {
+        return;
+      }
+    }
+
+    lastSaveReason = reason ?? null;
+    isSavingGame = true;
+    patchSaveStatus(set, { isSaving: true, lastSaveReason: reason ?? null });
+
     void get()
       .saveGame()
-      .then(() => {
+      .finally(() => {
+        isSavingGame = false;
         lastAutoSaveAt = Date.now();
         patchSaveStatus(set, {
           lastSavedAt: lastAutoSaveAt,
           isDirty: false,
+          isSaving: false,
+          lastSaveReason: reason ?? null,
         });
       });
   },
@@ -1015,6 +1133,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     get().updateDeliveries(scaledHours);
 
+    const stateAfterDelivery = get();
+    const qualityResult = processWarehouseQualityDegradation(
+      stateAfterDelivery.player.warehouses,
+      newTime,
+      scaledHours,
+      stateAfterDelivery.eventLog,
+    );
+    if (qualityResult.newEvents.length > 0 || qualityResult.warehouses !== stateAfterDelivery.player.warehouses) {
+      set({
+        player: {
+          ...stateAfterDelivery.player,
+          warehouses: qualityResult.warehouses.map((warehouse) =>
+            normalizeWarehouse(warehouse, newTime),
+          ),
+        },
+        ...(qualityResult.newEvents.length > 0
+          ? {
+              eventLog: prependGameEvents(
+                stateAfterDelivery.eventLog,
+                qualityResult.newEvents,
+                newTime,
+              ),
+            }
+          : {}),
+      });
+    }
+
     // Her 24 oyun saatinde bir ekonomi tick'i
     let { lastEconomyTickTime } = get();
     while (lastEconomyTickTime + ECONOMY_TICK_INTERVAL_HOURS <= newTime) {
@@ -1027,7 +1172,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().clearOldMarketNews();
     get().clearOldGameEvents();
     get().markSaveDirty();
-    get().autoSave();
+    get().autoSave('time_tick');
   },
 
   runEconomyTick: () => {
@@ -1162,6 +1307,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       marketNews: [...news, ...state.marketNews].slice(0, MARKET_NEWS_MAX_COUNT),
       eventLog: prependGameEvents(state.eventLog, gameEvents, state.currentTime),
     });
+    get().markSaveDirty();
     get().autoSave('economy_tick');
   },
 
@@ -1172,6 +1318,64 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ contracts: expired });
       get().markSaveDirty();
     }
+  },
+
+  refreshContractsFromMarket: () => {
+    const state = get();
+    if (!state.player) {
+      return;
+    }
+
+    const previousContracts = state.contracts ?? [];
+    const { contracts: updatedContracts, newContracts } = refreshContractsFromMarket(
+      buildContractRefreshParams(state),
+    );
+
+    const contractsChanged =
+      newContracts.length > 0 ||
+      updatedContracts.length !== previousContracts.length ||
+      updatedContracts.some(
+        (contract, index) => previousContracts[index]?.status !== contract.status,
+      );
+
+    lastContractMarketRefreshAt = Date.now();
+
+    if (!contractsChanged) {
+      return;
+    }
+
+    const patch: Partial<StoreGameState> = { contracts: updatedContracts };
+
+    if (
+      newContracts.length > 0 &&
+      shouldLogContractMarketEvent(state.eventLog, state.currentTime)
+    ) {
+      patch.eventLog = prependGameEvents(
+        state.eventLog,
+        [
+          {
+            time: state.currentTime,
+            type: 'market',
+            title: 'Yeni taşıma fırsatları',
+            message: `${newContracts.length} yeni taşıma fırsatı piyasaya eklendi.`,
+            importance: 'low',
+          },
+        ],
+        state.currentTime,
+      );
+    }
+
+    set(patch);
+    get().markSaveDirty();
+    if (newContracts.length > 0) {
+      get().autoSave('contracts_generated');
+    }
+  },
+
+  getContractRefreshRemainingSeconds: () => {
+    const elapsed = Date.now() - lastContractMarketRefreshAt;
+    const remaining = contractBalance.contractRefreshIntervalMs - elapsed;
+    return Math.max(0, Math.ceil(remaining / 1000));
   },
 
   replenishContractsIfNeeded: () => {
@@ -1212,6 +1416,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     set(patch);
+    get().markSaveDirty();
     if (newContracts.length > 0) {
       get().autoSave('contracts_generated');
     }
@@ -1220,13 +1425,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
   generateNewContracts: () => {
     const state = get();
     const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const ownedMaxTruckCapacity = getHighestOwnedTruckCapacity(state.player.trucks);
+    const idleMaxTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
     const newContracts = generateContracts(
       citiesToRecord(state.cities),
       state.routes,
       state.products,
       state.globalEconomy,
       state.contracts,
-      { currentTime: state.currentTime, maxNewContracts: 10, playerLevel },
+      {
+        currentTime: state.currentTime,
+        maxNewContracts: 10,
+        playerLevel,
+        ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
+        idleMaxTruckCapacity,
+      },
     );
 
     if (newContracts.length > 0) {
@@ -1238,6 +1451,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: `${newContracts.length} yeni taşıma fırsatı listelendi.`,
         importance: 'medium',
       });
+      get().markSaveDirty();
       get().autoSave('contracts_generated');
     }
   },
@@ -1599,19 +1813,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const distanceKm = contract.distanceKm ?? delivery.distanceKm ?? 0;
     const riskTier = getDeliveryRiskTier(delivery);
     const xpGain = calculateDeliveryXp(distanceKm, netProfit, riskTier);
-    const xpResult = applyXpToPlayer(normalizePlayerProgress(state.player), xpGain);
-    const notificationMessage = `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(contract.payment)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
-    const eventMessage = `${routeLabel} teslimatı tamamlandı. Net kâr: ${formatNotificationMoney(netProfit)}. +${xpGain} XP`;
+    const notificationMessage = `Teslimat tamamlandı · +${xpGain} XP`;
+    const eventMessage = `${routeLabel} teslimatı tamamlandı. Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
 
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterComplete);
-    const levelUpEventLog = xpResult.leveledUp
-      ? appendLevelUpEvents(state.eventLog, state.currentTime, xpResult.newLevels)
-      : state.eventLog;
 
     set({
       ...merged,
       player: {
-        ...xpResult.player,
+        ...state.player,
         trucks: merged.player!.trucks,
         drivers: merged.player!.drivers,
         warehouses: merged.player!.warehouses,
@@ -1633,7 +1843,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ...state.marketNews,
       ].slice(0, MARKET_NEWS_MAX_COUNT),
       eventLog: prependGameEvent(
-        levelUpEventLog,
+        state.eventLog,
         {
           id: deliveryEventId,
           time: state.currentTime,
@@ -1648,9 +1858,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     completedDeliveryNotificationIds.add(deliveryId);
 
-    if (xpResult.leveledUp) {
-      notifyLevelUps(get, state.currentTime, xpResult.newLevels);
-    }
+    get().addCompanyXp(xpGain, 'delivery_completed');
 
     try {
       get().addNotification({
@@ -1719,29 +1927,46 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().autoSave('delivery_failed');
   },
 
-  buyTruck: (truckId: string) => {
+  buyTruck: (catalogId: string): TradeActionResult => {
     const state = get();
-    const template = AVAILABLE_TRUCKS.find((t) => t.id === truckId);
+    const template = findTruckMarketItem(catalogId);
     if (!template) {
-      throw new Error('Kamyon bulunamadı.');
-    }
-
-    if (state.player.trucks.some((t) => t.id === truckId)) {
-      throw new Error('Bu kamyon zaten filoda.');
+      return {
+        success: false,
+        message: 'Kamyon bulunamadı.',
+      };
     }
 
     const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-    const requiredLevel = getTruckUnlockLevel(truckId);
+    const requiredLevel = resolveTruckMarketRequiredLevel(template);
     if (playerLevel < requiredLevel) {
-      throw new Error(`Bu kamyon için Level ${requiredLevel} gerekli.`);
+      return {
+        success: false,
+        message: `Bu kamyon için şirket seviyen Level ${requiredLevel} olmalı.`,
+      };
     }
 
     if (state.player.money < template.purchasePrice) {
-      throw new Error('Yetersiz bakiye.');
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUNDS',
+        message: `Kamyon satın almak için ${formatNotificationMoney(template.purchasePrice)} gerekli.`,
+      };
     }
 
+    const instanceId = `${catalogId}-${Date.now()}`;
     const newTruck: Truck = {
-      ...template,
+      id: instanceId,
+      catalogId,
+      name: template.name,
+      capacity: template.capacity,
+      fuelConsumptionPerKm: template.fuelConsumptionPerKm,
+      speed: template.speed,
+      reliability: template.reliability,
+      maintenanceCost: template.maintenanceCost,
+      comfort: template.comfort,
+      condition: template.condition,
+      purchasePrice: template.purchasePrice,
       currentCityId: state.player.homeCityId,
       status: 'idle',
     };
@@ -1752,29 +1977,79 @@ export const useGameStore = create<GameStore>((set, get) => ({
         money: state.player.money - template.purchasePrice,
         trucks: [...state.player.trucks, newTruck],
       },
+      financeLedger: prependFinanceLedger(state.financeLedger ?? [], {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'fleet_purchase',
+        amount: template.purchasePrice,
+        description: `${template.name} satın alındı`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Kamyon satın alındı',
+          message: `${template.name} filoya eklendi.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
     });
     get().addCompanyXp(levelBalance.xpRewards.truckPurchase, 'truck_purchase');
     get().autoSave('purchase');
+    return {
+      success: true,
+      message: `${template.name} satın alındı.`,
+    };
   },
 
-  hireDriver: (driverId: string) => {
+  hireDriver: (poolId: string): TradeActionResult => {
     const state = get();
-    const template = AVAILABLE_DRIVERS.find((d) => d.id === driverId);
+    const template = findDriverPoolItem(poolId);
     if (!template) {
-      throw new Error('Şoför bulunamadı.');
+      return {
+        success: false,
+        message: 'Şoför bulunamadı.',
+      };
     }
 
-    if (state.player.drivers.some((d) => d.id === driverId)) {
-      throw new Error('Bu şoför zaten işe alınmış.');
+    if (template.comingSoon) {
+      return {
+        success: false,
+        message: 'Uluslararası şoförler yakında eklenecek.',
+      };
+    }
+
+    if (isDriverPoolItemHired(state.player.drivers, poolId)) {
+      return {
+        success: false,
+        message: 'Bu şoför zaten işe alınmış.',
+      };
+    }
+
+    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const requiredLevel = resolveDriverRequiredLevel(template);
+    if (playerLevel < requiredLevel) {
+      return {
+        success: false,
+        message: `Bu şoför için şirket seviyen Level ${requiredLevel} olmalı.`,
+      };
     }
 
     if (state.player.money < template.hiringFee) {
-      throw new Error('Yetersiz bakiye.');
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUNDS',
+        message: `Şoför işe almak için ${formatNotificationMoney(template.hiringFee)} gerekli.`,
+      };
     }
 
-    const { hiringFee, ...driverFields } = template;
+    const { hiringFee, comingSoon: _comingSoon, ...driverFields } = template;
     const newDriver: Driver = {
       ...driverFields,
+      id: poolId,
+      poolId,
       assignedTruckId: null,
       status: 'idle',
     };
@@ -1785,9 +2060,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
         money: state.player.money - hiringFee,
         drivers: [...state.player.drivers, newDriver],
       },
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Şoför işe alındı',
+          message: `${template.name} (${getDriverTierLabel(template.tier)}) filoya katıldı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
     });
     get().addCompanyXp(levelBalance.xpRewards.driverHire, 'driver_hire');
     get().autoSave('purchase');
+    return {
+      success: true,
+      message: `${template.name} işe alındı.`,
+    };
   },
 
   repairTruck: (truckId: string) => {
@@ -1838,7 +2128,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().autoSave('repair');
   },
 
-  openWarehouse: (cityId: string): TradeActionResult => {
+  openWarehouse: (cityId: string, warehouseType: WarehouseType = 'standard'): TradeActionResult => {
     const state = get();
     const city = state.cities.find((candidate) => candidate.id === cityId);
     if (!city) {
@@ -1849,37 +2139,66 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (state.player.warehouses.some((warehouse) => warehouse.cityId === cityId)) {
+    const resolvedType = resolveWarehouseType(warehouseType);
+    if (resolvedType !== 'standard' && resolvedType !== 'cold') {
       return {
         success: false,
-        message: 'Bu şehirde zaten bir deponuz var.',
+        message: 'Bu depo tipi henüz kullanılamıyor.',
       };
     }
 
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-    const minLevel = getMinLevelForWarehouseCount(state.player.warehouses.length);
-    if (playerLevel < minLevel) {
+    if (
+      state.player.warehouses.some(
+        (warehouse) =>
+          warehouse.cityId === cityId && resolveWarehouseType(warehouse.warehouseType) === resolvedType,
+      )
+    ) {
       return {
         success: false,
-        message: `Yeni depo açmak için Level ${minLevel} gerekli.`,
+        message: `Bu şehirde zaten ${getWarehouseTypeLabel(resolvedType).toLowerCase()} var.`,
+      };
+    }
+
+    const warehouses = state.player.warehouses ?? [];
+    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+
+    if (!isWarehouseCityUnlocked(cityId, playerLevel)) {
+      const requiredCityLevel = levelConfig.warehouseUnlocks.extendedCityUnlockLevel;
+      return {
+        success: false,
+        message: `Bu şehirde depo açmak için Level ${requiredCityLevel} gerekli.`,
+      };
+    }
+
+    if (!canOpenMoreWarehouses(playerLevel, warehouses.length)) {
+      const nextLevel = getNextLevelForMoreWarehouses(warehouses.length);
+      return {
+        success: false,
+        message: `Yeni depo açmak için Level ${nextLevel} gerekiyor.`,
       };
     }
 
     const costModifier = city.warehouseCostModifier ?? 1;
-    const openCost = Math.round(warehouseBalance.baseOpenCost * costModifier);
+    const typeCostMultiplier =
+      resolvedType === 'cold' ? warehouseBalance.coldOpenCostMultiplier : 1;
+    const openCost = Math.round(warehouseBalance.baseOpenCost * costModifier * typeCostMultiplier);
+    const typeLabel = getWarehouseTypeLabel(resolvedType);
 
     if (state.player.money < openCost) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
-        message: `Depo açmak için ${formatNotificationMoney(openCost)} gerekli.`,
+        message: `${typeLabel} açmak için ${formatNotificationMoney(openCost)} gerekli.`,
       };
     }
 
     const warehouse: Warehouse = {
-      id: `warehouse-${cityId}-${Date.now()}`,
+      id: `warehouse-${cityId}-${resolvedType}-${Date.now()}`,
       cityId,
       capacityTons: tradingBalance.defaultWarehouseCapacityTons,
+      upgradeTier: 1,
+      warehouseType: resolvedType,
+      qualityProtection: resolvedType === 'cold' ? 1 : 0.5,
       inventory: [],
       storedProducts: {},
       usedCapacityTon: 0,
@@ -1896,7 +2215,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         type: 'expense',
         category: 'warehouse_open',
         amount: openCost,
-        description: `${city.name} deposu açıldı`,
+        description: `${city.name} · ${typeLabel}`,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -1904,7 +2223,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           time: state.currentTime,
           type: 'warehouse',
           title: 'Depo açıldı',
-          message: `${city.name} şehrinde yeni depo açıldı. Maliyet: ${formatNotificationMoney(openCost)}`,
+          message: `${city.name} şehrinde ${typeLabel.toLowerCase()} açıldı. Maliyet: ${formatNotificationMoney(openCost)}`,
           importance: 'medium',
         },
         state.currentTime,
@@ -1912,10 +2231,109 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
 
     get().addCompanyXp(levelBalance.xpRewards.warehouseOpen, 'warehouse_open');
+    get().markSaveDirty();
     get().autoSave('warehouse');
     return {
       success: true,
-      message: `${city.name} deposu açıldı.`,
+      message: `${city.name} · ${typeLabel} açıldı.`,
+    };
+  },
+
+  upgradeWarehouse: (warehouseId: string): TradeActionResult => {
+    const state = get();
+    const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
+    if (!warehouse) {
+      return {
+        success: false,
+        errorCode: 'WAREHOUSE_NOT_FOUND',
+        message: 'Depo bulunamadı.',
+      };
+    }
+
+    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const currentTier = warehouse.upgradeTier ?? 1;
+    const requiredLevel = getWarehouseUpgradeRequiredLevel(currentTier);
+
+    if (requiredLevel == null) {
+      return {
+        success: false,
+        message: 'Depo maksimum kapasitede.',
+      };
+    }
+
+    if (playerLevel < requiredLevel) {
+      return {
+        success: false,
+        message: `Bu yükseltme için Level ${requiredLevel} gerekli.`,
+      };
+    }
+
+    const capacityIncrease = getWarehouseUpgradeCapacityGain(currentTier);
+    if (capacityIncrease <= 0) {
+      return {
+        success: false,
+        message: 'Depo maksimum kapasitede.',
+      };
+    }
+
+    const city = state.cities.find((candidate) => candidate.id === warehouse.cityId);
+    const costModifier = city?.warehouseCostModifier ?? 1;
+    const upgradeCost = Math.round(warehouseBalance.baseOpenCost * 0.5 * costModifier);
+
+    if (state.player.money < upgradeCost) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUNDS',
+        message: `Depo yükseltmek için ${formatNotificationMoney(upgradeCost)} gerekli.`,
+      };
+    }
+
+    const cityName = city?.name ?? warehouse.cityId;
+    const nextTier = currentTier + 1;
+    const upgradeLabel = nextTier === 2 ? 'Orta depo' : 'Büyük depo';
+    const updatedWarehouses = state.player.warehouses.map((candidate) => {
+      if (candidate.id !== warehouse.id) {
+        return candidate;
+      }
+      return {
+        ...candidate,
+        capacityTons: candidate.capacityTons + capacityIncrease,
+        upgradeTier: nextTier,
+      };
+    });
+
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - upgradeCost,
+        warehouses: updatedWarehouses,
+      },
+      financeLedger: prependFinanceLedger(state.financeLedger ?? [], {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'warehouse_open',
+        amount: upgradeCost,
+        description: `${cityName} deposu yükseltildi`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'warehouse',
+          title: 'Depo yükseltildi',
+          message: `${cityName} deposu ${upgradeLabel} seviyesine yükseltildi (+${capacityIncrease} ton).`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    get().addCompanyXp(levelBalance.xpRewards.warehouseUpgrade, 'warehouse_upgrade');
+    get().markSaveDirty();
+    get().autoSave('warehouse');
+    return {
+      success: true,
+      message: `${cityName} deposu yükseltildi (+${capacityIncrease} ton, ${upgradeLabel}).`,
     };
   },
 
@@ -1952,15 +2370,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    const warehouse = warehouseId
-      ? state.player.warehouses.find((candidate) => candidate.id === warehouseId)
-      : state.player.warehouses.find((candidate) => candidate.cityId === cityId);
+    if (!warehouseId) {
+      return {
+        success: false,
+        errorCode: 'WAREHOUSE_NOT_FOUND',
+        message: 'Satın alma için bir depo seçmelisin.',
+      };
+    }
+
+    const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
 
     if (!warehouse || warehouse.cityId !== cityId) {
       return {
         success: false,
         errorCode: 'WAREHOUSE_NOT_FOUND',
-        message: 'Bu şehirde depo bulunmuyor. Önce depo açmalısın.',
+        message: 'Seçilen depo bu şehirde bulunamadı.',
       };
     }
 
@@ -1973,9 +2397,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+    const storageSuitability = evaluateStorageSuitability(product, warehouseType);
+    if (storageSuitability === 'blocked') {
+      return {
+        success: false,
+        errorCode: 'INCOMPATIBLE_WAREHOUSE',
+        message: 'Bu ürün bu depo tipinde saklanamaz.',
+      };
+    }
+
     const unitPrice = getCityProductMarketPrice(city, productId);
     const cityStock = getCityProductStock(city, productId);
-    const normalizedWarehouse = normalizeWarehouse(warehouse);
+    const normalizedWarehouse = normalizeWarehouse(warehouse, state.currentTime);
     const freeCapacity = getWarehouseFreeCapacityTon(normalizedWarehouse);
 
     if (quantity > cityStock) {
@@ -2003,11 +2437,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    const storageWarning = buildStorageWarningForPurchase(product, warehouseType);
     const nextInventory = mergeInventoryOnBuy(
       normalizedWarehouse.inventory ?? [],
       productId,
       quantity,
       unitPrice,
+      normalizedWarehouse,
+      state.currentTime,
+      storageWarning,
     );
     const usedCapacityTon = nextInventory.reduce((sum, item) => sum + item.quantity, 0);
     const productName = getProductDisplayName(productId);
@@ -2063,6 +2501,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       console.warn('[gameStore] trade buy notification failed:', error);
     }
 
+    get().markSaveDirty();
     get().autoSave('warehouse');
     return {
       success: true,
@@ -2125,8 +2564,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const unitPrice = getCityProductMarketPrice(city, productId);
     const averageBuyPrice = inventoryItem.averageBuyPrice ?? unitPrice;
-    const revenue = calculateTradeSellRevenue(unitPrice, quantity);
-    const profit = calculateTradeProfit(unitPrice, averageBuyPrice, quantity);
+    const itemQuality = inventoryItem.quality ?? 100;
+    const revenue = calculateTradeSellRevenue(unitPrice, quantity, itemQuality);
+    const profit = calculateTradeProfit(unitPrice, averageBuyPrice, quantity, itemQuality);
     const xpGain = calculateTradeSaleXp(profit);
     const productName = getProductDisplayName(productId);
     const cityName = city.name;
@@ -2182,9 +2622,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         type: 'success',
         title: 'Ürün satıldı',
         message:
-          xpGain > 0
+          profit > 0
             ? `Kâr: ${formatNotificationMoney(profit)} · +${xpGain} XP`
-            : `Kâr: ${formatNotificationMoney(profit)}`,
+            : `Satış tamamlandı · +${xpGain} XP`,
         actionLabel: 'Finansı Gör',
         actionTarget: 'finance',
         autoDismissMs: 3000,
@@ -2193,10 +2633,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       console.warn('[gameStore] trade sell notification failed:', error);
     }
 
-    if (xpGain > 0) {
-      get().addCompanyXp(xpGain, 'trade_sale');
-    }
+    get().addCompanyXp(xpGain, 'trade_sale');
 
+    get().markSaveDirty();
     get().autoSave('warehouse');
     return {
       success: true,
@@ -2216,6 +2655,121 @@ export const useGameStore = create<GameStore>((set, get) => ({
         fuelPrice: Number(Math.max(0.8, state.globalEconomy.fuelPrice * (1 + change)).toFixed(2)),
       },
     });
+  },
+
+  // TODO: Hide debug cash tools in production builds.
+  debugAddCash: (amount: number) => {
+    if (!Number.isFinite(amount)) {
+      return;
+    }
+    const safeAmount = Math.abs(amount);
+    if (safeAmount <= 0) {
+      return;
+    }
+
+    const state = get();
+    if (!state.player) {
+      return;
+    }
+
+    const currentMoney = state.player.money ?? 0;
+    set({
+      player: {
+        ...state.player,
+        money: currentMoney + safeAmount,
+      },
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title: 'Debug nakit eklendi',
+          message: `${formatNotificationMoney(safeAmount)} test parası eklendi.`,
+          importance: 'low',
+        },
+        state.currentTime,
+      ),
+    });
+    get().markSaveDirty();
+    get().autoSave('debug_cash_change');
+  },
+
+  debugRemoveCash: (amount: number) => {
+    if (!Number.isFinite(amount)) {
+      return;
+    }
+    const safeAmount = Math.abs(amount);
+    if (safeAmount <= 0) {
+      return;
+    }
+
+    const state = get();
+    if (!state.player) {
+      return;
+    }
+
+    const currentMoney = state.player.money ?? 0;
+    const newMoney = Math.max(0, currentMoney - safeAmount);
+    const removedAmount = currentMoney - newMoney;
+
+    set({
+      player: {
+        ...state.player,
+        money: newMoney,
+      },
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title: 'Debug nakit azaltıldı',
+          message: `${formatNotificationMoney(removedAmount)} test parası düşüldü.`,
+          importance: 'low',
+        },
+        state.currentTime,
+      ),
+    });
+    get().markSaveDirty();
+    get().autoSave('debug_cash_change');
+  },
+
+  debugSetCash: (amount: number) => {
+    if (!Number.isFinite(amount)) {
+      return;
+    }
+
+    const safeAmount = Math.max(0, amount);
+    const state = get();
+    if (!state.player) {
+      return;
+    }
+
+    const title =
+      safeAmount === 0 ? 'Debug nakit sıfırlandı' : 'Debug nakit ayarlandı';
+    const message =
+      safeAmount === 0
+        ? 'Nakit test amaçlı sıfırlandı.'
+        : `Nakit ${formatNotificationMoney(safeAmount)} olarak ayarlandı.`;
+
+    set({
+      player: {
+        ...state.player,
+        money: safeAmount,
+      },
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title,
+          message,
+          importance: 'low',
+        },
+        state.currentTime,
+      ),
+    });
+    get().markSaveDirty();
+    get().autoSave('debug_cash_change');
   },
 
   addMarketNews: (news) => {

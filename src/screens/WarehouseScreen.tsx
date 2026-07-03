@@ -26,8 +26,22 @@ import {
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
 } from '../simulation/trading';
-import { getMinLevelForWarehouseCount } from '../simulation/leveling';
-import type { City, CityProductState, ProductId, Warehouse } from '../types/game';
+import {
+  cityHasWarehouseType,
+  getEffectiveSellPrice,
+  getInventoryQuality,
+  getQualityColorHint,
+  getWarehouseTypeLabel,
+  resolveWarehouseType,
+} from '../simulation/warehouseStorage';
+import {
+  canOpenMoreWarehouses,
+  getMaxWarehousesForLevel,
+  getNextLevelForMoreWarehouses,
+  getWarehouseUpgradeRequiredLevel,
+  isWarehouseCityUnlocked,
+} from '../config/levelConfig';
+import type { City, CityProductState, ProductId, Warehouse, WarehouseType } from '../types/game';
 
 const COLORS = {
   background: '#070A12',
@@ -113,7 +127,8 @@ function getWarehouseCity(warehouse: WarehouseLike): City | undefined {
 function getWarehouseName(warehouse: WarehouseLike): string {
   if (warehouse.name) return warehouse.name;
   const city = getWarehouseCity(warehouse);
-  return `${city?.name ?? warehouse.cityId} Deposu`;
+  const typeLabel = getWarehouseTypeLabel(resolveWarehouseType(warehouse.warehouseType));
+  return `${city?.name ?? warehouse.cityId} · ${typeLabel}`;
 }
 
 function getWarehouseCapacity(warehouse: WarehouseLike): number {
@@ -121,7 +136,7 @@ function getWarehouseCapacity(warehouse: WarehouseLike): number {
 }
 
 function getWarehouseLevel(warehouse: WarehouseLike): number {
-  return warehouse.level ?? 1;
+  return warehouse.upgradeTier ?? warehouse.level ?? 1;
 }
 
 function getWarehouseStocks(warehouse: WarehouseLike): Record<string, number> {
@@ -155,10 +170,14 @@ function calculateWarehouseDailyCost(warehouse: WarehouseLike): WarehouseDailyCo
   const level = getWarehouseLevel(warehouse);
   const city = getWarehouseCity(warehouse);
   const costModifier = city?.warehouseCostModifier ?? 1;
+  const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+  const coldElectricityMultiplier =
+    warehouseType === 'cold' ? warehouseBalance.coldElectricityMultiplier : 1;
 
   const rent = warehouse.rent ?? capacity * DEFAULT_RENT_PER_TON * costModifier;
   const electricityCost =
-    warehouse.electricityCost ?? capacity * DEFAULT_ELECTRICITY_PER_TON * costModifier;
+    (warehouse.electricityCost ?? capacity * DEFAULT_ELECTRICITY_PER_TON * costModifier) *
+    coldElectricityMultiplier;
   const staffCost = warehouse.staffCost ?? level * DEFAULT_STAFF_COST_PER_LEVEL;
 
   return {
@@ -241,14 +260,18 @@ function getCityOpportunityScore(city: City): number {
   return countCityShortages(city) + countCitySurpluses(city);
 }
 
-function getEstimatedOpenCost(city: City): number {
+function getEstimatedOpenCost(city: City, warehouseType: WarehouseType = 'standard'): number {
   const modifier = city.warehouseCostModifier ?? 1;
-  return BASE_OPEN_COST * modifier;
+  const typeMultiplier =
+    warehouseType === 'cold' ? warehouseBalance.coldOpenCostMultiplier : 1;
+  return BASE_OPEN_COST * modifier * typeMultiplier;
 }
 
-function getEstimatedDailyRent(city: City): number {
+function getEstimatedDailyRent(city: City, warehouseType: WarehouseType = 'standard'): number {
   const modifier = city.warehouseCostModifier ?? 1;
-  return BASE_DAILY_RENT * modifier;
+  const coldMultiplier =
+    warehouseType === 'cold' ? warehouseBalance.coldElectricityMultiplier : 1;
+  return BASE_DAILY_RENT * modifier * (warehouseType === 'cold' ? 1.35 : 1) * (coldMultiplier > 1 ? 1.1 : 1);
 }
 
 function SummaryCard({
@@ -281,11 +304,15 @@ function SummaryCard({
 function WarehouseCard({
   warehouse,
   city,
+  playerLevel,
+  playerMoney,
   onSellProduct,
   onUpgrade,
 }: {
   warehouse: WarehouseLike;
   city?: City;
+  playerLevel: number;
+  playerMoney: number;
   onSellProduct: (warehouse: Warehouse, productId: ProductId) => void;
   onUpgrade: (warehouse: WarehouseLike) => void;
 }) {
@@ -297,6 +324,32 @@ function WarehouseCard({
   const warehouseUtilization = capacity > 0 ? used / capacity : 0;
   const utilizationColor = getUtilizationColor(warehouseUtilization);
   const inventory = normalized.inventory ?? [];
+  const warehouseTypeLabel = getWarehouseTypeLabel(resolveWarehouseType(warehouse.warehouseType));
+  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
+  const currentTier = warehouse.upgradeTier ?? 1;
+  const upgradeRequiredLevel = getWarehouseUpgradeRequiredLevel(currentTier);
+  const isUpgradeMaxed = upgradeRequiredLevel == null;
+  const isUpgradeLevelLocked =
+    upgradeRequiredLevel != null && safePlayerLevel < upgradeRequiredLevel;
+  const estimatedUpgradeCost = Math.round(
+    warehouseBalance.baseOpenCost * 0.5 * (city?.warehouseCostModifier ?? 1),
+  );
+  const canAffordUpgrade = playerMoney >= estimatedUpgradeCost;
+
+  let upgradeButtonLabel = 'Yükselt';
+  if (isUpgradeMaxed) {
+    upgradeButtonLabel = 'Maksimum';
+  } else if (isUpgradeLevelLocked) {
+    upgradeButtonLabel = `Level ${upgradeRequiredLevel} gerekli`;
+  } else if (!canAffordUpgrade) {
+    upgradeButtonLabel = 'Nakit yetersiz';
+  } else if (currentTier >= 2) {
+    upgradeButtonLabel = 'Büyük depo';
+  } else if (currentTier >= 1) {
+    upgradeButtonLabel = 'Orta depo';
+  }
+
+  const upgradeDisabled = isUpgradeMaxed || isUpgradeLevelLocked || !canAffordUpgrade;
 
   return (
     <View style={styles.warehouseCard}>
@@ -304,7 +357,7 @@ function WarehouseCard({
         <View style={styles.warehouseHeaderText}>
           <Text style={styles.warehouseName}>{getWarehouseName(warehouse)}</Text>
           <Text style={styles.warehouseMeta}>
-            {city?.name ?? warehouse.cityId} · Seviye {getWarehouseLevel(warehouse)}
+            {city?.name ?? warehouse.cityId} · {warehouseTypeLabel} · Seviye {getWarehouseLevel(warehouse)}
           </Text>
         </View>
         <Text style={[styles.utilizationBadge, { color: utilizationColor }]}>
@@ -325,10 +378,20 @@ function WarehouseCard({
         <View style={styles.stockBox}>
           {inventory.map((item) => {
             const currentPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
+            const itemQuality = getInventoryQuality(item);
+            const qualityHint = getQualityColorHint(itemQuality);
+            const qualityColor =
+              qualityHint === 'critical'
+                ? COLORS.danger
+                : qualityHint === 'warning'
+                  ? COLORS.primary
+                  : COLORS.textSecondary;
+            const effectiveSellPrice = getEffectiveSellPrice(currentPrice, itemQuality);
             const estimatedProfit = calculateTradeProfit(
               currentPrice,
               item.averageBuyPrice,
               item.quantity,
+              itemQuality,
             );
             const profitColor = estimatedProfit >= 0 ? COLORS.success : COLORS.danger;
 
@@ -336,9 +399,18 @@ function WarehouseCard({
               <View key={item.productId} style={styles.inventoryCard}>
                 <Text style={styles.stockProductName}>{getProductName(item.productId)}</Text>
                 <Text style={styles.stockValue}>{formatTons(item.quantity)}</Text>
-                <Text style={styles.inventoryMeta}>
-                  Alış ort.: {formatMoney(item.averageBuyPrice)} · Güncel: {formatMoney(currentPrice)}
+                <Text style={[styles.inventoryMeta, { color: qualityColor }]}>
+                  Kalite: {Math.round(itemQuality)}%
                 </Text>
+                <Text style={styles.inventoryMeta}>
+                  Alış ort.: {formatMoney(item.averageBuyPrice)} · Piyasa: {formatMoney(currentPrice)}
+                </Text>
+                <Text style={styles.inventoryMeta}>
+                  Kaliteye göre satış: {formatMoney(effectiveSellPrice)}
+                </Text>
+                {item.storageWarning ? (
+                  <Text style={styles.inventoryWarning}>{item.storageWarning}</Text>
+                ) : null}
                 <Text style={[styles.inventoryProfit, { color: profitColor }]}>
                   Tahmini kâr: {formatMoney(estimatedProfit)}
                 </Text>
@@ -363,8 +435,18 @@ function WarehouseCard({
       )}
 
       <View style={styles.warehouseActionsRow}>
-        <TouchableOpacity style={styles.secondaryActionButton} onPress={() => onUpgrade(warehouse)} activeOpacity={0.85}>
-          <Text style={styles.secondaryActionText}>Yükselt</Text>
+        {isUpgradeLevelLocked ? (
+          <Text style={styles.levelLockText}>
+            Bu yükseltme için Level {upgradeRequiredLevel} gerekli.
+          </Text>
+        ) : null}
+        <TouchableOpacity
+          style={[styles.secondaryActionButton, upgradeDisabled && styles.openWarehouseButtonDisabled]}
+          onPress={() => onUpgrade(warehouse)}
+          disabled={upgradeDisabled}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.secondaryActionText}>{upgradeButtonLabel}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -397,6 +479,7 @@ export default function WarehouseScreen() {
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const openWarehouse = useGameStore((state) => state.openWarehouse);
+  const upgradeWarehouse = useGameStore((state) => state.upgradeWarehouse);
   const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
 
   const warehouses: WarehouseLike[] = player?.warehouses ?? [];
@@ -417,9 +500,10 @@ export default function WarehouseScreen() {
   const dailyCost = useMemo(() => calculateTotalDailyWarehouseCost(warehouses), [warehouses]);
 
   const warehouseCityIds = useMemo(() => new Set(warehouses.map((w) => w.cityId)), [warehouses]);
-  const playerLevel = player?.level ?? player?.companyLevel ?? 1;
-  const nextWarehouseMinLevel = getMinLevelForWarehouseCount(warehouses.length);
-  const canOpenNextWarehouse = playerLevel >= nextWarehouseMinLevel;
+  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const maxWarehouses = getMaxWarehousesForLevel(playerLevel);
+  const canOpenMore = canOpenMoreWarehouses(playerLevel, warehouses.length);
+  const nextWarehouseLevel = getNextLevelForMoreWarehouses(warehouses.length);
   const topCityOpportunities = useMemo(
     () =>
       cities
@@ -429,12 +513,27 @@ export default function WarehouseScreen() {
     [cities, warehouseCityIds],
   );
 
-  const handleUpgradeWarehouse = () => {
-    setStatusMessage('Bu özellik yakında eklenecek.');
+  const coldDepotOpportunities = useMemo(
+    () =>
+      cities.filter(
+        (city) =>
+          warehouseCityIds.has(city.id) &&
+          !cityHasWarehouseType(warehouses, city.id, 'cold'),
+      ),
+    [cities, warehouseCityIds, warehouses],
+  );
+
+  const handleUpgradeWarehouse = (warehouse: WarehouseLike) => {
+    const result = upgradeWarehouse(warehouse.id);
+    if (!result.success) {
+      Alert.alert('Depo yükseltilemedi', result.message ?? 'İşlem tamamlanamadı.');
+      return;
+    }
+    setStatusMessage(result.message ?? 'Depo yükseltildi');
   };
 
-  const handleOpenWarehouse = (cityId: string) => {
-    const result = openWarehouse(cityId);
+  const handleOpenWarehouse = (cityId: string, warehouseType: WarehouseType = 'standard') => {
+    const result = openWarehouse(cityId, warehouseType);
     if (!result.success) {
       Alert.alert('Depo açılamadı', result.message ?? 'İşlem tamamlanamadı.');
       return;
@@ -529,6 +628,10 @@ export default function WarehouseScreen() {
           dailyCost={dailyCost}
         />
 
+        <Text style={styles.warehouseLimitHint}>
+          Depo limiti: {warehouses.length}/{maxWarehouses}
+        </Text>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Depolarım</Text>
           {warehouses.length === 0 ? (
@@ -539,12 +642,55 @@ export default function WarehouseScreen() {
                 key={warehouse.id}
                 warehouse={warehouse}
                 city={cities.find((city) => city.id === warehouse.cityId)}
+                playerLevel={playerLevel}
+                playerMoney={player.money}
                 onSellProduct={handleSellProduct}
                 onUpgrade={handleUpgradeWarehouse}
               />
             ))
           )}
         </View>
+
+        {coldDepotOpportunities.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Soğuk Depo Ekle</Text>
+            {coldDepotOpportunities.map((city) => {
+              const coldOpenCost = getEstimatedOpenCost(city, 'cold');
+              const coldDailyRent = getEstimatedDailyRent(city, 'cold');
+              const openDisabled = !canOpenMore || player.money < coldOpenCost;
+
+              return (
+                <View key={`cold-${city.id}`} style={styles.opportunityCard}>
+                  <Text style={styles.warehouseName}>{city.name}</Text>
+                  <Text style={styles.depotTypeHint}>
+                    Bu şehirde normal depo var. Meyve ve içecek için soğuk depo önerilir.
+                  </Text>
+                  <Text style={styles.opportunityCostLine}>
+                    Açılış: <Text style={styles.opportunityCostValue}>{formatMoney(coldOpenCost)}</Text>
+                  </Text>
+                  <Text style={styles.opportunityCostLine}>
+                    Günlük gider:{' '}
+                    <Text style={styles.opportunityCostValue}>{formatMoney(coldDailyRent)}</Text>
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.openWarehouseButton, openDisabled && styles.openWarehouseButtonDisabled]}
+                    onPress={() => handleOpenWarehouse(city.id, 'cold')}
+                    disabled={openDisabled}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.openWarehouseButtonText}>
+                      {!canOpenMore
+                        ? 'Seviye Gerekli'
+                        : player.money < coldOpenCost
+                          ? 'Nakit yetersiz'
+                          : 'Soğuk Depo Aç'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Şehir Depo Fırsatları</Text>
@@ -555,8 +701,12 @@ export default function WarehouseScreen() {
               const suggestion = getWarehouseSuggestion(city);
               const opportunityCount = getCityOpportunityScore(city);
               const costModifier = city.warehouseCostModifier ?? 1;
-              const estimatedOpenCost = getEstimatedOpenCost(city);
-              const estimatedDailyRent = getEstimatedDailyRent(city);
+              const standardOpenCost = getEstimatedOpenCost(city, 'standard');
+              const coldOpenCost = getEstimatedOpenCost(city, 'cold');
+              const standardDailyRent = getEstimatedDailyRent(city, 'standard');
+              const coldDailyRent = getEstimatedDailyRent(city, 'cold');
+              const cityUnlocked = isWarehouseCityUnlocked(city.id, playerLevel);
+              const openDisabled = !canOpenMore || !cityUnlocked;
 
               return (
                 <View key={city.id} style={styles.opportunityCard}>
@@ -567,32 +717,75 @@ export default function WarehouseScreen() {
                   <Text style={styles.opportunityMeta}>
                     {opportunityCount} piyasa sinyali · Maliyet etkisi {costModifier.toFixed(2)}x
                   </Text>
-                  <Text style={styles.opportunityCostLine}>
-                    Tahmini açılış maliyeti:{' '}
-                    <Text style={styles.opportunityCostValue}>{formatMoney(estimatedOpenCost)}</Text>
-                  </Text>
-                  <Text style={styles.opportunityCostLine}>
-                    Günlük kira:{' '}
-                    <Text style={styles.opportunityCostValue}>{formatMoney(estimatedDailyRent)}</Text>
-                  </Text>
-                  {!canOpenNextWarehouse ? (
+
+                  <View style={styles.depotTypeCard}>
+                    <Text style={styles.depotTypeTitle}>Normal Depo</Text>
+                    <Text style={styles.opportunityCostLine}>
+                      Açılış: <Text style={styles.opportunityCostValue}>{formatMoney(standardOpenCost)}</Text>
+                    </Text>
+                    <Text style={styles.opportunityCostLine}>
+                      Günlük gider:{' '}
+                      <Text style={styles.opportunityCostValue}>{formatMoney(standardDailyRent)}</Text>
+                    </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.openWarehouseButton,
+                        (openDisabled || player.money < standardOpenCost) && styles.openWarehouseButtonDisabled,
+                      ]}
+                      onPress={() => handleOpenWarehouse(city.id, 'standard')}
+                      disabled={openDisabled || player.money < standardOpenCost}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.openWarehouseButtonText}>
+                        {!canOpenMore || !cityUnlocked
+                          ? 'Seviye Gerekli'
+                          : player.money < standardOpenCost
+                            ? 'Nakit yetersiz'
+                            : 'Normal Depo Aç'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.depotTypeCard}>
+                    <Text style={styles.depotTypeTitle}>Soğuk Depo</Text>
+                    <Text style={styles.depotTypeHint}>
+                      Meyve, içecek ve bozulabilir ürünleri korur.
+                    </Text>
+                    <Text style={styles.opportunityCostLine}>
+                      Açılış: <Text style={styles.opportunityCostValue}>{formatMoney(coldOpenCost)}</Text>
+                    </Text>
+                    <Text style={styles.opportunityCostLine}>
+                      Günlük gider:{' '}
+                      <Text style={styles.opportunityCostValue}>{formatMoney(coldDailyRent)}</Text>
+                    </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.openWarehouseButton,
+                        (openDisabled || player.money < coldOpenCost) && styles.openWarehouseButtonDisabled,
+                      ]}
+                      onPress={() => handleOpenWarehouse(city.id, 'cold')}
+                      disabled={openDisabled || player.money < coldOpenCost}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.openWarehouseButtonText}>
+                        {!canOpenMore || !cityUnlocked
+                          ? 'Seviye Gerekli'
+                          : player.money < coldOpenCost
+                            ? 'Nakit yetersiz'
+                            : 'Soğuk Depo Aç'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {!canOpenMore ? (
                     <Text style={styles.levelLockText}>
-                      Yeni depo için Level {nextWarehouseMinLevel} gerekli
+                      Daha fazla depo açmak için şirket seviyeni yükselt. (Level {nextWarehouseLevel})
+                    </Text>
+                  ) : !cityUnlocked ? (
+                    <Text style={styles.levelLockText}>
+                      Bu şehirde depo açmak için Level 4 gerekli.
                     </Text>
                   ) : null}
-                  <TouchableOpacity
-                    style={[
-                      styles.openWarehouseButton,
-                      !canOpenNextWarehouse && styles.openWarehouseButtonDisabled,
-                    ]}
-                    onPress={() => handleOpenWarehouse(city.id)}
-                    disabled={!canOpenNextWarehouse}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.openWarehouseButtonText}>
-                      {canOpenNextWarehouse ? 'Depo Aç' : `Level ${nextWarehouseMinLevel} gerekli`}
-                    </Text>
-                  </TouchableOpacity>
                 </View>
               );
             })
@@ -613,6 +806,15 @@ export default function WarehouseScreen() {
         availableStock={0}
         inventoryQuantity={sellInventoryItem?.quantity ?? 0}
         averageBuyPrice={sellInventoryItem?.averageBuyPrice ?? 0}
+        inventoryQuality={sellInventoryItem?.quality ?? 100}
+        effectiveSellPrice={
+          sellCity && sellProductId && sellInventoryItem
+            ? getEffectiveSellPrice(
+                getCityProductMarketPrice(sellCity, sellProductId),
+                sellInventoryItem.quality ?? 100,
+              )
+            : undefined
+        }
         playerCash={player.money}
         onConfirm={handleConfirmSell}
         onClose={() => {
@@ -792,6 +994,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
   },
+  inventoryWarning: {
+    color: COLORS.danger,
+    fontSize: 11,
+    marginTop: 4,
+    lineHeight: 15,
+  },
   inventoryProfit: {
     fontSize: 12,
     fontWeight: '700',
@@ -868,6 +1076,26 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 6,
   },
+  depotTypeCard: {
+    backgroundColor: COLORS.cardAlt,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 12,
+    marginTop: 10,
+    gap: 4,
+  },
+  depotTypeTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  depotTypeHint: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginBottom: 4,
+  },
   opportunityCostLine: {
     color: COLORS.textSecondary,
     fontSize: 12,
@@ -876,6 +1104,12 @@ const styles = StyleSheet.create({
   opportunityCostValue: {
     color: COLORS.textPrimary,
     fontWeight: '700',
+  },
+  warehouseLimitHint: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 12,
   },
   levelLockText: {
     color: COLORS.danger,

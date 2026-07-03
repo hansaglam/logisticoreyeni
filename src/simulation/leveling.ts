@@ -2,8 +2,18 @@
  * LogistiCore - Şirket seviye ve XP sistemi
  */
 
-import { levelBalance } from '../config/balance';
-import type { Contract, Delivery, Player } from '../types/game';
+import {
+  calculateXpToNextLevel,
+  getMaxContractTonnageForLevel,
+  getMinLevelForWarehouseCount as getMinWarehouseLevelFromConfig,
+  getRequiredLevelForTonnage as getRequiredLevelForTonnageFromConfig,
+  getTruckRequiredLevel,
+  levelConfig,
+} from '../config/levelConfig';
+import type { Contract, Delivery, Player, PlayerProgressFields } from '../types/game';
+
+/** Kayıt yükleme — level/xp alanları eksik olabilir */
+export type PlayerProgressInput = Omit<Player, keyof PlayerProgressFields> & PlayerProgressFields;
 
 export type DeliveryRiskTier = 'low' | 'medium' | 'high';
 
@@ -22,18 +32,30 @@ export interface LevelProgress {
   isMaxLevel: boolean;
 }
 
-/** Sonraki seviye için gereken XP */
-export function calculateXpToNextLevel(level: number): number {
-  const safeLevel = Math.max(1, level);
-  return Math.round(100 * Math.pow(safeLevel, 1.45));
-}
+export {
+  calculateXpToNextLevel,
+  canOpenMoreWarehouses,
+  getContractLevelUnlockHint,
+  getContractTonnageRangeForLevel,
+  getDriverTierRequiredLevel,
+  getMaxContractTonnageForLevel,
+  getMaxWarehousesForLevel,
+  getNextContractUnlockTier,
+  getNextLevelForMoreWarehouses,
+  getNextUnlockForLevel,
+  getTruckRequiredLevel,
+  getUnlockedFutureFeatures,
+  getWarehouseUpgradeCapacityGain,
+  getWarehouseUpgradeRequiredLevel,
+  isWarehouseCityUnlocked,
+} from '../config/levelConfig';
 
 /** Oyuncu level/xp alanlarını normalize eder — eski save uyumluluğu */
-export function normalizePlayerProgress(player: Player): Player {
-  const level = Math.max(1, player.level ?? player.companyLevel ?? 1);
-  const xp = Math.max(0, player.xp ?? 0);
-  const totalXp = Math.max(0, player.totalXp ?? xp);
-  const xpToNextLevel = player.xpToNextLevel ?? calculateXpToNextLevel(level);
+export function normalizePlayerProgress(player: PlayerProgressInput): Player {
+  const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const xp = Math.max(0, player?.xp ?? 0);
+  const totalXp = Math.max(0, player?.totalXp ?? xp);
+  const xpToNextLevel = player?.xpToNextLevel ?? calculateXpToNextLevel(level);
 
   return {
     ...player,
@@ -47,7 +69,7 @@ export function normalizePlayerProgress(player: Player): Player {
 
 export function getLevelProgress(player: Player): LevelProgress {
   const normalized = normalizePlayerProgress(player);
-  const isMaxLevel = normalized.level >= levelBalance.maxLevel;
+  const isMaxLevel = normalized.level >= levelConfig.maxLevel;
   const xpToNext = isMaxLevel ? calculateXpToNextLevel(normalized.level) : normalized.xpToNextLevel;
   const progressRatio = isMaxLevel ? 1 : xpToNext > 0 ? normalized.xp / xpToNext : 0;
 
@@ -61,61 +83,30 @@ export function getLevelProgress(player: Player): LevelProgress {
   };
 }
 
+/** @deprecated getMaxContractTonnageForLevel kullanın */
 export function getMaxTonnageForLevel(level: number): number {
-  const safeLevel = Math.max(1, level);
-  let maxTonnage: number = levelBalance.contractTonnageByLevel[0]?.maxTonnage ?? 25;
-
-  for (const tier of levelBalance.contractTonnageByLevel) {
-    if (safeLevel >= tier.level) {
-      maxTonnage = tier.maxTonnage;
-    }
-  }
-
-  return maxTonnage;
+  return getMaxContractTonnageForLevel(level);
 }
 
 export function getRequiredLevelForTonnage(tonnage: number): number {
-  const tiers = [...levelBalance.contractTonnageByLevel].sort((a, b) => a.maxTonnage - b.maxTonnage);
-
-  for (const tier of tiers) {
-    if (tonnage <= tier.maxTonnage) {
-      return tier.level;
-    }
-  }
-
-  return tiers[tiers.length - 1]?.level ?? 1;
+  return getRequiredLevelForTonnageFromConfig(tonnage);
 }
 
+/** @deprecated getTruckRequiredLevel kullanın */
 export function getTruckUnlockLevel(truckId: string): number {
-  const unlocks = levelBalance.truckUnlockLevels as Record<string, number>;
-  return unlocks[truckId] ?? 1;
+  return getTruckRequiredLevel(truckId);
 }
 
 export function getMinLevelForWarehouseCount(currentWarehouseCount: number): number {
-  if (currentWarehouseCount <= 0) {
-    return 1;
-  }
-  if (currentWarehouseCount === 1) {
-    return levelBalance.warehouseUnlockLevels.openSecondWarehouse;
-  }
-  if (currentWarehouseCount === 2) {
-    return levelBalance.warehouseUnlockLevels.openThirdWarehouse;
-  }
-  return levelBalance.warehouseUnlockLevels.largeWarehouse;
+  return getMinWarehouseLevelFromConfig(currentWarehouseCount);
 }
 
 export function getLevelBenefits(level: number): LevelBenefits {
-  const safeLevel = Math.max(1, Math.min(level, levelBalance.maxLevel));
-  const maxContractTonnage = getMaxTonnageForLevel(safeLevel);
+  const safeLevel = Math.max(1, Math.min(level, levelConfig.maxLevel));
+  const maxContractTonnage = getMaxContractTonnageForLevel(safeLevel);
 
-  let nextLevelHint = 'Daha büyük sözleşmeler';
-  if (safeLevel < 2) {
-    nextLevelHint = 'Orta tonajlı sözleşmeler';
-  } else if (safeLevel < 4) {
-    nextLevelHint = 'Büyük sözleşmeler ve yeni kamyonlar';
-  } else if (safeLevel < 6) {
-    nextLevelHint = 'Ağır yükler ve ek depolar';
-  }
+  const nextTier = levelConfig.contractUnlocks.find((tier) => tier.level > safeLevel);
+  const nextLevelHint = nextTier?.label ?? 'Global lojistik hedefleri';
 
   return {
     level: safeLevel,
@@ -124,7 +115,7 @@ export function getLevelBenefits(level: number): LevelBenefits {
   };
 }
 
-export function getDeliveryRiskTier(delivery: Delivery): DeliveryRiskTier {
+export function getDeliveryRiskTier(delivery: Delivery | Pick<Delivery, 'breakdownChance' | 'accidentChance'>): DeliveryRiskTier {
   const combinedRisk = (delivery.breakdownChance ?? 0) + (delivery.accidentChance ?? 0);
   if (combinedRisk < 0.1) return 'low';
   if (combinedRisk < 0.25) return 'medium';
@@ -132,23 +123,33 @@ export function getDeliveryRiskTier(delivery: Delivery): DeliveryRiskTier {
 }
 
 export function calculateDeliveryXp(
-  distanceKm: number,
-  netProfit: number,
-  riskTier: DeliveryRiskTier,
+  distanceKm?: number,
+  netProfit?: number,
+  riskTier?: DeliveryRiskTier,
 ): number {
-  const baseXp = 25;
-  const distanceXp = distanceKm / 20;
-  const profitXp = Math.max(0, netProfit) / 1000;
-  const riskBonus = riskTier === 'high' ? 25 : riskTier === 'medium' ? 10 : 0;
+  const cfg = levelConfig.deliveryXp;
+  const safeDistance = Math.max(0, distanceKm ?? 0);
+  const safeProfit = netProfit ?? 0;
+  const tier = riskTier ?? 'low';
 
-  return Math.max(1, Math.round(baseXp + distanceXp + profitXp + riskBonus));
+  const distanceXp = safeDistance / cfg.distanceDivisor;
+  const profitXp = Math.max(0, safeProfit) / cfg.profitDivisor;
+  const riskBonus = cfg.riskBonus[tier];
+
+  const rawXp = Math.round(cfg.base + distanceXp + profitXp + riskBonus);
+  return Math.min(cfg.max, Math.max(cfg.min, rawXp));
 }
 
-export function calculateTradeSaleXp(profit: number): number {
-  if (profit <= 0) {
-    return 0;
+export function calculateTradeSaleXp(profit?: number): number {
+  const cfg = levelConfig.tradeXp;
+  const safeProfit = profit ?? 0;
+
+  if (safeProfit <= 0) {
+    return cfg.lossSale;
   }
-  return Math.max(1, Math.round(10 + profit / 1500));
+
+  const rawXp = Math.round(cfg.base + safeProfit / cfg.profitDivisor);
+  return Math.min(cfg.max, Math.max(cfg.min, rawXp));
 }
 
 export interface ApplyXpResult {
@@ -171,14 +172,14 @@ export function applyXpToPlayer(player: Player, amount: number): ApplyXpResult {
   const totalXp = normalized.totalXp + Math.max(0, amount);
   const newLevels: number[] = [];
 
-  while (xp >= xpToNextLevel && level < levelBalance.maxLevel) {
+  while (xp >= xpToNextLevel && level < levelConfig.maxLevel) {
     xp -= xpToNextLevel;
     level += 1;
     newLevels.push(level);
     xpToNextLevel = calculateXpToNextLevel(level);
   }
 
-  if (level >= levelBalance.maxLevel) {
+  if (level >= levelConfig.maxLevel) {
     xp = 0;
     xpToNextLevel = calculateXpToNextLevel(level);
   }

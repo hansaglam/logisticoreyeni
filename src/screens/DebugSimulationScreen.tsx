@@ -24,7 +24,15 @@ import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { canTruckCarryContract } from '../simulation/delivery';
 import { getTotalInventoryTons, summarizeFinanceLedger } from '../simulation/trading';
+import { getHighestOwnedTruckCapacity } from '../simulation/delivery';
+import {
+  countAvailableContracts,
+  countContractsAboveLevel,
+  countContractsAtOrBelowLevel,
+} from '../simulation/contracts';
 import { getLevelProgress } from '../simulation/leveling';
+import { contractBalance } from '../config/balance';
+import { getMaxContractTonnageForLevel } from '../config/levelConfig';
 import type {
   City,
   CityProductState,
@@ -416,13 +424,19 @@ function ProgressBar({ progress, color }: ProgressBarProps) {
 interface DebugButtonProps {
   label: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'danger';
+  variant?: 'primary' | 'secondary' | 'success' | 'danger';
   disabled?: boolean;
 }
 
 function DebugButton({ label, onPress, variant = 'secondary', disabled = false }: DebugButtonProps) {
   const borderColor =
-    variant === 'danger' ? COLORS.danger : variant === 'primary' ? COLORS.primary : COLORS.secondary;
+    variant === 'danger'
+      ? COLORS.danger
+      : variant === 'primary'
+        ? COLORS.primary
+        : variant === 'success'
+          ? COLORS.success
+          : COLORS.secondary;
 
   return (
     <TouchableOpacity
@@ -461,6 +475,10 @@ export default function DebugSimulationScreen() {
   const advanceTime = useGameStore((state) => state.advanceTime);
   const runEconomyTick = useGameStore((state) => state.runEconomyTick);
   const generateNewContracts = useGameStore((state) => state.generateNewContracts);
+  const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
+  const getContractRefreshRemainingSeconds = useGameStore(
+    (state) => state.getContractRefreshRemainingSeconds,
+  );
   const addNotification = useGameStore((state) => state.addNotification);
   const expireContracts = useGameStore((state) => state.expireContracts);
   const refuelOrUpdateFuelPrice = useGameStore((state) => state.refuelOrUpdateFuelPrice);
@@ -479,6 +497,9 @@ export default function DebugSimulationScreen() {
   const failDeliveryById = useGameStore((state) => state.failDeliveryById);
   const addCompanyXp = useGameStore((state) => state.addCompanyXp);
   const getLevelBenefits = useGameStore((state) => state.getLevelBenefits);
+  const debugAddCash = useGameStore((state) => state.debugAddCash);
+  const debugRemoveCash = useGameStore((state) => state.debugRemoveCash);
+  const debugSetCash = useGameStore((state) => state.debugSetCash);
 
   const [lastMessage, setLastMessage] = useState<StatusMessage>({
     type: 'info',
@@ -499,6 +520,13 @@ export default function DebugSimulationScreen() {
     void refreshSaveStatus();
   }, [refreshSaveStatus]);
 
+  useEffect(() => {
+    const countdownInterval = setInterval(() => {
+      setContractRefreshCountdown(getContractRefreshRemainingSeconds());
+    }, 1000);
+    return () => clearInterval(countdownInterval);
+  }, [getContractRefreshRemainingSeconds]);
+
   const availableContracts = useMemo(
     () => contracts.filter((c) => c.status === 'available'),
     [contracts],
@@ -509,6 +537,20 @@ export default function DebugSimulationScreen() {
   const recentEvents = useMemo(() => getRecentGameEvents(eventLog, 8), [eventLog]);
   const tradeSummary = useMemo(() => summarizeFinanceLedger(financeLedger), [financeLedger]);
   const totalInventoryTons = useMemo(() => getTotalInventoryTons(warehouses), [warehouses]);
+  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const maxUnlockedTonnage = getMaxContractTonnageForLevel(playerLevel);
+  const highestOwnedTruckCapacity = getHighestOwnedTruckCapacity(trucks);
+  const contractsAtLevel = useMemo(
+    () => countContractsAtOrBelowLevel(contracts, playerLevel),
+    [contracts, playerLevel],
+  );
+  const contractsAboveLevel = useMemo(
+    () => countContractsAboveLevel(contracts, playerLevel),
+    [contracts, playerLevel],
+  );
+  const [contractRefreshCountdown, setContractRefreshCountdown] = useState(
+    contractBalance.contractRefreshIntervalMs / 1000,
+  );
   const totalUsedCapacity = useMemo(
     () => warehouses.reduce((sum, warehouse) => sum + (warehouse.usedCapacityTon ?? 0), 0),
     [warehouses],
@@ -678,6 +720,21 @@ export default function DebugSimulationScreen() {
     }
   };
 
+  const handleDebugAddCash = (amount: number) => {
+    debugAddCash(amount);
+    setSuccess(`${formatMoney(amount)} eklendi`);
+  };
+
+  const handleDebugRemoveCash = (amount: number) => {
+    debugRemoveCash(amount);
+    setInfo(`${formatMoney(amount)} düşürüldü`);
+  };
+
+  const handleDebugSetCash = (amount: number) => {
+    debugSetCash(amount);
+    setSuccess(amount === 0 ? 'Nakit sıfırlandı' : `Nakit ${formatMoney(amount)} yapıldı`);
+  };
+
   if (!isGameReady || !player) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -742,7 +799,6 @@ export default function DebugSimulationScreen() {
             <DebugButton label="+1 Saat" onPress={() => handleAdvanceTime(1)} />
             <DebugButton label="+6 Saat" onPress={() => handleAdvanceTime(6)} />
             <DebugButton label="+24 Saat" onPress={() => handleAdvanceTime(24)} />
-            <DebugButton label="Sözleşme Üret (Debug)" onPress={handleGenerateContracts} />
             <DebugButton label="Test Teslimat Bildirimi" onPress={handleTestDeliveryNotification} />
             <DebugButton label="Ekonomi Tick" onPress={handleRunEconomyTick} variant="primary" />
             <DebugButton label="Save Now" onPress={() => void handleSaveNow()} variant="primary" />
@@ -750,6 +806,22 @@ export default function DebugSimulationScreen() {
             <DebugButton label="Reset Game" onPress={handleResetGame} variant="danger" />
             <DebugButton label="+50 XP" onPress={() => { addCompanyXp(50, 'debug'); setInfo('+50 XP eklendi'); }} />
             <DebugButton label="+250 XP" onPress={() => { addCompanyXp(250, 'debug'); setInfo('+250 XP eklendi'); }} variant="primary" />
+          </View>
+        </Section>
+
+        {/* TODO: Hide debug cash tools in production builds. */}
+        <Section title="Nakit Testi">
+          <View style={styles.cashTestPanel}>
+            <Text style={styles.cashTestLabel}>Mevcut nakit</Text>
+            <Text style={styles.cashTestValue}>{formatMoney(cash)}</Text>
+          </View>
+          <View style={styles.buttonGrid}>
+            <DebugButton label="+$10,000" onPress={() => handleDebugAddCash(10000)} variant="success" />
+            <DebugButton label="+$50,000" onPress={() => handleDebugAddCash(50000)} variant="success" />
+            <DebugButton label="+$250,000" onPress={() => handleDebugAddCash(250000)} variant="success" />
+            <DebugButton label="-$10,000" onPress={() => handleDebugRemoveCash(10000)} variant="danger" />
+            <DebugButton label="Nakit Sıfırla" onPress={() => handleDebugSetCash(0)} variant="danger" />
+            <DebugButton label="$1M Yap" onPress={() => handleDebugSetCash(1_000_000)} variant="primary" />
           </View>
         </Section>
 
@@ -767,6 +839,36 @@ export default function DebugSimulationScreen() {
             </View>
           </Section>
         ) : null}
+
+        <Section title="Sözleşme Piyasası (Debug)">
+          <View style={styles.levelDebugPanel}>
+            <Text style={styles.levelDebugLine}>
+              Available contracts: {countAvailableContracts(contracts)}
+            </Text>
+            <Text style={styles.levelDebugLine}>Player level: {playerLevel}</Text>
+            <Text style={styles.levelDebugLine}>Max unlocked tonnage: {maxUnlockedTonnage}t</Text>
+            <Text style={styles.levelDebugLine}>
+              Highest owned truck capacity: {highestOwnedTruckCapacity.toFixed(1)}t
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              Contracts at/below level: {contractsAtLevel}
+            </Text>
+            <Text style={styles.levelDebugLine}>Contracts above level: {contractsAboveLevel}</Text>
+            <Text style={styles.levelDebugLine}>
+              Next contract refresh: {contractRefreshCountdown}s
+            </Text>
+          </View>
+          <View style={styles.buttonGrid}>
+            <DebugButton
+              label="Refresh Contracts"
+              onPress={() => {
+                refreshContractsFromMarket();
+                setInfo('Contracts refreshed from market');
+              }}
+            />
+            <DebugButton label="Sözleşme Üret (Debug)" onPress={handleGenerateContracts} variant="primary" />
+          </View>
+        </Section>
 
         {/* Game State Summary */}
         <View style={styles.kpiGrid}>
@@ -869,6 +971,26 @@ export default function DebugSimulationScreen() {
               <StatItem
                 label="Save Version"
                 value={`v${saveStatus.saveVersion}`}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Game Ready"
+                value={isGameReady ? 'Yes' : 'No'}
+                color={isGameReady ? COLORS.success : COLORS.textMuted}
+              />
+              <StatItem
+                label="Saving"
+                value={saveStatus.isSaving ? 'Yes' : 'No'}
+                color={saveStatus.isSaving ? COLORS.primary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Last Reason"
+                value={saveStatus.lastSaveReason ?? '—'}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Game Time"
+                value={formatTime(currentTime)}
                 color={COLORS.secondary}
               />
             </View>
@@ -1300,6 +1422,24 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: 13,
     fontWeight: '600',
+  },
+  cashTestPanel: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.success,
+    padding: 14,
+    marginBottom: 12,
+  },
+  cashTestLabel: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  cashTestValue: {
+    color: COLORS.success,
+    fontSize: 22,
+    fontWeight: '800',
   },
 
   // Buttons

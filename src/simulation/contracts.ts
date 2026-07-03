@@ -16,9 +16,16 @@ import type {
   ProductMarket,
   Route,
 } from '../types/game';
-import { contractBalance, levelBalance } from '../config/balance';
+import { contractBalance } from '../config/balance';
+import {
+  applyCapacityProfileToTonnageRange,
+  getMaxContractTonnageForLevel,
+  getRequiredLevelForTonnage,
+  pickContractCapacityProfile,
+  pickContractGenerationLevelTier,
+  resolveContractGenerationRange,
+} from '../config/levelConfig';
 import { toProductMarket } from './economy';
-import { getMaxTonnageForLevel, getRequiredLevelForTonnage } from './leveling';
 
 // ---------------------------------------------------------------------------
 // Yapılandırma sabitleri
@@ -79,6 +86,10 @@ export interface GenerateContractForProductParams {
   globalEconomy: GlobalEconomy;
   currentTime: number;
   maxTruckCapacity?: number;
+  /** Seviyeye uygun minimum tonaj */
+  minTonnage?: number;
+  /** Seviyeye uygun maksimum tonaj */
+  maxTonnage?: number;
   /** Testlerde deterministik ID için sıra numarası */
   sequence?: number;
 }
@@ -86,6 +97,8 @@ export interface GenerateContractForProductParams {
 export interface GenerateContractsOptions {
   maxNewContracts?: number;
   maxTruckCapacity?: number;
+  ownedMaxTruckCapacity?: number;
+  idleMaxTruckCapacity?: number;
   playerLevel?: number;
   currentTime: number;
 }
@@ -164,6 +177,35 @@ export function calculateContractAmount(
 ): number {
   const transferable = Math.min(surplus, shortage) * 0.7;
   return clamp(transferable, 0, maxTruckCapacity);
+}
+
+/**
+ * Seviye aralığına uygun sözleşme miktarı (ton).
+ * Stok yeterliyse [minTonnage, maxTonnage] içinde rastgele hedefler.
+ */
+export function calculateContractAmountForRange(
+  surplus: number,
+  shortage: number,
+  minTonnage: number,
+  maxTonnage: number,
+): number {
+  const transferable = Math.min(surplus, shortage) * 0.7;
+  if (transferable <= 0) {
+    return 0;
+  }
+
+  const effectiveMax = Math.min(maxTonnage, transferable);
+  if (effectiveMax < 5) {
+    return 0;
+  }
+
+  const effectiveMin = Math.min(minTonnage, effectiveMax);
+  if (effectiveMax <= effectiveMin) {
+    return Math.round(effectiveMax * 10) / 10;
+  }
+
+  const amount = randomBetween(effectiveMin, effectiveMax);
+  return Math.round(amount * 10) / 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +415,19 @@ export function getMarketContractMatchTier(
   return 99;
 }
 
+/**
+ * Filtre sıralaması — contractId varsa en üst öncelik (-1), sonra rota eşleşme tier'ı.
+ */
+export function getContractFilterSortTier(
+  contract: Contract,
+  filter: MarketContractFilter,
+): number {
+  if (filter.contractId && contract.id === filter.contractId) {
+    return -1;
+  }
+  return getMarketContractMatchTier(contract, filter);
+}
+
 export function countExactMarketContractMatches(
   contracts: Contract[] | undefined,
   filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
@@ -512,6 +567,8 @@ export function generateContractForProduct(
     globalEconomy,
     currentTime,
     maxTruckCapacity = DEFAULT_MAX_TRUCK_CAPACITY,
+    minTonnage,
+    maxTonnage,
     sequence = Math.floor(randomBetween(1, 999_999)),
   } = params;
 
@@ -520,7 +577,10 @@ export function generateContractForProduct(
 
   const surplus = calculateSurplus(originMarket);
   const shortage = calculateShortage(destinationMarket);
-  const amount = calculateContractAmount(surplus, shortage, maxTruckCapacity);
+  const amount =
+    minTonnage != null && maxTonnage != null
+      ? calculateContractAmountForRange(surplus, shortage, minTonnage, maxTonnage)
+      : calculateContractAmount(surplus, shortage, maxTruckCapacity);
 
   if (amount <= 0) {
     return null;
@@ -578,7 +638,11 @@ export function generateContracts(
 ): Contract[] {
   const maxNewContracts = options.maxNewContracts ?? contractBalance.maxContractsPerTick;
   const playerLevel = Math.max(1, options.playerLevel ?? 1);
-  const maxTruckCapacity = options.maxTruckCapacity ?? getMaxTonnageForLevel(playerLevel);
+  const ownedMaxCapacity =
+    options.ownedMaxTruckCapacity ??
+    options.maxTruckCapacity ??
+    getMaxContractTonnageForLevel(playerLevel);
+  const idleMaxCapacity = options.idleMaxTruckCapacity ?? ownedMaxCapacity;
   const { currentTime } = options;
 
   const cityList = Object.values(cities);
@@ -634,6 +698,21 @@ export function generateContracts(
           continue;
         }
 
+        const levelTier = pickContractGenerationLevelTier();
+        const generationRange = resolveContractGenerationRange(playerLevel, levelTier);
+        const capacityProfile = pickContractCapacityProfile();
+        const tonnageBounds = applyCapacityProfileToTonnageRange(
+          generationRange.minTonnage,
+          generationRange.maxTonnage,
+          capacityProfile,
+          ownedMaxCapacity,
+          idleMaxCapacity,
+        );
+
+        if (!tonnageBounds) {
+          continue;
+        }
+
         sequenceCounter += 1;
 
         const contract = generateContractForProduct({
@@ -644,7 +723,9 @@ export function generateContracts(
           route,
           globalEconomy,
           currentTime,
-          maxTruckCapacity,
+          maxTruckCapacity: tonnageBounds.maxTonnage,
+          minTonnage: tonnageBounds.minTonnage,
+          maxTonnage: tonnageBounds.maxTonnage,
           sequence: sequenceCounter,
         });
 
@@ -652,31 +733,16 @@ export function generateContracts(
           continue;
         }
 
-        let finalContract = contract;
-
-        if (Math.random() < 0.08 && playerLevel < levelBalance.maxLevel) {
-          const tiers = [...levelBalance.contractTonnageByLevel].sort((a, b) => a.level - b.level);
-          const nextTier = tiers.find((tier) => tier.level > playerLevel);
-          if (nextTier) {
-            const teaser = generateContractForProduct({
-              originCity,
-              destinationCity,
-              productId: product.id,
-              product,
-              route,
-              globalEconomy,
-              currentTime,
-              maxTruckCapacity: nextTier.maxTonnage,
-              sequence: sequenceCounter + 10_000,
-            });
-            if (teaser && (teaser.amount ?? 0) > (contract.amount ?? 0)) {
-              finalContract = {
-                ...teaser,
-                requiredLevel: nextTier.level,
-              };
-            }
-          }
-        }
+        const finalContract: Contract = {
+          ...contract,
+          requiredLevel:
+            levelTier === 'current'
+              ? getRequiredLevelForTonnage(contract.amount ?? 0)
+              : Math.max(
+                  getRequiredLevelForTonnage(contract.amount ?? 0),
+                  generationRange.requiredLevel,
+                ),
+        };
 
         const dedupeKey = getContractDedupeKey(finalContract);
         if (existingDedupeKeys.has(dedupeKey)) {
@@ -739,6 +805,8 @@ export interface ReplenishContractsParams {
   contracts: Contract[];
   currentTime: number;
   maxTruckCapacity?: number;
+  ownedMaxTruckCapacity?: number;
+  idleMaxTruckCapacity?: number;
   playerLevel?: number;
 }
 
@@ -776,7 +844,10 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
   }
 
   const playerLevel = Math.max(1, params.playerLevel ?? 1);
-  const maxTruckCapacity = params.maxTruckCapacity ?? getMaxTonnageForLevel(playerLevel);
+  const ownedMaxCapacity =
+    params.ownedMaxTruckCapacity ??
+    params.maxTruckCapacity ??
+    getMaxContractTonnageForLevel(playerLevel);
 
   const newContracts = generateContracts(
     params.cities,
@@ -787,7 +858,105 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
     {
       currentTime: params.currentTime,
       maxNewContracts: needed,
-      maxTruckCapacity,
+      maxTruckCapacity: ownedMaxCapacity,
+      ownedMaxTruckCapacity: ownedMaxCapacity,
+      idleMaxTruckCapacity: params.idleMaxTruckCapacity,
+      playerLevel,
+    },
+  );
+
+  return {
+    contracts: mergeContractLists(expired, newContracts),
+    newContracts,
+  };
+}
+
+/** Oyuncu seviyesine uygun müsait sözleşme sayısı */
+export function countContractsAtOrBelowLevel(
+  contracts: Contract[] | undefined,
+  playerLevel: number,
+): number {
+  const safeLevel = Math.max(1, playerLevel);
+  return (contracts ?? []).filter(
+    (contract) =>
+      contract.status === 'available' && (contract.requiredLevel ?? 1) <= safeLevel,
+  ).length;
+}
+
+/** Oyuncu seviyesinin üstündeki müsait sözleşme sayısı */
+export function countContractsAboveLevel(
+  contracts: Contract[] | undefined,
+  playerLevel: number,
+): number {
+  const safeLevel = Math.max(1, playerLevel);
+  return (contracts ?? []).filter(
+    (contract) =>
+      contract.status === 'available' && (contract.requiredLevel ?? 1) > safeLevel,
+  ).length;
+}
+
+/**
+ * Periyodik piyasa yenilemesi — mevcut listeyi korur, süresi dolanları temizler,
+ * eksik kadar yeni sözleşme ekler.
+ */
+export function refreshContractsFromMarket(
+  params: ReplenishContractsParams & { maxContractsPerRefresh?: number },
+): ReplenishContractsResult {
+  const expired = expireOldContracts(params.contracts, params.currentTime);
+  const availableCount = countAvailableContracts(expired);
+  const maxTotal = contractBalance.maxAvailableContracts;
+
+  if (availableCount >= maxTotal) {
+    return { contracts: expired, newContracts: [] };
+  }
+
+  const maxPerRefresh =
+    params.maxContractsPerRefresh ?? contractBalance.contractsPerMarketRefresh;
+  const targetMin = contractBalance.targetAvailableContractsMin;
+  const targetMax = contractBalance.targetAvailableContractsMax;
+  const headroom = maxTotal - availableCount;
+
+  let needed = 0;
+  if (availableCount < targetMin) {
+    needed = Math.min(maxPerRefresh, targetMin - availableCount, headroom);
+  } else if (availableCount < targetMax) {
+    needed = Math.min(1, headroom);
+  }
+
+  const expiredThisCycle = expired.filter(
+    (contract, index) =>
+      contract.status === 'expired' &&
+      params.contracts[index]?.status === 'available',
+  ).length;
+  if (expiredThisCycle > 0) {
+    needed = Math.max(
+      needed,
+      Math.min(expiredThisCycle, maxPerRefresh, headroom),
+    );
+  }
+
+  if (needed <= 0) {
+    return { contracts: expired, newContracts: [] };
+  }
+
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const ownedMaxCapacity =
+    params.ownedMaxTruckCapacity ??
+    params.maxTruckCapacity ??
+    getMaxContractTonnageForLevel(playerLevel);
+
+  const newContracts = generateContracts(
+    params.cities,
+    params.routes,
+    params.products,
+    params.globalEconomy,
+    expired,
+    {
+      currentTime: params.currentTime,
+      maxNewContracts: needed,
+      maxTruckCapacity: ownedMaxCapacity,
+      ownedMaxTruckCapacity: ownedMaxCapacity,
+      idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
     },
   );

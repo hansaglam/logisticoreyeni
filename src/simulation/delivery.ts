@@ -77,9 +77,8 @@ export function createDeliveryId(contractId: string, startedAt: number, sequence
   return `delivery_${contractId}_${Math.floor(startedAt)}_${sequence}`;
 }
 
-// ---------------------------------------------------------------------------
-// Yük ve kapasite
-// ---------------------------------------------------------------------------
+/** Kamyon kondisyonu bu eşiğin altındaysa teslimat başlatılamaz */
+const MIN_TRUCK_CONDITION_FOR_DELIVERY = 30;
 
 /**
  * Sözleşmenin kamyon kapasitesi için geçerli yük ağırlığı (ton).
@@ -139,6 +138,11 @@ export function getMaxIdleTruckCapacity(trucks: Truck[] | undefined): number {
   return Math.max(...idle.map((truck) => truck.capacity ?? 0));
 }
 
+/** Oyuncunun sahip olduğu en yüksek kamyon kapasitesi (ton) */
+export function getHighestOwnedTruckCapacity(trucks: Truck[] | undefined): number {
+  return (trucks ?? []).reduce((max, truck) => Math.max(max, truck.capacity ?? 0), 0);
+}
+
 /**
  * İşi taşıyabilen boşta kamyonlar içinden en küçük uygun kamyonu seçer.
  * Gereksiz yere büyük kamyonu küçük işe göndermemek için kapasiteye göre sıralanır.
@@ -177,7 +181,7 @@ export function getContractAvailability(
     return {
       canStart: false,
       reason: 'LEVEL_INSUFFICIENT',
-      buttonLabel: 'Seviye Yetersiz',
+      buttonLabel: `Level ${requiredLevel} Gerekli`,
       title: 'Seviye yetersiz',
       message: `Bu sözleşme için şirket seviyen Level ${requiredLevel} olmalı.`,
       requiredLevel,
@@ -239,9 +243,32 @@ export function getContractAvailability(
     return {
       canStart: false,
       reason: 'CAPACITY_INSUFFICIENT',
-      buttonLabel: 'Kapasite Yetersiz',
+      buttonLabel: 'Daha Büyük Kamyon Gerekli',
       title: 'Kapasite yetersiz',
       message: `Bu iş için ${requiredCapacity.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyon kapasiten ${maxIdleTruckCapacity.toFixed(1)} ton.`,
+      maxIdleTruckCapacity,
+      requiredCapacity,
+    };
+  }
+
+  const capacityFittingTrucks = idleTrucks.filter(
+    (truck) => canTruckCarryContract(truck, contract, product),
+  );
+  const healthyTruck = capacityFittingTrucks.find(
+    (truck) => (truck.condition ?? 100) >= MIN_TRUCK_CONDITION_FOR_DELIVERY,
+  );
+
+  if (!healthyTruck) {
+    const bestCondition = Math.max(
+      ...capacityFittingTrucks.map((truck) => truck.condition ?? 0),
+      0,
+    );
+    return {
+      canStart: false,
+      reason: 'TRUCK_CONDITION_TOO_LOW',
+      buttonLabel: 'Tamir Gerekli',
+      title: 'Kamyon kondisyonu düşük',
+      message: `Bu iş için kamyon kondisyonunun en az %${MIN_TRUCK_CONDITION_FOR_DELIVERY} olması gerekir. En iyi boşta kamyon: %${Math.round(bestCondition)}.`,
       maxIdleTruckCapacity,
       requiredCapacity,
     };
@@ -261,7 +288,7 @@ export function getContractAvailabilityWarningText(
 ): string | null {
   switch (availability.reason) {
     case 'LEVEL_INSUFFICIENT':
-      return `Level ${availability.requiredLevel ?? 1} gerekli`;
+      return null;
     case 'NO_TRUCKS':
       return 'Kamyon yok';
     case 'NO_IDLE_TRUCKS':
@@ -271,7 +298,9 @@ export function getContractAvailabilityWarningText(
     case 'NO_IDLE_DRIVERS':
       return 'Müsait şoför yok';
     case 'CAPACITY_INSUFFICIENT':
-      return `Kapasite yetersiz: ${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t mevcut`;
+      return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
+    case 'TRUCK_CONDITION_TOO_LOW':
+      return 'Kamyon tamir gerekli';
     default:
       return null;
   }
@@ -293,6 +322,8 @@ export function availabilityReasonToStartDeliveryErrorCode(
       return 'DRIVER_BUSY';
     case 'CAPACITY_INSUFFICIENT':
       return 'CAPACITY_INSUFFICIENT';
+    case 'TRUCK_CONDITION_TOO_LOW':
+      return 'TRUCK_CONDITION_TOO_LOW';
     default:
       return 'DELIVERY_CREATE_FAILED';
   }

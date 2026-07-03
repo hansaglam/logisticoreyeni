@@ -18,6 +18,7 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { summarizeFinanceLedger } from '../simulation/trading';
+import { getLevelProgress } from '../simulation/leveling';
 import type { Contract, Delivery, Driver, ProductId, Truck, Warehouse } from '../types/game';
 
 const COLORS = {
@@ -220,6 +221,10 @@ export default function FinanceScreen() {
   const cash = player?.money ?? 0;
   const fuelPrice = globalEconomy?.fuelPrice ?? BASELINE_FUEL_PRICE;
   const { scrollBottomPadding } = useTabBarLayout();
+  const levelProgress = useMemo(
+    () => (player ? getLevelProgress(player) : null),
+    [player],
+  );
 
   const calculateTotalRevenue = (): number => {
     return contracts
@@ -414,7 +419,7 @@ export default function FinanceScreen() {
             />
             <BreakdownRow
               label="Toplam XP"
-              value={`${player.totalXp ?? player.xp ?? 0}`}
+              value={`${levelProgress?.totalXp ?? 0}`}
               color={COLORS.secondary}
             />
             <BreakdownRow

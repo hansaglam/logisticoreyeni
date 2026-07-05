@@ -1,59 +1,225 @@
 /**
- * LogistiCore - Daha Fazla (Ek Menü) Ekranı
+ * LogistiCore - Şirket / Daha Fazla Ekranı
  *
- * Depo, Finans, Simülasyon Testi ve Ayarlar gibi ikincil ekranlara giriş noktası.
+ * Premium şirket yönetim merkezi — finans, depolar ve yönetim araçları.
  */
 
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import ScreenHeader from '../components/ScreenHeader';
-import ScreenShell from '../components/ScreenShell';
-import InternalTestInfoPanel from '../components/InternalTestInfoPanel';
+import {
+  AppCard,
+  AppScreen,
+  GameIcon,
+  ListRowCard,
+  ProgressBar,
+  ScreenHeader,
+  SectionTitle,
+  StatusBadge,
+} from '../components/ui';
+import type { GameIconName } from '../theme/icons';
+import { CITIES_BY_ID } from '../data/cities';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { getLevelProgress } from '../simulation/leveling';
 import { useGameStore } from '../store/gameStore';
-import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
-import WarehouseScreen from './WarehouseScreen';
-import FinanceScreen from './FinanceScreen';
+import { colors, spacing, typography } from '../theme';
+import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import DebugSimulationScreen from './DebugSimulationScreen';
+import FinanceScreen from './FinanceScreen';
+import WarehouseScreen from './WarehouseScreen';
 
-type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'settings';
+type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug';
 
-interface MenuItem {
-  key: MoreRoute;
+interface ModuleItem {
+  key: MoreRoute | 'settings' | 'stats' | 'upgrades';
   label: string;
   subtitle: string;
-  icon: string;
-  showDeveloperBadge?: boolean;
+  icon: GameIconName;
+  badge?: { label: string; variant: 'amber' | 'danger' | 'info' | 'muted' };
+  placeholder?: boolean;
 }
 
 // TODO: Hide Debug Simulation in production builds.
-const MENU_ITEMS: MenuItem[] = [
-  { key: 'warehouse', label: 'Depolar', subtitle: 'Depo merkezleri ve şehir stokları', icon: '🏬' },
-  { key: 'finance', label: 'Finans', subtitle: 'Gelir, gider ve nakit akışı', icon: '💰' },
+const MODULE_ITEMS: ModuleItem[] = [
+  {
+    key: 'finance',
+    label: 'Finans',
+    subtitle: 'Gelir, gider ve şirket sağlığını görüntüle',
+    icon: 'cash',
+  },
+  {
+    key: 'warehouse',
+    label: 'Depolar',
+    subtitle: 'Stok, kapasite ve ticaret ürünlerini yönet',
+    icon: 'warehouse',
+  },
+  {
+    key: 'stats',
+    label: 'Şirket İstatistikleri',
+    subtitle: 'Performans ve kariyer özetini incele',
+    icon: 'profit',
+    placeholder: true,
+    badge: { label: 'Yakında', variant: 'muted' },
+  },
+  {
+    key: 'upgrades',
+    label: 'Geliştirmeler',
+    subtitle: 'Şirket ve filo yükseltmeleri',
+    icon: 'upgrade',
+    placeholder: true,
+    badge: { label: 'Yakında', variant: 'muted' },
+  },
   {
     key: 'debug',
     label: 'Simülasyon Testi',
-    subtitle: 'Zaman, ekonomi ve sözleşme testleri',
-    icon: '🛠️',
-    showDeveloperBadge: true,
+    subtitle: 'Yalnızca test sürümünde kullanılmalı',
+    icon: 'maintenance',
+    badge: { label: 'DEBUG', variant: 'amber' },
   },
-  { key: 'settings', label: 'Ayarlar', subtitle: 'Yakında', icon: '⚙️' },
+  {
+    key: 'settings',
+    label: 'Ayarlar',
+    subtitle: 'Oyun tercihleri ve bildirimler',
+    icon: 'settings',
+    placeholder: true,
+    badge: { label: 'Yakında', variant: 'muted' },
+  },
 ];
 
-const CARD_BORDER = '#263548';
-const CHEVRON_COLOR = '#9CA3AF';
-const DEVELOPER_BADGE_COLOR = '#F59E0B';
+const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
+
+const LIST_SCROLL_BOTTOM_EXTRA = 110;
+
+function formatMoney(value: number): string {
+  const rounded = Math.round(Number.isFinite(value) ? value : 0);
+  const sign = rounded < 0 ? '-' : '';
+  return `${sign}$${Math.abs(rounded)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+function getCityName(cityId: string | undefined): string {
+  if (!cityId) return 'Bilinmeyen şehir';
+  return CITIES_BY_ID[cityId]?.name ?? cityId;
+}
+
+function CompanyProfileCard({
+  companyName,
+  level,
+  reputation,
+  driverCount,
+  truckCount,
+  homeCityName,
+}: {
+  companyName: string;
+  level: number;
+  reputation: number;
+  driverCount: number;
+  truckCount: number;
+  homeCityName: string;
+}) {
+  const safeReputation = Math.max(0, Math.min(100, Math.round(reputation)));
+
+  return (
+    <AppCard variant="soft" style={styles.profileCard} padded={false}>
+      <View style={styles.profileRow}>
+        <View style={styles.profileIconWrap}>
+          <GameIcon name="company" size={26} color={colors.accentAmber} />
+        </View>
+        <View style={styles.profileMain}>
+          <Text style={styles.profileBrand}>LogistiCore</Text>
+          <Text style={styles.profileName} numberOfLines={1}>
+            {companyName}
+          </Text>
+          <Text style={styles.profileMeta} numberOfLines={1}>
+            Level {level} · İtibar {safeReputation}/100
+          </Text>
+          <Text style={styles.profileMeta} numberOfLines={1}>
+            {driverCount} şoför · {truckCount} kamyon · Merkez: {homeCityName}
+          </Text>
+        </View>
+        <StatusBadge label={`Lv.${level}`} variant="amber" size="sm" />
+      </View>
+    </AppCard>
+  );
+}
+
+function CompanyGrowthCard({
+  level,
+  xpProgress,
+  completedContracts,
+  truckCount,
+  warehouseCount,
+}: {
+  level: number;
+  xpProgress: number;
+  completedContracts: number;
+  truckCount: number;
+  warehouseCount: number;
+}) {
+  return (
+    <AppCard style={styles.growthCard} padded={false}>
+      <View style={styles.growthHeader}>
+        <GameIcon name="level" size={16} color={colors.accentBlue} />
+        <Text style={styles.growthTitle}>Şirket Gelişimi</Text>
+      </View>
+
+      <View style={styles.growthStats}>
+        <View style={styles.growthStatItem}>
+          <Text style={styles.growthStatLabel}>Level</Text>
+          <Text style={styles.growthStatValue}>{level}</Text>
+        </View>
+        <View style={styles.growthStatItem}>
+          <Text style={styles.growthStatLabel}>Sözleşme</Text>
+          <Text style={styles.growthStatValue}>{completedContracts}</Text>
+        </View>
+        <View style={styles.growthStatItem}>
+          <Text style={styles.growthStatLabel}>Filo</Text>
+          <Text style={styles.growthStatValue}>{truckCount}</Text>
+        </View>
+        <View style={styles.growthStatItem}>
+          <Text style={styles.growthStatLabel}>Depo</Text>
+          <Text style={styles.growthStatValue}>{warehouseCount}</Text>
+        </View>
+      </View>
+
+      <Text style={styles.xpLabel}>XP ilerlemesi</Text>
+      <ProgressBar progress={xpProgress} color={colors.accentBlue} height={6} />
+      <Text style={styles.xpHint}>{Math.round(xpProgress * 100)}% tamamlandı</Text>
+    </AppCard>
+  );
+}
+
+function ModuleChevron() {
+  return <Text style={styles.chevron}>›</Text>;
+}
 
 export default function MoreScreen() {
   const [route, setRoute] = useState<MoreRoute>('menu');
+  const player = useGameStore((state) => state.player);
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
   const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
+  const { tabBarHeight, bottomInset } = useTabBarLayout();
+  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
 
   useEffect(() => {
     if (!pendingMoreSubRoute) return;
     setRoute(pendingMoreSubRoute);
     clearPendingMoreSubRoute();
   }, [pendingMoreSubRoute, clearPendingMoreSubRoute]);
+
+  const levelProgress = useMemo(
+    () => (player ? getLevelProgress(player) : null),
+    [player],
+  );
+
+  const handleModulePress = (item: ModuleItem) => {
+    if (item.placeholder) {
+      Alert.alert('Yakında', PLACEHOLDER_ALERT_MESSAGE);
+      return;
+    }
+    setRoute(item.key as MoreRoute);
+  };
 
   if (route === 'warehouse') {
     return (
@@ -82,47 +248,79 @@ export default function MoreScreen() {
     );
   }
 
-  if (route === 'settings') {
-    return (
-      <ScreenShell>
-        <SubNavBar title="Ayarlar" onBack={() => setRoute('menu')} />
-        <View style={styles.settingsCard}>
-          <Text style={styles.settingsTitle}>Ayarlar</Text>
-          <Text style={styles.settingsText}>Oyun ayarları yakında eklenecek.</Text>
-        </View>
-      </ScreenShell>
-    );
-  }
+  const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const reputation = player?.reputation ?? 0;
+  const trucks = player?.trucks ?? [];
+  const drivers = player?.drivers ?? [];
+  const warehouses = player?.warehouses ?? [];
+  const completedContracts = player?.completedContracts ?? 0;
+  const companyName = player?.companyName ?? 'LogistiCore Lojistik';
+  const homeCityName = getCityName(player?.homeCityId);
+  const xpProgress = levelProgress?.progressRatio ?? 0;
 
   return (
-    <ScreenShell>
-      <ScreenHeader title="Daha Fazla" subtitle="Yönetim, finans ve gelişmiş araçlar" />
-      <InternalTestInfoPanel />
-      {MENU_ITEMS.map((item) => (
-        <TouchableOpacity
+    <AppScreen scroll scrollBottomPadding={listScrollBottomPadding}>
+      <ScreenHeader
+        title="Şirket"
+        subtitle="Şirketini, finansını ve yönetim araçlarını kontrol et"
+        titleIcon="company"
+        compact
+      />
+
+      {player ? (
+        <>
+          <CompanyProfileCard
+            companyName={companyName}
+            level={level}
+            reputation={reputation}
+            driverCount={drivers.length}
+            truckCount={trucks.length}
+            homeCityName={homeCityName}
+          />
+
+          <CompanyGrowthCard
+            level={level}
+            xpProgress={Math.max(0, Math.min(1, xpProgress))}
+            completedContracts={completedContracts}
+            truckCount={trucks.length}
+            warehouseCount={warehouses.length}
+          />
+
+          <View style={styles.cashStrip}>
+            <GameIcon name="cash" size={16} color={colors.success} />
+            <Text style={styles.cashLabel}>Nakit</Text>
+            <Text style={styles.cashValue}>{formatMoney(player.money ?? 0)}</Text>
+          </View>
+        </>
+      ) : null}
+
+      <SectionTitle title="Yönetim Modülleri" compact />
+
+      {MODULE_ITEMS.map((item) => (
+        <ListRowCard
           key={item.key}
-          style={styles.menuRow}
-          onPress={() => setRoute(item.key)}
-          activeOpacity={0.85}
-        >
-          <View style={styles.menuIconBox}>
-            <Text style={styles.menuIcon}>{item.icon}</Text>
-          </View>
-          <View style={styles.menuBody}>
-            <View style={styles.menuTitleRow}>
-              <Text style={styles.menuLabel}>{item.label}</Text>
-              {item.showDeveloperBadge ? (
-                <View style={styles.developerBadge}>
-                  <Text style={styles.developerBadgeText}>Geliştirici</Text>
-                </View>
+          title={item.label}
+          subtitle={item.subtitle}
+          icon={item.icon}
+          onPress={() => handleModulePress(item)}
+          right={
+            <View style={styles.moduleRight}>
+              {item.badge ? (
+                <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
               ) : null}
+              <ModuleChevron />
             </View>
-            <Text style={styles.menuSubtitle}>{item.subtitle}</Text>
-          </View>
-          <Text style={styles.menuChevron}>›</Text>
-        </TouchableOpacity>
+          }
+        />
       ))}
-    </ScreenShell>
+
+      <AppCard variant="soft" style={styles.debugNoteCard} padded={false}>
+        <GameIcon name="warning" size={14} color={colors.accentAmber} />
+        <Text style={styles.debugNoteText}>
+          Simülasyon Testi internal test aracıdır. Production öncesi gizlenecek.
+        </Text>
+      </AppCard>
+    </AppScreen>
   );
 }
 
@@ -130,7 +328,7 @@ function SubNavBar({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <View style={styles.subNav}>
       <TouchableOpacity style={styles.subNavBack} onPress={onBack} activeOpacity={0.8}>
-        <Text style={styles.subNavBackText}>‹ Daha Fazla</Text>
+        <Text style={styles.subNavBackText}>‹ Şirket</Text>
       </TouchableOpacity>
       <Text style={styles.subNavTitle} numberOfLines={1}>
         {title}
@@ -142,114 +340,169 @@ function SubNavBar({ title, onBack }: { title: string; onBack: () => void }) {
 const styles = StyleSheet.create({
   embeddedRoot: {
     flex: 1,
-    backgroundColor: UI.colors.background,
+    backgroundColor: colors.background,
     paddingTop: STATUS_BAR_HEIGHT,
   },
   subNav: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: UI.spacing.screen,
-    paddingTop: 8,
-    paddingBottom: 4,
-    backgroundColor: UI.colors.background,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 4,
+    paddingBottom: 2,
+    backgroundColor: colors.background,
     borderBottomWidth: 1,
-    borderBottomColor: UI.colors.border,
+    borderBottomColor: colors.border,
   },
   subNavBack: {
     paddingVertical: 6,
     paddingRight: 12,
   },
   subNavBackText: {
-    color: UI.colors.primary,
+    color: colors.accentAmber,
     fontSize: 14,
     fontWeight: '700',
   },
   subNavTitle: {
-    color: UI.colors.textMuted,
+    color: colors.textMuted,
     fontSize: 13,
     fontWeight: '600',
     flex: 1,
   },
-  menuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: UI.colors.card,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    paddingVertical: 17,
-    paddingHorizontal: 16,
-    marginBottom: 12,
+
+  profileCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  menuIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: UI.colors.cardAlt,
+  profileRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  profileIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: colors.accentAmberSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 14,
   },
-  menuIcon: {
-    fontSize: 21,
-  },
-  menuBody: {
+  profileMain: {
     flex: 1,
     minWidth: 0,
   },
-  menuTitleRow: {
+  profileBrand: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  profileName: {
+    ...typography.cardTitle,
+    fontSize: 16,
+    marginTop: 2,
+  },
+  profileMeta: {
+    ...typography.caption,
+    marginTop: 3,
+    lineHeight: 14,
+  },
+
+  growthCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  growthHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
-  menuLabel: {
-    color: UI.colors.text,
-    fontSize: 17,
-    fontWeight: '700',
+  growthTitle: {
+    ...typography.sectionTitle,
+    fontSize: 14,
   },
-  menuSubtitle: {
-    color: UI.colors.textMuted,
-    fontSize: 13,
-    marginTop: 3,
-    lineHeight: 18,
+  growthStats: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
-  developerBadge: {
+  growthStatItem: {
+    flex: 1,
+    backgroundColor: colors.cardSoft,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: DEVELOPER_BADGE_COLOR,
-    backgroundColor: 'rgba(245, 158, 11, 0.10)',
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    alignItems: 'center',
   },
-  developerBadgeText: {
-    color: DEVELOPER_BADGE_COLOR,
+  growthStatLabel: {
+    ...typography.caption,
     fontSize: 10,
-    fontWeight: '800',
   },
-  menuChevron: {
-    color: CHEVRON_COLOR,
+  growthStatValue: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  xpLabel: {
+    ...typography.caption,
+    marginBottom: 4,
+  },
+  xpHint: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 4,
+    textAlign: 'right',
+  },
+
+  cashStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.successSoft,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.success,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  cashLabel: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    flex: 1,
+  },
+  cashValue: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    color: colors.success,
+  },
+
+  moduleRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  chevron: {
+    color: colors.textMuted,
     fontSize: 22,
     fontWeight: '700',
-    marginLeft: 8,
   },
-  settingsCard: {
-    backgroundColor: UI.colors.card,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    padding: 16,
-    marginTop: 8,
+
+  debugNoteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  settingsTitle: {
-    color: UI.colors.text,
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  settingsText: {
-    color: UI.colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 20,
+  debugNoteText: {
+    ...typography.caption,
+    flex: 1,
+    lineHeight: 15,
+    color: colors.textSecondary,
   },
 });

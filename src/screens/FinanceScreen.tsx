@@ -1,39 +1,46 @@
 /**
  * LogistiCore - Finans Ekranı
  *
- * More menüsü içinde kullanılan sade finans analiz ekranı.
+ * Premium gelir/gider analizi — şirket sağlığı ve ticaret performansı.
  */
 
 import React, { useMemo } from 'react';
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { useGameStore } from '../store/gameStore';
+import {
+  AppCard,
+  AppScreen,
+  EmptyState,
+  GameIcon,
+  ProgressBar,
+  ScreenHeader,
+  SectionTitle,
+  SmallStatPill,
+  StatusBadge,
+} from '../components/ui';
+import type { GameIconName } from '../theme/icons';
+import type { StatusBadgeVariant } from '../components/ui';
 import { economyBalance, financeBalance, warehouseBalance } from '../config/balance';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { summarizeFinanceLedger } from '../simulation/trading';
-import { getLevelProgress } from '../simulation/leveling';
-import type { Contract, Delivery, Driver, ProductId, Truck, Warehouse } from '../types/game';
-
-const COLORS = {
-  background: '#070A12',
-  card: '#111827',
-  cardAlt: '#121826',
-  border: '#1F2A3C',
-  primary: '#F59E0B',
-  secondary: '#38BDF8',
-  success: '#22C55E',
-  danger: '#EF4444',
-  textPrimary: '#F9FAFB',
-  textSecondary: '#9CA3AF',
-  textMuted: '#64748B',
-};
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import {
+  getCityProductMarketPrice,
+  normalizeWarehouse,
+  summarizeFinanceLedger,
+} from '../simulation/trading';
+import { useGameStore } from '../store/gameStore';
+import { colors, spacing, typography } from '../theme';
+import type {
+  Contract,
+  Delivery,
+  Driver,
+  FinanceLedgerCategory,
+  FinanceLedgerEntry,
+  ProductId,
+  Truck,
+  Warehouse,
+} from '../types/game';
 
 const WAREHOUSE_RENT_PER_TON = warehouseBalance.rentPerTon;
 const WAREHOUSE_ELECTRICITY_PER_TON = warehouseBalance.electricityPerTon;
@@ -51,12 +58,16 @@ const FUEL_PRICE_SPIKE_RATIO = financeBalance.fuelPriceSpikeRatio;
 const BASELINE_FUEL_PRICE = economyBalance.baseFuelPrice;
 const MAX_ACTIVE_DELIVERIES = 3;
 const MAX_ALERTS = 3;
+const MAX_LEDGER_ENTRIES = 5;
 const HIGH_PROFIT_MARGIN = 0.9;
+const LIST_SCROLL_BOTTOM_EXTRA = 110;
+const DAY_HOURS = 24;
+const RUNNING_DELIVERY_STATUSES: Delivery['status'][] = ['preparing', 'on_route'];
 
 type HealthLabel = 'Güçlü' | 'Dengeli' | 'Riskli' | 'Kritik';
 
 function formatMoney(value: number): string {
-  const rounded = Math.round(value);
+  const rounded = Math.round(Number.isFinite(value) ? value : 0);
   const sign = rounded < 0 ? '-' : '';
   return `${sign}$${Math.abs(rounded)
     .toString()
@@ -64,11 +75,11 @@ function formatMoney(value: number): string {
 }
 
 function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function formatTons(value: number): string {
-  return `${value.toFixed(1)} ton`;
+  return `${(Number.isFinite(value) ? value : 0).toFixed(1)} ton`;
 }
 
 function getCityName(cityId: string): string {
@@ -79,43 +90,6 @@ function getProductName(productId: string): string {
   return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
 }
 
-function getDeliveryRiskLabel(delivery: Delivery): { label: string; color: string } {
-  const combinedRisk = (delivery.breakdownChance ?? 0) + (delivery.accidentChance ?? 0);
-  if (combinedRisk < 0.1) return { label: 'Düşük', color: COLORS.success };
-  if (combinedRisk < 0.25) return { label: 'Orta', color: COLORS.primary };
-  return { label: 'Yüksek', color: COLORS.danger };
-}
-
-function getDeliveryStatusLabel(status: Delivery['status']): string {
-  switch (status) {
-    case 'on_route':
-      return 'YOLDA';
-    case 'preparing':
-      return 'HAZIRLANIYOR';
-    case 'completed':
-      return 'TAMAMLANDI';
-    case 'failed':
-      return 'BAŞARISIZ';
-    default:
-      return status.toUpperCase();
-  }
-}
-
-function getDeliveryStatusColor(status: Delivery['status']): string {
-  switch (status) {
-    case 'on_route':
-      return COLORS.secondary;
-    case 'preparing':
-      return COLORS.primary;
-    case 'completed':
-      return COLORS.success;
-    case 'failed':
-      return COLORS.danger;
-    default:
-      return COLORS.textMuted;
-  }
-}
-
 function getFinancialHealthLabel(score: number): HealthLabel {
   if (score >= 80) return 'Güçlü';
   if (score >= 60) return 'Dengeli';
@@ -123,88 +97,228 @@ function getFinancialHealthLabel(score: number): HealthLabel {
   return 'Kritik';
 }
 
-function getFinancialHealthColor(score: number): string {
-  switch (getFinancialHealthLabel(score)) {
-    case 'Güçlü':
-      return COLORS.success;
-    case 'Dengeli':
-      return COLORS.secondary;
-    case 'Riskli':
-      return COLORS.primary;
-    case 'Kritik':
-      return COLORS.danger;
+function getHealthBarColor(score: number): string {
+  if (score >= 70) return colors.success;
+  if (score >= 40) return colors.accentAmber;
+  return colors.danger;
+}
+
+function getDeliveryRiskBadge(delivery: Delivery): { label: string; variant: StatusBadgeVariant } {
+  const combinedRisk = (delivery.breakdownChance ?? 0) + (delivery.accidentChance ?? 0);
+  if (combinedRisk < 0.1) return { label: 'Düşük risk', variant: 'success' };
+  if (combinedRisk < 0.25) return { label: 'Orta risk', variant: 'warning' };
+  return { label: 'Yüksek risk', variant: 'danger' };
+}
+
+function getDeliveryStatusBadge(status: Delivery['status']): { label: string; variant: StatusBadgeVariant } {
+  switch (status) {
+    case 'on_route':
+      return { label: 'Yolda', variant: 'blue' };
+    case 'preparing':
+      return { label: 'Hazırlanıyor', variant: 'amber' };
+    case 'completed':
+      return { label: 'Tamamlandı', variant: 'success' };
+    case 'failed':
+      return { label: 'Başarısız', variant: 'danger' };
     default:
-      return COLORS.textSecondary;
+      return { label: status, variant: 'muted' };
   }
 }
 
-function ProgressBar({ progress, color }: { progress: number; color: string }) {
-  const clamped = Math.max(0, Math.min(1, progress));
-  return (
-    <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, { width: `${clamped * 100}%`, backgroundColor: color }]} />
-    </View>
-  );
+function calculateInventoryStockValue(warehouses: Warehouse[]): number {
+  let total = 0;
+  for (const warehouse of warehouses) {
+    const city = CITIES_BY_ID[warehouse.cityId];
+    const inventory = normalizeWarehouse(warehouse).inventory ?? [];
+    for (const item of inventory) {
+      const qty = item.quantity ?? 0;
+      if (qty <= 0) continue;
+      const price = city ? getCityProductMarketPrice(city, item.productId) : 0;
+      const safePrice = Number.isFinite(price) ? price : 0;
+      total += qty * safePrice;
+    }
+  }
+  return Number.isFinite(total) ? total : 0;
 }
 
-function BreakdownRow({
-  label,
-  value,
-  color = COLORS.textPrimary,
-  isLast = false,
-}: {
+function formatLedgerTime(entryTime: number): string {
+  const safeEntry = Number.isFinite(entryTime) ? entryTime : 0;
+  const day = Math.floor(safeEntry / DAY_HOURS) + 1;
+  const hour = Math.floor(safeEntry % DAY_HOURS);
+  return `Gün ${day} · ${hour.toString().padStart(2, '0')}:00`;
+}
+
+function getLedgerDisplay(entry: FinanceLedgerEntry): {
+  icon: GameIconName;
+  title: string;
+  categoryLabel: string;
+} {
+  const description = entry.description?.trim();
+  switch (entry.category) {
+    case 'trade_purchase':
+      return {
+        icon: 'market',
+        title: description ?? 'Ürün satın alma',
+        categoryLabel: 'Ticaret',
+      };
+    case 'trade_sale':
+      return {
+        icon: 'revenue',
+        title: description ?? 'Ürün satışı',
+        categoryLabel: 'Ticaret',
+      };
+    case 'delivery_income':
+      return {
+        icon: 'contract',
+        title: description ?? 'Teslimat geliri',
+        categoryLabel: 'Teslimat',
+      };
+    case 'delivery_expense':
+      return {
+        icon: 'fuel',
+        title: description ?? 'Teslimat gideri',
+        categoryLabel: 'Teslimat',
+      };
+    case 'fleet_purchase':
+      return {
+        icon: 'truck',
+        title: description ?? 'Filo alımı',
+        categoryLabel: 'Filo',
+      };
+    case 'warehouse_open':
+      return {
+        icon: 'warehouse',
+        title: description ?? 'Depo açılışı',
+        categoryLabel: 'Depo',
+      };
+    default:
+      return {
+        icon: entry.type === 'income' ? 'revenue' : 'expense',
+        title: description ?? 'Diğer işlem',
+        categoryLabel: 'Diğer',
+      };
+  }
+}
+
+function aggregateOtherLedgerIncome(
+  entries: FinanceLedgerEntry[],
+  exclude: FinanceLedgerCategory[],
+): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.type !== 'income') continue;
+    if (exclude.includes(entry.category)) continue;
+    total += entry.amount ?? 0;
+  }
+  return total;
+}
+
+function aggregateOtherLedgerExpense(
+  entries: FinanceLedgerEntry[],
+  exclude: FinanceLedgerCategory[],
+): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.type !== 'expense') continue;
+    if (exclude.includes(entry.category)) continue;
+    total += entry.amount ?? 0;
+  }
+  return total;
+}
+
+interface BreakdownLine {
+  icon: GameIconName;
   label: string;
-  value: string;
+  amount: number;
   color?: string;
-  isLast?: boolean;
+}
+
+function BreakdownCard({
+  lines,
+  hint,
+}: {
+  lines: BreakdownLine[];
+  hint?: string;
 }) {
   return (
-    <View style={[styles.breakdownRow, isLast && styles.breakdownRowLast]}>
-      <Text style={styles.breakdownLabel}>{label}</Text>
-      <Text style={[styles.breakdownValue, { color }]}>{value}</Text>
-    </View>
+    <AppCard style={styles.breakdownCard} padded={false}>
+      {hint ? <Text style={styles.breakdownHint}>{hint}</Text> : null}
+      {lines.map((line, index) => (
+        <View
+          key={line.label}
+          style={[styles.breakdownRow, index === lines.length - 1 ? styles.breakdownRowLast : null]}
+        >
+          <View style={styles.breakdownLeft}>
+            <View style={styles.breakdownIconWrap}>
+              <GameIcon name={line.icon} size={14} color={line.color ?? colors.textSecondary} />
+            </View>
+            <Text style={styles.breakdownLabel} numberOfLines={1}>
+              {line.label}
+            </Text>
+          </View>
+          <Text style={[styles.breakdownValue, { color: line.color ?? colors.textPrimary }]}>
+            {formatMoney(line.amount)}
+          </Text>
+        </View>
+      ))}
+    </AppCard>
   );
 }
 
-function SummaryCard({
+function FinanceMetricStrip({
   cash,
   netProfit,
   dailyFixedCosts,
   companyValue,
-  showNetProfitHint,
 }: {
   cash: number;
   netProfit: number;
   dailyFixedCosts: number;
   companyValue: number;
-  showNetProfitHint: boolean;
 }) {
   return (
-    <View style={styles.summaryWrapper}>
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryItem}>
-          <Text style={[styles.summaryValue, { color: COLORS.success }]}>{formatMoney(cash)}</Text>
-          <Text style={styles.summaryLabel}>Nakit</Text>
-        </View>
-        <View style={styles.summaryItem}>
-          <Text style={[styles.summaryValue, { color: netProfit >= 0 ? COLORS.success : COLORS.danger }]}>
-            {formatMoney(netProfit)}
-          </Text>
-          <Text style={styles.summaryLabel}>Net kâr</Text>
-        </View>
-        <View style={styles.summaryItem}>
-          <Text style={[styles.summaryValue, { color: COLORS.danger }]}>{formatMoney(dailyFixedCosts)}</Text>
-          <Text style={styles.summaryLabel}>Günlük sabit gider</Text>
-        </View>
-        <View style={styles.summaryItem}>
-          <Text style={[styles.summaryValue, { color: COLORS.primary }]}>{formatMoney(companyValue)}</Text>
-          <Text style={styles.summaryLabel}>Şirket değeri</Text>
-        </View>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.metricStrip}
+    >
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Nakit"
+          value={formatMoney(cash)}
+          icon="cash"
+          accentColor={colors.success}
+          layout="chip"
+        />
       </View>
-      {showNetProfitHint ? (
-        <Text style={styles.summaryHint}>Teslimat gelirleri tamamlandığında net kâra yansır.</Text>
-      ) : null}
-    </View>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Net kâr"
+          value={formatMoney(netProfit)}
+          icon="profit"
+          accentColor={netProfit >= 0 ? colors.success : colors.danger}
+          layout="chip"
+        />
+      </View>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Günlük gider"
+          value={formatMoney(dailyFixedCosts)}
+          icon="expense"
+          accentColor={colors.danger}
+          layout="chip"
+        />
+      </View>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Şirket değeri"
+          value={formatMoney(companyValue)}
+          icon="company"
+          accentColor={colors.accentAmber}
+          layout="chip"
+        />
+      </View>
+    </ScrollView>
   );
 }
 
@@ -220,11 +334,8 @@ export default function FinanceScreen() {
   const warehouses: Warehouse[] = player?.warehouses ?? [];
   const cash = player?.money ?? 0;
   const fuelPrice = globalEconomy?.fuelPrice ?? BASELINE_FUEL_PRICE;
-  const { scrollBottomPadding } = useTabBarLayout();
-  const levelProgress = useMemo(
-    () => (player ? getLevelProgress(player) : null),
-    [player],
-  );
+  const { tabBarHeight, bottomInset } = useTabBarLayout();
+  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
 
   const calculateTotalRevenue = (): number => {
     return contracts
@@ -304,6 +415,10 @@ export default function FinanceScreen() {
     [drivers, warehouses],
   );
   const companyValue = useMemo(calculateCompanyValue, [trucks, warehouses, player?.reputation, cash]);
+  const inventoryStockValue = useMemo(
+    () => calculateInventoryStockValue(warehouses),
+    [warehouses],
+  );
 
   const availableContractCount = useMemo(
     () => contracts.filter((c) => c.status === 'available').length,
@@ -348,7 +463,7 @@ export default function FinanceScreen() {
   ]);
 
   const healthLabel = getFinancialHealthLabel(financialHealth);
-  const healthColor = getFinancialHealthColor(financialHealth);
+  const healthColor = getHealthBarColor(financialHealth);
 
   const alerts = useMemo(() => {
     const nextAlerts: string[] = [];
@@ -371,421 +486,567 @@ export default function FinanceScreen() {
     return nextAlerts.slice(0, MAX_ALERTS);
   }, [idleTruckCount, trucks, activeDeliveries.length, cash, dailyFixedCosts, fuelPrice]);
 
-  const topActiveDeliveries = useMemo(
-    () => activeDeliveries.slice(0, MAX_ACTIVE_DELIVERIES),
+  const topRunningDeliveries = useMemo(
+    () =>
+      activeDeliveries
+        .filter((delivery) => RUNNING_DELIVERY_STATUSES.includes(delivery.status))
+        .slice(0, MAX_ACTIVE_DELIVERIES),
     [activeDeliveries],
+  );
+
+  const runningDeliveryCount = useMemo(
+    () =>
+      activeDeliveries.filter((delivery) =>
+        RUNNING_DELIVERY_STATUSES.includes(delivery.status),
+      ).length,
+    [activeDeliveries],
+  );
+
+  const recentLedgerEntries = useMemo(
+    () => (financeLedger ?? []).slice(0, MAX_LEDGER_ENTRIES),
+    [financeLedger],
   );
 
   const showNetProfitHint = activeDeliveries.length > 0 && totalRevenue === 0;
   const showRevenueHint = totalRevenue === 0 && activeDeliveries.length > 0;
+  const hasTradeActivity =
+    tradeSummary.tradePurchaseTotal > 0 ||
+    tradeSummary.tradeSaleTotal > 0 ||
+    inventoryStockValue > 0;
 
   const fuelCosts = calculateActiveFuelCosts();
   const maintenanceCosts = calculateMaintenanceExposure();
   const driverSalaries = calculateDailyDriverSalary();
   const warehouseCosts = calculateDailyWarehouseCost();
+  const otherIncome = aggregateOtherLedgerIncome(financeLedger, [
+    'trade_sale',
+    'delivery_income',
+  ]);
+  const otherExpense = aggregateOtherLedgerExpense(financeLedger, [
+    'trade_purchase',
+    'delivery_expense',
+    'fleet_purchase',
+    'warehouse_open',
+  ]);
+
+  const incomeLines: BreakdownLine[] = [
+    { icon: 'contract', label: 'Sözleşme gelirleri', amount: totalRevenue, color: colors.success },
+    { icon: 'revenue', label: 'Ticaret satışları', amount: tradeSummary.tradeSaleTotal, color: colors.success },
+    { icon: 'profit', label: 'Teslimat bonusları', amount: 0, color: colors.textMuted },
+    { icon: 'warehouse', label: 'Depo satışları', amount: tradeSummary.tradeSaleTotal, color: colors.success },
+    { icon: 'cash', label: 'Diğer gelirler', amount: otherIncome, color: colors.info },
+  ];
+
+  const expenseLines: BreakdownLine[] = [
+    { icon: 'fuel', label: 'Yakıt giderleri', amount: fuelCosts, color: colors.danger },
+    { icon: 'repair', label: 'Bakım giderleri', amount: maintenanceCosts, color: colors.danger },
+    { icon: 'driver', label: 'Şoför maaşları', amount: driverSalaries, color: colors.danger },
+    { icon: 'warehouse', label: 'Depo giderleri', amount: warehouseCosts, color: colors.danger },
+    { icon: 'market', label: 'Ürün alımları', amount: tradeSummary.tradePurchaseTotal, color: colors.danger },
+    { icon: 'warning', label: 'Gecikme cezaları', amount: calculateLatePenalties(), color: colors.textMuted },
+    { icon: 'alert', label: 'Diğer giderler', amount: otherExpense, color: colors.danger },
+  ];
 
   if (!player) {
     return (
-      <View style={styles.root}>
+      <AppScreen>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Oyun başlatılıyor...</Text>
         </View>
-      </View>
+      </AppScreen>
     );
   }
 
   return (
-    <View style={styles.root}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <SummaryCard
-          cash={cash}
-          netProfit={netProfit}
-          dailyFixedCosts={dailyFixedCosts}
-          companyValue={companyValue}
-          showNetProfitHint={showNetProfitHint}
+    <AppScreen scroll embedded scrollBottomPadding={listScrollBottomPadding}>
+      <ScreenHeader
+        title="Finans"
+        subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"
+        compact
+      />
+
+      <FinanceMetricStrip
+        cash={cash}
+        netProfit={netProfit}
+        dailyFixedCosts={dailyFixedCosts}
+        companyValue={companyValue}
+      />
+
+      {showNetProfitHint ? (
+        <Text style={styles.summaryHint}>Teslimat gelirleri tamamlandığında net kâra yansır.</Text>
+      ) : null}
+
+      <SectionTitle title="Gelir Dağılımı" compact />
+      <BreakdownCard
+        lines={incomeLines}
+        hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
+      />
+
+      <SectionTitle title="Gider Dağılımı" compact />
+      <BreakdownCard lines={expenseLines} />
+
+      <SectionTitle title="Ticaret Performansı" compact />
+      <AppCard style={styles.tradeCard} padded={false}>
+        {hasTradeActivity ? (
+          <>
+            <View style={styles.tradeRow}>
+              <Text style={styles.tradeLabel}>Ürün alımları</Text>
+              <Text style={[styles.tradeValue, { color: colors.danger }]}>
+                {formatMoney(tradeSummary.tradePurchaseTotal)}
+              </Text>
+            </View>
+            <View style={styles.tradeRow}>
+              <Text style={styles.tradeLabel}>Ürün satışları</Text>
+              <Text style={[styles.tradeValue, { color: colors.success }]}>
+                {formatMoney(tradeSummary.tradeSaleTotal)}
+              </Text>
+            </View>
+            <View style={styles.tradeRow}>
+              <Text style={styles.tradeLabel}>Tahmini ticaret kârı</Text>
+              <Text
+                style={[
+                  styles.tradeValue,
+                  {
+                    color:
+                      tradeSummary.tradeNetProfit >= 0 ? colors.success : colors.danger,
+                  },
+                ]}
+              >
+                {formatMoney(tradeSummary.tradeNetProfit)}
+              </Text>
+            </View>
+            <View style={[styles.tradeRow, styles.tradeRowLast]}>
+              <Text style={styles.tradeLabel}>Depodaki stok değeri</Text>
+              <Text style={[styles.tradeValue, { color: colors.accentAmber }]}>
+                {formatMoney(inventoryStockValue)}
+              </Text>
+            </View>
+          </>
+        ) : (
+          <Text style={styles.tradeEmpty}>Henüz ticaret işlemi yok.</Text>
+        )}
+      </AppCard>
+
+      <SectionTitle
+        title="Aktif Teslimat Kârlılığı"
+        subtitle={
+          runningDeliveryCount > 0 ? `${runningDeliveryCount} aktif teslimat` : undefined
+        }
+        compact
+      />
+
+      {topRunningDeliveries.length === 0 ? (
+        <EmptyState
+          title="Şu anda aktif teslimat yok"
+          message="Yeni sözleşme alarak filonu çalıştırabilirsin."
+          icon="route"
         />
+      ) : (
+        topRunningDeliveries.map((delivery) => {
+          const contract = contracts.find((c) => c.id === delivery.contractId);
+          const payment = contract?.payment ?? 0;
+          const estimatedProfit =
+            typeof delivery.estimatedProfit === 'number'
+              ? delivery.estimatedProfit
+              : payment - (delivery.fuelCost ?? 0);
+          const profitMargin = payment > 0 ? estimatedProfit / payment : 0;
+          const risk = getDeliveryRiskBadge(delivery);
+          const status = getDeliveryStatusBadge(delivery.status);
+          const progress = Number.isFinite(delivery.progress) ? delivery.progress : 0;
 
-        <View style={styles.breakdownSection}>
-          <Text style={styles.sectionTitle}>Şirket İlerlemesi</Text>
-          <View style={styles.breakdownCard}>
-            <BreakdownRow
-              label="Seviye"
-              value={`Level ${player.level ?? player.companyLevel ?? 1}`}
-              color={COLORS.primary}
-            />
-            <BreakdownRow
-              label="Toplam XP"
-              value={`${levelProgress?.totalXp ?? 0}`}
-              color={COLORS.secondary}
-            />
-            <BreakdownRow
-              label="Tamamlanan sözleşme"
-              value={`${player.completedContracts}`}
-              color={COLORS.textPrimary}
-            />
-            <BreakdownRow label="Kamyon" value={`${trucks.length}`} color={COLORS.textPrimary} />
-            <BreakdownRow label="Depo" value={`${warehouses.length}`} color={COLORS.textPrimary} />
-            <BreakdownRow
-              label="İtibar"
-              value={`${Math.round(player.reputation)}/100`}
-              color={COLORS.success}
-              isLast
-            />
-          </View>
-        </View>
-
-        <View style={styles.breakdownSection}>
-          <Text style={styles.sectionTitle}>Gelir Dağılımı</Text>
-          {showRevenueHint ? (
-            <Text style={styles.sectionHint}>Gelirler teslimat tamamlandığında işlenir.</Text>
-          ) : null}
-          <View style={styles.breakdownCard}>
-            <BreakdownRow label="Sözleşme gelirleri" value={formatMoney(totalRevenue)} color={COLORS.success} />
-            <BreakdownRow
-              label="Ticaret satışları"
-              value={formatMoney(tradeSummary.tradeSaleTotal)}
-              color={COLORS.success}
-            />
-            <BreakdownRow label="Teslimat bonusları (yakında)" value={formatMoney(0)} color={COLORS.textMuted} />
-            <BreakdownRow
-              label="Ticaret kârı"
-              value={formatMoney(tradeSummary.tradeNetProfit)}
-              color={tradeSummary.tradeNetProfit >= 0 ? COLORS.success : COLORS.danger}
-              isLast
-            />
-          </View>
-        </View>
-
-        <View style={styles.breakdownSection}>
-          <Text style={styles.sectionTitle}>Gider Dağılımı</Text>
-          <View style={styles.breakdownCard}>
-            <BreakdownRow label="Yakıt giderleri" value={formatMoney(fuelCosts)} color={COLORS.danger} />
-            <BreakdownRow
-              label="Bakım giderleri"
-              value={formatMoney(maintenanceCosts)}
-              color={COLORS.danger}
-            />
-            <BreakdownRow label="Şoför maaşları" value={formatMoney(driverSalaries)} color={COLORS.danger} />
-            <BreakdownRow label="Depo giderleri" value={formatMoney(warehouseCosts)} color={COLORS.danger} />
-            <BreakdownRow
-              label="Ürün alımları"
-              value={formatMoney(tradeSummary.tradePurchaseTotal)}
-              color={COLORS.danger}
-            />
-            <BreakdownRow label="Gecikme cezaları (yakında)" value={formatMoney(0)} color={COLORS.textMuted} />
-            <BreakdownRow
-              label="Başarısız teslimat cezaları (yakında)"
-              value={formatMoney(0)}
-              color={COLORS.textMuted}
-              isLast
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            Aktif Teslimat Kârlılığı ({activeDeliveries.length})
-          </Text>
-          {topActiveDeliveries.length === 0 ? (
-            <Text style={styles.emptyText}>Şu an aktif teslimat yok.</Text>
-          ) : (
-            topActiveDeliveries.map((delivery) => {
-              const contract = contracts.find((c) => c.id === delivery.contractId);
-              const payment = contract?.payment ?? 0;
-              const estimatedProfit =
-                typeof delivery.estimatedProfit === 'number'
-                  ? delivery.estimatedProfit
-                  : payment - (delivery.fuelCost ?? 0);
-              const profitMargin = payment > 0 ? estimatedProfit / payment : 0;
-              const risk = getDeliveryRiskLabel(delivery);
-              const statusColor = getDeliveryStatusColor(delivery.status);
-
-              return (
-                <View key={delivery.id} style={styles.itemCard}>
-                  <View style={styles.itemHeaderRow}>
-                    <Text style={styles.itemTitle}>
-                      {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
-                    </Text>
-                    <Text style={[styles.itemStatusBadge, { color: statusColor }]}>
-                      {getDeliveryStatusLabel(delivery.status)}
-                    </Text>
-                  </View>
-                  <Text style={styles.itemSubtext}>
+          return (
+            <AppCard key={delivery.id} style={styles.deliveryCard} padded={false}>
+              <View style={styles.deliveryHeader}>
+                <View style={styles.deliveryTitleBlock}>
+                  <Text style={styles.deliveryRoute} numberOfLines={1}>
+                    {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
+                  </Text>
+                  <Text style={styles.deliverySub} numberOfLines={1}>
                     {getProductName(delivery.productId)} · {formatTons(delivery.amount)}
                   </Text>
-                  <View style={styles.deliveryStatsBlock}>
-                    <Text style={styles.deliveryStat}>Ödeme: {formatMoney(payment)}</Text>
-                    <Text style={styles.deliveryStat}>Yakıt: {formatMoney(delivery.fuelCost ?? 0)}</Text>
-                    <Text
-                      style={[
-                        styles.deliveryStat,
-                        { color: estimatedProfit >= 0 ? COLORS.success : COLORS.danger },
-                      ]}
-                    >
-                      Tahmini net: {formatMoney(estimatedProfit)}
-                    </Text>
-                    <Text style={styles.deliveryStat}>Kâr marjı: {formatPercent(profitMargin)}</Text>
-                    <Text style={[styles.deliveryStat, { color: risk.color }]}>Risk: {risk.label}</Text>
-                  </View>
-                  {profitMargin > HIGH_PROFIT_MARGIN ? (
-                    <Text style={styles.profitNote}>Bu iş oldukça kârlı görünüyor.</Text>
-                  ) : null}
                 </View>
-              );
-            })
-          )}
-        </View>
+                <StatusBadge label={status.label} variant={status.variant} size="sm" />
+              </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Finansal Sağlık</Text>
-          <View style={[styles.healthCard, { borderColor: healthColor }]}>
-            <View style={styles.healthHeaderRow}>
-              <Text style={[styles.healthScore, { color: healthColor }]}>{Math.round(financialHealth)}</Text>
-              <Text style={[styles.healthLabel, { color: healthColor }]}>{healthLabel}</Text>
-            </View>
-            <ProgressBar progress={financialHealth / 100} color={healthColor} />
-            <Text style={styles.healthHint}>
-              Nakit rezervi, sabit giderler, filo kondisyonu ve sözleşme geçmişine göre hesaplanır.
+              <View style={styles.deliveryStats}>
+                <Text style={styles.deliveryStat}>Ödeme: {formatMoney(payment)}</Text>
+                <Text style={styles.deliveryStat}>
+                  Yakıt/gider: {formatMoney(delivery.fuelCost ?? 0)}
+                </Text>
+                <Text
+                  style={[
+                    styles.deliveryStat,
+                    { color: estimatedProfit >= 0 ? colors.success : colors.danger },
+                  ]}
+                >
+                  Tahmini net kâr: {formatMoney(estimatedProfit)}
+                </Text>
+              </View>
+
+              <View style={styles.deliveryFooter}>
+                <StatusBadge label={risk.label} variant={risk.variant} size="sm" />
+                <Text style={styles.deliveryMargin}>Marj: {formatPercent(profitMargin)}</Text>
+              </View>
+
+              {delivery.status === 'on_route' ? (
+                <View style={styles.deliveryProgress}>
+                  <ProgressBar progress={progress} color={colors.accentBlue} height={5} />
+                  <Text style={styles.deliveryProgressText}>{formatPercent(progress)}</Text>
+                </View>
+              ) : null}
+
+              {profitMargin > HIGH_PROFIT_MARGIN ? (
+                <Text style={styles.profitNote}>Bu iş oldukça kârlı görünüyor.</Text>
+              ) : null}
+            </AppCard>
+          );
+        })
+      )}
+
+      <SectionTitle title="Finansal Sağlık" compact />
+      <AppCard
+        variant="soft"
+        style={[styles.healthCard, { borderColor: healthColor }]}
+        padded={false}
+      >
+        <View style={styles.healthHeader}>
+          <View>
+            <Text style={[styles.healthScore, { color: healthColor }]}>
+              {Math.round(financialHealth)}
+              <Text style={styles.healthScoreSuffix}> / 100</Text>
             </Text>
+            <Text style={[styles.healthLabel, { color: healthColor }]}>{healthLabel}</Text>
           </View>
+          <GameIcon name="success" size={22} color={healthColor} />
         </View>
+        <ProgressBar progress={financialHealth / 100} color={healthColor} height={8} />
+        <Text style={styles.healthHint} numberOfLines={2}>
+          Nakit rezervi, sabit giderler, filo kondisyonu ve sözleşme geçmişine göre hesaplanır.
+        </Text>
+      </AppCard>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Finans Uyarıları</Text>
-          {alerts.length === 0 ? (
-            <Text style={styles.emptyText}>Finansal durum normal görünüyor.</Text>
-          ) : (
-            alerts.map((alert, index) => (
+      <SectionTitle title="Son Finans Hareketleri" compact />
+      {recentLedgerEntries.length === 0 ? (
+        <AppCard variant="soft" style={styles.ledgerEmptyCard} padded={false}>
+          <Text style={styles.ledgerEmptyText}>Henüz finans hareketi yok.</Text>
+        </AppCard>
+      ) : (
+        recentLedgerEntries.map((entry, index) => {
+          const display = getLedgerDisplay(entry);
+          const amountColor = entry.type === 'income' ? colors.success : colors.danger;
+          const amountPrefix = entry.type === 'income' ? '+' : '-';
+
+          return (
+            <AppCard
+              key={entry.id ?? `ledger-${index}`}
+              style={styles.ledgerRow}
+              padded={false}
+            >
+              <View style={styles.ledgerIconWrap}>
+                <GameIcon name={display.icon} size={16} color={amountColor} />
+              </View>
+              <View style={styles.ledgerMain}>
+                <Text style={styles.ledgerTitle} numberOfLines={1}>
+                  {display.title}
+                </Text>
+                <Text style={styles.ledgerMeta} numberOfLines={1}>
+                  {display.categoryLabel} · {formatLedgerTime(entry.time)}
+                </Text>
+              </View>
+              <View style={styles.ledgerAmountCol}>
+                <Text style={[styles.ledgerAmount, { color: amountColor }]}>
+                  {amountPrefix}
+                  {formatMoney(entry.amount ?? 0)}
+                </Text>
+                <Text style={[styles.ledgerAmountType, { color: amountColor }]}>
+                  {entry.type === 'income' ? 'Gelir' : 'Gider'}
+                </Text>
+              </View>
+            </AppCard>
+          );
+        })
+      )}
+
+      {alerts.length > 0 ? (
+        <>
+          <SectionTitle title="Finans Uyarıları" compact />
+          <AppCard style={styles.alertsCard} padded={false}>
+            {alerts.map((alert, index) => (
               <View key={index} style={styles.alertRow}>
-                <Text style={styles.alertBullet}>⚠</Text>
+                <GameIcon name="warning" size={14} color={colors.accentAmber} />
                 <Text style={styles.alertText}>{alert}</Text>
               </View>
-            ))
-          )}
-        </View>
-      </ScrollView>
-    </View>
+            ))}
+          </AppCard>
+        </>
+      ) : null}
+    </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: spacing.xl,
   },
   loadingText: {
-    color: COLORS.textSecondary,
-    fontSize: 16,
+    ...typography.body,
+    color: colors.textSecondary,
   },
 
-  summaryWrapper: {
-    marginBottom: 14,
+  metricStrip: {
+    gap: spacing.md,
+    paddingRight: spacing.lg,
+    paddingBottom: spacing.xs,
+    marginBottom: 12,
   },
-  summaryCard: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  summaryItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: 2,
-  },
-  summaryValue: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  summaryLabel: {
-    color: COLORS.textMuted,
-    fontSize: 9,
-    marginTop: 4,
-    textAlign: 'center',
-    lineHeight: 12,
+  metricPillWrap: {
+    minWidth: 108,
   },
   summaryHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    marginTop: 8,
-    lineHeight: 16,
-    fontStyle: 'italic',
-  },
-
-  section: {
-    marginBottom: 14,
-  },
-  breakdownSection: {
-    marginBottom: 14,
-  },
-  sectionTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  sectionHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    marginBottom: 8,
-    lineHeight: 16,
-  },
-  emptyText: {
-    color: COLORS.textMuted,
-    fontSize: 12,
+    ...typography.caption,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
     fontStyle: 'italic',
   },
 
   breakdownCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  breakdownHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
   breakdownRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 5,
+    justifyContent: 'space-between',
+    paddingVertical: 4,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
   },
   breakdownRowLast: {
     borderBottomWidth: 0,
   },
-  breakdownLabel: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+  breakdownLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     flex: 1,
-    marginRight: 8,
+    minWidth: 0,
+    marginRight: spacing.sm,
+  },
+  breakdownIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: colors.cardSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  breakdownLabel: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    flex: 1,
   },
   breakdownValue: {
-    fontSize: 12,
-    fontWeight: '700',
+    ...typography.bodySmall,
+    fontWeight: '800',
   },
 
-  itemCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  tradeCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  itemHeaderRow: {
+  tradeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
-  itemTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-    flexShrink: 1,
-    marginRight: 8,
+  tradeRowLast: {
+    borderBottomWidth: 0,
   },
-  itemStatusBadge: {
-    fontSize: 10,
+  tradeLabel: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+  },
+  tradeValue: {
+    ...typography.bodySmall,
     fontWeight: '800',
   },
-  itemSubtext: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    marginTop: 4,
+  tradeEmpty: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+    fontStyle: 'italic',
   },
-  deliveryStatsBlock: {
-    marginTop: 10,
-    gap: 4,
+
+  deliveryCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  deliveryHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  deliveryTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  deliveryRoute: {
+    ...typography.cardTitle,
+    fontSize: 13,
+  },
+  deliverySub: {
+    ...typography.caption,
+    marginTop: 2,
+  },
+  deliveryStats: {
+    gap: 3,
+    marginBottom: spacing.sm,
   },
   deliveryStat: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+    ...typography.bodySmall,
+    fontSize: 11,
+    color: colors.textSecondary,
     fontWeight: '600',
   },
+  deliveryFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  deliveryMargin: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  deliveryProgress: {
+    marginTop: spacing.sm,
+    gap: 4,
+  },
+  deliveryProgressText: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
+    textAlign: 'right',
+  },
   profitNote: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    marginTop: 8,
+    ...typography.caption,
+    color: colors.success,
+    marginTop: spacing.sm,
     fontStyle: 'italic',
   },
 
   healthCard: {
-    backgroundColor: COLORS.cardAlt,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 2,
-    marginBottom: 0,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
   },
-  healthHeaderRow: {
+  healthHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'baseline',
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
   healthScore: {
     fontSize: 28,
     fontWeight: '800',
   },
+  healthScoreSuffix: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
   healthLabel: {
     fontSize: 14,
     fontWeight: '800',
+    marginTop: 2,
   },
   healthHint: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    marginTop: 8,
+    ...typography.caption,
+    marginTop: spacing.sm,
     lineHeight: 16,
   },
 
-  progressTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#1E293B',
-    overflow: 'hidden',
+  ledgerEmptyCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  progressFill: {
-    height: '100%',
-    borderRadius: 3,
+  ledgerEmptyText: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+    fontStyle: 'italic',
+  },
+  ledgerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  ledgerIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: colors.cardSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ledgerMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  ledgerTitle: {
+    ...typography.bodySmall,
+    fontWeight: '700',
+  },
+  ledgerMeta: {
+    ...typography.caption,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  ledgerAmount: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  ledgerAmountCol: {
+    alignItems: 'flex-end',
+    minWidth: 72,
+  },
+  ledgerAmountType: {
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+    textAlign: 'right',
   },
 
+  alertsCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.28)',
+  },
   alertRow: {
     flexDirection: 'row',
-    backgroundColor: COLORS.card,
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  alertBullet: {
-    color: COLORS.primary,
-    fontSize: 13,
-    marginRight: 8,
+    alignItems: 'flex-start',
+    gap: spacing.sm,
   },
   alertText: {
-    color: COLORS.textSecondary,
     fontSize: 12,
     flex: 1,
-    lineHeight: 17,
+    lineHeight: 16,
+    color: colors.textSecondary,
   },
 });

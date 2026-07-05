@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, AppState, StatusBar, StyleSheet, Text, View } from 'react-native';
 
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
-import BottomTabBar, { type TabKey } from './src/components/BottomTabBar';
+import BottomTabBar, { type TabDefinition, type TabKey } from './src/components/BottomTabBar';
 import GameToast from './src/components/GameToast';
 import { useGameLoop } from './src/hooks/useGameLoop';
 import { useGameStore } from './src/store/gameStore';
@@ -21,19 +21,13 @@ import MarketScreen from './src/screens/MarketScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import { UI } from './src/theme/ui';
 
-interface TabDefinition {
-  key: TabKey;
-  label: string;
-  icon: string;
-}
-
 const TABS: TabDefinition[] = [
-  { key: 'dashboard', label: 'Ana Sayfa', icon: '🏠' },
-  { key: 'map', label: 'Harita', icon: '🗺️' },
-  { key: 'contracts', label: 'İşler', icon: '📄' },
-  { key: 'fleet', label: 'Filo', icon: '🚚' },
-  { key: 'market', label: 'Piyasa', icon: '📈' },
-  { key: 'more', label: 'Daha Fazla', icon: '☰' },
+  { key: 'dashboard', label: 'Ana Sayfa', icon: 'dashboard' },
+  { key: 'map', label: 'Harita', icon: 'map' },
+  { key: 'contracts', label: 'İşler', icon: 'contract' },
+  { key: 'fleet', label: 'Filo', icon: 'truck' },
+  { key: 'market', label: 'Piyasa', icon: 'market' },
+  { key: 'more', label: 'Daha Fazla', icon: 'more' },
 ];
 
 function renderActiveScreen(tab: TabKey, onNavigate: (tab: TabKey) => void): React.ReactElement {

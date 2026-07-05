@@ -1,26 +1,33 @@
 /**
  * LogistiCore - Piyasa (Market) Ekranı
  *
- * Stratejik ekonomi analizi: piyasa özeti, şehir stokları ve ticaret fırsatları.
+ * Premium piyasa analizi: stoklar, fiyatlar ve taşıma fırsatları.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
-import { useGameStore } from '../store/gameStore';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
+import {
+  ActionButton,
+  AppCard,
+  AppScreen,
+  EmptyState,
+  FilterChip,
+  GameIcon,
+  IconButton,
+  ProductIcon,
+  ProgressBar,
+  ScreenHeader,
+  SectionTitle,
+  SegmentedControl,
+  SmallStatPill,
+  StatusBadge,
+} from '../components/ui';
+import type { StatusBadgeVariant } from '../components/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { countExactMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
 import {
   getCityProductMarketPrice,
@@ -36,32 +43,28 @@ import {
   getWarehouseTypeLabel,
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
+import { useGameStore } from '../store/gameStore';
+import { colors, spacing, typography } from '../theme';
 import type { City, CityProductState, MarketOpportunity, Product, ProductId, Route } from '../types/game';
-
-const COLORS = {
-  background: '#070A12',
-  card: '#111827',
-  cardAlt: '#121826',
-  border: '#1F2A3C',
-  primary: '#F59E0B',
-  secondary: '#38BDF8',
-  success: '#22C55E',
-  danger: '#EF4444',
-  warning: '#FB923C',
-  textPrimary: '#F9FAFB',
-  textSecondary: '#9CA3AF',
-  textMuted: '#64748B',
-};
 
 const CRITICAL_SHORTAGE_RATIO = 0.35;
 const HIGH_SURPLUS_RATIO = 1.5;
 const SHORTAGE_THRESHOLD = 0.7;
 const SURPLUS_THRESHOLD = 1.2;
 const STATUS_MESSAGE_TIMEOUT_MS = 2000;
-
+const LIST_SCROLL_BOTTOM_EXTRA = 110;
 const MAX_OPPORTUNITIES = 3;
+const OPPORTUNITY_SCORE_CAP = 2500;
+const PRICE_CHANGE_MIN_PERCENT = -99;
+const PRICE_CHANGE_MAX_PERCENT = 150;
 
+type MarketTab = 'products' | 'opportunities';
 type MarketStatus = 'Kritik Kıtlık' | 'Kıtlık' | 'Dengeli' | 'Fazla' | 'Yüksek Fazla';
+
+const MARKET_TABS = [
+  { key: 'products' as const, label: 'Ürünler', icon: 'inventory' as const },
+  { key: 'opportunities' as const, label: 'Fırsatlar', icon: 'route' as const },
+];
 
 interface NormalizedProductMarket {
   productId: ProductId;
@@ -94,19 +97,72 @@ function formatMoney(value: number): string {
     .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 }
 
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+/** Ham piyasa skorunu 0-100 aralığına normalize eder — yalnızca UI gösterimi */
+function normalizeOpportunityScore(rawScore: number | undefined | null): number {
+  const safe = Number(rawScore ?? 0);
+  if (!Number.isFinite(safe) || safe <= 0) return 0;
+
+  if (safe <= 1) {
+    return Math.min(100, Math.round(safe * 100));
+  }
+
+  if (safe <= 100) {
+    return Math.round(safe);
+  }
+
+  const capped = Math.min(safe, OPPORTUNITY_SCORE_CAP);
+  if (capped >= 2000) return 100;
+  if (capped >= 1200) {
+    return 75 + Math.round(((capped - 1200) / 800) * 25);
+  }
+  if (capped >= 700) {
+    return 50 + Math.round(((capped - 700) / 500) * 25);
+  }
+  return Math.min(49, Math.round((capped / 700) * 49));
 }
 
-function formatTons(value: number): string {
-  return `${value.toFixed(1)} ton`;
+function formatOpportunityScoreDisplay(rawScore: number | undefined | null): string {
+  return `${normalizeOpportunityScore(rawScore)}/100`;
 }
 
-function formatTime(hours: number): string {
+function getOpportunityPotential(normalizedScore: number): {
+  label: string;
+  variant: StatusBadgeVariant;
+} {
+  if (normalizedScore >= 80) {
+    return { label: 'Çok güçlü', variant: 'success' };
+  }
+  if (normalizedScore >= 60) {
+    return { label: 'Güçlü', variant: 'success' };
+  }
+  if (normalizedScore >= 40) {
+    return { label: 'Orta', variant: 'warning' };
+  }
+  return { label: 'Zayıf', variant: 'muted' };
+}
+
+function clampPriceChangePercent(changeRatio: number): number | null {
+  if (!Number.isFinite(changeRatio)) return null;
+  const pct = changeRatio * 100;
+  if (!Number.isFinite(pct)) return null;
+  return Math.max(PRICE_CHANGE_MIN_PERCENT, Math.min(PRICE_CHANGE_MAX_PERCENT, pct));
+}
+
+function formatDisplayPriceChange(changeRatio: number): string | null {
+  const clamped = clampPriceChangePercent(changeRatio);
+  if (clamped === null) return null;
+  if (clamped === 0) return '0%';
+  if (clamped >= PRICE_CHANGE_MAX_PERCENT) return '150+%';
+  if (clamped <= PRICE_CHANGE_MIN_PERCENT) return `${PRICE_CHANGE_MIN_PERCENT}%`;
+  if (clamped > 0) return `+${Math.round(clamped)}%`;
+  return `${Math.round(clamped)}%`;
+}
+
+function formatTimeCompact(hours: number): string {
   const totalHours = Math.max(0, Math.floor(hours));
   const day = Math.floor(totalHours / 24) + 1;
   const hourOfDay = totalHours % 24;
-  return `Gün ${day} · ${hourOfDay.toString().padStart(2, '0')}:00`;
+  return `G${day} · ${hourOfDay.toString().padStart(2, '0')}:00`;
 }
 
 function getProductName(productId: string): string {
@@ -125,10 +181,7 @@ function getProductMarket(
     return null;
   }
 
-  const raw = city.products[productId] as
-    | (CityProductState & { price?: number })
-    | undefined;
-
+  const raw = city.products[productId] as (CityProductState & { price?: number }) | undefined;
   if (!raw) {
     return null;
   }
@@ -162,52 +215,74 @@ function getMarketStatus(stockRatio: number): MarketStatus {
   return 'Yüksek Fazla';
 }
 
-function getMarketStatusColor(status: MarketStatus): string {
+function getMarketStatusVariant(status: MarketStatus): StatusBadgeVariant {
   switch (status) {
     case 'Kritik Kıtlık':
-      return COLORS.danger;
+      return 'danger';
     case 'Kıtlık':
-      return COLORS.warning;
+      return 'warning';
     case 'Dengeli':
-      return COLORS.secondary;
+      return 'muted';
     case 'Fazla':
-      return COLORS.success;
+      return 'success';
     case 'Yüksek Fazla':
-      return '#A3E635';
+      return 'success';
     default:
-      return COLORS.textSecondary;
+      return 'muted';
   }
+}
+
+function getStockBarColor(stockRatio: number): string {
+  if (stockRatio < 0.3) return colors.danger;
+  if (stockRatio < 0.7) return colors.accentAmber;
+  if (stockRatio <= 1.2) return colors.info;
+  return colors.success;
+}
+
+function getPriceChangePercent(market: NormalizedProductMarket): number {
+  if (!market.basePrice) return 0;
+  return (market.currentPrice - market.basePrice) / market.basePrice;
 }
 
 function getOpportunityHint(market: NormalizedProductMarket): string {
   const stockRatio = calculateStockRatio(market);
-
-  if (stockRatio < 0.5) {
-    return 'Bu şehirde ürün ihtiyacı duyuluyor.';
-  }
-  if (stockRatio > 1.4) {
-    return 'Bu şehirde ürün fazlası var.';
-  }
+  if (stockRatio < 0.5) return 'Bu şehirde ürün ihtiyacı duyuluyor.';
+  if (stockRatio > 1.4) return 'Bu şehirde ürün fazlası var.';
   return 'Bu ürün dengeli seviyede.';
 }
 
 function getDemandLevelLabel(level: MarketOpportunity['demandLevel']): string {
   switch (level) {
     case 'high':
-      return 'yüksek';
+      return 'Yüksek';
     case 'medium':
-      return 'orta';
+      return 'Orta';
     default:
-      return 'düşük';
+      return 'Düşük';
   }
+}
+
+function getOpportunityStrength(normalizedScore: number): {
+  label: string;
+  variant: StatusBadgeVariant;
+} {
+  if (normalizedScore >= 75) {
+    return { label: 'Güçlü fırsat', variant: 'success' };
+  }
+  if (normalizedScore >= 50) {
+    return { label: 'İyi fırsat', variant: 'info' };
+  }
+  return { label: 'Orta fırsat', variant: 'muted' };
 }
 
 function findMarketHighlights(cities: City[], products: Product[]): {
   criticalShortage: MarketHighlight | null;
   highestSurplus: MarketHighlight | null;
+  criticalCount: number;
 } {
   let criticalShortage: MarketHighlight | null = null;
   let highestSurplus: MarketHighlight | null = null;
+  let criticalCount = 0;
 
   for (const city of cities) {
     for (const product of products) {
@@ -216,11 +291,11 @@ function findMarketHighlights(cities: City[], products: Product[]): {
 
       const stockRatio = calculateStockRatio(market);
 
-      if (
-        stockRatio < CRITICAL_SHORTAGE_RATIO &&
-        (!criticalShortage || stockRatio < criticalShortage.stockRatio)
-      ) {
-        criticalShortage = { cityId: city.id, productId: product.id, stockRatio };
+      if (stockRatio < CRITICAL_SHORTAGE_RATIO) {
+        criticalCount += 1;
+        if (!criticalShortage || stockRatio < criticalShortage.stockRatio) {
+          criticalShortage = { cityId: city.id, productId: product.id, stockRatio };
+        }
       }
 
       if (
@@ -232,80 +307,139 @@ function findMarketHighlights(cities: City[], products: Product[]): {
     }
   }
 
-  return { criticalShortage, highestSurplus };
+  return { criticalShortage, highestSurplus, criticalCount };
 }
 
-function buildMarketAlert(
-  cities: City[],
-  products: Product[],
-  routes: Route[],
-): MarketAlert {
+function buildMarketAlert(cities: City[], products: Product[], routes: Route[]): MarketAlert {
   const { criticalShortage, highestSurplus } = findMarketHighlights(cities, products);
   const opportunities = findMarketOpportunities(cities, routes, products, MAX_OPPORTUNITIES);
   const bestOpportunity = opportunities[0] ?? null;
-
   const isStable = !criticalShortage && !highestSurplus && !bestOpportunity;
 
   return { isStable, criticalShortage, highestSurplus, bestOpportunity };
 }
 
-function ProgressBar({ progress, color }: { progress: number; color: string }) {
-  const clamped = Math.max(0, Math.min(1, progress));
+interface MarketMetricStripProps {
+  fuelPrice: number;
+  currentTime: number;
+  criticalCount: number;
+  opportunityCount: number;
+}
+
+function MarketMetricStrip({
+  fuelPrice,
+  currentTime,
+  criticalCount,
+  opportunityCount,
+}: MarketMetricStripProps) {
   return (
-    <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, { width: `${clamped * 100}%`, backgroundColor: color }]} />
-    </View>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.metricStrip}
+    >
+      <SmallStatPill
+        label="Yakıt"
+        value={`$${fuelPrice.toFixed(2)}/L`}
+        icon="fuel"
+        accentColor={colors.accentAmber}
+        layout="chip"
+      />
+      <SmallStatPill
+        label="Zaman"
+        value={formatTimeCompact(currentTime)}
+        icon="time"
+        accentColor={colors.info}
+        layout="chip"
+      />
+      <SmallStatPill
+        label="Kritik"
+        value={String(criticalCount)}
+        icon="warning"
+        accentColor={criticalCount > 0 ? colors.danger : colors.success}
+        layout="chip"
+      />
+      <SmallStatPill
+        label="Fırsat"
+        value={`${opportunityCount} adet`}
+        icon="contract"
+        accentColor={colors.accentBlue}
+        layout="chip"
+      />
+    </ScrollView>
   );
 }
 
-function CityButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function FuelPriceCard({ fuelPrice }: { fuelPrice: number }) {
+  const trendBars = [0.5, 0.65, 0.58, 0.72, 0.68, 0.85];
+
   return (
-    <TouchableOpacity style={[styles.cityButton, active && styles.cityButtonActive]} onPress={onPress}>
-      <Text style={[styles.cityButtonText, active && styles.cityButtonTextActive]}>{label}</Text>
-    </TouchableOpacity>
+    <AppCard style={styles.fuelCard} padded={false}>
+      <View style={styles.fuelRow}>
+        <View style={styles.fuelIconWrap}>
+          <GameIcon name="fuel" size={16} color={colors.accentAmber} />
+        </View>
+        <View style={styles.fuelMain}>
+          <Text style={styles.fuelLabel}>Yakıt Fiyatı</Text>
+          <Text style={styles.fuelValue}>${fuelPrice.toFixed(2)} / L</Text>
+        </View>
+        <View style={styles.fuelTrendMini}>
+          {trendBars.map((height, index) => (
+            <View
+              key={`fuel-bar-${index}`}
+              style={[
+                styles.trendBar,
+                {
+                  height: 6 + height * 8,
+                  backgroundColor:
+                    index === trendBars.length - 1 ? colors.accentAmber : colors.borderStrong,
+                },
+              ]}
+            />
+          ))}
+        </View>
+        <StatusBadge label="Canlı" variant="amber" size="sm" />
+      </View>
+    </AppCard>
   );
 }
 
-function MarketAlertCard({
-  alert,
-  onRefresh,
-}: {
-  alert: MarketAlert;
-  onRefresh: () => void;
-}) {
+function MarketAlertCard({ alert }: { alert: MarketAlert }) {
   return (
-    <View style={styles.alertCard}>
+    <AppCard variant="highlighted" style={styles.alertCard} padded>
       <View style={styles.alertHeaderRow}>
-        <Text style={styles.alertTitle}>Piyasa Uyarısı</Text>
-        <TouchableOpacity style={styles.alertRefreshButton} onPress={onRefresh} activeOpacity={0.85}>
-          <Text style={styles.alertRefreshButtonText}>Piyasayı Yenile</Text>
-        </TouchableOpacity>
+        <View style={styles.alertTitleRow}>
+          <GameIcon name="warning" size={16} color={colors.accentAmber} />
+          <Text style={styles.alertTitle}>Piyasa Uyarısı</Text>
+        </View>
+        <StatusBadge label="Piyasa yeni" variant="info" size="sm" />
       </View>
 
       {alert.criticalShortage ? (
-        <Text style={styles.alertBodyText}>
-          <Text style={styles.alertBodyLabel}>Kritik kıtlık: </Text>
-          {getCityName(alert.criticalShortage.cityId)}'da {getProductName(alert.criticalShortage.productId)}{' '}
-          stoğu kritik seviyede.
+        <Text style={styles.alertLine} numberOfLines={2}>
+          <Text style={styles.alertLabel}>Kritik kıtlık: </Text>
+          {getCityName(alert.criticalShortage.cityId)}'de{' '}
+          {getProductName(alert.criticalShortage.productId)} stoğu çok düşük.
         </Text>
       ) : (
-        <Text style={[styles.alertBodyText, { color: COLORS.success }]}>Piyasa dengeli görünüyor.</Text>
+        <Text style={[styles.alertLine, { color: colors.success }]} numberOfLines={1}>
+          Piyasa dengeli görünüyor.
+        </Text>
       )}
 
       {alert.bestOpportunity ? (
-        <Text style={[styles.alertBodyText, styles.alertBodyTextSpaced]}>
-          <Text style={styles.alertBodyLabel}>En iyi fırsat: </Text>
+        <Text style={styles.alertLine} numberOfLines={2}>
+          <Text style={styles.alertLabel}>En iyi fırsat: </Text>
           {getCityName(alert.bestOpportunity.fromCityId)} →{' '}
-          {getCityName(alert.bestOpportunity.toCityId)} ·{' '}
-          {alert.bestOpportunity.productName} ·{' '}
+          {getCityName(alert.bestOpportunity.toCityId)} · {alert.bestOpportunity.productName} ·{' '}
           {formatMoney(alert.bestOpportunity.priceGap)} fiyat farkı
         </Text>
       ) : (
-        <Text style={[styles.alertHintText, styles.alertBodyTextSpaced]}>
+        <Text style={styles.alertHint} numberOfLines={1}>
           Henüz belirgin taşıma fırsatı yok.
         </Text>
       )}
-    </View>
+    </AppCard>
   );
 }
 
@@ -323,23 +457,25 @@ function CityOverviewCard({
   fuelModifier: number;
 }) {
   return (
-    <View style={styles.cityOverviewCard}>
-      <Text style={styles.sectionTitle}>{cityName} Piyasa Özeti</Text>
+    <AppCard style={styles.cityOverviewCard} padded>
+      <Text style={styles.cityOverviewTitle}>{cityName} Piyasa Özeti</Text>
       <View style={styles.cityOverviewRow}>
         <View style={styles.cityOverviewItem}>
-          <Text style={[styles.cityOverviewValue, { color: COLORS.danger }]}>{shortages}</Text>
+          <Text style={[styles.cityOverviewValue, { color: colors.danger }]}>{shortages}</Text>
           <Text style={styles.cityOverviewLabel}>Kritik kıtlık</Text>
         </View>
         <View style={styles.cityOverviewItem}>
-          <Text style={[styles.cityOverviewValue, { color: COLORS.success }]}>{surpluses}</Text>
+          <Text style={[styles.cityOverviewValue, { color: colors.success }]}>{surpluses}</Text>
           <Text style={styles.cityOverviewLabel}>Fazla stok</Text>
         </View>
         <View style={styles.cityOverviewItem}>
-          <Text style={[styles.cityOverviewValue, { color: COLORS.primary }]}>{formatMoney(avgPrice)}</Text>
+          <Text style={[styles.cityOverviewValue, { color: colors.accentAmber }]}>
+            {formatMoney(avgPrice)}
+          </Text>
           <Text style={styles.cityOverviewLabel}>Ort. fiyat</Text>
         </View>
         <View style={styles.cityOverviewItem}>
-          <Text style={[styles.cityOverviewValue, { color: COLORS.secondary }]}>
+          <Text style={[styles.cityOverviewValue, { color: colors.info }]}>
             {fuelModifier.toFixed(2)}x
           </Text>
           <Text style={styles.cityOverviewLabel}>Yakıt etkisi</Text>
@@ -348,59 +484,81 @@ function CityOverviewCard({
       <Text style={styles.cityOverviewHint}>
         Bu şehirde eksik ürünler daha pahalı, fazla ürünler daha ucuz olur.
       </Text>
-    </View>
+    </AppCard>
   );
 }
 
 function ProductMarketCard({
   market,
-  cityStock,
   hasWarehouse,
   onBuyPress,
 }: {
   market: NormalizedProductMarket;
-  cityStock: number;
   hasWarehouse: boolean;
   onBuyPress: () => void;
 }) {
   const stockRatio = calculateStockRatio(market);
   const status = getMarketStatus(stockRatio);
-  const statusColor = getMarketStatusColor(status);
+  const statusVariant = getMarketStatusVariant(status);
   const hint = getOpportunityHint(market);
+  const priceChange = getPriceChangePercent(market);
+  const priceChangeLabel = formatDisplayPriceChange(priceChange);
+  const priceChangePositive = (clampPriceChangePercent(priceChange) ?? 0) >= 0;
   const progressValue = Math.min(stockRatio, 2) / 2;
 
   return (
-    <View style={styles.productCard}>
-      <View style={styles.productHeaderRow}>
-        <Text style={styles.productName}>{getProductName(market.productId)}</Text>
-        <Text style={[styles.marketStatusBadge, { color: statusColor }]}>{status}</Text>
+    <AppCard style={styles.productCard} padded={false}>
+      <View style={styles.cardTopRow}>
+        <View style={styles.productIconBox}>
+          <ProductIcon productId={market.productId} size={15} color={colors.info} />
+        </View>
+        <View style={styles.cardMain}>
+          <View style={styles.productTitleRow}>
+            <Text style={styles.productName} numberOfLines={1}>
+              {getProductName(market.productId)}
+            </Text>
+            <StatusBadge label={status} variant={statusVariant} size="sm" />
+          </View>
+          <Text style={styles.productStock} numberOfLines={1}>
+            Stok {market.stock.toFixed(1)} / {market.targetStock.toFixed(1)} ton
+          </Text>
+        </View>
+        <View style={styles.cardRight}>
+          <Text style={styles.productPrice}>{formatMoney(market.currentPrice)}</Text>
+          <Text style={styles.productPriceUnit}>/ ton</Text>
+          {priceChangeLabel ? (
+            <Text
+              style={[
+                styles.priceChangeText,
+                { color: priceChangePositive ? colors.success : colors.danger },
+              ]}
+              numberOfLines={1}
+            >
+              {priceChangeLabel}
+            </Text>
+          ) : null}
+        </View>
       </View>
 
-      <ProgressBar progress={progressValue} color={statusColor} />
-
-      <View style={styles.productMetaRow}>
-        <Text style={styles.productMeta}>
-          Stok: {market.stock.toFixed(1)} / {market.targetStock.toFixed(1)} ton
-        </Text>
-        <Text style={styles.productMeta}>Doluluk: {formatPercent(stockRatio)}</Text>
-      </View>
-
-      <Text style={styles.productPrice}>{formatMoney(market.currentPrice)}</Text>
-      <Text style={styles.productMeta}>Şehir stoğu: {cityStock.toFixed(1)} ton</Text>
-      <Text style={styles.opportunityHint}>{hint}</Text>
-      <Text style={styles.productDetail}>
-        Üretim: {market.productionPerDay.toFixed(1)} ton/gün · Tüketim:{' '}
-        {market.consumptionPerDay.toFixed(1)} ton/gün
+      <Text style={styles.productHint} numberOfLines={1}>
+        {hint}
       </Text>
 
-      <TouchableOpacity
-        style={[styles.tradeActionButton, !hasWarehouse && styles.tradeActionButtonMuted]}
-        onPress={onBuyPress}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.tradeActionButtonText}>{hasWarehouse ? 'Satın Al' : 'Depo Gerekli'}</Text>
-      </TouchableOpacity>
-    </View>
+      <View style={styles.productFooterRow}>
+        <View style={styles.productProgress}>
+          <ProgressBar progress={progressValue} color={getStockBarColor(stockRatio)} height={2} />
+        </View>
+        <ActionButton
+          label={hasWarehouse ? 'Satın Al' : 'Depo Gerekli'}
+          onPress={onBuyPress}
+          variant={hasWarehouse ? 'primary' : 'secondary'}
+          icon={hasWarehouse ? 'cash' : 'warehouse'}
+          iconSize={11}
+          compact
+          style={styles.productAction}
+        />
+      </View>
+    </AppCard>
   );
 }
 
@@ -413,49 +571,66 @@ function OpportunityCard({
   matchingContractsCount: number;
   onViewContracts: (opportunity: MarketOpportunity) => void;
 }) {
+  const normalizedScore = normalizeOpportunityScore(opportunity.score);
+  const strength = getOpportunityStrength(normalizedScore);
+  const potential = getOpportunityPotential(normalizedScore);
   const hasActiveContracts = matchingContractsCount > 0;
 
   return (
-    <View style={styles.opportunityCard}>
-      <View style={styles.opportunityHeaderRow}>
-        <View style={styles.opportunityHeaderMain}>
-          <Text style={styles.opportunityRoute}>
+    <AppCard style={styles.opportunityCard} padded>
+      <View style={styles.cardTopRow}>
+        <View style={styles.productIconBox}>
+          <GameIcon name="route" size={16} color={colors.accentBlue} />
+        </View>
+        <View style={styles.cardMain}>
+          <Text style={styles.opportunityRoute} numberOfLines={1}>
             {opportunity.fromCityName || getCityName(opportunity.fromCityId)} →{' '}
             {opportunity.toCityName || getCityName(opportunity.toCityId)}
           </Text>
-          <Text style={styles.opportunityProduct}>Ürün: {opportunity.productName}</Text>
+          <Text style={styles.opportunityProduct} numberOfLines={1}>
+            Ürün: {opportunity.productName}
+          </Text>
         </View>
+        <StatusBadge label={strength.label} variant={strength.variant} size="sm" />
       </View>
 
-      <Text style={styles.opportunityLine}>
-        Fiyat farkı: <Text style={styles.opportunityLineValue}>{formatMoney(opportunity.priceGap)}</Text>
-      </Text>
-      <Text style={styles.opportunityLine}>
-        Mesafe: <Text style={styles.opportunityLineValue}>{Math.round(opportunity.distanceKm)} km</Text>
-      </Text>
-      <Text style={styles.opportunityLine}>
-        Tahmini talep:{' '}
-        <Text style={styles.opportunityLineValue}>{getDemandLevelLabel(opportunity.demandLevel)}</Text>
-      </Text>
-      <Text style={styles.opportunityLine}>
-        Aktif sözleşme:{' '}
-        <Text style={[styles.opportunityLineValue, { color: hasActiveContracts ? COLORS.success : COLORS.textMuted }]}>
-          {matchingContractsCount}
+      <View style={styles.opportunityMetrics}>
+        <Text style={styles.opportunityLine} numberOfLines={1}>
+          Fiyat farkı: <Text style={styles.opportunityValue}>{formatMoney(opportunity.priceGap)}</Text>
+          {' · '}
+          Mesafe: <Text style={styles.opportunityValue}>{Math.round(opportunity.distanceKm ?? 0)} km</Text>
         </Text>
-      </Text>
+        <Text style={styles.opportunityLine} numberOfLines={1}>
+          Talep: <Text style={styles.opportunityValue}>{getDemandLevelLabel(opportunity.demandLevel)}</Text>
+          {' · '}
+          Potansiyel: <Text style={styles.opportunityValue}>{potential.label}</Text>
+          {' · '}
+          Skor: <Text style={styles.opportunityValue}>{formatOpportunityScoreDisplay(opportunity.score)}</Text>
+        </Text>
+        <Text style={styles.opportunityLine} numberOfLines={1}>
+          {hasActiveContracts ? (
+            <>
+              Uygun sözleşme:{' '}
+              <Text style={[styles.opportunityValue, { color: colors.success }]}>
+                {matchingContractsCount}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.opportunityPending}>Uygun sözleşme bekleniyor</Text>
+          )}
+        </Text>
+      </View>
 
-      {!hasActiveContracts ? (
-        <Text style={styles.opportunityPendingHint}>Bu rota için aktif sözleşme bekleniyor</Text>
-      ) : null}
-
-      <TouchableOpacity
-        style={styles.opportunityActionButton}
+      <ActionButton
+        label="Sözleşmeleri Gör"
         onPress={() => onViewContracts(opportunity)}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.opportunityActionButtonText}>Sözleşmeleri Gör</Text>
-      </TouchableOpacity>
-    </View>
+        variant="primary"
+        icon="contract"
+        iconSize={12}
+        compact
+        style={styles.opportunityAction}
+      />
+    </AppCard>
   );
 }
 
@@ -477,12 +652,16 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     (state) => state.openContractsForMarketOpportunity,
   );
   const buyProductForWarehouse = useGameStore((state) => state.buyProductForWarehouse);
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { tabBarHeight, bottomInset } = useTabBarLayout();
 
+  const [activeTab, setActiveTab] = useState<MarketTab>('products');
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
   const [tradeProductId, setTradeProductId] = useState<ProductId | null>(null);
+
+  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
+  const fuelPrice = globalEconomy?.fuelPrice ?? 0;
 
   useEffect(() => {
     if (!selectedCityId && cities.length > 0) {
@@ -495,6 +674,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     const timeout = setTimeout(() => setStatusMessage(null), STATUS_MESSAGE_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [statusMessage]);
+
+  const marketHighlights = useMemo(
+    () => findMarketHighlights(cities, products),
+    [cities, products],
+  );
 
   const marketAlert = useMemo(
     () => buildMarketAlert(cities, products, routes),
@@ -599,7 +783,8 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   }, [player?.warehouses, selectedCity, tradeProduct]);
 
   const selectedCityTotalFreeCapacity = useMemo(
-    () => selectedCityWarehouses.reduce((sum, warehouse) => sum + getWarehouseFreeCapacityTon(warehouse), 0),
+    () =>
+      selectedCityWarehouses.reduce((sum, warehouse) => sum + getWarehouseFreeCapacityTon(warehouse), 0),
     [selectedCityWarehouses],
   );
 
@@ -649,12 +834,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const handleRefreshMarket = () => {
     refreshMarketSnapshot();
-    setStatusMessage('Piyasa yenilendi');
+    setStatusMessage('Piyasa güncellendi');
   };
 
   const handleOpenContractsForOpportunity = (opportunity: MarketOpportunity) => {
     if (__DEV__) {
-      // TODO: remove verbose market-contract debug logs before release.
       console.log('Market opportunity pressed', opportunity);
     }
 
@@ -678,114 +862,131 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   if (!player) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <AppScreen>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
         </View>
-      </SafeAreaView>
+      </AppScreen>
     );
   }
 
   if (cities.length === 0 || products.length === 0) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.emptyStateTitle}>Piyasa verisi yok</Text>
-          <Text style={styles.emptyStateSubtitle}>Şehir ve ürün verileri henüz yüklenmedi.</Text>
-        </View>
-      </SafeAreaView>
+      <AppScreen>
+        <EmptyState
+          title="Piyasa verisi yok"
+          message="Şehir ve ürün verileri henüz yüklenmedi."
+          icon="market"
+        />
+      </AppScreen>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.header}>
-          <Text style={styles.title}>Piyasa</Text>
-          <Text style={styles.subtitle}>
-            Şehir stoklarını, fiyatları ve taşıma fırsatlarını analiz et.
-          </Text>
-          <View style={styles.headerBadges}>
-            <View style={styles.headerBadge}>
-              <Text style={[styles.headerBadgeValue, { color: COLORS.secondary }]}>
-                ${globalEconomy.fuelPrice.toFixed(2)}/L
-              </Text>
-              <Text style={styles.headerBadgeLabel}>Yakıt</Text>
-            </View>
-            <View style={styles.headerBadge}>
-              <Text style={[styles.headerBadgeValue, { color: COLORS.primary }]}>
-                {formatTime(currentTime)}
-              </Text>
-              <Text style={styles.headerBadgeLabel}>Zaman</Text>
-            </View>
+    <AppScreen scroll scrollBottomPadding={listScrollBottomPadding}>
+      <ScreenHeader
+        title="Piyasa"
+        subtitle="Stokları, fiyatları ve taşıma fırsatlarını analiz et"
+        rightAction={
+          <IconButton icon="refresh" onPress={handleRefreshMarket} size={20} color={colors.textSecondary} />
+        }
+      />
+
+      {statusMessage ? (
+        <AppCard variant="success" style={styles.statusBanner} padded>
+          <View style={styles.statusBannerRow}>
+            <GameIcon name="success" size={14} color={colors.success} />
+            <Text style={styles.statusBannerText}>{statusMessage}</Text>
           </View>
+        </AppCard>
+      ) : null}
+
+      <MarketMetricStrip
+        fuelPrice={fuelPrice}
+        currentTime={currentTime}
+        criticalCount={marketHighlights.criticalCount}
+        opportunityCount={opportunities.length}
+      />
+
+      <FuelPriceCard fuelPrice={fuelPrice} />
+      <MarketAlertCard alert={marketAlert} />
+
+      <SegmentedControl
+        options={MARKET_TABS}
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        accentColor={colors.accentBlue}
+      />
+
+      {activeTab === 'products' ? (
+        <View style={styles.tabContent}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            nestedScrollEnabled
+            contentContainerStyle={styles.cityChipRow}
+          >
+            {cities.map((city) => (
+              <FilterChip
+                key={city.id}
+                label={city.name}
+                selected={city.id === selectedCityId}
+                onPress={() => setSelectedCityId(city.id)}
+                accentColor={colors.accentAmber}
+                compact
+              />
+            ))}
+          </ScrollView>
+
+          {!selectedCity ? (
+            <EmptyState title="Şehir seç" message="Ürün fiyatlarını görmek için bir şehir seç." icon="city" />
+          ) : (
+            <>
+              <CityOverviewCard
+                cityName={selectedCity.name}
+                shortages={selectedCityOverview.shortages}
+                surpluses={selectedCityOverview.surpluses}
+                avgPrice={selectedCityOverview.avgPrice}
+                fuelModifier={selectedCityOverview.fuelModifier}
+              />
+
+              <SectionTitle title="Ürün Piyasası" subtitle={`${selectedCity.name} ürün fiyatları`} compact />
+
+              {products.every((product) => !getProductMarket(selectedCity, product.id)) ? (
+                <EmptyState title="Ürün verisi yok" icon="inventory" />
+              ) : (
+                products.map((product) => {
+                  const market = getProductMarket(selectedCity, product.id);
+                  if (!market) return null;
+                  return (
+                    <ProductMarketCard
+                      key={product.id}
+                      market={market}
+                      hasWarehouse={selectedCityWarehouses.length > 0}
+                      onBuyPress={() => handleBuyProductPress(product.id)}
+                    />
+                  );
+                })
+              )}
+            </>
+          )}
         </View>
+      ) : null}
 
-        {statusMessage ? (
-          <View style={styles.statusToast}>
-            <Text style={styles.statusToastText}>{statusMessage}</Text>
-          </View>
-        ) : null}
-
-        <MarketAlertCard alert={marketAlert} onRefresh={handleRefreshMarket} />
-
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          nestedScrollEnabled
-          style={styles.citySelectorScroll}
-          contentContainerStyle={styles.citySelectorContent}
-        >
-          {cities.map((city) => (
-            <CityButton
-              key={city.id}
-              label={city.name}
-              active={city.id === selectedCityId}
-              onPress={() => setSelectedCityId(city.id)}
-            />
-          ))}
-        </ScrollView>
-
-        {selectedCity ? (
-          <CityOverviewCard
-            cityName={selectedCity.name}
-            shortages={selectedCityOverview.shortages}
-            surpluses={selectedCityOverview.surpluses}
-            avgPrice={selectedCityOverview.avgPrice}
-            fuelModifier={selectedCityOverview.fuelModifier}
+      {activeTab === 'opportunities' ? (
+        <View style={styles.tabContent}>
+          <SectionTitle
+            title="Fırsat Tarayıcı"
+            subtitle="Şehirler arası fiyat farklarına göre olası kârlı rotalar."
+            compact
           />
-        ) : null}
 
-        {selectedCity ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Ürün Piyasası</Text>
-            {products.map((product) => {
-              const market = getProductMarket(selectedCity, product.id);
-              if (!market) return null;
-              return (
-                <ProductMarketCard
-                  key={product.id}
-                  market={market}
-                  cityStock={getCityProductStock(selectedCity, product.id)}
-                  hasWarehouse={selectedCityWarehouses.length > 0}
-                  onBuyPress={() => handleBuyProductPress(product.id)}
-                />
-              );
-            })}
-          </View>
-        ) : null}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Fırsat Tarayıcı</Text>
-          <Text style={styles.sectionSubtitle}>
-            Şehirler arası fiyat ve stok farklarına göre olası kârlı rotalar.
-          </Text>
           {opportunities.length === 0 ? (
-            <Text style={styles.emptyText}>Henüz belirgin taşıma fırsatı yok.</Text>
+            <EmptyState
+              title="Şu anda güçlü fırsat bulunamadı"
+              message="Piyasa değiştikçe yeni fırsatlar oluşacak."
+              icon="route"
+            />
           ) : (
             opportunities.map((opportunity) => (
               <OpportunityCard
@@ -797,7 +998,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
             ))
           )}
         </View>
-      </ScrollView>
+      ) : null}
 
       <TradeProductModal
         visible={tradeModalVisible}
@@ -823,175 +1024,139 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           setTradeProductId(null);
         }}
       />
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-    paddingTop: STATUS_BAR_HEIGHT,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingVertical: spacing.xxxl,
   },
   loadingText: {
-    color: COLORS.textSecondary,
-    fontSize: 16,
+    ...typography.body,
+    color: colors.textSecondary,
   },
-
-  header: {
-    marginBottom: 14,
+  statusBanner: {
+    marginBottom: spacing.sm,
   },
-  title: {
-    color: COLORS.primary,
-    fontSize: 24,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  subtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 4,
-  },
-  headerBadges: {
+  statusBannerRow: {
     flexDirection: 'row',
-    marginTop: 12,
-    gap: 8,
+    alignItems: 'center',
+    gap: spacing.sm,
   },
-  headerBadge: {
-    backgroundColor: COLORS.card,
-    borderRadius: 10,
-    paddingVertical: 6,
+  statusBannerText: {
+    ...typography.bodySmall,
+    color: colors.success,
+    fontWeight: '700',
+    flex: 1,
+  },
+  metricStrip: {
+    gap: spacing.xs,
+    paddingBottom: spacing.xs,
+    paddingRight: spacing.sm,
+  },
+  fuelCard: {
+    marginBottom: spacing.xs,
+    paddingVertical: 10,
     paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
   },
-  headerBadgeValue: {
-    fontSize: 12,
-    fontWeight: '800',
+  fuelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: 44,
   },
-  headerBadgeLabel: {
-    color: COLORS.textMuted,
+  fuelIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: colors.accentAmberSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fuelMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fuelLabel: {
+    ...typography.caption,
     fontSize: 10,
+    color: colors.textMuted,
+  },
+  fuelValue: {
+    ...typography.bodySmall,
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.accentAmber,
     marginTop: 1,
   },
-
-  statusToast: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(34, 197, 94, 0.12)',
-    borderWidth: 1,
-    borderColor: COLORS.success,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 12,
+  fuelTrendMini: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 2,
+    height: 14,
+    width: 42,
   },
-  statusToastText: {
-    color: COLORS.success,
-    fontSize: 12,
-    fontWeight: '700',
+  trendBar: {
+    flex: 1,
+    borderRadius: 2,
+    minWidth: 4,
   },
-
   alertCard: {
-    backgroundColor: COLORS.cardAlt,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  alertTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    fontWeight: '800',
+    marginBottom: spacing.sm,
   },
   alertHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
-    gap: 8,
+    marginBottom: spacing.xs,
+    gap: spacing.sm,
   },
-  alertRefreshButton: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: COLORS.card,
+  alertTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flex: 1,
   },
-  alertRefreshButtonText: {
-    color: COLORS.textSecondary,
-    fontSize: 10,
+  alertTitle: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  alertLine: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  alertLabel: {
+    color: colors.textMuted,
     fontWeight: '700',
   },
-  alertBodyText: {
-    color: COLORS.textPrimary,
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: '600',
-  },
-  alertBodyLabel: {
-    color: COLORS.textMuted,
-    fontWeight: '700',
-  },
-  alertBodyTextSpaced: {
-    marginTop: 8,
-  },
-  alertHintText: {
-    color: COLORS.textMuted,
-    fontSize: 12,
+  alertHint: {
+    ...typography.caption,
+    color: colors.textMuted,
     fontStyle: 'italic',
+    marginTop: 4,
   },
-
-  citySelectorScroll: {
-    marginBottom: 12,
+  tabContent: {
+    marginTop: spacing.sm,
   },
-  citySelectorContent: {
-    paddingRight: UI.spacing.screen,
+  cityChipRow: {
+    paddingBottom: spacing.sm,
+    paddingRight: spacing.sm,
   },
-  cityButton: {
-    backgroundColor: COLORS.card,
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    flexShrink: 0,
-  },
-  cityButtonActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  cityButtonText: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  cityButtonTextActive: {
-    color: '#0B1220',
-  },
-
   cityOverviewCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    marginBottom: spacing.sm,
+  },
+  cityOverviewTitle: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
   },
   cityOverviewRow: {
     flexDirection: 'row',
@@ -1002,212 +1167,140 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cityOverviewValue: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '800',
   },
   cityOverviewLabel: {
-    color: COLORS.textMuted,
+    ...typography.caption,
     fontSize: 10,
+    color: colors.textMuted,
     marginTop: 2,
     textAlign: 'center',
   },
   cityOverviewHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 10,
-  },
-
-  section: {
-    marginBottom: 18,
-  },
-  sectionTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  sectionSubtitle: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 10,
-  },
-  emptyText: {
-    color: COLORS.textMuted,
-    fontSize: 13,
-    fontStyle: 'italic',
-  },
-
-  emptyStateTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  emptyStateSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  emptyStateButton: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  emptyStateButtonText: {
-    color: '#0B1220',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  progressTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#1E293B',
-    overflow: 'hidden',
-    marginBottom: 6,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 3,
-  },
-
-  productCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 15,
-    marginBottom: 11,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  productHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  productName: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-    flexShrink: 1,
-    marginRight: 8,
-  },
-  marketStatusBadge: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  productMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  productMeta: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  productPrice: {
-    color: COLORS.primary,
-    fontSize: 15,
-    fontWeight: '800',
-    marginBottom: 3,
-  },
-  opportunityHint: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginBottom: 3,
-  },
-  productDetail: {
-    color: COLORS.textMuted,
+    ...typography.caption,
     fontSize: 10,
-    opacity: 0.65,
+    color: colors.textMuted,
+    lineHeight: 14,
+    marginTop: spacing.sm,
   },
-
+  productCard: {
+    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
   opportunityCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 15,
-    marginBottom: 11,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    marginBottom: 9,
   },
-  opportunityHeaderRow: {
+  cardTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: 8,
     gap: 8,
   },
-  opportunityHeaderMain: {
-    flex: 1,
-  },
-  opportunityStrengthBadge: {
+  productIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: colors.accentBlueSoft,
     borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    backgroundColor: COLORS.cardAlt,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  opportunityStrengthText: {
-    fontSize: 10,
+  cardMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  cardRight: {
+    alignItems: 'flex-end',
+    minWidth: 72,
+  },
+  productName: {
+    ...typography.cardTitle,
+    fontSize: 13,
     fontWeight: '800',
+    flex: 1,
+    minWidth: 0,
   },
-  opportunityRoute: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
+  productTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
-  opportunityProduct: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+  productStock: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.textSecondary,
     marginTop: 2,
   },
-  opportunityLine: {
-    color: COLORS.textMuted,
+  productPrice: {
+    ...typography.bodySmall,
     fontSize: 12,
-    marginBottom: 4,
+    fontWeight: '800',
+    color: colors.accentAmber,
   },
-  opportunityLineValue: {
-    color: COLORS.textPrimary,
+  productPriceUnit: {
+    ...typography.caption,
+    fontSize: 9,
+    color: colors.textMuted,
+  },
+  priceChangeText: {
+    ...typography.caption,
+    fontSize: 9,
     fontWeight: '700',
+    marginTop: 1,
   },
-  opportunityPendingHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    fontStyle: 'italic',
+  productHint: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
     marginTop: 4,
   },
-  opportunityActionButton: {
-    alignSelf: 'flex-start',
-    marginTop: 10,
-    backgroundColor: COLORS.primary,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+  productFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: 6,
   },
-  opportunityActionButtonText: {
-    color: '#0B1220',
-    fontSize: 12,
+  productProgress: {
+    flex: 1,
+    minWidth: 0,
+  },
+  productAction: {
+    minHeight: 32,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+  },
+  opportunityRoute: {
+    ...typography.bodySmall,
     fontWeight: '800',
+    color: colors.textPrimary,
   },
-  tradeActionButton: {
+  opportunityProduct: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  opportunityMetrics: {
+    marginTop: 4,
+    gap: 1,
+  },
+  opportunityLine: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  opportunityValue: {
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  opportunityPending: {
+    color: colors.textMuted,
+    fontStyle: 'italic',
+  },
+  opportunityAction: {
+    marginTop: 6,
+    minHeight: 34,
+    paddingVertical: 6,
     alignSelf: 'flex-start',
-    marginTop: 10,
-    backgroundColor: COLORS.secondary,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
-  tradeActionButtonMuted: {
-    backgroundColor: '#334155',
-  },
-  tradeActionButtonText: {
-    color: '#0B1220',
-    fontSize: 12,
-    fontWeight: '800',
   },
 });

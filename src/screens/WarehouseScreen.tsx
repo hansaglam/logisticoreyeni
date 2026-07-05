@@ -1,25 +1,45 @@
 /**
  * LogistiCore - Depo Ekranı
  *
- * More menüsü içinde kullanılan sade depo yönetimi ekranı.
+ * Premium stok odaklı depo yönetimi — kapasite, envanter ve ticaret kararları.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 
 import TradeProductModal from '../components/TradeProductModal';
-import { useGameStore } from '../store/gameStore';
+import {
+  ActionButton,
+  AppCard,
+  AppScreen,
+  EmptyState,
+  GameIcon,
+  IconButton,
+  ProductIcon,
+  ProgressBar,
+  ScreenHeader,
+  SectionTitle,
+  SmallStatPill,
+  StatusBadge,
+} from '../components/ui';
+import type { StatusBadgeVariant } from '../components/ui';
 import { warehouseBalance } from '../config/balance';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import {
+  canOpenMoreWarehouses,
+  getMaxWarehousesForLevel,
+  getNextLevelForMoreWarehouses,
+  getWarehouseUpgradeRequiredLevel,
+  isWarehouseCityUnlocked,
+} from '../config/levelConfig';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   calculateTradeProfit,
   getCityProductMarketPrice,
@@ -32,30 +52,12 @@ import {
   getInventoryQuality,
   getQualityColorHint,
   getWarehouseTypeLabel,
+  productNeedsColdStorage,
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
-import {
-  canOpenMoreWarehouses,
-  getMaxWarehousesForLevel,
-  getNextLevelForMoreWarehouses,
-  getWarehouseUpgradeRequiredLevel,
-  isWarehouseCityUnlocked,
-} from '../config/levelConfig';
-import type { City, CityProductState, ProductId, Warehouse, WarehouseType } from '../types/game';
-
-const COLORS = {
-  background: '#070A12',
-  card: '#111827',
-  cardAlt: '#121826',
-  border: '#1F2A3C',
-  primary: '#F59E0B',
-  secondary: '#38BDF8',
-  success: '#22C55E',
-  danger: '#EF4444',
-  textPrimary: '#F9FAFB',
-  textSecondary: '#9CA3AF',
-  textMuted: '#64748B',
-};
+import { useGameStore } from '../store/gameStore';
+import { colors, spacing, typography } from '../theme';
+import type { City, CityProductState, Product, ProductId, Warehouse, WarehouseType } from '../types/game';
 
 const DEFAULT_RENT_PER_TON = warehouseBalance.rentPerTon;
 const DEFAULT_ELECTRICITY_PER_TON = warehouseBalance.electricityPerTon;
@@ -70,9 +72,13 @@ const HIGH_VOLATILITY_THRESHOLD = 15;
 const MAX_CITY_OPPORTUNITIES = 3;
 const MAX_STRATEGY_TIPS = 3;
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
+const LIST_SCROLL_BOTTOM_EXTRA = 110;
+
+const CAPACITY_OK_THRESHOLD = 0.7;
+const CAPACITY_WARN_THRESHOLD = 0.9;
 
 const STORAGE_STRATEGY_TIPS: string[] = [
-  'Ürün fazlası olan şehirlerde depo açmak, ucuz stok toplamak için avantaj sağlar.',
+  'Fazla stok olan şehirlerde ürün ucuzlar. Depoda bekletip fiyat yükselince satabilirsin.',
   'Kıtlık yaşayan şehirler yüksek fiyatlı teslimatlar için iyi hedef olabilir.',
   'Depo büyütmek esneklik sağlar ama günlük sabit giderleri artırır.',
 ];
@@ -96,8 +102,14 @@ interface WarehouseDailyCost {
   total: number;
 }
 
+interface PortfolioMetrics {
+  productCount: number;
+  inventoryValue: number;
+  estimatedProfit: number;
+}
+
 function formatMoney(value: number): string {
-  const rounded = Math.round(value);
+  const rounded = Math.round(Number.isFinite(value) ? value : 0);
   const sign = rounded < 0 ? '-' : '';
   return `${sign}$${Math.abs(rounded)
     .toString()
@@ -105,30 +117,24 @@ function formatMoney(value: number): string {
 }
 
 function formatTons(value: number): string {
-  return `${value.toFixed(1)} ton`;
+  const safe = Number.isFinite(value) ? value : 0;
+  return `${safe.toFixed(1)} ton`;
 }
 
 function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
+  return CITIES_BY_ID[cityId]?.name ?? 'Bilinmeyen şehir';
 }
 
 function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
+  return PRODUCT_BY_ID[productId as ProductId]?.name ?? 'Bilinmeyen ürün';
 }
 
 function getWarehouseCity(warehouse: WarehouseLike): City | undefined {
   return CITIES_BY_ID[warehouse.cityId];
-}
-
-function getWarehouseName(warehouse: WarehouseLike): string {
-  if (warehouse.name) return warehouse.name;
-  const city = getWarehouseCity(warehouse);
-  const typeLabel = getWarehouseTypeLabel(resolveWarehouseType(warehouse.warehouseType));
-  return `${city?.name ?? warehouse.cityId} · ${typeLabel}`;
 }
 
 function getWarehouseCapacity(warehouse: WarehouseLike): number {
@@ -137,17 +143,6 @@ function getWarehouseCapacity(warehouse: WarehouseLike): number {
 
 function getWarehouseLevel(warehouse: WarehouseLike): number {
   return warehouse.upgradeTier ?? warehouse.level ?? 1;
-}
-
-function getWarehouseStocks(warehouse: WarehouseLike): Record<string, number> {
-  const source = warehouse.stocks ?? warehouse.storedProducts ?? {};
-  const result: Record<string, number> = {};
-  for (const [productId, amount] of Object.entries(source)) {
-    if (typeof amount === 'number' && amount > 0) {
-      result[productId] = amount;
-    }
-  }
-  return result;
 }
 
 function calculateWarehouseUsedCapacity(warehouse: WarehouseLike): number {
@@ -200,19 +195,10 @@ function calculateTotalDailyWarehouseCost(warehouses: WarehouseLike[]): number {
   return warehouses.reduce((sum, w) => sum + calculateWarehouseDailyCost(w).total, 0);
 }
 
-function getUtilizationColor(utilization: number): string {
-  if (utilization <= 0.5) return COLORS.success;
-  if (utilization <= 0.8) return COLORS.primary;
-  return COLORS.danger;
-}
-
-function getCityProductPrice(city: City | undefined, productId: string): number {
-  if (!city) return 0;
-  const raw = city.products[productId as ProductId] as
-    | (CityProductState & { price?: number })
-    | undefined;
-  if (!raw) return 0;
-  return raw.currentPrice ?? raw.price ?? raw.basePrice ?? 0;
+function getCapacityBarColor(utilization: number): string {
+  if (utilization >= CAPACITY_WARN_THRESHOLD) return colors.danger;
+  if (utilization >= CAPACITY_OK_THRESHOLD) return colors.accentAmber;
+  return colors.success;
 }
 
 function calculateProductStockRatio(state: CityProductState): number {
@@ -249,9 +235,9 @@ function getWarehouseSuggestion(city: City): string {
   const shortages = countCityShortages(city);
   const surpluses = countCitySurpluses(city);
 
-  if (shortages > surpluses + 1) return 'İyi ithalat merkezi';
-  if (surpluses > shortages + 1) return 'İyi ihracat merkezi';
-  if (shortages > 0 && surpluses > 0) return 'Dengeli lojistik merkezi';
+  if (shortages > surpluses + 1) return 'İthalat merkezi';
+  if (surpluses > shortages + 1) return 'Üretim fazlası';
+  if (shortages > 0 && surpluses > 0) return 'Stratejik rota';
   if (calculatePriceVolatility(city) > HIGH_VOLATILITY_THRESHOLD) return 'Yüksek ticaret potansiyeli';
   return 'Dengeli piyasa';
 }
@@ -274,28 +260,228 @@ function getEstimatedDailyRent(city: City, warehouseType: WarehouseType = 'stand
   return BASE_DAILY_RENT * modifier * (warehouseType === 'cold' ? 1.35 : 1) * (coldMultiplier > 1 ? 1.1 : 1);
 }
 
-function SummaryCard({
-  totalCapacity,
-  usedCapacity,
-  dailyCost,
-}: {
+function calculatePortfolioMetrics(
+  warehouses: WarehouseLike[],
+  cities: City[],
+  products: Product[],
+): PortfolioMetrics {
+  const productIds = new Set<string>();
+  let inventoryValue = 0;
+  let estimatedProfit = 0;
+
+  for (const warehouse of warehouses) {
+    const city = cities.find((c) => c.id === warehouse.cityId);
+    const normalized = normalizeWarehouse(warehouse);
+    for (const item of normalized.inventory ?? []) {
+      const qty = item.quantity ?? 0;
+      if (qty <= 0) continue;
+
+      productIds.add(item.productId);
+      const currentPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
+      const safePrice = Number.isFinite(currentPrice) ? currentPrice : 0;
+      inventoryValue += qty * safePrice;
+      estimatedProfit += calculateTradeProfit(
+        safePrice,
+        item.averageBuyPrice ?? 0,
+        qty,
+        item.quality ?? 100,
+      );
+    }
+  }
+
+  return {
+    productCount: productIds.size,
+    inventoryValue: Number.isFinite(inventoryValue) ? inventoryValue : 0,
+    estimatedProfit: Number.isFinite(estimatedProfit) ? estimatedProfit : 0,
+  };
+}
+
+function warehouseHasRisk(warehouse: WarehouseLike, products: Product[]): boolean {
+  const normalized = normalizeWarehouse(warehouse);
+  const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+
+  for (const item of normalized.inventory ?? []) {
+    const qualityHint = getQualityColorHint(getInventoryQuality(item));
+    if (qualityHint === 'critical') return true;
+
+    const product = products.find((p) => p.id === item.productId);
+    if (
+      product &&
+      productNeedsColdStorage(product) &&
+      warehouseType !== 'cold' &&
+      (item.storageWarning || qualityHint === 'warning')
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getWarehouseStatusBadge(
+  warehouse: WarehouseLike,
+  products: Product[],
+): { label: string; variant: StatusBadgeVariant } {
+  const capacity = getWarehouseCapacity(warehouse);
+  const used = calculateWarehouseUsedCapacity(warehouse);
+  const utilization = capacity > 0 ? used / capacity : 0;
+  const inventory = normalizeWarehouse(warehouse).inventory ?? [];
+
+  if (inventory.length === 0 || used <= 0) {
+    return { label: 'Boş', variant: 'muted' };
+  }
+  if (utilization >= CAPACITY_WARN_THRESHOLD) {
+    return { label: 'Dolu', variant: 'danger' };
+  }
+  if (warehouseHasRisk(warehouse, products)) {
+    return { label: 'Riskli', variant: 'warning' };
+  }
+  return { label: 'Aktif', variant: 'success' };
+}
+
+interface WarehouseMetricStripProps {
   totalCapacity: number;
   usedCapacity: number;
+  freeCapacity: number;
   dailyCost: number;
-}) {
+  productCount: number;
+  inventoryValue: number;
+}
+
+function WarehouseMetricStrip({
+  totalCapacity,
+  usedCapacity,
+  freeCapacity,
+  dailyCost,
+  productCount,
+  inventoryValue,
+}: WarehouseMetricStripProps) {
   return (
-    <View style={styles.summaryCard}>
-      <View style={styles.summaryItem}>
-        <Text style={[styles.summaryValue, { color: COLORS.secondary }]}>{formatTons(totalCapacity)}</Text>
-        <Text style={styles.summaryLabel}>Toplam kapasite</Text>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.metricStrip}
+    >
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Kapasite"
+          value={formatTons(totalCapacity)}
+          icon="warehouse"
+          accentColor={colors.info}
+          layout="chip"
+        />
       </View>
-      <View style={styles.summaryItem}>
-        <Text style={[styles.summaryValue, { color: COLORS.success }]}>{formatTons(usedCapacity)}</Text>
-        <Text style={styles.summaryLabel}>Kullanılan</Text>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Kullanılan"
+          value={formatTons(usedCapacity)}
+          icon="inventory"
+          accentColor={colors.accentBlue}
+          layout="chip"
+        />
       </View>
-      <View style={styles.summaryItem}>
-        <Text style={[styles.summaryValue, { color: COLORS.danger }]}>{formatMoney(dailyCost)}</Text>
-        <Text style={styles.summaryLabel}>Günlük gider</Text>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Boş alan"
+          value={formatTons(freeCapacity)}
+          icon="package"
+          accentColor={colors.success}
+          layout="chip"
+        />
+      </View>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Günlük gider"
+          value={formatMoney(dailyCost)}
+          icon="expense"
+          accentColor={colors.danger}
+          layout="chip"
+        />
+      </View>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Ürün çeşidi"
+          value={String(productCount)}
+          icon="product"
+          accentColor={colors.accentAmber}
+          layout="chip"
+        />
+      </View>
+      <View style={styles.metricPillWrap}>
+        <SmallStatPill
+          label="Stok değeri"
+          value={formatMoney(inventoryValue)}
+          icon="cash"
+          accentColor={colors.success}
+          layout="chip"
+        />
+      </View>
+    </ScrollView>
+  );
+}
+
+function InventoryRow({
+  productId,
+  quantity,
+  averageBuyPrice,
+  currentPrice,
+  estimatedProfit,
+  storageWarning,
+  showColdHint,
+  qualityHint,
+  onSell,
+}: {
+  productId: ProductId;
+  quantity: number;
+  averageBuyPrice: number;
+  currentPrice: number;
+  estimatedProfit: number;
+  storageWarning?: string;
+  showColdHint: boolean;
+  qualityHint: 'normal' | 'warning' | 'critical';
+  onSell: () => void;
+}) {
+  const profitPositive = estimatedProfit >= 0;
+  const profitLabel = profitPositive ? 'Kâr' : 'Zarar';
+  const profitColor = profitPositive ? colors.success : colors.danger;
+
+  return (
+    <View style={styles.inventoryRow}>
+      <ProductIcon productId={productId} size={24} color={colors.info} />
+      <View style={styles.inventoryMain}>
+        <View style={styles.inventoryTitleRow}>
+          <Text style={styles.inventoryName} numberOfLines={1}>
+            {getProductName(productId)}
+          </Text>
+          <Text style={styles.inventoryQty}>{formatTons(quantity)}</Text>
+        </View>
+        <Text style={styles.inventoryMeta} numberOfLines={1}>
+          Alış: {formatMoney(averageBuyPrice)} / ton
+        </Text>
+        <Text style={styles.inventoryMeta} numberOfLines={1}>
+          Güncel: {formatMoney(currentPrice)} / ton
+        </Text>
+        {showColdHint ? (
+          <Text style={styles.inventoryHint} numberOfLines={1}>
+            Soğuk depo önerilir
+          </Text>
+        ) : null}
+        {storageWarning && qualityHint === 'critical' ? (
+          <Text style={styles.inventoryDanger} numberOfLines={1}>
+            {storageWarning}
+          </Text>
+        ) : storageWarning ? (
+          <Text style={styles.inventoryHint} numberOfLines={1}>
+            {storageWarning}
+          </Text>
+        ) : null}
+      </View>
+      <View style={styles.inventoryRight}>
+        <Text style={[styles.inventoryProfit, { color: profitColor }]} numberOfLines={1}>
+          {profitLabel}: {profitPositive ? '+' : ''}
+          {formatMoney(estimatedProfit)}
+        </Text>
+        <ActionButton label="Sat" onPress={onSell} variant="primary" compact style={styles.sellButton} />
       </View>
     </View>
   );
@@ -304,6 +490,7 @@ function SummaryCard({
 function WarehouseCard({
   warehouse,
   city,
+  products,
   playerLevel,
   playerMoney,
   onSellProduct,
@@ -311,6 +498,7 @@ function WarehouseCard({
 }: {
   warehouse: WarehouseLike;
   city?: City;
+  products: Product[];
   playerLevel: number;
   playerMoney: number;
   onSellProduct: (warehouse: Warehouse, productId: ProductId) => void;
@@ -319,12 +507,12 @@ function WarehouseCard({
   const normalized = normalizeWarehouse(warehouse);
   const capacity = getWarehouseCapacity(warehouse);
   const used = calculateWarehouseUsedCapacity(warehouse);
-  const free = calculateWarehouseFreeCapacity(warehouse);
   const cost = calculateWarehouseDailyCost(warehouse);
   const warehouseUtilization = capacity > 0 ? used / capacity : 0;
-  const utilizationColor = getUtilizationColor(warehouseUtilization);
+  const barColor = getCapacityBarColor(warehouseUtilization);
   const inventory = normalized.inventory ?? [];
   const warehouseTypeLabel = getWarehouseTypeLabel(resolveWarehouseType(warehouse.warehouseType));
+  const statusBadge = getWarehouseStatusBadge(warehouse, products);
   const safePlayerLevel = Math.max(1, playerLevel ?? 1);
   const currentTier = warehouse.upgradeTier ?? 1;
   const upgradeRequiredLevel = getWarehouseUpgradeRequiredLevel(currentTier);
@@ -335,134 +523,175 @@ function WarehouseCard({
     warehouseBalance.baseOpenCost * 0.5 * (city?.warehouseCostModifier ?? 1),
   );
   const canAffordUpgrade = playerMoney >= estimatedUpgradeCost;
-
-  let upgradeButtonLabel = 'Yükselt';
-  if (isUpgradeMaxed) {
-    upgradeButtonLabel = 'Maksimum';
-  } else if (isUpgradeLevelLocked) {
-    upgradeButtonLabel = `Level ${upgradeRequiredLevel} gerekli`;
-  } else if (!canAffordUpgrade) {
-    upgradeButtonLabel = 'Nakit yetersiz';
-  } else if (currentTier >= 2) {
-    upgradeButtonLabel = 'Büyük depo';
-  } else if (currentTier >= 1) {
-    upgradeButtonLabel = 'Orta depo';
-  }
+  const warehouseType = resolveWarehouseType(warehouse.warehouseType);
 
   const upgradeDisabled = isUpgradeMaxed || isUpgradeLevelLocked || !canAffordUpgrade;
 
+  const upgradeHelperText = isUpgradeMaxed
+    ? 'Maksimum seviyeye ulaşıldı'
+    : isUpgradeLevelLocked
+      ? `Yükseltme için Level ${upgradeRequiredLevel} gerekli`
+      : !canAffordUpgrade
+        ? 'Yükseltme için nakit yetersiz'
+        : null;
+
   return (
-    <View style={styles.warehouseCard}>
-      <View style={styles.warehouseHeaderRow}>
+    <AppCard style={styles.warehouseCard} padded={false}>
+      <View style={styles.warehouseHeader}>
+        <View style={styles.warehouseIconWrap}>
+          <GameIcon name="warehouse" size={18} color={colors.accentBlue} />
+        </View>
         <View style={styles.warehouseHeaderText}>
-          <Text style={styles.warehouseName}>{getWarehouseName(warehouse)}</Text>
-          <Text style={styles.warehouseMeta}>
-            {city?.name ?? warehouse.cityId} · {warehouseTypeLabel} · Seviye {getWarehouseLevel(warehouse)}
+          <Text style={styles.warehouseTitle} numberOfLines={1}>
+            {city?.name ?? getCityName(warehouse.cityId)}
+          </Text>
+          <Text style={styles.warehouseMeta} numberOfLines={1}>
+            {warehouseTypeLabel} · Seviye {getWarehouseLevel(warehouse)}
           </Text>
         </View>
-        <Text style={[styles.utilizationBadge, { color: utilizationColor }]}>
-          {formatPercent(warehouseUtilization)}
-        </Text>
+        <StatusBadge label={statusBadge.label} variant={statusBadge.variant} size="sm" />
       </View>
 
-      <View style={styles.warehouseStatsBlock}>
-        <Text style={styles.warehouseStatLine}>Kapasite: {formatTons(capacity)}</Text>
-        <Text style={styles.warehouseStatLine}>Kullanılan: {formatTons(used)}</Text>
-        <Text style={styles.warehouseStatLine}>Boş alan: {formatTons(free)}</Text>
-        <Text style={[styles.warehouseStatLine, { color: COLORS.danger }]}>
-          Günlük gider: {formatMoney(cost.total)}
-        </Text>
+      <View style={styles.capacityBlock}>
+        <View style={styles.capacityLabelRow}>
+          <Text style={styles.capacityLabel}>
+            Kapasite {(Number.isFinite(used) ? used : 0).toFixed(1)} /{' '}
+            {(Number.isFinite(capacity) ? capacity : 0).toFixed(1)} ton
+          </Text>
+          <Text style={[styles.capacityPercent, { color: barColor }]}>
+            {formatPercent(warehouseUtilization)}
+          </Text>
+        </View>
+        <ProgressBar progress={warehouseUtilization} color={barColor} height={6} />
       </View>
+
+      <Text style={styles.dailyCostLine}>
+        Günlük gider: <Text style={styles.dailyCostValue}>{formatMoney(cost.total)}</Text>
+      </Text>
 
       {inventory.length > 0 ? (
-        <View style={styles.stockBox}>
-          {inventory.map((item) => {
+        <View style={styles.inventoryList}>
+          {inventory.map((item, index) => {
             const currentPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
+            const safePrice = Number.isFinite(currentPrice) ? currentPrice : 0;
             const itemQuality = getInventoryQuality(item);
             const qualityHint = getQualityColorHint(itemQuality);
-            const qualityColor =
-              qualityHint === 'critical'
-                ? COLORS.danger
-                : qualityHint === 'warning'
-                  ? COLORS.primary
-                  : COLORS.textSecondary;
-            const effectiveSellPrice = getEffectiveSellPrice(currentPrice, itemQuality);
+            const product = products.find((p) => p.id === item.productId);
+            const showColdHint =
+              !!product &&
+              productNeedsColdStorage(product) &&
+              warehouseType !== 'cold' &&
+              !item.storageWarning;
             const estimatedProfit = calculateTradeProfit(
-              currentPrice,
-              item.averageBuyPrice,
-              item.quantity,
+              safePrice,
+              item.averageBuyPrice ?? 0,
+              item.quantity ?? 0,
               itemQuality,
             );
-            const profitColor = estimatedProfit >= 0 ? COLORS.success : COLORS.danger;
 
             return (
-              <View key={item.productId} style={styles.inventoryCard}>
-                <Text style={styles.stockProductName}>{getProductName(item.productId)}</Text>
-                <Text style={styles.stockValue}>{formatTons(item.quantity)}</Text>
-                <Text style={[styles.inventoryMeta, { color: qualityColor }]}>
-                  Kalite: {Math.round(itemQuality)}%
-                </Text>
-                <Text style={styles.inventoryMeta}>
-                  Alış ort.: {formatMoney(item.averageBuyPrice)} · Piyasa: {formatMoney(currentPrice)}
-                </Text>
-                <Text style={styles.inventoryMeta}>
-                  Kaliteye göre satış: {formatMoney(effectiveSellPrice)}
-                </Text>
-                {item.storageWarning ? (
-                  <Text style={styles.inventoryWarning}>{item.storageWarning}</Text>
-                ) : null}
-                <Text style={[styles.inventoryProfit, { color: profitColor }]}>
-                  Tahmini kâr: {formatMoney(estimatedProfit)}
-                </Text>
-                <TouchableOpacity
-                  style={styles.sellButton}
-                  onPress={() => onSellProduct(normalized, item.productId)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.sellButtonText}>Sat</Text>
-                </TouchableOpacity>
+              <View
+                key={item.productId}
+                style={[
+                  styles.inventoryItemWrap,
+                  index < inventory.length - 1 ? styles.inventoryItemBorder : null,
+                ]}
+              >
+                <InventoryRow
+                  productId={item.productId}
+                  quantity={item.quantity ?? 0}
+                  averageBuyPrice={item.averageBuyPrice ?? 0}
+                  currentPrice={safePrice}
+                  estimatedProfit={estimatedProfit}
+                  storageWarning={item.storageWarning}
+                  showColdHint={showColdHint}
+                  qualityHint={qualityHint}
+                  onSell={() => onSellProduct(normalized, item.productId)}
+                />
               </View>
             );
           })}
         </View>
       ) : (
         <View style={styles.emptyStockBlock}>
-          <Text style={styles.emptyStockTitle}>Depo boş.</Text>
-          <Text style={styles.emptyStockHint}>
-            Piyasa ekranından ucuz ürün alıp burada stoklayabilir, fiyat yükselince satabilirsin.
+          <GameIcon name="inventory" size={20} color={colors.textMuted} />
+          <Text style={styles.emptyStockTitle}>Bu depoda ürün yok</Text>
+          <Text style={styles.emptyStockHint} numberOfLines={2}>
+            Piyasa ekranından bu şehirde ürün satın alabilirsin.
           </Text>
         </View>
       )}
 
-      <View style={styles.warehouseActionsRow}>
-        {isUpgradeLevelLocked ? (
-          <Text style={styles.levelLockText}>
-            Bu yükseltme için Level {upgradeRequiredLevel} gerekli.
-          </Text>
+      <View style={styles.warehouseFooter}>
+        {upgradeHelperText ? (
+          <Text style={styles.upgradeHelperText}>{upgradeHelperText}</Text>
         ) : null}
-        <TouchableOpacity
-          style={[styles.secondaryActionButton, upgradeDisabled && styles.openWarehouseButtonDisabled]}
+        <ActionButton
+          label="Yükselt"
           onPress={() => onUpgrade(warehouse)}
+          variant="secondary"
           disabled={upgradeDisabled}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.secondaryActionText}>{upgradeButtonLabel}</Text>
-        </TouchableOpacity>
+          compact
+          icon="upgrade"
+          iconSize={14}
+        />
       </View>
+    </AppCard>
+  );
+}
+
+function DepotTypeOption({
+  title,
+  hint,
+  openCost,
+  dailyRent,
+  buttonLabel,
+  disabled,
+  onPress,
+}: {
+  title: string;
+  hint?: string;
+  openCost: number;
+  dailyRent: number;
+  buttonLabel: string;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <View style={styles.depotTypeCard}>
+      <Text style={styles.depotTypeTitle}>{title}</Text>
+      {hint ? (
+        <Text style={styles.depotTypeHint} numberOfLines={2}>
+          {hint}
+        </Text>
+      ) : null}
+      <Text style={styles.depotCostCompact}>
+        Açılış {formatMoney(openCost)} · Günlük {formatMoney(dailyRent)}
+      </Text>
+      <ActionButton
+        label={buttonLabel}
+        onPress={onPress}
+        variant="primary"
+        disabled={disabled}
+        compact
+        fullWidth
+        style={styles.depotOpenButton}
+      />
     </View>
   );
 }
 
-function StrategyTipsSection({ onShowMore }: { onShowMore: () => void }) {
+function StrategyTipsCard({ onShowMore }: { onShowMore: () => void }) {
   const visibleTips = STORAGE_STRATEGY_TIPS.slice(0, MAX_STRATEGY_TIPS);
 
   return (
-    <View style={styles.section}>
-      <View style={styles.tipsHeaderRow}>
-        <Text style={styles.sectionTitle}>Depo Strateji İpuçları</Text>
-        <TouchableOpacity onPress={onShowMore} activeOpacity={0.85}>
-          <Text style={styles.tipsToggle}>Daha fazla</Text>
-        </TouchableOpacity>
+    <AppCard variant="soft" style={styles.tipsCard} padded={false}>
+      <View style={styles.tipsHeader}>
+        <View style={styles.tipsTitleRow}>
+          <GameIcon name="route" size={16} color={colors.accentAmber} />
+          <Text style={styles.tipsTitle}>Depo Strateji İpuçları</Text>
+        </View>
+        <ActionButton label="Daha fazla" onPress={onShowMore} variant="secondary" compact />
       </View>
       {visibleTips.map((tip, index) => (
         <View key={index} style={styles.tipRow}>
@@ -470,7 +699,7 @@ function StrategyTipsSection({ onShowMore }: { onShowMore: () => void }) {
           <Text style={styles.tipText}>{tip}</Text>
         </View>
       ))}
-    </View>
+    </AppCard>
   );
 }
 
@@ -487,7 +716,11 @@ export default function WarehouseScreen() {
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
   const [sellWarehouse, setSellWarehouse] = useState<Warehouse | null>(null);
   const [sellProductId, setSellProductId] = useState<ProductId | null>(null);
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { tabBarHeight, bottomInset } = useTabBarLayout();
+  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
+
+  const scrollRef = useRef<ScrollView>(null);
+  const opportunitiesOffsetRef = useRef(0);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -497,7 +730,15 @@ export default function WarehouseScreen() {
 
   const totalCapacity = useMemo(() => calculateTotalWarehouseCapacity(warehouses), [warehouses]);
   const usedCapacity = useMemo(() => calculateTotalUsedCapacity(warehouses), [warehouses]);
+  const freeCapacity = useMemo(
+    () => Math.max(0, totalCapacity - usedCapacity),
+    [totalCapacity, usedCapacity],
+  );
   const dailyCost = useMemo(() => calculateTotalDailyWarehouseCost(warehouses), [warehouses]);
+  const portfolioMetrics = useMemo(
+    () => calculatePortfolioMetrics(warehouses, cities, products),
+    [warehouses, cities, products],
+  );
 
   const warehouseCityIds = useMemo(() => new Set(warehouses.map((w) => w.cityId)), [warehouses]);
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
@@ -586,214 +827,221 @@ export default function WarehouseScreen() {
     setStatusMessage('Ek depo stratejileri yakında eklenecek.');
   };
 
+  const scrollToOpportunities = () => {
+    scrollRef.current?.scrollTo({ y: opportunitiesOffsetRef.current, animated: true });
+  };
+
   if (!player) {
     return (
-      <View style={styles.root}>
+      <AppScreen>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Oyun başlatılıyor...</Text>
         </View>
-      </View>
+      </AppScreen>
     );
   }
 
   if (cities.length === 0 || products.length === 0) {
     return (
-      <View style={styles.root}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.emptyStateTitle}>Şehir veya ürün verisi yok</Text>
-          <Text style={styles.emptyStateSubtitle}>
-            Depo verileri şehir ve ürün bilgilerine bağlıdır.
-          </Text>
-        </View>
-      </View>
+      <AppScreen>
+        <EmptyState
+          title="Şehir veya ürün verisi yok"
+          message="Depo verileri şehir ve ürün bilgilerine bağlıdır."
+          icon="warehouse"
+        />
+      </AppScreen>
     );
   }
 
   return (
-    <View style={styles.root}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        showsVerticalScrollIndicator={false}
-      >
-        {statusMessage ? (
-          <View style={styles.statusToast}>
-            <Text style={styles.statusToastText}>{statusMessage}</Text>
-          </View>
-        ) : null}
+    <AppScreen scroll scrollRef={scrollRef} scrollBottomPadding={listScrollBottomPadding}>
+      <ScreenHeader
+        title="Depolar"
+        subtitle="Stoklarını, kapasiteni ve ticaret kârını yönet"
+        titleIcon="warehouse"
+        rightAction={
+          topCityOpportunities.length > 0 || coldDepotOpportunities.length > 0 ? (
+            <IconButton
+              icon="plus"
+              onPress={scrollToOpportunities}
+              size={22}
+              color={colors.accentAmber}
+            />
+          ) : undefined
+        }
+      />
 
-        <SummaryCard
-          totalCapacity={totalCapacity}
-          usedCapacity={usedCapacity}
-          dailyCost={dailyCost}
-        />
-
-        <Text style={styles.warehouseLimitHint}>
-          Depo limiti: {warehouses.length}/{maxWarehouses}
-        </Text>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Depolarım</Text>
-          {warehouses.length === 0 ? (
-            <Text style={styles.emptyText}>Henüz bir depon yok.</Text>
-          ) : (
-            warehouses.map((warehouse) => (
-              <WarehouseCard
-                key={warehouse.id}
-                warehouse={warehouse}
-                city={cities.find((city) => city.id === warehouse.cityId)}
-                playerLevel={playerLevel}
-                playerMoney={player.money}
-                onSellProduct={handleSellProduct}
-                onUpgrade={handleUpgradeWarehouse}
-              />
-            ))
-          )}
+      {statusMessage ? (
+        <View style={styles.statusToast}>
+          <GameIcon name="success" size={14} color={colors.info} />
+          <Text style={styles.statusToastText}>{statusMessage}</Text>
         </View>
+      ) : null}
 
+      <WarehouseMetricStrip
+        totalCapacity={totalCapacity}
+        usedCapacity={usedCapacity}
+        freeCapacity={freeCapacity}
+        dailyCost={dailyCost}
+        productCount={portfolioMetrics.productCount}
+        inventoryValue={portfolioMetrics.inventoryValue}
+      />
+
+      <Text style={styles.limitHint}>
+        Depo limiti: {warehouses.length}/{maxWarehouses}
+      </Text>
+
+      <SectionTitle
+        title="Depolarım"
+        subtitle={
+          warehouses.length > 0
+            ? `${warehouses.length} depo · Tahmini kâr ${formatMoney(portfolioMetrics.estimatedProfit)}`
+            : undefined
+        }
+        compact
+      />
+
+      {warehouses.length === 0 ? (
+        <EmptyState
+          title="Henüz bir depon yok"
+          message="Aşağıdaki depo fırsatlarından yeni bir depo açarak ticarete başlayabilirsin."
+          icon="warehouse"
+        />
+      ) : (
+        warehouses.map((warehouse) => (
+          <WarehouseCard
+            key={warehouse.id}
+            warehouse={warehouse}
+            city={cities.find((city) => city.id === warehouse.cityId)}
+            products={products}
+            playerLevel={playerLevel}
+            playerMoney={player.money}
+            onSellProduct={handleSellProduct}
+            onUpgrade={handleUpgradeWarehouse}
+          />
+        ))
+      )}
+
+      <View
+        onLayout={(event) => {
+          opportunitiesOffsetRef.current = event.nativeEvent.layout.y;
+        }}
+      >
         {coldDepotOpportunities.length > 0 ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Soğuk Depo Ekle</Text>
+          <>
+            <SectionTitle title="Soğuk Depo Ekle" compact />
             {coldDepotOpportunities.map((city) => {
               const coldOpenCost = getEstimatedOpenCost(city, 'cold');
               const coldDailyRent = getEstimatedDailyRent(city, 'cold');
               const openDisabled = !canOpenMore || player.money < coldOpenCost;
 
+              let buttonLabel = 'Soğuk Depo Aç';
+              if (!canOpenMore) {
+                buttonLabel = 'Seviye Gerekli';
+              } else if (player.money < coldOpenCost) {
+                buttonLabel = 'Nakit Yetersiz';
+              }
+
               return (
-                <View key={`cold-${city.id}`} style={styles.opportunityCard}>
-                  <Text style={styles.warehouseName}>{city.name}</Text>
-                  <Text style={styles.depotTypeHint}>
+                <AppCard key={`cold-${city.id}`} style={styles.opportunityCard} padded={false}>
+                  <View style={styles.opportunityHeader}>
+                    <GameIcon name="city" size={16} color={colors.info} />
+                    <Text style={styles.opportunityCity}>{city.name}</Text>
+                    <StatusBadge label="Soğuk depo" variant="info" size="sm" />
+                  </View>
+                  <Text style={styles.opportunityHint} numberOfLines={2}>
                     Bu şehirde normal depo var. Meyve ve içecek için soğuk depo önerilir.
                   </Text>
-                  <Text style={styles.opportunityCostLine}>
-                    Açılış: <Text style={styles.opportunityCostValue}>{formatMoney(coldOpenCost)}</Text>
-                  </Text>
-                  <Text style={styles.opportunityCostLine}>
-                    Günlük gider:{' '}
-                    <Text style={styles.opportunityCostValue}>{formatMoney(coldDailyRent)}</Text>
-                  </Text>
-                  <TouchableOpacity
-                    style={[styles.openWarehouseButton, openDisabled && styles.openWarehouseButtonDisabled]}
-                    onPress={() => handleOpenWarehouse(city.id, 'cold')}
+                  <DepotTypeOption
+                    title="Soğuk Depo"
+                    openCost={coldOpenCost}
+                    dailyRent={coldDailyRent}
+                    buttonLabel={buttonLabel}
                     disabled={openDisabled}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.openWarehouseButtonText}>
-                      {!canOpenMore
-                        ? 'Seviye Gerekli'
-                        : player.money < coldOpenCost
-                          ? 'Nakit yetersiz'
-                          : 'Soğuk Depo Aç'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
+                    onPress={() => handleOpenWarehouse(city.id, 'cold')}
+                  />
+                </AppCard>
               );
             })}
-          </View>
+          </>
         ) : null}
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Şehir Depo Fırsatları</Text>
-          {topCityOpportunities.length === 0 ? (
-            <Text style={styles.emptyText}>Her şehirde zaten bir depon var.</Text>
-          ) : (
-            topCityOpportunities.map((city) => {
-              const suggestion = getWarehouseSuggestion(city);
-              const opportunityCount = getCityOpportunityScore(city);
-              const costModifier = city.warehouseCostModifier ?? 1;
-              const standardOpenCost = getEstimatedOpenCost(city, 'standard');
-              const coldOpenCost = getEstimatedOpenCost(city, 'cold');
-              const standardDailyRent = getEstimatedDailyRent(city, 'standard');
-              const coldDailyRent = getEstimatedDailyRent(city, 'cold');
-              const cityUnlocked = isWarehouseCityUnlocked(city.id, playerLevel);
-              const openDisabled = !canOpenMore || !cityUnlocked;
+        <SectionTitle title="Yeni Depo Fırsatları" compact />
 
-              return (
-                <View key={city.id} style={styles.opportunityCard}>
-                  <View style={styles.warehouseHeaderRow}>
-                    <Text style={styles.warehouseName}>{city.name}</Text>
-                    <Text style={styles.suggestionBadge}>{suggestion}</Text>
-                  </View>
-                  <Text style={styles.opportunityMeta}>
-                    {opportunityCount} piyasa sinyali · Maliyet etkisi {costModifier.toFixed(2)}x
-                  </Text>
+        {topCityOpportunities.length === 0 ? (
+          <AppCard variant="soft" style={styles.opportunityEmptyCard} padded={false}>
+            <Text style={styles.opportunityEmptyText}>Her şehirde zaten bir depon var.</Text>
+          </AppCard>
+        ) : (
+          topCityOpportunities.map((city) => {
+            const suggestion = getWarehouseSuggestion(city);
+            const opportunityCount = getCityOpportunityScore(city);
+            const costModifier = city.warehouseCostModifier ?? 1;
+            const standardOpenCost = getEstimatedOpenCost(city, 'standard');
+            const coldOpenCost = getEstimatedOpenCost(city, 'cold');
+            const standardDailyRent = getEstimatedDailyRent(city, 'standard');
+            const coldDailyRent = getEstimatedDailyRent(city, 'cold');
+            const cityUnlocked = isWarehouseCityUnlocked(city.id, playerLevel);
+            const openDisabled = !canOpenMore || !cityUnlocked;
 
-                  <View style={styles.depotTypeCard}>
-                    <Text style={styles.depotTypeTitle}>Normal Depo</Text>
-                    <Text style={styles.opportunityCostLine}>
-                      Açılış: <Text style={styles.opportunityCostValue}>{formatMoney(standardOpenCost)}</Text>
-                    </Text>
-                    <Text style={styles.opportunityCostLine}>
-                      Günlük gider:{' '}
-                      <Text style={styles.opportunityCostValue}>{formatMoney(standardDailyRent)}</Text>
-                    </Text>
-                    <TouchableOpacity
-                      style={[
-                        styles.openWarehouseButton,
-                        (openDisabled || player.money < standardOpenCost) && styles.openWarehouseButtonDisabled,
-                      ]}
-                      onPress={() => handleOpenWarehouse(city.id, 'standard')}
-                      disabled={openDisabled || player.money < standardOpenCost}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.openWarehouseButtonText}>
-                        {!canOpenMore || !cityUnlocked
-                          ? 'Seviye Gerekli'
-                          : player.money < standardOpenCost
-                            ? 'Nakit yetersiz'
-                            : 'Normal Depo Aç'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+            const standardButtonLabel = !canOpenMore || !cityUnlocked
+              ? 'Seviye Gerekli'
+              : player.money < standardOpenCost
+                ? 'Nakit Yetersiz'
+                : 'Depo Aç';
 
-                  <View style={styles.depotTypeCard}>
-                    <Text style={styles.depotTypeTitle}>Soğuk Depo</Text>
-                    <Text style={styles.depotTypeHint}>
-                      Meyve, içecek ve bozulabilir ürünleri korur.
-                    </Text>
-                    <Text style={styles.opportunityCostLine}>
-                      Açılış: <Text style={styles.opportunityCostValue}>{formatMoney(coldOpenCost)}</Text>
-                    </Text>
-                    <Text style={styles.opportunityCostLine}>
-                      Günlük gider:{' '}
-                      <Text style={styles.opportunityCostValue}>{formatMoney(coldDailyRent)}</Text>
-                    </Text>
-                    <TouchableOpacity
-                      style={[
-                        styles.openWarehouseButton,
-                        (openDisabled || player.money < coldOpenCost) && styles.openWarehouseButtonDisabled,
-                      ]}
-                      onPress={() => handleOpenWarehouse(city.id, 'cold')}
-                      disabled={openDisabled || player.money < coldOpenCost}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.openWarehouseButtonText}>
-                        {!canOpenMore || !cityUnlocked
-                          ? 'Seviye Gerekli'
-                          : player.money < coldOpenCost
-                            ? 'Nakit yetersiz'
-                            : 'Soğuk Depo Aç'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+            const coldButtonLabel = !canOpenMore || !cityUnlocked
+              ? 'Seviye Gerekli'
+              : player.money < coldOpenCost
+                ? 'Nakit Yetersiz'
+                : 'Soğuk Depo Aç';
 
-                  {!canOpenMore ? (
-                    <Text style={styles.levelLockText}>
-                      Daha fazla depo açmak için şirket seviyeni yükselt. (Level {nextWarehouseLevel})
-                    </Text>
-                  ) : !cityUnlocked ? (
-                    <Text style={styles.levelLockText}>
-                      Bu şehirde depo açmak için Level 4 gerekli.
-                    </Text>
-                  ) : null}
+            return (
+              <AppCard key={city.id} style={styles.opportunityCard} padded={false}>
+                <View style={styles.opportunityHeader}>
+                  <GameIcon name="city" size={16} color={colors.accentBlue} />
+                  <Text style={styles.opportunityCity}>{city.name}</Text>
+                  <StatusBadge label={suggestion} variant="amber" size="sm" />
                 </View>
-              );
-            })
-          )}
-        </View>
+                <Text style={styles.opportunityMeta} numberOfLines={1}>
+                  {opportunityCount} piyasa sinyali · Maliyet etkisi {costModifier.toFixed(2)}x
+                </Text>
 
-        <StrategyTipsSection onShowMore={handleShowMoreTips} />
-      </ScrollView>
+                <DepotTypeOption
+                  title="Normal Depo"
+                  openCost={standardOpenCost}
+                  dailyRent={standardDailyRent}
+                  buttonLabel={standardButtonLabel}
+                  disabled={openDisabled || player.money < standardOpenCost}
+                  onPress={() => handleOpenWarehouse(city.id, 'standard')}
+                />
+
+                <DepotTypeOption
+                  title="Soğuk Depo"
+                  hint="Meyve, içecek ve bozulabilir ürünleri korur."
+                  openCost={coldOpenCost}
+                  dailyRent={coldDailyRent}
+                  buttonLabel={coldButtonLabel}
+                  disabled={openDisabled || player.money < coldOpenCost}
+                  onPress={() => handleOpenWarehouse(city.id, 'cold')}
+                />
+
+                {!canOpenMore ? (
+                  <Text style={styles.levelLockText}>
+                    Daha fazla depo açmak için şirket seviyeni yükselt. (Level {nextWarehouseLevel})
+                  </Text>
+                ) : !cityUnlocked ? (
+                  <Text style={styles.levelLockText}>
+                    Bu şehirde depo açmak için Level 4 gerekli.
+                  </Text>
+                ) : null}
+              </AppCard>
+            );
+          })
+        )}
+      </View>
+
+      <StrategyTipsCard onShowMore={handleShowMoreTips} />
 
       <TradeProductModal
         visible={tradeModalVisible}
@@ -823,343 +1071,326 @@ export default function WarehouseScreen() {
           setSellProductId(null);
         }}
       />
-    </View>
+    </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: spacing.xl,
   },
   loadingText: {
-    color: COLORS.textSecondary,
-    fontSize: 16,
+    ...typography.body,
+    color: colors.textSecondary,
   },
 
   statusToast: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    backgroundColor: colors.infoSoft,
     borderWidth: 1,
-    borderColor: COLORS.secondary,
+    borderColor: colors.info,
     borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 12,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
   },
   statusToastText: {
-    color: COLORS.secondary,
+    color: colors.info,
     fontSize: 12,
     fontWeight: '700',
   },
 
-  summaryCard: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  metricStrip: {
+    gap: spacing.md,
+    paddingRight: spacing.lg,
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
-  summaryItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  summaryValue: {
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  summaryLabel: {
-    color: COLORS.textMuted,
-    fontSize: 10,
-    marginTop: 4,
-    textAlign: 'center',
-    lineHeight: 13,
+  metricPillWrap: {
+    minWidth: 100,
   },
 
-  section: {
-    marginBottom: 14,
-  },
-  sectionTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  emptyText: {
-    color: COLORS.textMuted,
-    fontSize: 13,
-    fontStyle: 'italic',
-  },
-  emptyStateTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  emptyStateSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    textAlign: 'center',
+  limitHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
   },
 
   warehouseCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  warehouseHeaderRow: {
+  warehouseHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  warehouseIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.accentBlueSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   warehouseHeaderText: {
-    flexShrink: 1,
-    marginRight: 8,
+    flex: 1,
+    minWidth: 0,
   },
-  warehouseName: {
-    color: COLORS.textPrimary,
+  warehouseTitle: {
+    ...typography.cardTitle,
     fontSize: 14,
-    fontWeight: '700',
   },
   warehouseMeta: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    marginTop: 3,
-  },
-  utilizationBadge: {
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  warehouseStatsBlock: {
-    marginTop: 10,
-    gap: 4,
-  },
-  warehouseStatLine: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-
-  stockBox: {
-    backgroundColor: COLORS.cardAlt,
-    borderRadius: 8,
-    padding: 10,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  stockRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  stockProductName: {
-    color: COLORS.textPrimary,
-    fontSize: 12,
-    fontWeight: '600',
-    flex: 1,
-    marginRight: 8,
-  },
-  stockValue: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  inventoryCard: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    paddingVertical: 8,
-    marginBottom: 4,
-  },
-  inventoryMeta: {
-    color: COLORS.textMuted,
-    fontSize: 11,
+    ...typography.caption,
     marginTop: 2,
   },
-  inventoryWarning: {
-    color: COLORS.danger,
+
+  capacityBlock: {
+    marginBottom: spacing.sm,
+    gap: 4,
+  },
+  capacityLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  capacityLabel: {
+    ...typography.caption,
     fontSize: 11,
-    marginTop: 4,
-    lineHeight: 15,
+    color: colors.textSecondary,
   },
-  inventoryProfit: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 4,
-  },
-  sellButton: {
-    alignSelf: 'flex-start',
-    marginTop: 8,
-    backgroundColor: COLORS.primary,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  sellButtonText: {
-    color: '#0B1220',
-    fontSize: 12,
+  capacityPercent: {
+    fontSize: 11,
     fontWeight: '800',
   },
+
+  dailyCostLine: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+  },
+  dailyCostValue: {
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+
+  inventoryList: {
+    backgroundColor: colors.cardSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+  },
+  inventoryItemWrap: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  inventoryItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  inventoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  inventoryMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  inventoryTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  inventoryName: {
+    ...typography.bodySmall,
+    fontWeight: '700',
+    flex: 1,
+  },
+  inventoryQty: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  inventoryMeta: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  inventoryHint: {
+    fontSize: 10,
+    color: colors.accentAmber,
+    marginTop: 3,
+    fontWeight: '600',
+  },
+  inventoryDanger: {
+    fontSize: 10,
+    color: colors.danger,
+    marginTop: 3,
+    fontWeight: '600',
+  },
+  inventoryRight: {
+    alignItems: 'flex-end',
+    gap: 4,
+    minWidth: 76,
+  },
+  inventoryProfit: {
+    fontSize: 10,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  sellButton: {
+    minHeight: 32,
+    paddingVertical: 4,
+  },
+
   emptyStockBlock: {
-    marginTop: 10,
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.cardSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+    gap: 6,
   },
   emptyStockTitle: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+    ...typography.bodySmall,
     fontWeight: '700',
   },
   emptyStockHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    marginTop: 4,
-    lineHeight: 16,
+    ...typography.caption,
+    textAlign: 'center',
+    lineHeight: 15,
   },
 
-  warehouseActionsRow: {
-    flexDirection: 'row',
-    marginTop: 12,
-    gap: 8,
+  warehouseFooter: {
+    gap: 4,
+    alignItems: 'flex-start',
   },
-  secondaryActionButton: {
-    flex: 1,
-    backgroundColor: COLORS.cardAlt,
-    borderWidth: 1,
-    borderColor: COLORS.secondary,
-    borderRadius: 10,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
+  upgradeHelperText: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
   },
-  secondaryActionText: {
-    color: COLORS.secondary,
-    fontSize: 12,
-    fontWeight: '700',
+  levelLockText: {
+    ...typography.caption,
+    color: colors.warning,
+    fontWeight: '600',
+    marginTop: spacing.xs,
   },
 
   opportunityCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  suggestionBadge: {
-    color: COLORS.primary,
-    fontSize: 10,
-    fontWeight: '800',
-    maxWidth: '48%',
-    textAlign: 'right',
-    lineHeight: 14,
+  opportunityHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  opportunityCity: {
+    ...typography.cardTitle,
+    fontSize: 14,
+    flex: 1,
+  },
+  opportunityHint: {
+    ...typography.caption,
+    marginBottom: spacing.sm,
+    lineHeight: 15,
   },
   opportunityMeta: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    marginTop: 6,
-    marginBottom: 6,
+    ...typography.caption,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
+  opportunityEmptyCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  opportunityEmptyText: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+    fontStyle: 'italic',
+  },
+
   depotTypeCard: {
-    backgroundColor: COLORS.cardAlt,
+    backgroundColor: colors.cardSoft,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 12,
-    marginTop: 10,
+    borderColor: colors.border,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
     gap: 4,
   },
   depotTypeTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 13,
+    ...typography.bodySmall,
     fontWeight: '800',
   },
   depotTypeHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    lineHeight: 15,
+    ...typography.caption,
+    lineHeight: 14,
+    marginBottom: 2,
+  },
+  depotCostCompact: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
     marginBottom: 4,
   },
-  opportunityCostLine: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  opportunityCostValue: {
-    color: COLORS.textPrimary,
-    fontWeight: '700',
-  },
-  warehouseLimitHint: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  levelLockText: {
-    color: COLORS.danger,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  openWarehouseButton: {
-    backgroundColor: COLORS.primary,
-    height: 42,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-  },
-  openWarehouseButtonDisabled: {
-    backgroundColor: COLORS.border,
-  },
-  openWarehouseButtonText: {
-    color: '#0B1220',
-    fontSize: 13,
-    fontWeight: '800',
+  depotOpenButton: {
+    marginTop: spacing.xs,
   },
 
-  tipsHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
+  tipsCard: {
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  tipsToggle: {
-    color: COLORS.primary,
-    fontSize: 12,
-    fontWeight: '700',
+  tipsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  tipsTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flex: 1,
+  },
+  tipsTitle: {
+    ...typography.sectionTitle,
+    fontSize: 14,
   },
   tipRow: {
     flexDirection: 'row',
-    marginBottom: 8,
-    paddingRight: 8,
+    marginBottom: spacing.sm,
+    paddingRight: spacing.sm,
   },
   tipBullet: {
-    color: COLORS.primary,
+    color: colors.accentAmber,
     fontSize: 13,
     fontWeight: '800',
-    marginRight: 8,
+    marginRight: spacing.sm,
   },
   tipText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+    ...typography.bodySmall,
     flex: 1,
     lineHeight: 17,
+    color: colors.textSecondary,
   },
 });

@@ -1,74 +1,84 @@
 /**
- * LogistiCore - Sözleşmeler Ekranı
+ * LogistiCore - İşler / Sözleşmeler Ekranı
  *
- * Oyuncunun müsait işleri hızlıca tarayıp en iyi sözleşmeyi seçebileceği sade ekran.
+ * Piyasadaki taşıma sözleşmelerini premium dark UI ile yönetme ekranı.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  SafeAreaView,
   Alert,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  type ScrollView as ScrollViewType,
 } from 'react-native';
 
-import { useGameStore } from '../store/gameStore';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
+import ContractAssignmentModal from '../components/ContractAssignmentModal';
+import {
+  AppScreen,
+  EmptyState,
+  GameIcon,
+  IconButton,
+  ProgressBar,
+  ProductIcon,
+} from '../components/ui';
+import { deliveryBalance } from '../config/balance';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { getRoute as findRoute } from '../data/routes';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { dedupeAvailableContracts, getContractFilterSortTier } from '../simulation/contracts';
 import {
   calculateTravelHours,
   getContractAvailability,
-  getContractAvailabilityWarningText,
   getContractCargoWeight,
   selectIdleTruckForContract,
 } from '../simulation/delivery';
-import { dedupeAvailableContracts, getContractFilterSortTier, getMarketContractMatchTier } from '../simulation/contracts';
-import { contractBalance } from '../config/balance';
-import { getMaxContractTonnageForLevel } from '../config/levelConfig';
-import { getContractRequiredLevel } from '../simulation/leveling';
-import { getContractLevelUnlockHint } from '../config/levelConfig';
-import { deliveryBalance } from '../config/balance';
-import ContractAssignmentModal from '../components/ContractAssignmentModal';
-import type { Contract, Driver, GlobalEconomy, MarketContractFilter, Product, ProductId, Route, Truck } from '../types/game';
-
-const COLORS = {
-  background: '#070A12',
-  card: '#111827',
-  cardAlt: '#121826',
-  border: '#1F2A3C',
-  primary: '#F59E0B',
-  secondary: '#38BDF8',
-  success: '#22C55E',
-  danger: '#EF4444',
-  textPrimary: '#F8FAFC',
-  textSecondary: '#94A3B8',
-  textMuted: '#64748B',
-};
+import { useGameStore } from '../store/gameStore';
+import { colors, spacing } from '../theme';
+import { STATUS_BAR_HEIGHT } from '../theme/ui';
+import type {
+  Contract,
+  ContractAvailability,
+  Delivery,
+  Driver,
+  GlobalEconomy,
+  MarketContractFilter,
+  Product,
+  ProductId,
+  Route,
+  Truck,
+} from '../types/game';
 
 const FALLBACK_FUEL_RATE_PER_KM = deliveryBalance.fuelCostEstimateMultiplier;
 const FALLBACK_AVERAGE_SPEED_KMH = deliveryBalance.defaultAverageSpeed;
 const FALLBACK_DRIVER_SALARY_PER_DAY = deliveryBalance.fallbackDriverSalaryPerDay;
 const URGENT_URGENCY_THRESHOLD = 0.75;
-const URGENT_FALLBACK_DEADLINE_HOURS = 10;
+const URGENT_DEADLINE_SLACK = 0.95;
 const LONG_ROUTE_KM = 350;
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const MARKET_HIGHLIGHT_TIMEOUT_MS = 8000;
+const DAY_HOURS = 24;
+const LIST_FILTER: FilterKey = 'bestPayment';
+const LIST_SCROLL_BOTTOM_EXTRA = 110;
+
+const COLORS = {
+  background: colors.background,
+  card: colors.card,
+  border: colors.borderStrong,
+  cyan: colors.info,
+  green: colors.success,
+  red: colors.danger,
+  muted: colors.textMuted,
+  text: colors.textPrimary,
+  textSecondary: colors.textSecondary,
+};
 
 type FilterKey = 'all' | 'bestPayment' | 'shortDistance' | 'urgent' | 'lowRisk';
-
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: 'all', label: 'Tümü' },
-  { key: 'bestPayment', label: 'En yüksek ödeme' },
-  { key: 'shortDistance', label: 'Kısa rota' },
-  { key: 'urgent', label: 'Acil' },
-  { key: 'lowRisk', label: 'Düşük risk' },
-];
+type SegmentKey = 'available' | 'active' | 'completed';
 
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
 
@@ -82,22 +92,80 @@ function formatMoney(value: number): string {
 
 function formatHours(hours: number): string {
   const totalHours = Math.max(0, Math.round(hours));
-  const days = Math.floor(totalHours / 24);
-  const remainingHours = totalHours % 24;
-  if (days > 0) return `${days}g ${remainingHours}sa`;
-  return `${remainingHours}sa`;
+  const days = Math.floor(totalHours / DAY_HOURS);
+  const remainingHours = totalHours % DAY_HOURS;
+  if (days > 0) return `${days}g ${remainingHours}s`;
+  return `${remainingHours}s`;
 }
 
 function formatDistance(km: number): string {
   return `${Math.round(km)} km`;
 }
 
-function formatTons(amount: number): string {
-  return `${amount.toFixed(1)} ton`;
+function formatTonsCompact(amount: number): string {
+  return `${amount.toFixed(1)} t`;
+}
+
+function formatTimeLeft(hours: number): string {
+  const totalMinutes = Math.max(0, Math.round(hours * 60));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h > 0) return `${h}s ${m}dk`;
+  return `${m}dk`;
 }
 
 function formatPercent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
+
+function getActionPillLabel(availability: ContractAvailability): string {
+  switch (availability.reason) {
+    case 'LEVEL_INSUFFICIENT':
+      return 'Seviye Yetersiz';
+    case 'NO_TRUCKS':
+    case 'NO_IDLE_TRUCKS':
+      return 'Kamyon Yok';
+    case 'NO_DRIVERS':
+    case 'NO_IDLE_DRIVERS':
+      return 'Şoför Yok';
+    case 'CAPACITY_INSUFFICIENT':
+      return 'Kapasite Yetersiz';
+    case 'TRUCK_CONDITION_TOO_LOW':
+      return 'Tamir Gerekli';
+    default:
+      return 'Ekibi Seç';
+  }
+}
+
+function formatRiskDisplayLabel(label: string): string {
+  if (label === 'Yüksek risk') return 'Yüksek Risk';
+  if (label === 'Orta risk') return 'Orta Risk';
+  return 'Düşük Risk';
+}
+
+function getRiskOutlineStyle(
+  label: string,
+  soft = false,
+): { backgroundColor: string; borderColor: string; color: string } {
+  if (label === 'Yüksek risk') {
+    return {
+      backgroundColor: COLORS.card,
+      borderColor: soft ? 'rgba(248, 113, 113, 0.45)' : COLORS.red,
+      color: soft ? 'rgba(248, 113, 113, 0.85)' : COLORS.red,
+    };
+  }
+  if (label === 'Orta risk') {
+    return {
+      backgroundColor: COLORS.card,
+      borderColor: colors.accentAmber,
+      color: colors.accentAmber,
+    };
+  }
+  return {
+    backgroundColor: COLORS.card,
+    borderColor: colors.success,
+    color: colors.success,
+  };
 }
 
 function getCityName(cityId: string): string {
@@ -206,12 +274,18 @@ function calculateBaseRiskLabel(contract: Contract): Pick<RiskInfo, 'label' | 'c
     product.perishability * 0.15;
 
   if (riskScore >= 0.6) {
-    return { label: 'Yüksek risk', color: COLORS.danger };
+    return { label: 'Yüksek risk', color: colors.danger };
   }
   if (riskScore >= 0.35) {
-    return { label: 'Orta risk', color: COLORS.primary };
+    return { label: 'Orta risk', color: colors.accentAmber };
   }
-  return { label: 'Düşük risk', color: COLORS.success };
+  return { label: 'Düşük risk', color: colors.success };
+}
+
+function getRiskBadgeVariant(label: string): 'danger' | 'warning' | 'success' {
+  if (label === 'Yüksek risk') return 'danger';
+  if (label === 'Orta risk') return 'warning';
+  return 'success';
 }
 
 function buildRiskReasons(
@@ -290,14 +364,17 @@ function analyzeContract(
 }
 
 function isUrgentContract(contract: Contract): boolean {
-  if (contract.urgency >= URGENT_URGENCY_THRESHOLD) return true;
-
-  const travelHours = estimateContractTravelHours(contract);
-  if (travelHours > 0 && contract.deadlineHours <= travelHours * 1.25) {
+  if (contract.urgency >= URGENT_URGENCY_THRESHOLD) {
     return true;
   }
 
-  return contract.deadlineHours <= URGENT_FALLBACK_DEADLINE_HOURS;
+  const travelHours = estimateContractTravelHours(contract);
+  if (travelHours <= 0) {
+    return false;
+  }
+
+  // Yalnızca teslim süresi, tahmini yol süresinden belirgin şekilde kısaysa acil say
+  return contract.deadlineHours < travelHours * URGENT_DEADLINE_SLACK;
 }
 
 function getEstimatedProfit(contract: Contract, globalEconomy: GlobalEconomy): number {
@@ -406,99 +483,137 @@ function sortContractsForDisplay(
   });
 }
 
-function getTruckDetailText(
-  availability: ReturnType<typeof getContractAvailability>,
-  suggestedTruck?: Truck,
-): string {
-  if (availability.reason === 'LEVEL_INSUFFICIENT') {
-    return `Level ${availability.requiredLevel ?? 1} gerekli`;
-  }
-  if (availability.reason === 'NO_TRUCKS' || availability.reason === 'NO_IDLE_TRUCKS') {
-    return 'Müsait kamyon yok';
-  }
-  if (availability.reason === 'TRUCK_CONDITION_TOO_LOW') {
-    return 'Kamyon tamir gerekli';
-  }
-  if (availability.reason === 'CAPACITY_INSUFFICIENT') {
-    return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
-  }
-  if (!suggestedTruck) {
-    return 'Uygun kamyon yok';
-  }
-  return `${suggestedTruck.name} · kapasite yeterli`;
-}
-
-function getDriverDetailText(availability: ReturnType<typeof getContractAvailability>, driver?: Driver): string {
-  if (availability.reason === 'NO_DRIVERS' || availability.reason === 'NO_IDLE_DRIVERS') {
-    return 'Müsait şoför yok';
-  }
-  return driver?.name ?? 'Müsait değil';
-}
-
-function getDeadlineRiskText(contract: Contract, travelHours: number): string {
-  if (contract.deadlineHours < travelHours) return 'Teslim süresi yetersiz';
-  if (contract.deadlineHours < travelHours * 1.25) return 'Sıkı teslim penceresi';
-  return 'Teslim süresi yeterli';
-}
-
 function findSuggestedDriver(drivers: Driver[]): Driver | undefined {
   return (drivers ?? []).find((driver) => driver.status === 'idle');
 }
 
-function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function getDeliveryStatusVariant(status: Delivery['status']): 'blue' | 'amber' | 'success' | 'danger' {
+  switch (status) {
+    case 'on_route':
+      return 'blue';
+    case 'preparing':
+      return 'amber';
+    case 'completed':
+      return 'success';
+    default:
+      return 'danger';
+  }
+}
+
+function getDeliveryStatusLabel(status: Delivery['status']): string {
+  switch (status) {
+    case 'on_route':
+      return 'Yolda';
+    case 'preparing':
+      return 'Hazırlanıyor';
+    case 'completed':
+      return 'Tamamlandı';
+    default:
+      return 'Başarısız';
+  }
+}
+
+function findDeliveryForContract(contractId: string, deliveries: Delivery[]): Delivery | undefined {
+  return deliveries.find((delivery) => delivery.contractId === contractId);
+}
+
+interface TabSegment {
+  key: SegmentKey;
+  label: string;
+  count: number;
+}
+
+interface ContractsTabBarProps {
+  segments: TabSegment[];
+  activeKey: SegmentKey;
+  onChange: (key: SegmentKey) => void;
+}
+
+function ContractsTabBar({ segments, activeKey, onChange }: ContractsTabBarProps) {
   return (
-    <TouchableOpacity
-      style={[styles.filterChip, active && styles.filterChipActive]}
-      onPress={onPress}
-      activeOpacity={0.85}
-    >
-      <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>{label}</Text>
-    </TouchableOpacity>
+    <View style={styles.tabBar}>
+      {segments.map((segment, index) => {
+        const isActive = segment.key === activeKey;
+        return (
+          <React.Fragment key={segment.key}>
+            {index > 0 ? <View style={styles.tabDivider} /> : null}
+            <TouchableOpacity
+              style={styles.tabItem}
+              onPress={() => onChange(segment.key)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.tabLabelRow}>
+                <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
+                  {segment.label}
+                </Text>
+                {segment.count > 0 ? (
+                  <View style={styles.tabBadge}>
+                    <Text style={styles.tabBadgeText}>
+                      {segment.count > 99 ? '99+' : segment.count}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              {isActive ? <View style={styles.tabUnderline} /> : null}
+            </TouchableOpacity>
+          </React.Fragment>
+        );
+      })}
+    </View>
+  );
+}
+
+interface CompactStatRowProps {
+  availableCount: number;
+  activeCount: number;
+  bestPayment: number;
+}
+
+function CompactStatRow({ availableCount, activeCount, bestPayment }: CompactStatRowProps) {
+  return (
+    <View style={styles.compactStatRow}>
+      <Text style={styles.compactStatText}>
+        Müsait{' '}
+        <Text style={styles.statValueInfo}>{availableCount}</Text>
+        {' · '}Aktif{' '}
+        <Text style={styles.statValueAmber}>{activeCount}</Text>
+        {' · '}En yüksek{' '}
+        <Text style={styles.statValueSuccess}>{formatMoney(bestPayment)}</Text>
+      </Text>
+    </View>
   );
 }
 
 interface ContractCardProps {
   contract: Contract;
-  expanded: boolean;
   trucks: Truck[];
   drivers: Driver[];
   playerLevel: number;
   globalEconomy: GlobalEconomy;
-  marketHighlight?: boolean;
   isPinnedMarketMatch?: boolean;
-  pinnedMatchBadgeLabel?: string;
-  onToggle: () => void;
-  onAccept: () => void;
+  onPress: () => void;
 }
 
 function ContractCard({
   contract,
-  expanded,
   trucks,
   drivers,
   playerLevel,
   globalEconomy,
-  marketHighlight = false,
   isPinnedMarketMatch = false,
-  pinnedMatchBadgeLabel = 'Piyasa fırsatıyla eşleşiyor',
-  onToggle,
-  onAccept,
+  onPress,
 }: ContractCardProps) {
   const safePlayerLevel = Math.max(1, playerLevel ?? 1);
-  const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
   const availability = getContractAvailability(contract, trucks, drivers, safePlayerLevel);
-  const requiredLevel = getContractRequiredLevel(contract);
-  const isLevelLocked = requiredLevel > safePlayerLevel;
-  const levelUnlockHint = isLevelLocked
-    ? getContractLevelUnlockHint(safePlayerLevel, requiredLevel)
-    : null;
-  const { risk, financials, suggestedTruck, suggestedDriver, route } = analysis;
   const cargoWeight = availability.requiredCapacity ?? getContractCargoWeight(contract);
-  const capacityOk = availability.reason === 'OK';
-  const deadlineRisk = getDeadlineRiskText(contract, financials.travelHours);
-  const availabilityWarning = getContractAvailabilityWarningText(availability);
+  const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
+  const { financials, risk } = analysis;
+  const urgent = isUrgentContract(contract);
+  const pillLabel = getActionPillLabel(availability);
+  const riskSoft = urgent && risk.label === 'Yüksek risk';
+  const riskOutline = getRiskOutlineStyle(risk.label, riskSoft);
 
-  const handleAcceptPress = () => {
+  const handlePress = () => {
     if (!availability.canStart) {
       Alert.alert(
         availability.title ?? availability.buttonLabel,
@@ -506,194 +621,201 @@ function ContractCard({
       );
       return;
     }
-    onAccept();
+    onPress();
   };
 
-  const acceptButtonStyle = styles.acceptButton;
-  const acceptButtonExpandedStyle = styles.acceptButtonExpanded;
-  const acceptButtonTextStyle = styles.acceptButtonText;
-
   return (
-    <View
+    <TouchableOpacity
+      activeOpacity={0.88}
+      onPress={handlePress}
       style={[
-        styles.contractCard,
-        expanded && styles.contractCardExpanded,
-        marketHighlight && styles.contractCardMarketHighlight,
-        isPinnedMarketMatch && styles.contractCardPinnedMarket,
-        isLevelLocked && styles.contractCardLevelLocked,
+        styles.listCard,
+        isPinnedMarketMatch && styles.listCardHighlight,
       ]}
     >
       {isPinnedMarketMatch ? (
-        <View style={styles.marketMatchBadge}>
-          <Text style={styles.marketMatchBadgeText}>{pinnedMatchBadgeLabel}</Text>
+        <View style={styles.marketOpportunityTag}>
+          <Text style={styles.marketOpportunityTagText}>Piyasa fırsatı</Text>
         </View>
       ) : null}
-      {isLevelLocked ? (
-        <View style={styles.levelLockBadge}>
-          <Text style={styles.levelLockBadgeText}>Level {requiredLevel} işi</Text>
+
+      <View style={styles.cardRow}>
+        <View style={styles.iconBox}>
+          <ProductIcon productId={contract.productId} size={22} color={COLORS.cyan} />
         </View>
-      ) : null}
-      {levelUnlockHint ? (
-        <Text style={styles.levelUnlockHint}>{levelUnlockHint}</Text>
-      ) : null}
-      <TouchableOpacity activeOpacity={0.9} onPress={onToggle}>
-        <View style={styles.contractTopRow}>
-          <Text style={styles.contractRoute} numberOfLines={1}>
+
+        <View style={styles.cardCenter}>
+          <Text style={styles.cardRoute} numberOfLines={1}>
             {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
           </Text>
-          <Text style={styles.contractPayment}>{formatMoney(contract.payment)}</Text>
-        </View>
-
-        <Text style={styles.contractProduct}>
-          {getProductName(contract.productId)} · {formatTons(cargoWeight)}
-        </Text>
-
-        <View style={styles.contractMetaRow}>
-          <Text style={styles.contractMeta}>{formatDistance(contract.distanceKm)}</Text>
-          <Text style={styles.contractMetaDot}>·</Text>
-          <Text style={styles.contractMeta}>{formatHours(contract.deadlineHours)} kaldı</Text>
-          <Text style={styles.contractMetaDot}>·</Text>
-          <Text style={[styles.contractMeta, { color: risk.color }]}>{risk.label}</Text>
-        </View>
-
-        <View style={styles.financeRow}>
-          <View style={styles.financeItem}>
-            <Text style={styles.financeLabel}>
-              Kâr:{' '}
-              <Text
-                style={[
-                  styles.financeValue,
-                  { color: financials.estimatedProfit >= 0 ? COLORS.success : COLORS.danger },
-                ]}
-              >
-                {formatMoney(financials.estimatedProfit)}
-              </Text>
-            </Text>
-          </View>
-          <View style={[styles.financeItem, styles.financeItemRight]}>
-            <Text style={styles.financeLabel}>
-              Gider: <Text style={styles.financeValue}>{formatMoney(financials.totalExpense)}</Text>
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.riskReasonRow}>
-          <Text style={styles.riskReasonLabel}>Risk sebebi:</Text>
-          <Text style={styles.riskReasonValue} numberOfLines={2}>
-            {risk.primaryReason}
+          <Text style={styles.cardProduct} numberOfLines={1}>
+            {getProductName(contract.productId)}
+          </Text>
+          <Text style={styles.cardMetaLine} numberOfLines={1}>
+            Yük {formatTonsCompact(cargoWeight)} · Kalan {formatTimeLeft(contract.deadlineHours)}
           </Text>
         </View>
 
-        {availabilityWarning && !isLevelLocked ? (
-          <Text style={styles.capacityWarning}>{availabilityWarning}</Text>
-        ) : null}
-      </TouchableOpacity>
+        <View style={styles.cardRight}>
+          <Text style={styles.cardPayment}>{formatMoney(contract.payment)}</Text>
+          <Text
+            style={[
+              styles.cardProfit,
+              { color: financials.estimatedProfit >= 0 ? COLORS.green : COLORS.red },
+            ]}
+          >
+            Kâr {formatMoney(financials.estimatedProfit)}
+          </Text>
+        </View>
+      </View>
 
-      {expanded && (
-        <View style={styles.expandedArea}>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Yük ağırlığı</Text>
-            <Text style={styles.detailValue}>{formatTons(cargoWeight)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Uygun kamyon</Text>
-            <Text
+      <View style={styles.cardFooter}>
+        <Text style={styles.cardFinanceLine} numberOfLines={1}>
+          Gider {formatMoney(financials.totalExpense)} · Marj {formatPercent(financials.profitMargin)}
+        </Text>
+        <View style={styles.cardFooterActions}>
+          <View style={styles.cardFooterBadges}>
+            {urgent ? (
+              <View style={[styles.miniBadge, styles.urgentBadge]}>
+                <GameIcon name="urgent" size={9} color={COLORS.red} />
+                <Text style={styles.urgentBadgeText}>Acil</Text>
+              </View>
+            ) : null}
+            <View
               style={[
-                styles.detailValue,
-                { color: capacityOk ? COLORS.success : COLORS.danger },
+                styles.miniBadge,
+                riskSoft && styles.miniBadgeSoft,
+                {
+                  backgroundColor: riskOutline.backgroundColor,
+                  borderColor: riskOutline.borderColor,
+                },
               ]}
             >
-              {getTruckDetailText(availability, suggestedTruck)}
-            </Text>
+              <Text
+                style={[
+                  styles.miniBadgeText,
+                  riskSoft && styles.miniBadgeTextSoft,
+                  { color: riskOutline.color },
+                ]}
+              >
+                {formatRiskDisplayLabel(risk.label)}
+              </Text>
+            </View>
           </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Uygun şoför</Text>
-            <Text style={styles.detailValue}>{getDriverDetailText(availability, suggestedDriver)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Tahmini süre</Text>
-            <Text style={styles.detailValue}>{formatHours(financials.travelHours)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Teslim süresi</Text>
-            <Text style={styles.detailValue}>{formatHours(contract.deadlineHours)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Yakıt gideri</Text>
-            <Text style={styles.detailValue}>{formatMoney(financials.fuelCost)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Şoför gideri</Text>
-            <Text style={styles.detailValue}>{formatMoney(financials.driverCost)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Bakım gideri</Text>
-            <Text style={styles.detailValue}>{formatMoney(financials.maintenanceCost)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Risk payı</Text>
-            <Text style={styles.detailValue}>{formatMoney(financials.riskReserve)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Net tahmini kâr</Text>
-            <Text
-              style={[
-                styles.detailValue,
-                { color: financials.estimatedProfit >= 0 ? COLORS.success : COLORS.danger },
-              ]}
-            >
-              {formatMoney(financials.estimatedProfit)}
-            </Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Kâr marjı</Text>
-            <Text style={styles.detailValue}>{formatPercent(financials.profitMargin)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Teslim süresi riski</Text>
-            <Text style={styles.detailValue}>{deadlineRisk}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Rota zorluğu</Text>
-            <Text style={styles.detailValue}>{formatPercent(route?.difficulty ?? 0.5)}</Text>
-          </View>
-          <TouchableOpacity
-            style={[acceptButtonExpandedStyle, !availability.canStart && styles.acceptButtonBlocked]}
-            onPress={handleAcceptPress}
-            activeOpacity={0.85}
+          <View
+            style={[
+              styles.actionPill,
+              availability.canStart ? styles.actionPillReady : styles.actionPillBlocked,
+            ]}
           >
             <Text
               style={[
-                acceptButtonTextStyle,
-                !availability.canStart && styles.acceptButtonTextBlocked,
+                styles.actionPillText,
+                availability.canStart ? styles.actionPillTextReady : styles.actionPillTextBlocked,
               ]}
             >
-              {availability.buttonLabel}
+              {pillLabel}
             </Text>
-          </TouchableOpacity>
+          </View>
         </View>
-      )}
+      </View>
+    </TouchableOpacity>
+  );
+}
 
-      <TouchableOpacity
-        style={[acceptButtonStyle, !availability.canStart && styles.acceptButtonBlocked]}
-        onPress={handleAcceptPress}
-        activeOpacity={0.85}
-      >
-        <Text
-          style={[acceptButtonTextStyle, !availability.canStart && styles.acceptButtonTextBlocked]}
-        >
-          {availability.buttonLabel}
-        </Text>
-      </TouchableOpacity>
+interface ActiveDeliveryCardProps {
+  delivery: Delivery;
+  trucks: Truck[];
+  drivers: Driver[];
+  currentTime: number;
+}
+
+function ActiveDeliveryCard({ delivery, trucks, drivers, currentTime }: ActiveDeliveryCardProps) {
+  const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
+  const truck = (trucks ?? []).find((item) => item.id === delivery.truckId);
+  const driver = (drivers ?? []).find((item) => item.id === delivery.driverId);
+
+  return (
+    <View style={styles.listCard}>
+      <View style={styles.cardRow}>
+        <View style={styles.iconBox}>
+          <ProductIcon productId={delivery.productId} size={22} color={COLORS.cyan} />
+        </View>
+        <View style={styles.cardCenter}>
+          <Text style={styles.cardRoute} numberOfLines={1}>
+            {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
+          </Text>
+          <Text style={styles.cardProduct} numberOfLines={1}>
+            {getProductName(delivery.productId)}
+          </Text>
+          <Text style={styles.cardMetaLine} numberOfLines={1}>
+            {truck?.name ?? 'Kamyon'} · {driver?.name ?? 'Şoför'}
+          </Text>
+        </View>
+        <View style={styles.cardRight}>
+          <Text style={styles.cardPayment}>{formatMoney(delivery.estimatedProfit)}</Text>
+          <View style={styles.cardMetricTimeRow}>
+            <GameIcon name="time" size={11} color={COLORS.muted} />
+            <Text style={styles.cardMetaValue}>{formatTimeLeft(hoursLeft)}</Text>
+          </View>
+        </View>
+      </View>
+      <View style={styles.activeProgressRow}>
+        <ProgressBar progress={delivery.progress} color={COLORS.cyan} height={3} />
+        <Text style={styles.activeProgressText}>{formatPercent(delivery.progress)}</Text>
+      </View>
+    </View>
+  );
+}
+
+interface CompletedContractCardProps {
+  contract: Contract;
+  globalEconomy: GlobalEconomy;
+  netProfit?: number;
+}
+
+function CompletedContractCard({ contract, globalEconomy, netProfit }: CompletedContractCardProps) {
+  const profit =
+    netProfit ??
+    analyzeContract(contract, globalEconomy).financials.estimatedProfit;
+
+  return (
+    <View style={styles.listCard}>
+      <View style={styles.cardRow}>
+        <View style={styles.iconBox}>
+          <ProductIcon productId={contract.productId} size={22} color={COLORS.green} />
+        </View>
+        <View style={styles.cardCenter}>
+          <Text style={styles.cardRoute} numberOfLines={1}>
+            {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
+          </Text>
+          <Text style={styles.cardProduct} numberOfLines={1}>
+            {getProductName(contract.productId)}
+          </Text>
+        </View>
+        <View style={styles.cardRight}>
+          <Text style={styles.cardPayment}>{formatMoney(contract.payment)}</Text>
+          <Text style={[styles.cardProfit, { color: COLORS.green }]}>
+            Kâr {formatMoney(profit)}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.cardFooter}>
+        <View style={[styles.miniBadge, styles.completedBadge]}>
+          <GameIcon name="success" size={10} color={COLORS.green} />
+          <Text style={[styles.miniBadgeText, { color: COLORS.green }]}>Tamamlandı</Text>
+        </View>
+      </View>
     </View>
   );
 }
 
 export default function ContractsScreen() {
   const player = useGameStore((state) => state.player);
-  const cities = useGameStore((state) => state.cities) ?? [];
   const contracts = useGameStore((state) => state.contracts) ?? [];
+  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const currentTime = useGameStore((state) => state.currentTime);
 
   const startDelivery = useGameStore((state) => state.startDelivery);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
@@ -701,19 +823,13 @@ export default function ContractsScreen() {
   const highlightedContractId = useGameStore((state) => state.highlightedContractId);
   const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
   const setHighlightedContractId = useGameStore((state) => state.setHighlightedContractId);
-  const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
-  const getContractRefreshRemainingSeconds = useGameStore(
-    (state) => state.getContractRefreshRemainingSeconds,
-  );
-  const { scrollBottomPadding } = useTabBarLayout();
+  const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
+  const { tabBarHeight, bottomInset } = useTabBarLayout();
+  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
 
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewType>(null);
 
-  const [activeFilter, setActiveFilter] = useState<FilterKey>('bestPayment');
-  const [refreshCountdown, setRefreshCountdown] = useState(
-    contractBalance.contractRefreshIntervalMs / 1000,
-  );
-  const [expandedContractId, setExpandedContractId] = useState<string | null>(null);
+  const [activeSegment, setActiveSegment] = useState<SegmentKey>('available');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
@@ -724,21 +840,6 @@ export default function ContractsScreen() {
     return () => clearTimeout(timeout);
   }, [statusMessage]);
 
-  useEffect(() => {
-    refreshContractsFromMarket();
-    const refreshInterval = setInterval(() => {
-      refreshContractsFromMarket();
-    }, contractBalance.contractRefreshIntervalMs);
-    return () => clearInterval(refreshInterval);
-  }, [refreshContractsFromMarket]);
-
-  useEffect(() => {
-    const countdownInterval = setInterval(() => {
-      setRefreshCountdown(getContractRefreshRemainingSeconds());
-    }, 1000);
-    return () => clearInterval(countdownInterval);
-  }, [getContractRefreshRemainingSeconds]);
-
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
@@ -748,34 +849,34 @@ export default function ContractsScreen() {
     [contracts],
   );
 
-  const activeContracts = useMemo(
-    () => (contracts ?? []).filter((c) => c.status === 'active'),
+  const runningDeliveries = useMemo(
+    () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
+    [activeDeliveries],
+  );
+
+  const completedContracts = useMemo(
+    () => contracts.filter((c) => c.status === 'completed'),
     [contracts],
   );
 
   const topSummary = useMemo(() => {
     if (availableContracts.length === 0) {
-      return {
-        bestPayment: 0,
-        shortestRoute: 0,
-        urgentCount: 0,
-      };
+      return { bestPayment: 0 };
     }
     return {
       bestPayment: Math.max(...availableContracts.map((c) => c.payment)),
-      shortestRoute: Math.min(...availableContracts.map((c) => c.distanceKm)),
-      urgentCount: availableContracts.filter(isUrgentContract).length,
     };
   }, [availableContracts]);
 
   const filteredContracts = useMemo(() => {
+    if (!globalEconomy) return [];
     return sortContractsForDisplay(
       availableContracts,
       trucks,
       drivers,
       playerLevel,
       globalEconomy,
-      activeFilter,
+      LIST_FILTER,
       marketContractFilter,
     );
   }, [
@@ -784,9 +885,17 @@ export default function ContractsScreen() {
     drivers,
     playerLevel,
     globalEconomy,
-    activeFilter,
     marketContractFilter,
   ]);
+
+  const tabSegments = useMemo<TabSegment[]>(
+    () => [
+      { key: 'available', label: 'Müsait', count: availableContracts.length },
+      { key: 'active', label: 'Aktif', count: runningDeliveries.length },
+      { key: 'completed', label: 'Tamamlanan', count: completedContracts.length },
+    ],
+    [availableContracts.length, runningDeliveries.length, completedContracts.length],
+  );
 
   const marketMatchStats = useMemo(() => {
     if (!isRouteContractFilter(marketContractFilter)) {
@@ -829,7 +938,7 @@ export default function ContractsScreen() {
 
     if (highlightId) {
       setHighlightedContractId(highlightId);
-      setExpandedContractId(highlightId);
+      setActiveSegment('available');
     } else {
       setHighlightedContractId(null);
     }
@@ -841,19 +950,13 @@ export default function ContractsScreen() {
     }, MARKET_HIGHLIGHT_TIMEOUT_MS);
 
     return () => clearTimeout(timer);
-  }, [
-    availableContracts,
-    marketContractFilter,
-    setHighlightedContractId,
-  ]);
+  }, [availableContracts, marketContractFilter, setHighlightedContractId]);
 
-  if (!player) {
+  if (!player || !globalEconomy) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Oyun başlatılıyor...</Text>
-        </View>
-      </SafeAreaView>
+      <AppScreen scroll>
+        <EmptyState title="Oyun başlatılıyor..." icon="contract" />
+      </AppScreen>
     );
   }
 
@@ -890,7 +993,7 @@ export default function ContractsScreen() {
 
     closeAssignmentModal();
     setStatusMessage({ type: 'success', text: 'Teslimat başlatıldı' });
-    setExpandedContractId(null);
+    setActiveSegment('active');
   };
 
   const handleGoToFleet = (subTab?: 'trucks' | 'drivers' | 'shop') => {
@@ -903,665 +1006,548 @@ export default function ContractsScreen() {
     setHighlightedContractId(null);
   };
 
-  const toggleExpanded = (contractId: string) => {
-    setExpandedContractId((current) => (current === contractId ? null : contractId));
+  const handleRefresh = () => {
+    refreshMarketSnapshot();
+    setStatusMessage({ type: 'success', text: 'Piyasa güncellendi' });
   };
 
+  const marketFilterLine = isRouteContractFilter(marketContractFilter)
+    ? `${marketContractFilter.fromCityName} → ${marketContractFilter.toCityName} · ${marketContractFilter.productName}`
+    : '';
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        ref={scrollRef}
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        showsVerticalScrollIndicator={false}
-      >
+    <View style={[styles.screenRoot, { paddingBottom: tabBarHeight }]}>
+      <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
-          <View style={styles.headerTextBlock}>
-            <Text style={styles.title}>Sözleşmeler</Text>
-            <Text style={styles.refreshHint}>
-              Fırsatlar 30 sn aralıklarla güncellenir
-              {refreshCountdown > 0 ? ` · Sonraki yenileme: ${refreshCountdown}sn` : ''}
-            </Text>
-          </View>
-          <View style={styles.headerBadges}>
-            <View style={styles.headerBadge}>
-              <Text style={styles.headerBadgeValue}>{availableContracts.length}</Text>
-              <Text style={styles.headerBadgeLabel}>Müsait</Text>
-            </View>
-            <View style={styles.headerBadge}>
-              <Text style={[styles.headerBadgeValue, { color: COLORS.secondary }]}>
-                {activeContracts.length}
-              </Text>
-              <Text style={styles.headerBadgeLabel}>Aktif</Text>
-            </View>
-          </View>
+          <TouchableOpacity style={styles.headerIconButton} onPress={() => {}} activeOpacity={0.8}>
+            <Text style={styles.headerIconText}>‹</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Sözleşmeler</Text>
+          <IconButton
+            icon="refresh"
+            onPress={handleRefresh}
+            size={16}
+            color={COLORS.cyan}
+            backgroundColor={COLORS.card}
+            style={styles.headerIconButton}
+          />
         </View>
 
-        {statusMessage && (
+        {statusMessage ? (
           <View
             style={[
               styles.statusBanner,
-              { borderColor: statusMessage.type === 'success' ? COLORS.success : COLORS.danger },
+              {
+                borderColor: statusMessage.type === 'success' ? COLORS.green : COLORS.red,
+                backgroundColor:
+                  statusMessage.type === 'success' ? colors.successSoft : colors.dangerSoft,
+              },
             ]}
           >
             <Text
               style={[
                 styles.statusBannerText,
-                { color: statusMessage.type === 'success' ? COLORS.success : COLORS.danger },
+                { color: statusMessage.type === 'success' ? COLORS.green : COLORS.red },
               ]}
             >
               {statusMessage.text}
             </Text>
           </View>
-        )}
-
-        {isRouteContractFilter(marketContractFilter) ? (
-          <View style={styles.marketFilterCard}>
-            <View style={styles.marketFilterHeaderRow}>
-              <View style={styles.marketFilterTextWrap}>
-                <Text style={styles.marketFilterTitle}>
-                  {marketContractFilter.source === 'map' && marketContractFilter.contractId
-                    ? 'Haritadaki önerilen iş gösteriliyor'
-                    : marketContractFilter.source === 'map'
-                      ? 'Haritadaki fırsata göre gösteriliyor'
-                      : 'Piyasa fırsatına göre gösteriliyor'}
-                </Text>
-                <Text style={styles.marketFilterSubtitle}>
-                  {marketContractFilter.fromCityName} → {marketContractFilter.toCityName} ·{' '}
-                  {marketContractFilter.productName}
-                </Text>
-                <Text style={styles.marketFilterHint}>
-                  {marketContractFilter.source === 'map' && marketContractFilter.contractId
-                    ? 'Harita ekranındaki önerilen iş en üste taşındı.'
-                    : marketContractFilter.source === 'map'
-                      ? 'Harita ekranındaki en iyi fırsata ait sözleşmeler üstte listelendi.'
-                      : 'Piyasa sayfasındaki fiyat farkına göre ilgili işler üstte listelendi.'}
-                </Text>
-              </View>
-              <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
-                <Text style={styles.marketFilterClear}>Filtreyi Temizle</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
         ) : null}
 
-        {isRouteContractFilter(marketContractFilter) &&
-        marketMatchStats.exact === 0 &&
-        marketMatchStats.related === 0 ? (
-          <View style={styles.marketNoMatchCard}>
-            <Text style={styles.marketNoMatchTitle}>
-              Bu fırsata uygun aktif sözleşme şu anda yok.
-            </Text>
-            <Text style={styles.marketNoMatchSubtitle}>
-              Piyasa güncellendikçe bu rota için yeni sözleşmeler oluşabilir.
-            </Text>
-          </View>
-        ) : null}
+        <CompactStatRow
+          availableCount={availableContracts.length}
+          activeCount={runningDeliveries.length}
+          bestPayment={topSummary.bestPayment}
+        />
 
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{availableContracts.length}</Text>
-            <Text style={styles.summaryLabel}>Müsait</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: COLORS.success }]}>
-              {formatMoney(topSummary.bestPayment)}
-            </Text>
-            <Text style={styles.summaryLabel}>En yüksek ödeme</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{formatDistance(topSummary.shortestRoute)}</Text>
-            <Text style={styles.summaryLabel}>Kısa rota</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: COLORS.primary }]}>
-              {topSummary.urgentCount}
-            </Text>
-            <Text style={styles.summaryLabel}>Acil</Text>
-          </View>
-        </View>
+        <ContractsTabBar
+          segments={tabSegments}
+          activeKey={activeSegment}
+          onChange={setActiveSegment}
+        />
 
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          nestedScrollEnabled
-          style={styles.filterScroll}
-          contentContainerStyle={styles.filterScrollContent}
+          ref={scrollRef}
+          style={styles.listScroll}
+          contentContainerStyle={[
+            styles.listScrollContent,
+            { paddingBottom: listScrollBottomPadding },
+          ]}
+          showsVerticalScrollIndicator={false}
         >
-          {FILTERS.map((filter) => (
-            <FilterChip
-              key={filter.key}
-              label={filter.label}
-              active={activeFilter === filter.key}
-              onPress={() => setActiveFilter(filter.key)}
-            />
-          ))}
-        </ScrollView>
+          {activeSegment === 'available' ? (
+            <>
+              {isRouteContractFilter(marketContractFilter) ? (
+                <View style={styles.marketFilterCompact}>
+                  <Text style={styles.marketFilterLine} numberOfLines={1}>
+                    Piyasa fırsatı · {marketFilterLine}
+                  </Text>
+                  <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
+                    <Text style={styles.marketFilterClear}>Temizle</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
 
-        {availableContracts.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📄</Text>
-            <Text style={styles.emptyTitle}>Müsait sözleşme yok</Text>
-            <Text style={styles.emptySubtitle}>
-              Şu anda uygun sözleşme yok. Piyasa yeni fırsatlar oluşturdukça burada görünecek.
-            </Text>
-          </View>
-        ) : filteredContracts.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>🔍</Text>
-            <Text style={styles.emptyTitle}>Eşleşme yok</Text>
-            <Text style={styles.emptySubtitle}>Başka bir filtre deneyerek iş arayın.</Text>
-          </View>
-        ) : (
-          filteredContracts.map((contract) => {
-            const matchTier = isRouteContractFilter(marketContractFilter)
-              ? getContractFilterSortTier(contract, marketContractFilter)
-              : 99;
-            const isPinnedRecommended =
-              marketContractFilter?.contractId === contract.id &&
-              highlightedContractId === contract.id;
-            const pinnedMatchBadgeLabel = isPinnedRecommended
-              ? 'Harita önerisi'
-              : marketContractFilter?.source === 'map'
-                ? 'Harita fırsatıyla eşleşiyor'
-                : 'Piyasa fırsatıyla eşleşiyor';
+              {isRouteContractFilter(marketContractFilter) &&
+              marketMatchStats.exact === 0 &&
+              marketMatchStats.related === 0 ? (
+                <View style={styles.marketNoMatchCompact}>
+                  <Text style={styles.marketNoMatchText}>
+                    Bu fırsata uygun aktif sözleşme şu anda yok.
+                  </Text>
+                </View>
+              ) : null}
 
-            return (
-              <ContractCard
-                key={contract.id}
-                contract={contract}
-                expanded={expandedContractId === contract.id}
-                trucks={player.trucks}
-                drivers={player.drivers}
-                playerLevel={player.level ?? player.companyLevel ?? 1}
-                globalEconomy={globalEconomy}
-                marketHighlight={matchTier > 0 && matchTier < 99}
-                isPinnedMarketMatch={highlightedContractId === contract.id}
-                pinnedMatchBadgeLabel={pinnedMatchBadgeLabel}
-                onToggle={() => toggleExpanded(contract.id)}
-                onAccept={() => openAssignmentModal(contract)}
+              {availableContracts.length === 0 ? (
+                <EmptyState
+                  title="Şu anda uygun sözleşme yok"
+                  message="Piyasa yeni fırsatlar oluşturdukça burada görünecek."
+                  icon="contract"
+                />
+              ) : (
+                filteredContracts.map((contract) => (
+                  <ContractCard
+                    key={contract.id}
+                    contract={contract}
+                    trucks={player.trucks ?? []}
+                    drivers={player.drivers ?? []}
+                    playerLevel={player.level ?? player.companyLevel ?? 1}
+                    globalEconomy={globalEconomy}
+                    isPinnedMarketMatch={highlightedContractId === contract.id}
+                    onPress={() => openAssignmentModal(contract)}
+                  />
+                ))
+              )}
+            </>
+          ) : null}
+
+          {activeSegment === 'active' ? (
+            runningDeliveries.length === 0 ? (
+              <EmptyState
+                title="Şu anda aktif teslimat yok."
+                message="Yeni bir sözleşme başlattığında rotalar burada görünecek."
+                icon="truck"
               />
-            );
-          })
-        )}
-      </ScrollView>
+            ) : (
+              runningDeliveries.map((delivery) => (
+                <ActiveDeliveryCard
+                  key={delivery.id}
+                  delivery={delivery}
+                  trucks={player.trucks ?? []}
+                  drivers={player.drivers ?? []}
+                  currentTime={currentTime}
+                />
+              ))
+            )
+          ) : null}
+
+          {activeSegment === 'completed' ? (
+            completedContracts.length === 0 ? (
+              <EmptyState
+                title="Henüz tamamlanan sözleşme yok."
+                message="Tamamlanan işler burada listelenecek."
+                icon="success"
+              />
+            ) : (
+              completedContracts.map((contract) => {
+                const linkedDelivery = findDeliveryForContract(contract.id, activeDeliveries);
+                return (
+                  <CompletedContractCard
+                    key={contract.id}
+                    contract={contract}
+                    globalEconomy={globalEconomy}
+                    netProfit={linkedDelivery?.estimatedProfit}
+                  />
+                );
+              })
+            )
+          ) : null}
+        </ScrollView>
+      </SafeAreaView>
 
       <ContractAssignmentModal
         visible={assignmentModalVisible}
         contract={assignmentContract}
-        trucks={player.trucks}
-        drivers={player.drivers}
+        trucks={player.trucks ?? []}
+        drivers={player.drivers ?? []}
         playerLevel={player.level ?? player.companyLevel ?? 1}
         onClose={closeAssignmentModal}
         onConfirm={handleConfirmAssignment}
         onGoToFleet={handleGoToFleet}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,
     paddingTop: STATUS_BAR_HEIGHT,
+    paddingHorizontal: spacing.lg,
   },
-  scrollView: {
+  listScroll: {
     flex: 1,
   },
-  scrollContent: {
-    paddingHorizontal: UI.spacing.screen,
-    paddingTop: 8,
+  listScrollContent: {
+    paddingTop: spacing.sm,
   },
-  loadingContainer: {
-    flex: 1,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  headerIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadingText: {
-    color: COLORS.textSecondary,
+  headerIconText: {
+    color: COLORS.text,
     fontSize: 16,
+    fontWeight: '700',
   },
-
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 14,
-  },
-  headerTextBlock: {
+  headerTitle: {
     flex: 1,
-    marginRight: 12,
-  },
-  title: {
-    color: COLORS.textPrimary,
-    fontSize: 26,
+    color: COLORS.text,
+    fontSize: 17,
     fontWeight: '800',
+    letterSpacing: 0.2,
+    textAlign: 'center',
   },
-  refreshHint: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-    marginTop: 4,
-    lineHeight: 16,
-  },
-  headerBadges: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  headerBadge: {
-    backgroundColor: COLORS.card,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    alignItems: 'center',
-    minWidth: 58,
-  },
-  headerBadgeValue: {
-    color: COLORS.primary,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  headerBadgeLabel: {
-    color: COLORS.textMuted,
-    fontSize: 10,
-    marginTop: 1,
-  },
-
   statusBanner: {
-    backgroundColor: COLORS.card,
     borderWidth: 1,
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
   },
   statusBannerText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     textAlign: 'center',
   },
-
-  summaryCard: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
+  compactStatRow: {
+    marginBottom: spacing.sm,
+    minHeight: 30,
+    paddingVertical: 7,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+    backgroundColor: colors.cardSoft,
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    marginBottom: 14,
+    justifyContent: 'center',
   },
-  summaryItem: {
+  compactStatText: {
+    fontSize: 11,
+    color: COLORS.muted,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  statValueInfo: {
+    color: COLORS.cyan,
+    fontWeight: '800',
+  },
+  statValueAmber: {
+    color: colors.accentAmber,
+    fontWeight: '800',
+  },
+  statValueSuccess: {
+    color: COLORS.green,
+    fontWeight: '800',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  tabItem: {
     flex: 1,
     alignItems: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
   },
-  summaryValue: {
-    color: COLORS.textPrimary,
-    fontSize: 13,
-    fontWeight: '800',
+  tabDivider: {
+    width: 1,
+    backgroundColor: COLORS.border,
+    marginVertical: spacing.sm,
   },
-  summaryLabel: {
-    color: COLORS.textMuted,
-    fontSize: 10,
-    marginTop: 3,
-  },
-
-  filterScroll: {
-    marginBottom: 14,
-    flexGrow: 0,
-  },
-  filterScrollContent: {
+  tabLabelRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingRight: UI.spacing.screen,
-  },
-  filterChip: {
-    backgroundColor: COLORS.card,
-    borderRadius: 18,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    flexShrink: 0,
-  },
-  filterChipActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  filterChipText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  filterChipTextActive: {
-    color: '#0B1220',
-  },
-
-  contractCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 16,
-    marginBottom: 13,
-  },
-  contractCardExpanded: {
-    borderColor: COLORS.primary,
-  },
-  contractCardMarketHighlight: {
-    borderColor: COLORS.secondary,
-    borderWidth: 1.5,
-  },
-  contractCardPinnedMarket: {
-    borderColor: COLORS.primary,
-    borderWidth: 2,
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-  },
-  contractCardLevelLocked: {
-    opacity: 0.62,
-  },
-  marketMatchBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(245, 158, 11, 0.18)',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginBottom: 8,
-  },
-  marketMatchBadgeText: {
-    color: COLORS.primary,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  levelLockBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginBottom: 8,
-  },
-  levelLockBadgeText: {
-    color: COLORS.danger,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  levelUnlockHint: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  contractTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  contractRoute: {
-    color: COLORS.textPrimary,
-    fontSize: 15,
-    fontWeight: '800',
-    flex: 1,
-    marginRight: 10,
-  },
-  contractProduct: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    marginBottom: 6,
-  },
-  contractMetaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  contractMeta: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  contractMetaDot: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    marginHorizontal: 5,
-  },
-  contractPayment: {
-    color: COLORS.success,
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  financeRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-    gap: 12,
-  },
-  financeItem: {
-    flex: 1,
-  },
-  financeItemRight: {
-    alignItems: 'flex-end',
-  },
-  financeLabel: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  financeValue: {
-    color: COLORS.textPrimary,
-    fontWeight: '800',
-  },
-  riskReasonRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 4,
   },
-  riskReasonLabel: {
-    color: COLORS.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  riskReasonValue: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
-    flexShrink: 1,
-    flexGrow: 1,
-  },
-
-  expandedArea: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 5,
-  },
-  detailLabel: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-  },
-  detailValue: {
-    color: COLORS.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  acceptButton: {
-    backgroundColor: COLORS.primary,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-  },
-  acceptButtonExpanded: {
-    backgroundColor: COLORS.primary,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-  },
-  acceptButtonText: {
-    color: '#0B1220',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  acceptButtonBlocked: {
-    backgroundColor: '#1C1917',
-    borderWidth: 1,
-    borderColor: '#EA580C',
-  },
-  acceptButtonTextBlocked: {
-    color: '#FB923C',
-  },
-  capacityWarning: {
-    marginTop: 8,
-    color: '#FB923C',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  capacityHint: {
-    marginTop: 4,
-    color: COLORS.textMuted,
-    fontSize: 11,
-    lineHeight: 15,
-  },
-
-  marketFilterCard: {
-    backgroundColor: '#0F172A',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.secondary,
-    padding: 12,
-    marginBottom: 12,
-  },
-  marketFilterHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  marketFilterTextWrap: {
-    flex: 1,
-  },
-  marketFilterTitle: {
-    color: COLORS.textPrimary,
+  tabLabel: {
     fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.muted,
+  },
+  tabLabelActive: {
+    color: COLORS.cyan,
     fontWeight: '800',
-    marginBottom: 4,
   },
-  marketFilterSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+  tabBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: COLORS.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
   },
-  marketFilterHint: {
-    color: COLORS.textMuted,
+  tabBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    left: spacing.sm,
+    right: spacing.sm,
+    height: 2,
+    backgroundColor: COLORS.cyan,
+    borderRadius: 1,
+  },
+  marketFilterCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.accentAmberSoft,
+    borderWidth: 1,
+    borderColor: colors.accentAmber,
+    borderRadius: 10,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  marketFilterLine: {
+    flex: 1,
     fontSize: 11,
-    lineHeight: 16,
-    marginTop: 6,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
   },
   marketFilterClear: {
-    color: COLORS.primary,
-    fontSize: 12,
+    fontSize: 11,
+    color: colors.accentAmber,
+    fontWeight: '800',
+  },
+  marketNoMatchCompact: {
+    backgroundColor: colors.cardSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  marketNoMatchText: {
+    fontSize: 11,
+    color: colors.accentAmber,
     fontWeight: '700',
   },
-  marketNoMatchCard: {
-    backgroundColor: '#1C1410',
+  listCard: {
+    backgroundColor: COLORS.card,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#7C2D12',
-    padding: 12,
-    marginBottom: 12,
+    borderColor: COLORS.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
   },
-  marketNoMatchTitle: {
-    color: COLORS.primary,
-    fontSize: 13,
-    fontWeight: '800',
+  listCardHighlight: {
+    borderColor: colors.accentAmber,
+    borderLeftWidth: 3,
+    backgroundColor: colors.accentAmberSoft,
+  },
+  marketOpportunityTag: {
+    alignSelf: 'flex-start',
     marginBottom: 6,
-  },
-  marketNoMatchSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 10,
-  },
-  marketNoMatchActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  marketNoMatchButton: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  marketNoMatchButtonText: {
-    color: '#0B1220',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  marketNoMatchButtonSecondary: {
-    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: colors.accentAmberSoft,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderColor: colors.accentAmber,
   },
-  marketNoMatchButtonSecondaryText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
+  marketOpportunityTagText: {
+    fontSize: 9,
     fontWeight: '700',
+    color: colors.accentAmber,
   },
-
-  emptyState: {
-    backgroundColor: COLORS.card,
-    borderRadius: 16,
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  iconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: colors.cardSoft,
     borderWidth: 1,
     borderColor: COLORS.border,
-    padding: 28,
     alignItems: 'center',
-    marginTop: 8,
+    justifyContent: 'center',
   },
-  emptyIcon: {
-    fontSize: 36,
-    marginBottom: 10,
+  cardCenter: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 1,
   },
-  emptyTitle: {
-    color: COLORS.textPrimary,
+  cardRoute: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 2,
+  },
+  cardProduct: {
+    fontSize: 11,
+    color: COLORS.muted,
+    marginBottom: 2,
+  },
+  cardMetaLine: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  cardRight: {
+    alignItems: 'flex-end',
+    minWidth: 92,
+    maxWidth: 112,
+    paddingTop: 1,
+  },
+  cardPayment: {
     fontSize: 16,
     fontWeight: '800',
-    marginBottom: 6,
+    color: COLORS.green,
+    marginBottom: 3,
   },
-  emptySubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 16,
+  cardProfit: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.green,
   },
-  emptyButton: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 20,
-    paddingVertical: 11,
-    borderRadius: 10,
+  cardMetaValue: {
+    fontSize: 10,
+    color: COLORS.text,
+    fontWeight: '700',
   },
-  emptyButtonText: {
-    color: '#0B1220',
-    fontSize: 13,
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: 8,
+  },
+  cardFinanceLine: {
+    flex: 1,
+    flexShrink: 1,
+    fontSize: 10,
+    color: COLORS.muted,
+    fontWeight: '600',
+    marginRight: spacing.xs,
+  },
+  cardFooterActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  cardFooterBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  miniBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    height: 21,
+    paddingHorizontal: 7,
+    borderRadius: 11,
+    borderWidth: 1,
+  },
+  miniBadgeSoft: {
+    height: 20,
+    paddingHorizontal: 6,
+  },
+  miniBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  miniBadgeTextSoft: {
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  urgentBadge: {
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.red,
+    height: 22,
+  },
+  urgentBadgeText: {
+    fontSize: 10,
     fontWeight: '800',
+    color: COLORS.red,
+  },
+  completedBadge: {
+    backgroundColor: colors.successSoft,
+    borderColor: colors.success,
+  },
+  actionPill: {
+    height: 24,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionPillReady: {
+    backgroundColor: colors.infoSoft,
+    borderColor: COLORS.cyan,
+  },
+  actionPillBlocked: {
+    backgroundColor: colors.cardSoft,
+    borderColor: COLORS.border,
+  },
+  actionPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  actionPillTextReady: {
+    color: COLORS.cyan,
+  },
+  actionPillTextBlocked: {
+    color: COLORS.muted,
+  },
+  cardMetricTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  activeProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  activeProgressText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.muted,
+    minWidth: 30,
+    textAlign: 'right',
   },
 });

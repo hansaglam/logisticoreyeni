@@ -6,6 +6,7 @@
  */
 
 import type { DriverTier, FutureUnlockStatus } from '../types/game';
+import { contractLevelBalance } from './contractLevelBalance';
 
 export interface ContractUnlockTier {
   level: number;
@@ -47,25 +48,29 @@ export const levelConfig = {
   contractUnlocks: [
     { level: 1, maxTonnage: 25, label: 'Küçük sözleşmeler' },
     { level: 2, maxTonnage: 40, label: 'Orta tonajlı sözleşmeler' },
-    { level: 5, maxTonnage: 60, label: 'Büyük sözleşmeler' },
-    { level: 8, maxTonnage: 90, label: 'Ağır yük sözleşmeleri' },
-    { level: 10, maxTonnage: 120, label: 'Kurumsal sözleşmeler' },
+    { level: 3, maxTonnage: 60, label: 'Genişletilmiş sözleşmeler' },
+    { level: 4, maxTonnage: 85, label: 'Büyük tonajlı sözleşmeler' },
+    { level: 5, maxTonnage: 100, label: 'Büyük sözleşmeler' },
+    { level: 8, maxTonnage: 120, label: 'Ağır yük sözleşmeleri' },
+    { level: 10, maxTonnage: 150, label: 'Kurumsal sözleşmeler' },
   ] satisfies ContractUnlockTier[],
 
   /** Sözleşme üretiminde kullanılan tonaj aralıkları */
   contractGeneration: {
     tonnageRanges: [
       { level: 1, minTonnage: 10, maxTonnage: 25 },
-      { level: 2, minTonnage: 25, maxTonnage: 40 },
-      { level: 5, minTonnage: 40, maxTonnage: 60 },
-      { level: 8, minTonnage: 60, maxTonnage: 90 },
-      { level: 10, minTonnage: 90, maxTonnage: 120 },
+      { level: 2, minTonnage: 20, maxTonnage: 40 },
+      { level: 3, minTonnage: 25, maxTonnage: 60 },
+      { level: 4, minTonnage: 40, maxTonnage: 85 },
+      { level: 5, minTonnage: 60, maxTonnage: 100 },
+      { level: 8, minTonnage: 90, maxTonnage: 120 },
+      { level: 10, minTonnage: 100, maxTonnage: 150 },
     ] satisfies ContractTonnageRange[],
-    /** Mevcut seviye / bir üst / iki üst seviye dağılımı */
+    /** @deprecated contractLevelBalance kullanın */
     tierDistribution: {
-      currentLevel: 0.8,
-      nextLevel: 0.15,
-      futureTeaser: 0.05,
+      currentLevel: 0.7,
+      nextLevel: 0.2,
+      futureTeaser: 0.08,
     },
     /** Filo kapasitesine göre iş dağılımı */
     capacityDistribution: {
@@ -390,19 +395,66 @@ export function getNextContractUnlockTier(playerLevel: number): ContractUnlockTi
   return levelConfig.contractUnlocks.find((tier) => tier.level > safeLevel) ?? null;
 }
 
-export type ContractGenerationLevelTier = 'current' | 'next' | 'future';
+export type ContractGenerationLevelTier = 'current' | 'next' | 'twoAbove' | 'special';
 
-/** Sözleşme üretiminde seviye kademesi seçer */
-export function pickContractGenerationLevelTier(): ContractGenerationLevelTier {
-  const { tierDistribution } = levelConfig.contractGeneration;
+interface ContractTierWeights {
+  current: number;
+  next: number;
+  twoAbove: number;
+  special: number;
+}
+
+function getContractTierWeightsForPlayer(playerLevel: number): ContractTierWeights {
+  const safeLevel = Math.max(1, playerLevel);
+  const balance = contractLevelBalance;
+
+  if (safeLevel === 1) {
+    return { current: 0.8, next: 0.18, twoAbove: 0.02, special: 0 };
+  }
+  if (safeLevel === 2) {
+    return { current: 0.75, next: 0.2, twoAbove: 0.05, special: 0 };
+  }
+  if (safeLevel === 3) {
+    return { current: 0.72, next: 0.2, twoAbove: 0.08, special: 0 };
+  }
+  if (safeLevel >= 8) {
+    return { current: 0.6, next: 0.22, twoAbove: 0.12, special: 0.06 };
+  }
+
+  return {
+    current: balance.sameOrLowerLevelWeight,
+    next: balance.oneLevelAboveWeight,
+    twoAbove: balance.twoLevelAboveWeight,
+    special: balance.specialHighLevelWeight,
+  };
+}
+
+/** Oyuncu seviyesine göre sözleşme üretim kademesi seçer */
+export function pickContractGenerationLevelTier(
+  playerLevel: number,
+): ContractGenerationLevelTier {
+  const weights = getContractTierWeightsForPlayer(playerLevel);
   const roll = Math.random();
-  if (roll < tierDistribution.currentLevel) {
+
+  if (roll < weights.current) {
     return 'current';
   }
-  if (roll < tierDistribution.currentLevel + tierDistribution.nextLevel) {
+  if (roll < weights.current + weights.next) {
     return 'next';
   }
-  return 'future';
+  if (roll < weights.current + weights.next + weights.twoAbove) {
+    return 'twoAbove';
+  }
+  return weights.special > 0 ? 'special' : 'twoAbove';
+}
+
+/** Oyuncu seviyesine göre üretilebilecek max requiredLevel */
+export function getMaxAllowedContractRequiredLevel(playerLevel: number): number {
+  const safeLevel = Math.max(1, playerLevel);
+  const extraGap =
+    contractLevelBalance.lowLevelMaxExtraLevel[safeLevel] ??
+    contractLevelBalance.maxVisibleLevelGapDefault;
+  return safeLevel + extraGap;
 }
 
 export type ContractCapacityProfile = 'doable' | 'stretch' | 'aspirational';
@@ -458,14 +510,28 @@ export function resolveContractGenerationRange(
     }
   }
 
-  const futureTier = getContractUnlockTierAbovePlayer(safeLevel, 2);
-  if (futureTier) {
-    const range = getContractTonnageRangeForLevel(futureTier.level);
-    return {
-      minTonnage: range.minTonnage,
-      maxTonnage: range.maxTonnage,
-      requiredLevel: futureTier.level,
-    };
+  if (levelTier === 'twoAbove') {
+    const futureTier = getContractUnlockTierAbovePlayer(safeLevel, 2);
+    if (futureTier) {
+      const range = getContractTonnageRangeForLevel(futureTier.level);
+      return {
+        minTonnage: range.minTonnage,
+        maxTonnage: range.maxTonnage,
+        requiredLevel: futureTier.level,
+      };
+    }
+  }
+
+  if (levelTier === 'special') {
+    const specialTier = getContractUnlockTierAbovePlayer(safeLevel, 3);
+    if (specialTier) {
+      const range = getContractTonnageRangeForLevel(specialTier.level);
+      return {
+        minTonnage: range.minTonnage,
+        maxTonnage: range.maxTonnage,
+        requiredLevel: specialTier.level,
+      };
+    }
   }
 
   const fallback = getContractTonnageRangeForLevel(safeLevel);
@@ -542,7 +608,7 @@ export function getContractLevelUnlockHint(playerLevel: number, requiredLevel: n
     return '';
   }
   if (levelsNeeded === 1) {
-    return '1 seviye sonra açılır';
+    return 'Bir sonraki seviyede açılır';
   }
   return `Level ${safeRequiredLevel}'e ulaşınca açılır (${levelsNeeded} seviye kaldı)`;
 }

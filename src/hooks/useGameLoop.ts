@@ -4,13 +4,16 @@
 
 import { useEffect } from 'react';
 
+import { getMsPerGameHour } from '../config/balance';
 import { useGameStore } from '../store/gameStore';
 
 /** Gerçek zaman tick aralığı (ms) */
-export const GAME_LOOP_TICK_MS = 500;
+export const GAME_LOOP_TICK_MS = 1000;
 
-/** Her tick'te ilerletilen oyun saati */
-export const GAME_HOURS_PER_TICK = 0.25;
+export function getGameHoursPerTick(gameSpeed: number): number {
+  const msPerGameHour = getMsPerGameHour(gameSpeed);
+  return GAME_LOOP_TICK_MS / msPerGameHour;
+}
 
 export function useGameLoop() {
   const isGameReady = useGameStore((state) => state.isGameReady);
@@ -22,11 +25,11 @@ export function useGameLoop() {
       return;
     }
 
-    const intervalMs = GAME_LOOP_TICK_MS / Math.max(gameSpeed, 0.25);
+    const hoursPerTick = getGameHoursPerTick(gameSpeed);
 
     const intervalId = setInterval(() => {
-      useGameStore.getState().advanceTime(GAME_HOURS_PER_TICK);
-    }, intervalMs);
+      useGameStore.getState().advanceTime(hoursPerTick);
+    }, GAME_LOOP_TICK_MS);
 
     return () => clearInterval(intervalId);
   }, [gameSpeed, isGameReady, isPaused]);

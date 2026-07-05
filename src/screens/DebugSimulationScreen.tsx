@@ -23,12 +23,19 @@ import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { canTruckCarryContract } from '../simulation/delivery';
+import {
+  calculateCompanyScore,
+  formatCompanyScore,
+  getCompanyScoreBreakdown,
+} from '../simulation/companyScore';
 import { getTotalInventoryTons, summarizeFinanceLedger } from '../simulation/trading';
+import { leaderboardConfig } from '../config/leaderboard';
 import { getHighestOwnedTruckCapacity } from '../simulation/delivery';
 import {
   countAvailableContracts,
   countContractsAboveLevel,
   countContractsAtOrBelowLevel,
+  getContractLevelMixStats,
 } from '../simulation/contracts';
 import { getLevelProgress } from '../simulation/leveling';
 import { contractBalance } from '../config/balance';
@@ -500,6 +507,10 @@ export default function DebugSimulationScreen() {
   const debugAddCash = useGameStore((state) => state.debugAddCash);
   const debugRemoveCash = useGameStore((state) => state.debugRemoveCash);
   const debugSetCash = useGameStore((state) => state.debugSetCash);
+  const debugAdvanceOneDay = useGameStore((state) => state.debugAdvanceOneDay);
+  const debugProcessDailyCosts = useGameStore((state) => state.debugProcessDailyCosts);
+  const debugExpireLeaseTruck = useGameStore((state) => state.debugExpireLeaseTruck);
+  const debugGetEconomyBalanceSummary = useGameStore((state) => state.debugGetEconomyBalanceSummary);
 
   const [lastMessage, setLastMessage] = useState<StatusMessage>({
     type: 'info',
@@ -536,6 +547,28 @@ export default function DebugSimulationScreen() {
   const citySnapshot = cities.slice(0, CITY_SNAPSHOT_COUNT);
   const recentEvents = useMemo(() => getRecentGameEvents(eventLog, 8), [eventLog]);
   const tradeSummary = useMemo(() => summarizeFinanceLedger(financeLedger), [financeLedger]);
+  const companyScoreBreakdown = useMemo(
+    () =>
+      getCompanyScoreBreakdown({
+        player,
+        cities,
+        products,
+        financeLedger,
+        currentTime,
+      }),
+    [player, cities, products, financeLedger, currentTime],
+  );
+  const companyScore = useMemo(
+    () =>
+      calculateCompanyScore({
+        player,
+        cities,
+        products,
+        financeLedger,
+        currentTime,
+      }),
+    [player, cities, products, financeLedger, currentTime],
+  );
   const totalInventoryTons = useMemo(() => getTotalInventoryTons(warehouses), [warehouses]);
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const maxUnlockedTonnage = getMaxContractTonnageForLevel(playerLevel);
@@ -546,6 +579,10 @@ export default function DebugSimulationScreen() {
   );
   const contractsAboveLevel = useMemo(
     () => countContractsAboveLevel(contracts, playerLevel),
+    [contracts, playerLevel],
+  );
+  const contractLevelMix = useMemo(
+    () => getContractLevelMixStats(contracts, playerLevel),
     [contracts, playerLevel],
   );
   const [contractRefreshCountdown, setContractRefreshCountdown] = useState(
@@ -809,6 +846,45 @@ export default function DebugSimulationScreen() {
           </View>
         </Section>
 
+        <Section title="Ekonomi Dengesi (V1)">
+          <View style={styles.buttonGrid}>
+            <DebugButton
+              label="+1 Gün"
+              onPress={() => {
+                try {
+                  debugAdvanceOneDay();
+                  setSuccess('1 oyun günü ilerletildi');
+                } catch (error) {
+                  setError(error instanceof Error ? error.message : 'Gün ilerletme başarısız');
+                }
+              }}
+              variant="primary"
+            />
+            <DebugButton
+              label="Günlük Giderleri İşle"
+              onPress={() => {
+                debugProcessDailyCosts();
+                setSuccess('Günlük operasyon giderleri işlendi');
+              }}
+            />
+            <DebugButton
+              label="Kiralık Süre Testi"
+              onPress={() => {
+                debugExpireLeaseTruck();
+                setInfo('Boşta kiralık kamyon süresi dolduruldu (varsa)');
+              }}
+              variant="danger"
+            />
+            <DebugButton
+              label="Economy Balance Summary"
+              onPress={() => {
+                const summary = debugGetEconomyBalanceSummary();
+                setInfo(summary);
+              }}
+            />
+          </View>
+        </Section>
+
         {/* TODO: Hide debug cash tools in production builds. */}
         <Section title="Nakit Testi">
           <View style={styles.cashTestPanel}>
@@ -854,6 +930,16 @@ export default function DebugSimulationScreen() {
               Contracts at/below level: {contractsAtLevel}
             </Text>
             <Text style={styles.levelDebugLine}>Contracts above level: {contractsAboveLevel}</Text>
+            <Text style={styles.levelDebugLine}>
+              At current level: {contractLevelMix.availableAtCurrentLevel}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              One level above: {contractLevelMix.oneLevelAboveContracts}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              Locked total: {contractLevelMix.lockedContracts} (
+              {formatPercent(contractLevelMix.lockedRatio)})
+            </Text>
             <Text style={styles.levelDebugLine}>
               Next contract refresh: {contractRefreshCountdown}s
             </Text>
@@ -942,6 +1028,92 @@ export default function DebugSimulationScreen() {
               </View>
             ))
           )}
+        </Section>
+
+        <Section title="Company Score">
+          <View style={styles.saveStatusCard}>
+            <View style={styles.statGrid}>
+              <StatItem
+                label="Total Score"
+                value={formatCompanyScore(companyScore)}
+                color={COLORS.primary}
+              />
+              <StatItem
+                label="Diamonds"
+                value={String(Math.max(0, player?.diamonds ?? 0))}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Cash Score"
+                value={formatCompanyScore(companyScoreBreakdown.cashScore)}
+                color={COLORS.success}
+              />
+              <StatItem
+                label="Fleet Score"
+                value={formatCompanyScore(companyScoreBreakdown.truckValueScore)}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Warehouse Score"
+                value={formatCompanyScore(companyScoreBreakdown.warehouseValueScore)}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Inventory Score"
+                value={formatCompanyScore(companyScoreBreakdown.inventoryValueScore)}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Delivery Bonus"
+                value={formatCompanyScore(companyScoreBreakdown.completedContractsScore)}
+                color={COLORS.success}
+              />
+              <StatItem
+                label="Reputation Bonus"
+                value={formatCompanyScore(companyScoreBreakdown.reputationScore)}
+                color={COLORS.success}
+              />
+              <StatItem
+                label="Level Bonus"
+                value={formatCompanyScore(companyScoreBreakdown.levelScore)}
+                color={COLORS.success}
+              />
+              <StatItem
+                label="Trade Bonus"
+                value={formatCompanyScore(companyScoreBreakdown.weeklyTradeProfitScore)}
+                color={COLORS.success}
+              />
+              <StatItem
+                label="Penalties"
+                value={formatCompanyScore(companyScoreBreakdown.penaltiesScore)}
+                color={COLORS.danger}
+              />
+              <StatItem
+                label="1st Reward"
+                value={`${leaderboardConfig.rewards[1].diamonds} 💎`}
+                color={COLORS.primary}
+              />
+              <StatItem
+                label="2nd Reward"
+                value={`${leaderboardConfig.rewards[2].diamonds} 💎`}
+                color={COLORS.primary}
+              />
+              <StatItem
+                label="3rd Reward"
+                value={`${leaderboardConfig.rewards[3].diamonds} 💎`}
+                color={COLORS.primary}
+              />
+              <StatItem
+                label="Cash Rewards"
+                value={leaderboardConfig.cashRewardsEnabled ? 'enabled' : 'disabled'}
+                color={leaderboardConfig.cashRewardsEnabled ? COLORS.danger : COLORS.success}
+              />
+            </View>
+          </View>
+          <Text style={styles.debugNoteText}>
+            TODO: Weekly leaderboard and diamond reward distribution will be handled by Firebase
+            backend / Cloud Functions.
+          </Text>
         </Section>
 
         {/* TODO: Hide Save Status debug panel in production builds. */}

@@ -111,25 +111,157 @@ function formatTimeLeft(hours: number): string {
   return `${m}dk`;
 }
 
-function getActionPillLabel(availability: ContractAvailability): string {
+interface ContractCardBadge {
+  key: string;
+  label: string;
+  icon?: React.ComponentProps<typeof GameIcon>['name'];
+  iconColor?: string;
+  textColor: string;
+  backgroundColor: string;
+  borderColor: string;
+  soft?: boolean;
+  muted?: boolean;
+  compact?: boolean;
+  warning?: boolean;
+}
+
+const TRUCK_UNAVAILABLE_BADGE = {
+  label: 'Kamyon yok',
+  textColor: '#F59E0B',
+  backgroundColor: 'rgba(245, 158, 11, 0.12)',
+  borderColor: 'rgba(245, 158, 11, 0.65)',
+} as const;
+
+function createTruckUnavailableBadge(): ContractCardBadge {
+  return {
+    key: 'availability',
+    label: TRUCK_UNAVAILABLE_BADGE.label,
+    textColor: TRUCK_UNAVAILABLE_BADGE.textColor,
+    backgroundColor: TRUCK_UNAVAILABLE_BADGE.backgroundColor,
+    borderColor: TRUCK_UNAVAILABLE_BADGE.borderColor,
+    warning: true,
+  };
+}
+
+function getAvailabilityBadge(
+  availability: ContractAvailability,
+  playerLevel: number,
+  hasTruckAtOrigin: boolean,
+): ContractCardBadge | null {
+  if (availability.canStart) {
+    if (hasTruckAtOrigin) {
+      return {
+        key: 'availability',
+        label: 'Kamyon hazır',
+        icon: 'truck',
+        iconColor: COLORS.green,
+        textColor: COLORS.green,
+        backgroundColor: COLORS.card,
+        borderColor: colors.success,
+      };
+    }
+    return null;
+  }
+
   switch (availability.reason) {
-    case 'LEVEL_INSUFFICIENT':
-      return 'Seviye Yetersiz';
+    case 'LEVEL_INSUFFICIENT': {
+      const requiredLevel = availability.requiredLevel ?? 1;
+      const safePlayerLevel = Math.max(1, playerLevel ?? 1);
+      const label =
+        requiredLevel === safePlayerLevel + 1
+          ? `Level ${requiredLevel} gerekli`
+          : 'Seviye yetersiz';
+      return {
+        key: 'availability',
+        label,
+        textColor: colors.accentAmber,
+        backgroundColor: colors.accentAmberSoft,
+        borderColor: colors.accentAmber,
+      };
+    }
+    case 'NO_TRUCK_AT_ORIGIN':
     case 'NO_TRUCKS':
     case 'NO_IDLE_TRUCKS':
-      return 'Kamyon Yok';
+      return createTruckUnavailableBadge();
     case 'NO_DRIVERS':
     case 'NO_IDLE_DRIVERS':
-      return 'Şoför Yok';
-    case 'NO_TRUCK_AT_ORIGIN':
-      return 'Çıkışta Kamyon Yok';
+      return {
+        key: 'availability',
+        label: 'Şoför yok',
+        textColor: COLORS.muted,
+        backgroundColor: colors.cardSoft,
+        borderColor: COLORS.border,
+      };
     case 'CAPACITY_INSUFFICIENT':
-      return 'Kapasite Yetersiz';
+      return {
+        key: 'availability',
+        label: 'Kapasite yok',
+        textColor: COLORS.muted,
+        backgroundColor: colors.cardSoft,
+        borderColor: COLORS.border,
+      };
     case 'TRUCK_CONDITION_TOO_LOW':
-      return 'Tamir Gerekli';
+      return {
+        key: 'availability',
+        label: 'Tamir gerekli',
+        textColor: COLORS.muted,
+        backgroundColor: colors.cardSoft,
+        borderColor: COLORS.border,
+      };
     default:
-      return 'Ekibi Seç';
+      return null;
   }
+}
+
+function buildContractFooterBadges(params: {
+  availability: ContractAvailability;
+  playerLevel: number;
+  hasTruckAtOrigin: boolean;
+  urgent: boolean;
+  riskLabel: string;
+  riskOutline: ReturnType<typeof getRiskOutlineStyle>;
+  riskSoft: boolean;
+}): ContractCardBadge[] {
+  const {
+    availability,
+    playerLevel,
+    hasTruckAtOrigin,
+    urgent,
+    riskLabel,
+    riskOutline,
+    riskSoft,
+  } = params;
+  const badges: ContractCardBadge[] = [];
+
+  if (!availability.canStart) {
+    const availabilityBadge = getAvailabilityBadge(availability, playerLevel, hasTruckAtOrigin);
+    if (availabilityBadge) {
+      badges.push(availabilityBadge);
+    }
+  }
+
+  if (urgent) {
+    badges.push({
+      key: 'urgent',
+      label: 'Acil',
+      icon: 'urgent',
+      iconColor: COLORS.red,
+      textColor: COLORS.red,
+      backgroundColor: COLORS.card,
+      borderColor: COLORS.red,
+    });
+  }
+
+  badges.push({
+    key: 'risk',
+    label: formatRiskDisplayLabel(riskLabel ?? ''),
+    textColor: riskOutline.color,
+    backgroundColor: riskOutline.backgroundColor,
+    borderColor: riskOutline.borderColor,
+    soft: riskSoft,
+  });
+
+  return badges.slice(0, 3);
 }
 
 function formatRiskDisplayLabel(label: string): string {
@@ -393,7 +525,11 @@ function getContractSortPriority(
     return -1000;
   }
 
-  const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
+  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
+  const requiredLevel = contract.requiredLevel ?? 1;
+  const levelGap = requiredLevel - safePlayerLevel;
+  const atOrigin = hasIdleTruckAtOrigin(trucks, contract.originCityId);
+
   let priority = 0;
 
   if (isRouteContractFilter(marketFilter)) {
@@ -401,25 +537,37 @@ function getContractSortPriority(
     priority += tier * 20;
   }
 
-  if (availability.canStart) {
+  if (levelGap <= 0) {
+    const availability = getContractAvailability(contract, trucks, drivers, safePlayerLevel);
+    if (availability.canStart) {
+      priority += 0;
+    } else if (availability.reason === 'NO_TRUCK_AT_ORIGIN') {
+      priority += 20;
+    } else if (
+      availability.reason === 'NO_TRUCKS' ||
+      availability.reason === 'NO_IDLE_TRUCKS' ||
+      availability.reason === 'NO_DRIVERS' ||
+      availability.reason === 'NO_IDLE_DRIVERS'
+    ) {
+      priority += 35;
+    } else if (availability.reason === 'CAPACITY_INSUFFICIENT') {
+      priority += 40;
+    } else if (availability.reason === 'TRUCK_CONDITION_TOO_LOW') {
+      priority += 45;
+    } else {
+      priority += 50;
+    }
+    if (atOrigin && !availability.canStart && availability.reason !== 'NO_TRUCK_AT_ORIGIN') {
+      priority -= 3;
+    }
     return priority;
   }
-  if (availability.reason === 'LEVEL_INSUFFICIENT') {
-    return priority + 100;
+
+  if (levelGap === 1) {
+    return priority + (atOrigin ? 55 : 65);
   }
-  if (availability.reason === 'NO_TRUCKS' || availability.reason === 'NO_IDLE_TRUCKS') {
-    return priority + 110;
-  }
-  if (availability.reason === 'NO_DRIVERS' || availability.reason === 'NO_IDLE_DRIVERS') {
-    return priority + 120;
-  }
-  if (availability.reason === 'NO_TRUCK_AT_ORIGIN') {
-    return priority + 125;
-  }
-  if (availability.reason === 'CAPACITY_INSUFFICIENT') {
-    return priority + 130;
-  }
-  return priority + 140;
+
+  return priority + (atOrigin ? 100 : 110) + levelGap * 5;
 }
 
 function sortContractsForDisplay(
@@ -636,10 +784,22 @@ function ContractCard({
   const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
   const { financials, risk } = analysis;
   const urgent = isUrgentContract(contract);
-  const pillLabel = getActionPillLabel(availability);
   const hasTruckAtOrigin = hasIdleTruckAtOrigin(trucks, contract.originCityId);
   const riskSoft = urgent && risk.label === 'Yüksek risk';
-  const riskOutline = getRiskOutlineStyle(risk.label, riskSoft);
+  const riskOutline = getRiskOutlineStyle(risk.label ?? '', riskSoft);
+  const payment = contract.payment ?? 0;
+  const estimatedProfit = financials.estimatedProfit ?? 0;
+  const totalExpense = financials.totalExpense ?? 0;
+  const profitMargin = financials.profitMargin ?? 0;
+  const footerBadges = buildContractFooterBadges({
+    availability,
+    playerLevel: safePlayerLevel,
+    hasTruckAtOrigin,
+    urgent,
+    riskLabel: risk.label ?? '',
+    riskOutline,
+    riskSoft,
+  });
 
   const handlePress = () => {
     if (!availability.canStart) {
@@ -668,96 +828,86 @@ function ContractCard({
         </View>
       ) : null}
 
-      <View style={styles.cardRow}>
-        <View style={styles.iconBox}>
-          <ProductIcon productId={contract.productId} size={22} color={COLORS.cyan} />
+      <View style={styles.cardHeader}>
+        <View style={styles.contractIconBox}>
+          <ProductIcon productId={contract.productId} size={20} color={COLORS.cyan} />
         </View>
 
-        <View style={styles.cardCenter}>
-          <Text style={styles.cardRoute} numberOfLines={1}>
+        <View style={styles.leftInfo}>
+          <Text style={styles.contractRoute} numberOfLines={1} ellipsizeMode="tail">
             {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
           </Text>
-          <Text style={styles.cardProduct} numberOfLines={1}>
+          <Text style={styles.contractProduct} numberOfLines={1} ellipsizeMode="tail">
             {getProductName(contract.productId)}
           </Text>
-          <Text style={styles.cardMetaLine} numberOfLines={1}>
+          <Text style={styles.contractMetaLine} numberOfLines={1} ellipsizeMode="tail">
             Yük {formatTonsCompact(cargoWeight)} · Kalan {formatTimeLeft(contract.deadlineHours)}
           </Text>
         </View>
 
-        <View style={styles.cardRight}>
-          <Text style={styles.cardPayment}>{formatMoney(contract.payment)}</Text>
+        <View style={styles.rightPrice}>
+          <Text style={styles.contractPayment} numberOfLines={1} ellipsizeMode="tail">
+            {formatMoney(payment)}
+          </Text>
           <Text
             style={[
-              styles.cardProfit,
-              { color: financials.estimatedProfit >= 0 ? COLORS.green : COLORS.red },
+              styles.contractProfit,
+              { color: estimatedProfit >= 0 ? COLORS.green : COLORS.red },
             ]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
           >
-            Kâr {formatMoney(financials.estimatedProfit)}
+            Kâr {formatMoney(estimatedProfit)}
           </Text>
         </View>
       </View>
 
       <View style={styles.cardFooter}>
-        <Text style={styles.cardFinanceLine} numberOfLines={1}>
-          Gider {formatMoney(financials.totalExpense)} · Marj {formatPercent(financials.profitMargin)}
+        <Text style={styles.cardFinanceLine} numberOfLines={1} ellipsizeMode="tail">
+          Gider {formatMoney(totalExpense)} · Marj {formatPercent(profitMargin)}
         </Text>
-        <View style={styles.cardFooterActions}>
-          <View style={styles.cardFooterBadges}>
-            {hasTruckAtOrigin ? (
-              <View style={[styles.miniBadge, styles.originReadyBadge]}>
-                <GameIcon name="truck" size={9} color={COLORS.green} />
-                <Text style={[styles.miniBadgeText, { color: COLORS.green }]}>Kamyon hazır</Text>
-              </View>
-            ) : availability.reason === 'NO_TRUCK_AT_ORIGIN' ? (
-              <View style={[styles.miniBadge, styles.originMissingBadge]}>
-                <Text style={[styles.miniBadgeText, { color: COLORS.muted }]}>
-                  Bu şehirde kamyon yok
-                </Text>
-              </View>
-            ) : null}
-            {urgent ? (
-              <View style={[styles.miniBadge, styles.urgentBadge]}>
-                <GameIcon name="urgent" size={9} color={COLORS.red} />
-                <Text style={styles.urgentBadgeText}>Acil</Text>
-              </View>
-            ) : null}
+
+        <View style={styles.cardBadgeRow}>
+          {footerBadges.map((badge) => (
             <View
+              key={badge.key}
               style={[
                 styles.miniBadge,
-                riskSoft && styles.miniBadgeSoft,
+                badge.soft && styles.miniBadgeSoft,
+                badge.compact && styles.miniBadgeCompact,
+                badge.warning && styles.miniBadgeWarning,
                 {
-                  backgroundColor: riskOutline.backgroundColor,
-                  borderColor: riskOutline.borderColor,
+                  backgroundColor: badge.backgroundColor,
+                  borderColor: badge.borderColor,
                 },
               ]}
             >
+              {badge.icon ? (
+                <GameIcon name={badge.icon} size={10} color={badge.iconColor ?? badge.textColor} />
+              ) : null}
               <Text
                 style={[
                   styles.miniBadgeText,
-                  riskSoft && styles.miniBadgeTextSoft,
-                  { color: riskOutline.color },
+                  badge.soft && styles.miniBadgeTextSoft,
+                  badge.muted && styles.miniBadgeTextMuted,
+                  badge.compact && styles.miniBadgeTextCompact,
+                  badge.warning && styles.miniBadgeTextWarning,
+                  { color: badge.textColor },
                 ]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
               >
-                {formatRiskDisplayLabel(risk.label)}
+                {badge.label}
               </Text>
             </View>
-          </View>
-          <View
-            style={[
-              styles.actionPill,
-              availability.canStart ? styles.actionPillReady : styles.actionPillBlocked,
-            ]}
-          >
-            <Text
-              style={[
-                styles.actionPillText,
-                availability.canStart ? styles.actionPillTextReady : styles.actionPillTextBlocked,
-              ]}
-            >
-              {pillLabel}
-            </Text>
-          </View>
+          ))}
+          {availability.canStart ? (
+            <View style={[styles.actionPill, styles.actionPillReady]}>
+              <Text style={[styles.actionPillText, styles.actionPillTextReady]} numberOfLines={1}>
+                Ekibi Seç
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
     </TouchableOpacity>
@@ -1059,18 +1209,18 @@ export default function ContractsScreen() {
     <View style={[styles.screenRoot, { paddingBottom: tabBarHeight }]}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.headerIconButton} onPress={() => {}} activeOpacity={0.8}>
-            <Text style={styles.headerIconText}>‹</Text>
-          </TouchableOpacity>
+          <View style={styles.headerSideSlot} />
           <Text style={styles.headerTitle}>Sözleşmeler</Text>
-          <IconButton
-            icon="refresh"
-            onPress={handleRefresh}
-            size={16}
-            color={COLORS.cyan}
-            backgroundColor={COLORS.card}
-            style={styles.headerIconButton}
-          />
+          <View style={styles.headerSideSlot}>
+            <IconButton
+              icon="refresh"
+              onPress={handleRefresh}
+              size={16}
+              color={COLORS.cyan}
+              backgroundColor={COLORS.card}
+              style={styles.headerIconButton}
+            />
+          </View>
         </View>
 
         {statusMessage ? (
@@ -1114,7 +1264,7 @@ export default function ContractsScreen() {
           style={styles.listScroll}
           contentContainerStyle={[
             styles.listScrollContent,
-            { paddingBottom: scrollBottomPadding },
+            { paddingBottom: Math.max(scrollBottomPadding, tabBarHeight + 48) },
           ]}
           showsVerticalScrollIndicator={false}
         >
@@ -1245,6 +1395,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: spacing.sm,
   },
+  headerSideSlot: {
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerIconButton: {
     width: 34,
     height: 34,
@@ -1267,6 +1422,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.2,
     textAlign: 'center',
+    minWidth: 0,
   },
   statusBanner: {
     borderWidth: 1,
@@ -1431,9 +1587,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    marginBottom: spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
   },
   listCardHighlight: {
     borderColor: colors.accentAmber,
@@ -1459,6 +1615,61 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.sm,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  leftInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rightPrice: {
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    minWidth: 100,
+    maxWidth: 130,
+    paddingLeft: 6,
+  },
+  contractIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: colors.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contractRoute: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 1,
+  },
+  contractProduct: {
+    fontSize: 13,
+    color: COLORS.muted,
+    marginBottom: 1,
+  },
+  contractMetaLine: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  contractPayment: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: COLORS.green,
+    marginBottom: 2,
+    lineHeight: 24,
+  },
+  contractProfit: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.green,
+    lineHeight: 18,
   },
   iconBox: {
     width: 44,
@@ -1514,51 +1725,69 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: 8,
+    marginTop: 6,
+    gap: 4,
   },
   cardFinanceLine: {
-    flex: 1,
-    flexShrink: 1,
-    fontSize: 10,
+    width: '100%',
+    fontSize: 12,
     color: COLORS.muted,
     fontWeight: '600',
-    marginRight: spacing.xs,
   },
-  cardFooterActions: {
+  cardBadgeRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 6,
-    flexShrink: 0,
-  },
-  cardFooterBadges: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+    columnGap: 6,
+    rowGap: 6,
+    maxWidth: '100%',
+    overflow: 'hidden',
   },
   miniBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    height: 21,
-    paddingHorizontal: 7,
-    borderRadius: 11,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
     borderWidth: 1,
+    maxWidth: 150,
+    flexShrink: 1,
+  },
+  miniBadgeCompact: {
+    maxWidth: 160,
+  },
+  miniBadgeWarning: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    maxWidth: 120,
   },
   miniBadgeSoft: {
-    height: 20,
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   miniBadgeText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
+    lineHeight: 14,
+    flexShrink: 1,
   },
   miniBadgeTextSoft: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '600',
+    lineHeight: 13,
+  },
+  miniBadgeTextMuted: {
+    fontWeight: '600',
+  },
+  miniBadgeTextCompact: {
+    fontSize: 10,
+    lineHeight: 13,
+  },
+  miniBadgeTextWarning: {
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 14,
   },
   urgentBadge: {
     backgroundColor: COLORS.card,
@@ -1575,30 +1804,24 @@ const styles = StyleSheet.create({
     borderColor: colors.success,
   },
   actionPill: {
-    height: 24,
-    paddingHorizontal: 10,
-    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   actionPillReady: {
     backgroundColor: colors.infoSoft,
     borderColor: COLORS.cyan,
   },
-  actionPillBlocked: {
-    backgroundColor: colors.cardSoft,
-    borderColor: COLORS.border,
-  },
   actionPillText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
   },
   actionPillTextReady: {
     color: COLORS.cyan,
-  },
-  actionPillTextBlocked: {
-    color: COLORS.muted,
   },
   cardMetricTimeRow: {
     flexDirection: 'row',

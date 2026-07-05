@@ -24,9 +24,11 @@ import type {
   TruckTransfer,
   Warehouse,
 } from '../types/game';
+import { normalizeDriver } from '../data/drivers';
 import { normalizeWarehouse } from '../simulation/trading';
 import { normalizeTruckCity } from '../simulation/delivery';
 import { normalizePlayerProgress } from '../simulation/leveling';
+import { calculateCompanyScore } from '../simulation/companyScore';
 
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
 export const SAVE_GAME_VERSION = 1;
@@ -45,6 +47,10 @@ export interface SaveGameMeta {
   xp: number;
   /** Kariyer boyu toplam XP */
   totalXp: number;
+  /** Premium elmas bakiyesi */
+  diamonds?: number;
+  /** Kayıt anındaki şirket puanı (runtime hesaplanabilir) */
+  companyScore?: number;
   appVersion: string;
   saveVersion: number;
 }
@@ -144,6 +150,14 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     homeCityId,
   });
 
+  const companyScore = calculateCompanyScore({
+    player,
+    cities: state.cities,
+    products: state.products,
+    financeLedger: state.financeLedger ?? [],
+    currentTime: state.currentTime,
+  });
+
   return {
     version: SAVE_GAME_VERSION,
     meta: {
@@ -155,6 +169,8 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
       level: player.level,
       xp: player.xp,
       totalXp: player.totalXp,
+      diamonds: player.diamonds ?? 0,
+      companyScore,
       appVersion: APP_VERSION,
       saveVersion: SAVE_GAME_VERSION,
     },
@@ -192,6 +208,7 @@ export function normalizeLoadedPlayer(player: Player): Player {
     homeCityId,
     warehouses: normalizePlayerWarehouses(player.warehouses ?? []),
     trucks: normalizePlayerTrucks(player.trucks, homeCityId),
+    drivers: (player.drivers ?? []).map((driver) => normalizeDriver(driver)),
   });
 }
 
@@ -314,6 +331,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     isPaused: payload.isPaused,
     gameSpeed: payload.gameSpeed,
     lastEconomyTickTime:
+      Math.floor(payload.currentTime / economyTickInterval) * economyTickInterval,
+    lastDailyOperatingCostTime:
       Math.floor(payload.currentTime / economyTickInterval) * economyTickInterval,
     player,
     cities: payload.cities,

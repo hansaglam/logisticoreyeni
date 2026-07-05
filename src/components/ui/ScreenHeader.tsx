@@ -6,6 +6,8 @@ import type { GameIconName } from '../../theme/icons';
 import GameIcon from './GameIcon';
 import IconButton from './IconButton';
 
+const SIDE_SLOT_WIDTH = 48;
+
 interface ScreenHeaderProps {
   title: string;
   subtitle?: string;
@@ -28,29 +30,37 @@ export default function ScreenHeader({
 }: ScreenHeaderProps) {
   return (
     <View style={[styles.header, compact && styles.headerCompact]}>
-      <View style={styles.left}>
+      <View style={styles.sideSlot}>
         {onBack ? (
           <IconButton
             icon="back"
             onPress={onBack}
             size={compact ? 20 : 22}
             color={colors.textPrimary}
-            style={styles.backButton}
           />
         ) : null}
-        <View style={styles.titleBlock}>
-          <View style={styles.titleRow}>
-            {titleIcon && !compact ? (
-              <GameIcon name={titleIcon} size={22} color={titleIconColor} />
-            ) : null}
-            <Text style={[styles.title, compact && styles.titleCompact]}>{title}</Text>
-          </View>
-          {subtitle ? (
-            <Text style={[styles.subtitle, compact && styles.subtitleCompact]}>{subtitle}</Text>
-          ) : null}
-        </View>
       </View>
-      {rightAction ? <View style={styles.right}>{rightAction}</View> : null}
+
+      <View style={styles.center}>
+        <View style={styles.titleRow}>
+          {titleIcon && !compact ? (
+            <GameIcon name={titleIcon} size={22} color={titleIconColor} />
+          ) : null}
+          <Text style={[styles.title, compact && styles.titleCompact]} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
+        {subtitle ? (
+          <Text
+            style={[styles.subtitle, compact && styles.subtitleCompact]}
+            numberOfLines={2}
+          >
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.sideSlot}>{rightAction ?? null}</View>
     </View>
   );
 }
@@ -58,40 +68,38 @@ export default function ScreenHeader({
 const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: spacing.md,
   },
-  left: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginRight: spacing.md,
+  sideSlot: {
+    width: SIDE_SLOT_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 34,
   },
-  backButton: {
-    marginRight: spacing.sm,
-    marginTop: 2,
-  },
-  titleBlock: {
+  center: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+    paddingHorizontal: spacing.xs,
   },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: spacing.sm,
+    maxWidth: '100%',
   },
   title: {
     ...typography.screenTitle,
     fontSize: 22,
+    textAlign: 'center',
   },
   subtitle: {
     ...typography.screenSubtitle,
     marginTop: spacing.xs,
-  },
-  right: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    minHeight: 32,
+    textAlign: 'center',
   },
   headerCompact: {
     marginBottom: 12,

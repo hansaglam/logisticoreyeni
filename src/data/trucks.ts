@@ -10,10 +10,12 @@ import type { Truck } from '../types/game';
 /** Satın alınabilir kamyon şablonu — id ve sahiplik durumu hariç */
 export type TruckTemplate = Omit<Truck, 'currentCityId' | 'status' | 'catalogId'>;
 
-/** Mağazada listelenen kamyon — level kilidi ile */
+/** Satın alınabilir kamyon şablonu — level kilidi ile */
 export interface TruckMarketItem extends TruckTemplate {
   /** Bu modeli satın almak için gereken şirket seviyesi */
   requiredLevel: number;
+  /** Haftalık kira bedeli ($) */
+  weeklyLeaseCost?: number;
 }
 
 /** Oyuncunun oyuna başladığı varsayılan kamyon */
@@ -29,6 +31,7 @@ export const STARTER_TRUCK: Truck = {
   comfort: 60,
   condition: 88,
   purchasePrice: 45_000,
+  ownershipType: 'owned',
   currentCityId: 'izmir',
   homeCityId: 'izmir',
   status: 'idle',
@@ -47,6 +50,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
     comfort: 55,
     condition: 100,
     purchasePrice: 52_000,
+    weeklyLeaseCost: 5_500,
     requiredLevel: 1,
   },
   {
@@ -60,6 +64,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
     comfort: 75,
     condition: 100,
     purchasePrice: 85_000,
+    weeklyLeaseCost: 9_000,
     requiredLevel: 3,
   },
   {
@@ -73,6 +78,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
     comfort: 82,
     condition: 100,
     purchasePrice: 92_000,
+    weeklyLeaseCost: 9_800,
     requiredLevel: 4,
   },
   {
@@ -86,6 +92,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
     comfort: 65,
     condition: 100,
     purchasePrice: 98_000,
+    weeklyLeaseCost: 10_500,
     requiredLevel: 7,
   },
   {
@@ -99,6 +106,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
     comfort: 70,
     condition: 100,
     purchasePrice: 125_000,
+    weeklyLeaseCost: 13_500,
     requiredLevel: 8,
   },
 ];

@@ -16,9 +16,10 @@ import type {
   ProductMarket,
   Route,
 } from '../types/game';
-import { contractBalance } from '../config/balance';
+import { contractBalance, contractLevelBalance, deliveryBalance, timeBalance } from '../config/balance';
 import {
   applyCapacityProfileToTonnageRange,
+  getMaxAllowedContractRequiredLevel,
   getMaxContractTonnageForLevel,
   getRequiredLevelForTonnage,
   pickContractCapacityProfile,
@@ -239,32 +240,85 @@ export function calculateUrgency(destinationProductMarket: ProductMarket): numbe
 /**
  * Sözleşme ödemesini hesaplar ($).
  *
- * basePayment = amount × product.basePrice × 0.15
- * distancePayment = distanceKm × amount × distanceRate
- * urgencyBonus = basePayment × urgency × 0.35
- * difficultyBonus = basePayment × route.difficulty × 0.20
- * fuelAdjustment = fuelPrice × distanceKm × 0.05
+ * Maliyet tabanlı fiyatlandırma: yakıt, bakım, şoför zamanı, operasyon ve risk
+ * payları üzerine hedef net kâr marjı eklenir.
  */
-export function calculateContractPayment(params: ContractPaymentParams): number {
+export function estimateContractOperatingCosts(params: ContractPaymentParams): number {
   const { amount, originMarket, destinationMarket, route, urgency, globalEconomy } = params;
-
-  // Kaynak taban fiyatı birincil referans; hedef fiyat prim etkisini yansıtır
   const referencePrice = (originMarket.basePrice + destinationMarket.basePrice) / 2;
+  const distanceKm = route.distanceKm;
 
-  const basePayment = amount * referencePrice * contractBalance.baseTransportRate;
-  const distancePayment = route.distanceKm * amount * contractBalance.distancePaymentRate;
-  const urgencyBonus = basePayment * urgency * contractBalance.urgencyBonusMultiplier;
-  const difficultyBonus = basePayment * route.difficulty * contractBalance.difficultyBonusMultiplier;
-  const fuelAdjustment =
-    globalEconomy.fuelPrice * route.distanceKm * contractBalance.fuelAdjustmentMultiplier;
+  const fuelCost =
+    distanceKm *
+    contractBalance.estimateFuelPerKm *
+    globalEconomy.fuelPrice *
+    (1 + amount / 30);
 
-  const rawPayment =
-    basePayment + distancePayment + urgencyBonus + difficultyBonus + fuelAdjustment;
+  const maintenanceCost =
+    distanceKm * contractBalance.estimateMaintenancePerKm * (1 + route.difficulty * 0.3);
+
+  const travelHours = distanceKm / contractBalance.averageSpeedKmh;
+  const driverHourlyCost =
+    deliveryBalance.fallbackDriverSalaryPerDay / timeBalance.hoursPerDay;
+  const driverTimeCost = travelHours * driverHourlyCost * deliveryBalance.driverCostMultiplier;
+
+  const operationsCost = distanceKm * contractBalance.operationsCostPerKm;
+
+  const cargoValueRisk = amount * referencePrice * contractBalance.cargoValueRiskRate;
+  const urgencyRisk = amount * referencePrice * urgency * 0.02;
+  const difficultyRisk = amount * referencePrice * route.difficulty * 0.025;
+
+  return (
+    fuelCost +
+    maintenanceCost +
+    driverTimeCost +
+    operationsCost +
+    cargoValueRisk +
+    urgencyRisk +
+    difficultyRisk
+  );
+}
+
+function resolveTargetProfitMargin(params: ContractPaymentParams): number {
+  const { amount, route, urgency } = params;
+  const difficulty = route.difficulty;
+  const isLarge = amount >= contractBalance.largeContractTonnage;
+  const isRisky = urgency >= 0.65 || difficulty >= 0.7;
+  const isEasy = urgency < 0.35 && difficulty < 0.4 && route.distanceKm < 400;
+
+  let minMargin: number;
+  let maxMargin: number;
+
+  if (isLarge) {
+    minMargin = contractBalance.profitMarginLargeMin;
+    maxMargin = contractBalance.profitMarginLargeMax;
+  } else if (isRisky) {
+    minMargin = contractBalance.profitMarginRiskyMin;
+    maxMargin = contractBalance.profitMarginRiskyMax;
+  } else if (isEasy) {
+    minMargin = contractBalance.profitMarginEasyMin;
+    maxMargin = contractBalance.profitMarginEasyMax;
+  } else {
+    minMargin = contractBalance.profitMarginMediumMin;
+    maxMargin = contractBalance.profitMarginMediumMax;
+  }
+
+  const blend = clamp(urgency * 0.4 + difficulty * 0.35 + (amount / 40) * 0.25, 0, 1);
+  return minMargin + (maxMargin - minMargin) * blend;
+}
+
+export function calculateContractPayment(params: ContractPaymentParams): number {
+  const { amount, originMarket, destinationMarket } = params;
+
+  const referencePrice = (originMarket.basePrice + destinationMarket.basePrice) / 2;
+  const operatingCosts = estimateContractOperatingCosts(params);
+  const targetMargin = resolveTargetProfitMargin(params);
+  const rawPayment = operatingCosts * (1 + targetMargin);
 
   const floor = amount * referencePrice * contractBalance.minContractPayment;
   const ceiling = amount * referencePrice * contractBalance.maxContractPaymentMultiplier;
 
-  return clamp(rawPayment, floor, ceiling);
+  return clamp(Math.round(rawPayment), floor, ceiling);
 }
 
 /**
@@ -702,8 +756,13 @@ export function generateContracts(
           continue;
         }
 
-        const levelTier = pickContractGenerationLevelTier();
+        const levelTier = pickContractGenerationLevelTier(playerLevel);
         const generationRange = resolveContractGenerationRange(playerLevel, levelTier);
+        const maxAllowedRequiredLevel = getMaxAllowedContractRequiredLevel(playerLevel);
+
+        if (generationRange.requiredLevel > maxAllowedRequiredLevel) {
+          continue;
+        }
         const capacityProfile = pickContractCapacityProfile();
         const tonnageBounds = applyCapacityProfileToTonnageRange(
           generationRange.minTonnage,
@@ -741,12 +800,19 @@ export function generateContracts(
           ...contract,
           requiredLevel:
             levelTier === 'current'
-              ? getRequiredLevelForTonnage(contract.amount ?? 0)
+              ? Math.min(
+                  getRequiredLevelForTonnage(contract.amount ?? 0),
+                  playerLevel,
+                )
               : Math.max(
                   getRequiredLevelForTonnage(contract.amount ?? 0),
                   generationRange.requiredLevel,
                 ),
         };
+
+        if ((finalContract.requiredLevel ?? 1) > maxAllowedRequiredLevel) {
+          continue;
+        }
 
         const dedupeKey = getContractDedupeKey(finalContract);
         if (existingDedupeKeys.has(dedupeKey)) {
@@ -787,6 +853,83 @@ export function generateContracts(
   }
 
   return selected;
+}
+
+export interface ContractLevelMixStats {
+  playerLevel: number;
+  totalAvailable: number;
+  availableAtCurrentLevel: number;
+  oneLevelAboveContracts: number;
+  lockedContracts: number;
+  lockedRatio: number;
+}
+
+/** Debug / denge kontrolü için müsait sözleşme seviye dağılımı */
+export function getContractLevelMixStats(
+  contracts: Contract[] | undefined,
+  playerLevel: number,
+): ContractLevelMixStats {
+  const safeLevel = Math.max(1, playerLevel ?? 1);
+  const available = (contracts ?? []).filter((contract) => contract.status === 'available');
+  const totalAvailable = available.length;
+  let availableAtCurrentLevel = 0;
+  let oneLevelAboveContracts = 0;
+  let lockedContracts = 0;
+
+  for (const contract of available) {
+    const requiredLevel = contract.requiredLevel ?? 1;
+    if (requiredLevel <= safeLevel) {
+      availableAtCurrentLevel += 1;
+    } else if (requiredLevel === safeLevel + 1) {
+      oneLevelAboveContracts += 1;
+      lockedContracts += 1;
+    } else if (requiredLevel > safeLevel) {
+      lockedContracts += 1;
+    }
+  }
+
+  return {
+    playerLevel: safeLevel,
+    totalAvailable,
+    availableAtCurrentLevel,
+    oneLevelAboveContracts,
+    lockedContracts,
+    lockedRatio: totalAvailable > 0 ? lockedContracts / totalAvailable : 0,
+  };
+}
+
+/**
+ * Müsait listede kilitli sözleşme oranını sınırlar.
+ * Fazla yüksek seviye işler expired yapılır (en yüksek requiredLevel önce).
+ */
+export function balanceAvailableContractLevelMix(
+  contracts: Contract[],
+  playerLevel: number,
+): Contract[] {
+  const safeLevel = Math.max(1, playerLevel ?? 1);
+  const maxLockedRatio = contractLevelBalance.maxLockedContractRatio;
+  const available = contracts.filter((contract) => contract.status === 'available');
+
+  if (available.length === 0) {
+    return contracts;
+  }
+
+  const locked = available.filter((contract) => (contract.requiredLevel ?? 1) > safeLevel);
+  const maxLocked = Math.max(0, Math.floor(available.length * maxLockedRatio));
+
+  if (locked.length <= maxLocked) {
+    return contracts;
+  }
+
+  const excessCount = locked.length - maxLocked;
+  const toExpire = [...locked]
+    .sort((a, b) => (b.requiredLevel ?? 1) - (a.requiredLevel ?? 1))
+    .slice(0, excessCount);
+  const expireIds = new Set(toExpire.map((contract) => contract.id));
+
+  return contracts.map((contract) =>
+    expireIds.has(contract.id) ? { ...contract, status: 'expired' as const } : contract,
+  );
 }
 
 /** Müsait sözleşme sayısını döndürür */
@@ -874,8 +1017,10 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
     },
   );
 
+  const merged = mergeContractLists(expired, newContracts);
+
   return {
-    contracts: mergeContractLists(expired, newContracts),
+    contracts: balanceAvailableContractLevelMix(merged, playerLevel),
     newContracts,
   };
 }
@@ -971,8 +1116,10 @@ export function refreshContractsFromMarket(
     },
   );
 
+  const merged = mergeContractLists(expired, newContracts);
+
   return {
-    contracts: mergeContractLists(expired, newContracts),
+    contracts: balanceAvailableContractLevelMix(merged, playerLevel),
     newContracts,
   };
 }

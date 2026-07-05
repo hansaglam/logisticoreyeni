@@ -5,6 +5,7 @@
  */
 
 import { getDriverTierRequiredLevel } from '../config/levelConfig';
+import { operatingCostBalance } from '../config/balance';
 import type { Driver, DriverTier } from '../types/game';
 
 /** İşe alınabilir şoför şablonu — id, atama ve durum hariç */
@@ -192,10 +193,16 @@ export function getDriverPoolForLevel(_playerLevel?: number): DriverMarketItem[]
 
 export function normalizeDriver(driver: Driver): Driver {
   const tier = driver.tier ?? 'rookie';
+  const dailySalary =
+    driver.dailySalary ?? driver.salaryPerDay ?? operatingCostBalance.fallbackDriverDailySalary;
   return {
     ...driver,
     tier,
     requiredLevel: driver.requiredLevel ?? getDriverTierRequiredLevel(tier),
+    dailySalary,
+    salaryPerDay: dailySalary,
+    salaryPeriod: driver.salaryPeriod ?? 'daily',
+    hireCost: driver.hireCost,
   };
 }
 

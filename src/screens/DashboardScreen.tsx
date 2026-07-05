@@ -24,8 +24,15 @@ import { deliveryBalance } from '../config/balance';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getLevelProgress } from '../simulation/leveling';
 import {
+  calculateCompanyScore,
+  formatCompanyScore,
+} from '../simulation/companyScore';
+import {
+  calculateDailyOperatingCostBreakdown,
+  getWeeklyLeaseBurden,
+} from '../simulation/dailyOperatingCosts';
+import {
   getContractAvailability,
-  getIdleTruckOriginCityIds,
 } from '../simulation/delivery';
 import {
   calculateTradeProfit,
@@ -409,8 +416,15 @@ function StatLine({
 }) {
   return (
     <View style={styles.statLine}>
-      <Text style={styles.statLineLabel}>{label}</Text>
-      <Text style={[styles.statLineValue, { color: valueColor }]}>{value}</Text>
+      <Text style={styles.statLineLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text
+        style={[styles.statLineValue, { color: valueColor }]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
@@ -419,6 +433,7 @@ function CompanyHeaderCard({
   companyName,
   level,
   money,
+  diamonds,
   currentTime,
   fuelPrice,
   isPaused,
@@ -427,6 +442,7 @@ function CompanyHeaderCard({
   companyName: string;
   level: number;
   money: number;
+  diamonds: number;
   currentTime: number;
   fuelPrice: number;
   isPaused: boolean;
@@ -452,6 +468,7 @@ function CompanyHeaderCard({
 
         <View style={styles.headerRight}>
           <Text style={styles.cashValue}>{formatMoney(money)}</Text>
+          <Text style={styles.diamondValue}>💎 {diamonds.toLocaleString('en-US')}</Text>
           <IconButton
             icon={isPaused ? 'play' : 'pause'}
             onPress={onTogglePause}
@@ -503,9 +520,45 @@ function CompactSummaryCard({
         <View style={styles.summaryIconWrap}>
           <GameIcon name={icon} size={14} color={colors.accentBlue} />
         </View>
-        <Text style={styles.summaryTitle}>{title}</Text>
+        <Text style={styles.summaryTitle} numberOfLines={1}>
+          {title}
+        </Text>
       </View>
       {children}
+    </AppCard>
+  );
+}
+
+function ExpenseSummaryCard({
+  dailyFixed,
+  weeklyLease,
+}: {
+  dailyFixed: number;
+  weeklyLease: number;
+}) {
+  const safeDaily = Number.isFinite(dailyFixed) ? dailyFixed : 0;
+  const safeWeekly = Number.isFinite(weeklyLease) ? weeklyLease : 0;
+
+  return (
+    <AppCard style={styles.expenseCard} padded>
+      <View style={styles.summaryHeader}>
+        <View style={styles.summaryIconWrap}>
+          <GameIcon name="expense" size={14} color={colors.danger} />
+        </View>
+        <Text style={styles.summaryTitle} numberOfLines={1}>
+          Gider Özeti
+        </Text>
+      </View>
+      <StatLine
+        label="Günlük gider"
+        value={formatMoney(safeDaily)}
+        valueColor={colors.danger}
+      />
+      <StatLine
+        label="Haftalık kira"
+        value={formatMoney(safeWeekly)}
+        valueColor={colors.accentAmber}
+      />
     </AppCard>
   );
 }
@@ -552,6 +605,9 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const eventLog = useGameStore((state) => state.eventLog) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
+  const cities = useGameStore((state) => state.cities) ?? [];
+  const products = useGameStore((state) => state.products) ?? [];
+  const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
@@ -598,18 +654,25 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     const snapshotDrivers = player?.drivers ?? [];
     return {
       totalTrucks: snapshotTrucks.length,
-      idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle').length,
+      idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
       idleDrivers: snapshotDrivers.filter((d) => d.status === 'idle').length,
+    };
+  }, [player]);
+
+  const operationCosts = useMemo(() => {
+    if (!player) {
+      return { dailyFixed: 0, weeklyLeaseBurden: 0 };
+    }
+    const breakdown = calculateDailyOperatingCostBreakdown(player);
+    return {
+      dailyFixed: breakdown.total,
+      weeklyLeaseBurden: getWeeklyLeaseBurden(player.trucks ?? []),
     };
   }, [player]);
 
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
-  const idleOriginCityIds = useMemo(
-    () => getIdleTruckOriginCityIds(trucks, player?.homeCityId),
-    [trucks, player?.homeCityId],
-  );
 
   const recentDevelopments = useMemo(
     () => buildRecentDevelopments(marketNews, eventLog, 2),
@@ -629,6 +692,19 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
   const warehouseFillRatio = getWarehouseFillRatio(player, currentTime);
   const tradeProfitAvailable = hasProfitableWarehouseStock(player, currentTime);
+  const playerDiamonds = Math.max(0, player.diamonds ?? 0);
+
+  const companyScore = useMemo(
+    () =>
+      calculateCompanyScore({
+        player,
+        cities,
+        products,
+        financeLedger,
+        currentTime,
+      }),
+    [player, cities, products, financeLedger, currentTime],
+  );
 
   const nextAction = resolveNextAction(
     player.money,
@@ -677,6 +753,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         companyName={player.companyName}
         level={levelProgress.level}
         money={player.money}
+        diamonds={playerDiamonds}
         currentTime={currentTime}
         fuelPrice={fuelPrice}
         isPaused={isPaused}
@@ -687,54 +764,80 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
       {showCashWarning ? <CashWarningCard cash={player.money} /> : null}
 
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCol}>
-          <CompactSummaryCard title="Şirket Özeti" icon="company">
-            <StatLine label="Nakit" value={formatMoney(player.money)} valueColor={colors.success} />
-            <StatLine label="Level" value={`${levelProgress.level}`} valueColor={colors.accentAmber} />
-            <StatLine label="İtibar" value={`${Math.round(player.reputation)}/100`} />
-            {!levelProgress.isMaxLevel ? (
-              <View style={styles.xpBlock}>
-                <View style={styles.xpRow}>
-                  <Text style={styles.statLineLabel}>XP</Text>
-                  <Text style={styles.xpValue}>
-                    {levelProgress.xp} / {levelProgress.xpToNextLevel}
-                  </Text>
+      <View style={styles.summarySection}>
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCol}>
+            <CompactSummaryCard title="Şirket Özeti" icon="company">
+              <StatLine
+                label="Nakit"
+                value={formatMoney(player.money ?? 0)}
+                valueColor={colors.success}
+              />
+              <StatLine
+                label="Şirket Puanı"
+                value={formatCompanyScore(companyScore ?? 0)}
+                valueColor={colors.accentAmber}
+              />
+              <StatLine
+                label="Level"
+                value={`${levelProgress.level}`}
+                valueColor={colors.accentAmber}
+              />
+              <StatLine
+                label="İtibar"
+                value={`${Math.round(player.reputation ?? 0)}/100`}
+              />
+              {!levelProgress.isMaxLevel ? (
+                <View style={styles.xpBlock}>
+                  <View style={styles.xpRow}>
+                    <Text style={styles.statLineLabel} numberOfLines={1}>
+                      XP
+                    </Text>
+                    <Text style={styles.xpValue} numberOfLines={1}>
+                      {levelProgress.xp ?? 0} / {levelProgress.xpToNextLevel}
+                    </Text>
+                  </View>
+                  <ProgressBar
+                    progress={levelProgress.progressRatio}
+                    color={colors.accentAmber}
+                    height={4}
+                  />
                 </View>
-                <ProgressBar
-                  progress={levelProgress.progressRatio}
-                  color={colors.accentAmber}
-                  height={4}
-                />
-              </View>
-            ) : (
-              <StatLine label="XP" value="Maksimum" valueColor={colors.accentAmber} />
-            )}
-          </CompactSummaryCard>
+              ) : (
+                <StatLine label="XP" value="Maksimum" valueColor={colors.accentAmber} />
+              )}
+            </CompactSummaryCard>
+          </View>
+
+          <View style={styles.summaryCol}>
+            <CompactSummaryCard title="Operasyon Özeti" icon="truck">
+              <StatLine
+                label="Boşta kamyon"
+                value={`${fleetSnapshot.idleTrucks}`}
+                valueColor={colors.success}
+              />
+              <StatLine
+                label="Aktif teslimat"
+                value={`${runningDeliveries.length}`}
+                valueColor={colors.accentBlue}
+              />
+              <StatLine
+                label="Müsait sözleşme"
+                value={`${availableContracts.length}`}
+                valueColor={colors.accentAmber}
+              />
+              <StatLine
+                label="Depo doluluk"
+                value={formatRatioPercent(warehouseFillRatio)}
+              />
+            </CompactSummaryCard>
+          </View>
         </View>
 
-        <View style={styles.summaryCol}>
-          <CompactSummaryCard title="Operasyon Özeti" icon="truck">
-            <StatLine label="Boşta kamyon" value={`${fleetSnapshot.idleTrucks}`} />
-            <StatLine
-              label="Aktif teslimat"
-              value={`${runningDeliveries.length}`}
-              valueColor={colors.accentBlue}
-            />
-            <StatLine
-              label="Müsait sözleşme"
-              value={`${availableContracts.length}`}
-              valueColor={colors.accentAmber}
-            />
-            <StatLine label="Depo doluluk" value={formatRatioPercent(warehouseFillRatio)} />
-            {idleOriginCityIds.length > 0 ? (
-              <StatLine
-                label="Boşta şehir"
-                value={idleOriginCityIds.map((id) => getCityName(id)).join(', ')}
-              />
-            ) : null}
-          </CompactSummaryCard>
-        </View>
+        <ExpenseSummaryCard
+          dailyFixed={operationCosts.dailyFixed ?? 0}
+          weeklyLease={operationCosts.weeklyLeaseBurden ?? 0}
+        />
       </View>
 
       {deliveryPreview.length > 0 ? (
@@ -931,6 +1034,11 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: colors.success,
   },
+  diamondValue: {
+    ...typography.caption,
+    color: colors.accentBlue,
+    fontWeight: '700',
+  },
   headerFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -983,9 +1091,13 @@ const styles = StyleSheet.create({
     color: colors.warning,
   },
 
+  summarySection: {
+    gap: 10,
+    marginBottom: spacing.xs,
+  },
   summaryRow: {
     flexDirection: 'row',
-    gap: spacing.md,
+    gap: 12,
   },
   summaryCol: {
     flex: 1,
@@ -993,6 +1105,9 @@ const styles = StyleSheet.create({
   },
   summaryCard: {
     flex: 1,
+  },
+  expenseCard: {
+    paddingVertical: spacing.sm,
   },
   summaryHeader: {
     flexDirection: 'row',
@@ -1021,11 +1136,17 @@ const styles = StyleSheet.create({
   statLineLabel: {
     ...typography.caption,
     color: colors.textMuted,
+    flex: 1,
+    flexShrink: 1,
+    marginRight: spacing.xs,
   },
   statLineValue: {
     ...typography.caption,
     fontWeight: '700',
     color: colors.textPrimary,
+    flexShrink: 0,
+    textAlign: 'right',
+    maxWidth: '52%',
   },
   xpBlock: {
     marginTop: spacing.xs,
@@ -1035,11 +1156,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: spacing.xs,
   },
   xpValue: {
     ...typography.caption,
     fontWeight: '700',
     color: colors.accentAmber,
+    flexShrink: 0,
+    textAlign: 'right',
   },
 
   sectionSpaced: {

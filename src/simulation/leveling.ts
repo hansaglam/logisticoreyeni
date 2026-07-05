@@ -64,6 +64,9 @@ export function normalizePlayerProgress(player: PlayerProgressInput): Player {
     totalXp,
     xpToNextLevel,
     companyLevel: level,
+    diamonds: Math.max(0, player?.diamonds ?? 0),
+    failedDeliveries: Math.max(0, player?.failedDeliveries ?? 0),
+    lateDeliveries: Math.max(0, player?.lateDeliveries ?? 0),
   };
 }
 

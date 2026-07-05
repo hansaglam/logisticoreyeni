@@ -4,7 +4,8 @@
  * Envanter normalizasyonu, kapasite ve alım/satım hesapları.
  */
 
-import { tradingBalance } from '../config/balance';
+import { operatingCostBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import {
   getEffectiveSellPrice,
@@ -68,8 +69,29 @@ export function normalizeWarehouseInventory(
 export function normalizeWarehouse(warehouse: Warehouse, currentTime = 0): Warehouse {
   const inventory = normalizeWarehouseInventory(warehouse, currentTime);
   const usedCapacityTon = inventory.reduce((sum, item) => sum + item.quantity, 0);
+  const capacityTons = warehouse.capacityTons ?? warehouse.capacityTon ?? 80;
+  const city = CITIES_BY_ID[warehouse.cityId];
+  const modifier = city?.warehouseCostModifier ?? 1;
+  const tier = warehouse.upgradeTier ?? 1;
+  const typeMultiplier =
+    resolveWarehouseType(warehouse.warehouseType) === 'cold'
+      ? warehouseBalance.coldElectricityMultiplier
+      : 1;
+  const computedDailyCost = Math.round(
+    (capacityTons * warehouseBalance.rentPerTon +
+      capacityTons * warehouseBalance.electricityPerTon * typeMultiplier +
+      warehouseBalance.staffCostPerLevel * tier) *
+      modifier,
+  );
+  const dailyOperatingCost =
+    warehouse.dailyOperatingCost ??
+    (computedDailyCost > 0 ? computedDailyCost : operatingCostBalance.fallbackWarehouseDailyCost);
+
   return {
     ...warehouse,
+    capacityTons,
+    capacityTon: capacityTons,
+    dailyOperatingCost,
     warehouseType: resolveWarehouseType(warehouse.warehouseType),
     qualityProtection:
       warehouse.qualityProtection ??

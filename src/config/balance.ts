@@ -9,6 +9,46 @@ import {
   getMinLevelForWarehouseCount,
   levelConfig,
 } from './levelConfig';
+import { contractLevelBalance } from './contractLevelBalance';
+
+export { contractLevelBalance } from './contractLevelBalance';
+export type { ContractLevelBalance } from './contractLevelBalance';
+
+/** Oyun zaman ölçeği — gerçek ms / oyun saati */
+export const timeBalance = {
+  normalMsPerGameHour: 15_000,
+  fastMsPerGameHour: 7_500,
+  debugMsPerGameHour: 1_000,
+  hoursPerDay: 24,
+  daysPerWeek: 7,
+  daysPerMonth: 30,
+} as const;
+
+/** Günlük operasyon giderleri */
+export const operatingCostBalance = {
+  /** Eski kayıtlar için şoför günlük maaş fallback ($) */
+  fallbackDriverDailySalary: 120,
+  /** Eski kayıtlar için depo günlük işletme fallback ($) */
+  fallbackWarehouseDailyCost: 250,
+  /** Genel operasyon tabanı ($/gün) */
+  dailyOperationsBase: 80,
+  /** Kamyon başına ek operasyon ($/gün) */
+  operationsPerOwnedTruck: 25,
+  /** Şoför başına ek operasyon ($/gün) */
+  operationsPerDriver: 15,
+  /** Haftalık kira süresi (oyun saati) */
+  leaseDurationHours: 7 * 24,
+} as const;
+
+export function getMsPerGameHour(gameSpeed: number): number {
+  if (gameSpeed >= 6) {
+    return timeBalance.debugMsPerGameHour;
+  }
+  if (gameSpeed >= 1.5) {
+    return timeBalance.fastMsPerGameHour;
+  }
+  return timeBalance.normalMsPerGameHour;
+}
 
 export const economyBalance = {
   /** Varsayılan yakıt fiyatı ($/L) */
@@ -68,6 +108,28 @@ export const contractBalance = {
   minDeadlineHours: 4,
   /** Maksimum teslim süresi (saat) */
   maxDeadlineHours: 168,
+  /** Sözleşme maliyet tahmininde varsayılan yakıt tüketimi (L/km) */
+  estimateFuelPerKm: 0.32,
+  /** Sözleşme maliyet tahmininde varsayılan bakım ($/km) */
+  estimateMaintenancePerKm: 0.18,
+  /** Operasyon payı: distanceKm × oran */
+  operationsCostPerKm: 0.12,
+  /** Ürün değeri risk payı: amount × referencePrice × oran */
+  cargoValueRiskRate: 0.015,
+  /** Kolay/kısa iş hedef net kâr marjı */
+  profitMarginEasyMin: 0.2,
+  profitMarginEasyMax: 0.35,
+  /** Orta iş hedef net kâr marjı */
+  profitMarginMediumMin: 0.3,
+  profitMarginMediumMax: 0.5,
+  /** Riskli/acil iş hedef net kâr marjı */
+  profitMarginRiskyMin: 0.45,
+  profitMarginRiskyMax: 0.7,
+  /** Büyük seviye işi hedef net kâr marjı */
+  profitMarginLargeMin: 0.5,
+  profitMarginLargeMax: 0.75,
+  /** Büyük iş tonaj eşiği */
+  largeContractTonnage: 22,
 } as const;
 
 export const deliveryBalance = {
@@ -181,6 +243,23 @@ export const financeBalance = {
   reputationValuePerPoint: 100,
 } as const;
 
+/** Şirket puanı (Company Score) — haftalık leaderboard sıralaması için */
+export const companyScoreBalance = {
+  truckValueWeight: 0.85,
+  warehouseValueWeight: 0.75,
+  inventoryValueWeight: 0.7,
+  completedContractBonus: 1500,
+  reputationBonusPerPoint: 1000,
+  levelBonusPerLevel: 5000,
+  weeklyTradeProfitWeight: 0.5,
+  failedDeliveryPenalty: 5000,
+  lateDeliveryPenalty: 2000,
+  /** Haftalık ticaret kârı penceresi (oyun saati) */
+  weeklyHours: 168,
+  /** Depo tier bonusu: (upgradeTier - 1) × oran */
+  warehouseTierBonusRate: 0.15,
+} as const;
+
 export const levelBalance = {
   maxLevel: levelConfig.maxLevel,
   contractTonnageByLevel: levelConfig.contractUnlocks.map(({ level, maxTonnage }) => ({
@@ -203,8 +282,11 @@ export const levelBalance = {
 
 /** Tüm denge grupları — tek import noktası */
 export const balanceConfig = {
+  time: timeBalance,
+  operatingCost: operatingCostBalance,
   economy: economyBalance,
   contract: contractBalance,
+  contractLevel: contractLevelBalance,
   delivery: deliveryBalance,
   truck: truckBalance,
   warehouse: warehouseBalance,
@@ -213,6 +295,8 @@ export const balanceConfig = {
   level: levelBalance,
 } as const;
 
+export type TimeBalance = typeof timeBalance;
+export type OperatingCostBalance = typeof operatingCostBalance;
 export type EconomyBalance = typeof economyBalance;
 export type ContractBalance = typeof contractBalance;
 export type DeliveryBalance = typeof deliveryBalance;

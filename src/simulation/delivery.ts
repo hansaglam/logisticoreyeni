@@ -117,8 +117,29 @@ export function canTruckCarryContract(truck: Truck, contract: Contract, product?
 }
 
 /** Kamyon teslimat için boşta mı? */
+export function isTruckLeaseActive(truck: Truck, currentTime: number): boolean {
+  if (truck.leaseExpired) {
+    return false;
+  }
+  if ((truck.ownershipType ?? 'owned') !== 'leased') {
+    return true;
+  }
+  if (truck.leaseExpiresAt == null) {
+    return true;
+  }
+  if (truck.status === 'on_route' || truck.status === 'transferring') {
+    return true;
+  }
+  return truck.leaseExpiresAt > currentTime;
+}
+
 export function isTruckIdle(truck: Truck): boolean {
-  return truck.status === 'idle';
+  return truck.status === 'idle' && !truck.leaseExpired;
+}
+
+/** Kamyon görev atanabilir mi? */
+export function isTruckAvailableForAssignment(truck: Truck, currentTime: number): boolean {
+  return isTruckIdle(truck) && isTruckLeaseActive(truck, currentTime);
 }
 
 /** Kamyon boş transferde mi? */
@@ -141,6 +162,10 @@ export function normalizeTruckCity(truck: Truck, fallbackHomeCityId?: string): T
     ...truck,
     currentCityId,
     homeCityId: truck.homeCityId ?? fallbackHomeCityId ?? currentCityId,
+    ownershipType: truck.ownershipType ?? 'owned',
+    purchasePrice: truck.purchasePrice ?? 45_000,
+    leaseExpiresAt: truck.leaseExpiresAt ?? null,
+    leaseExpired: truck.leaseExpired ?? false,
   };
 }
 
@@ -203,6 +228,7 @@ export function selectIdleTruckForContract(
   trucks: Truck[] | undefined,
   contract: Contract,
   product?: Product,
+  currentTime = 0,
 ): Truck | undefined {
   const resolved = product ?? PRODUCT_BY_ID[contract.productId];
   if (!resolved) return undefined;
@@ -210,7 +236,7 @@ export function selectIdleTruckForContract(
   return (trucks ?? [])
     .filter(
       (truck) =>
-        isTruckIdle(truck) &&
+        isTruckAvailableForAssignment(truck, currentTime) &&
         isTruckAtContractOrigin(truck, contract) &&
         canTruckCarryContract(truck, contract, resolved),
     )
@@ -251,7 +277,7 @@ export function getContractAvailability(
     return {
       canStart: false,
       reason: 'NO_TRUCKS',
-      buttonLabel: 'Kamyon Yok',
+      buttonLabel: 'Kamyon yok',
       title: 'Kamyon yok',
       message: 'Bu işi almak için önce bir kamyon satın almalısın.',
       requiredCapacity,
@@ -262,10 +288,10 @@ export function getContractAvailability(
     return {
       canStart: false,
       reason: 'NO_IDLE_TRUCKS',
-      buttonLabel: 'Müsait Kamyon Yok',
-      title: 'Müsait kamyon yok',
+      buttonLabel: 'Kamyon yok',
+      title: 'Kamyon yok',
       message:
-        'Tüm kamyonların şu anda teslimatta. Yeni bir kamyon satın alabilir veya mevcut teslimatın bitmesini bekleyebilirsin.',
+        'Bu işi almak için şu anda uygun boştaki kamyonun yok. Mevcut teslimatların bitmesini bekleyebilir veya yeni kamyon satın alabilirsin.',
       requiredCapacity,
     };
   }
@@ -309,13 +335,13 @@ export function getContractAvailability(
   }
 
   if (!hasIdleTruckAtOrigin(truckList, originCityId)) {
-    const fromCityName = CITIES_BY_ID[originCityId]?.name ?? originCityId;
+    const fromCityName = CITIES_BY_ID[originCityId]?.name ?? 'bu şehir';
     return {
       canStart: false,
       reason: 'NO_TRUCK_AT_ORIGIN',
-      buttonLabel: 'Çıkışta Kamyon Yok',
-      title: 'Çıkışta kamyon yok',
-      message: `Bu iş ${fromCityName} çıkışlı. Bu şehirde boşta kamyonun yok.`,
+      buttonLabel: 'Kamyon yok',
+      title: 'Kamyon yok',
+      message: `Bu iş ${fromCityName} çıkışlı. Bu şehirde boştaki kamyonun yok.`,
       maxIdleTruckCapacity,
       requiredCapacity,
     };
@@ -373,15 +399,13 @@ export function getContractAvailabilityWarningText(
     case 'LEVEL_INSUFFICIENT':
       return null;
     case 'NO_TRUCKS':
-      return 'Kamyon yok';
     case 'NO_IDLE_TRUCKS':
-      return 'Müsait kamyon yok';
+    case 'NO_TRUCK_AT_ORIGIN':
+      return 'Kamyon yok';
     case 'NO_DRIVERS':
       return 'Şoför yok';
     case 'NO_IDLE_DRIVERS':
       return 'Müsait şoför yok';
-    case 'NO_TRUCK_AT_ORIGIN':
-      return 'Çıkışta kamyon yok';
     case 'CAPACITY_INSUFFICIENT':
       return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
     case 'TRUCK_CONDITION_TOO_LOW':

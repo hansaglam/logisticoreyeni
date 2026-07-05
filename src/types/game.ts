@@ -164,6 +164,12 @@ export interface Route {
 /** Kamyon durumu */
 export type TruckStatus = 'idle' | 'on_route' | 'maintenance' | 'transferring';
 
+/** Kamyon sahiplik türü */
+export type TruckOwnershipType = 'owned' | 'leased';
+
+/** Kamyon kira dönemi */
+export type TruckLeasePeriod = 'daily' | 'weekly' | 'monthly';
+
 /** Oyuncuya ait bir kamyon */
 export interface Truck {
   id: string;
@@ -184,6 +190,16 @@ export interface Truck {
   condition: number;
   /** Satın alma fiyatı ($) */
   purchasePrice: number;
+  /** Sahiplik türü — eski kayıtlarda owned kabul edilir */
+  ownershipType?: TruckOwnershipType;
+  /** Günlük kira ($) — kiralık kamyonlarda */
+  leaseDailyCost?: number;
+  /** Kira dönemi */
+  leasePeriod?: TruckLeasePeriod;
+  /** Kira bitiş zamanı (oyun saati) */
+  leaseExpiresAt?: number | null;
+  /** Kira süresi doldu — pasif */
+  leaseExpired?: boolean;
   /** Mağaza katalog kimliği — aynı modelden birden fazla alımda instance id'den ayrılır */
   catalogId?: string;
   /** Kamyonun bulunduğu şehir */
@@ -225,8 +241,16 @@ export interface Driver {
   speed: number;
   /** Moral seviyesi (0–100) */
   morale: number;
-  /** Günlük maaş ($) */
+  /** Günlük maaş ($) — salaryPerDay ile eş anlamlı */
   salaryPerDay: number;
+  /** Günlük maaş ($) — yeni alan adı */
+  dailySalary?: number;
+  /** Haftalık maaş ($) — opsiyonel */
+  weeklySalary?: number;
+  /** Maaş ödeme periyodu */
+  salaryPeriod?: 'daily' | 'weekly';
+  /** İşe alım ücreti ($) — tek seferlik */
+  hireCost?: number;
   /** Atandığı kamyon; boştaysa null */
   assignedTruckId: string | null;
   status: DriverStatus;
@@ -402,6 +426,12 @@ export interface Warehouse {
   upgradeTier?: number;
   /** Depo türü — eski kayıtlarda yoksa standard kabul edilir */
   warehouseType?: WarehouseType;
+  /** Depo açılış maliyeti ($) — kayıt uyumluluğu */
+  openCost?: number;
+  /** Günlük işletme gideri ($) */
+  dailyOperatingCost?: number;
+  /** Kapasite (ton) — capacityTons ile eş anlamlı */
+  capacityTon?: number;
   /** Kalite koruma katsayısı (0–1) */
   qualityProtection?: number;
 }
@@ -415,6 +445,13 @@ export type FinanceLedgerCategory =
   | 'fleet_purchase'
   | 'warehouse_open'
   | 'truck_transfer'
+  | 'daily_operating_cost'
+  | 'driver_salary'
+  | 'driver_hire'
+  | 'warehouse_rent'
+  | 'truck_lease'
+  | 'truck_rental'
+  | 'operations'
   | 'other';
 
 /** Gelir/gider kaydı — save'e yazılır */
@@ -482,6 +519,12 @@ export interface Player extends PlayerProgressFields {
   reputation: number;
   /** Tamamlanan sözleşme sayısı */
   completedContracts: number;
+  /** Başarısız teslimat sayısı — company score cezası */
+  failedDeliveries?: number;
+  /** Gecikmeli teslimat sayısı — company score cezası */
+  lateDeliveries?: number;
+  /** Premium para birimi — haftalık leaderboard ödülleri için */
+  diamonds?: number;
   /** Oyuncunun sahip olduğu kamyonlar */
   trucks: Truck[];
   /** Oyuncunun işe aldığı şoförler */
@@ -630,6 +673,26 @@ export type RecommendedMapAction =
       buttonLabel: 'Piyasayı Gör';
     };
 
+/** Şirket puanı dağılımı — runtime hesaplanır, save'e yazılmaz */
+export interface CompanyScoreBreakdown {
+  cashScore: number;
+  truckValueScore: number;
+  warehouseValueScore: number;
+  inventoryValueScore: number;
+  completedContractsScore: number;
+  reputationScore: number;
+  levelScore: number;
+  weeklyTradeProfitScore: number;
+  penaltiesScore: number;
+  totalScore: number;
+  truckValue: number;
+  warehouseValue: number;
+  inventoryValue: number;
+  weeklyTradeProfit: number;
+  failedDeliveries: number;
+  lateDeliveries: number;
+}
+
 /** Dinamik piyasa haberi */
 export interface MarketNews {
   id: string;
@@ -654,6 +717,8 @@ export interface StoreGameState {
   gameSpeed: number;
   /** Son ekonomi tick'inin yapıldığı oyun saati */
   lastEconomyTickTime: number;
+  /** Son günlük gider işleminin yapıldığı oyun saati */
+  lastDailyOperatingCostTime: number;
   player: Player;
   cities: City[];
   products: Product[];

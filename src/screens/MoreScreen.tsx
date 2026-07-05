@@ -30,7 +30,7 @@ import WarehouseScreen from './WarehouseScreen';
 type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug';
 
 interface ModuleItem {
-  key: MoreRoute | 'settings' | 'stats' | 'upgrades';
+  key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
   label: string;
   subtitle: string;
   icon: GameIconName;
@@ -59,6 +59,14 @@ const MODULE_ITEMS: ModuleItem[] = [
     icon: 'profit',
     placeholder: true,
     badge: { label: 'Yakında', variant: 'muted' },
+  },
+  {
+    key: 'leaderboard',
+    label: 'Liderlik Tablosu',
+    subtitle: 'Haftalık sıralama yakında.',
+    icon: 'company',
+    placeholder: true,
+    badge: { label: 'Yakında', variant: 'info' },
   },
   {
     key: 'upgrades',
@@ -277,7 +285,9 @@ export default function MoreScreen() {
             <GameIcon name="cash" size={16} color={colors.success} />
             <Text style={styles.cashLabel}>Nakit</Text>
             <Text style={styles.cashValue}>{formatMoney(player.money ?? 0)}</Text>
+            <Text style={styles.diamondStrip}>💎 {Math.max(0, player.diamonds ?? 0)}</Text>
           </View>
+          {/* TODO: Add premium shop and diamond spending system later. */}
         </>
       ) : null}
 
@@ -466,6 +476,12 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     fontWeight: '800',
     color: colors.success,
+  },
+  diamondStrip: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    color: colors.accentBlue,
+    marginLeft: spacing.sm,
   },
 
   moduleRight: {

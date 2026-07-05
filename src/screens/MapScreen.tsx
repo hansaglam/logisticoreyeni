@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 
+import { debugConfig } from '../config/debug';
 import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
 import { AppCard, GameIcon, ProgressBar, StatusBadge, type StatusBadgeVariant } from '../components/ui';
 import { normalizeCityId } from '../data/networkPositions';
@@ -843,18 +844,18 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         ]}
       >
         <View style={styles.header}>
-          <TouchableOpacity style={styles.headerIconButton} onPress={() => {}} activeOpacity={0.8}>
-            <Text style={styles.headerIconText}>‹</Text>
-          </TouchableOpacity>
+          <View style={styles.headerSideSlot} />
 
           <View style={styles.headerCenter}>
             <Text style={styles.headerTitle}>Türkiye Lojistik Ağı</Text>
             <Text style={styles.headerSubtitle}>Şehirler, rotalar ve aktif teslimatlar</Text>
           </View>
 
-          <TouchableOpacity style={styles.headerIconButton} onPress={handleRefreshMarket} activeOpacity={0.8}>
-            <Text style={styles.headerIconText}>⟳</Text>
-          </TouchableOpacity>
+          <View style={styles.headerSideSlot}>
+            <TouchableOpacity style={styles.headerIconButton} onPress={handleRefreshMarket} activeOpacity={0.8}>
+              <Text style={styles.headerIconText}>⟳</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <ScrollView
@@ -899,7 +900,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         ) : null}
 
         <WorldMapCanvas
-          calibrationMode={__DEV__}
+          calibrationMode={debugConfig.mapCalibrationEnabled}
           cities={cities}
           routes={routes}
           contracts={contracts}
@@ -981,10 +982,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 10,
   },
+  headerSideSlot: {
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerCenter: {
     flex: 1,
     alignItems: 'center',
     paddingHorizontal: 8,
+    minWidth: 0,
   },
   headerTitle: {
     color: COLORS.text,

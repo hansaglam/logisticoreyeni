@@ -42,6 +42,7 @@ import {
   getDriverPoolForLevel,
   getDriverTierLabel,
   isDriverPoolItemHired,
+  normalizeDriver,
   resolveDriverRequiredLevel,
   STARTER_DRIVER,
 } from '../data/drivers';
@@ -56,6 +57,7 @@ import {
   generateContracts,
   getRouteBetweenCities,
   mergeContractLists,
+  balanceAvailableContractLevelMix,
   randomBetween as contractRandomBetween,
   refreshContractsFromMarket,
   replenishAvailableContracts,
@@ -107,7 +109,12 @@ import {
   processWarehouseQualityDegradation,
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
-import { contractBalance, economyBalance, levelBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { contractBalance, economyBalance, getMsPerGameHour, levelBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import {
+  buildDailyOperatingCostLedgerEntries,
+  calculateDailyOperatingCostBreakdown,
+  processExpiredTruckLeases,
+} from '../simulation/dailyOperatingCosts';
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
 import {
   canOpenMoreWarehouses,
@@ -145,7 +152,8 @@ import {
 const STARTING_MONEY = 20_000;
 const AUTO_SAVE_MIN_INTERVAL_MS = 15_000;
 const ENABLE_SAVE_LOGS = false;
-const ECONOMY_TICK_INTERVAL_HOURS = 24;
+const ECONOMY_TICK_INTERVAL_HOURS = timeBalance.hoursPerDay;
+const DAILY_COST_INTERVAL_HOURS = timeBalance.hoursPerDay;
 const MARKET_NEWS_MAX_AGE_HOURS = 72;
 const MARKET_NEWS_MAX_COUNT = 30;
 const EVENT_LOG_MAX_AGE_HOURS = 72;
@@ -597,7 +605,7 @@ export function createInitialGameState(): StoreGameState {
       contractBalance.initialContractsMax + 0.999,
     ),
   );
-  const contracts = generateContracts(
+  const rawContracts = generateContracts(
     citiesToRecord(cities),
     ROUTES,
     PRODUCTS,
@@ -611,12 +619,14 @@ export function createInitialGameState(): StoreGameState {
       idleMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
     },
   );
+  const contracts = balanceAvailableContractLevelMix(rawContracts, 1);
 
   return {
     currentTime: 0,
     isPaused: false,
     gameSpeed: 1,
     lastEconomyTickTime: 0,
+    lastDailyOperatingCostTime: 0,
     player: {
       companyName: 'LogistiCore Lojistik',
       money: STARTING_MONEY,
@@ -628,6 +638,9 @@ export function createInitialGameState(): StoreGameState {
       homeCityId: 'izmir',
       reputation: 50,
       completedContracts: 0,
+      failedDeliveries: 0,
+      lateDeliveries: 0,
+      diamonds: 0,
       trucks: [structuredClone(STARTER_TRUCK)],
       drivers: [structuredClone(STARTER_DRIVER)],
       warehouses: [
@@ -635,6 +648,8 @@ export function createInitialGameState(): StoreGameState {
           id: 'warehouse-starter-1',
           cityId: 'izmir',
           capacityTons: 100,
+          capacityTon: 100,
+          dailyOperatingCost: operatingCostBalance.fallbackWarehouseDailyCost,
           upgradeTier: 1,
           warehouseType: 'standard',
           qualityProtection: 0.5,
@@ -737,7 +752,10 @@ export interface GameStore extends StoreGameState {
   completeDeliveryById: (deliveryId: string) => void;
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => void;
   buyTruck: (catalogId: string) => TradeActionResult;
+  leaseTruck: (catalogId: string) => TradeActionResult;
   hireDriver: (poolId: string) => TradeActionResult;
+  processDailyOperatingCosts: () => void;
+  processExpiredLeases: () => void;
   repairTruck: (truckId: string) => void;
   refuelOrUpdateFuelPrice: () => void;
   addMarketNews: (news: Omit<MarketNews, 'id'> & { id?: string }) => void;
@@ -764,6 +782,10 @@ export interface GameStore extends StoreGameState {
   debugAddCash: (amount: number) => void;
   debugRemoveCash: (amount: number) => void;
   debugSetCash: (amount: number) => void;
+  debugAdvanceOneDay: () => void;
+  debugProcessDailyCosts: () => void;
+  debugExpireLeaseTruck: () => void;
+  debugGetEconomyBalanceSummary: () => string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,19 +1179,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    const scaledHours = hours * state.gameSpeed;
-    const newTime = state.currentTime + scaledHours;
+    const newTime = state.currentTime + hours;
 
     set({ currentTime: newTime });
 
-    get().updateDeliveries(scaledHours);
-    get().updateTransfers(scaledHours);
+    get().updateDeliveries(hours);
+    get().updateTransfers(hours);
 
     const stateAfterDelivery = get();
     const qualityResult = processWarehouseQualityDegradation(
       stateAfterDelivery.player.warehouses,
       newTime,
-      scaledHours,
+      hours,
       stateAfterDelivery.eventLog,
     );
     if (qualityResult.newEvents.length > 0 || qualityResult.warehouses !== stateAfterDelivery.player.warehouses) {
@@ -1192,6 +1213,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
     }
 
+    let { lastDailyOperatingCostTime } = get();
+    while (lastDailyOperatingCostTime + DAILY_COST_INTERVAL_HOURS <= newTime) {
+      lastDailyOperatingCostTime += DAILY_COST_INTERVAL_HOURS;
+      set({ lastDailyOperatingCostTime });
+      get().processDailyOperatingCosts();
+    }
+
+    get().processExpiredLeases();
+
     // Her 24 oyun saatinde bir ekonomi tick'i
     let { lastEconomyTickTime } = get();
     while (lastEconomyTickTime + ECONOMY_TICK_INTERVAL_HOURS <= newTime) {
@@ -1205,6 +1235,59 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().clearOldGameEvents();
     get().markSaveDirty();
     get().autoSave('time_tick');
+  },
+
+  processDailyOperatingCosts: () => {
+    const state = get();
+    const breakdown = calculateDailyOperatingCostBreakdown(state.player);
+    if (breakdown.total <= 0) {
+      return;
+    }
+
+    const ledgerEntries = buildDailyOperatingCostLedgerEntries(breakdown, state.currentTime);
+    let nextLedger = state.financeLedger ?? [];
+    for (const entry of ledgerEntries) {
+      nextLedger = prependFinanceLedger(nextLedger, entry);
+    }
+
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - breakdown.total,
+      },
+      financeLedger: nextLedger,
+    });
+  },
+
+  processExpiredLeases: () => {
+    const state = get();
+    const { trucks, expiredTruckNames } = processExpiredTruckLeases(
+      state.player.trucks,
+      state.currentTime,
+    );
+
+    if (expiredTruckNames.length === 0) {
+      return;
+    }
+
+    set({
+      player: {
+        ...state.player,
+        trucks,
+      },
+    });
+
+    for (const truckName of expiredTruckNames) {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'warning',
+        title: 'Kiralama süresi doldu',
+        message: `${truckName} — kiralık kamyon süresi doldu ve pasif hale getirildi.`,
+        actionLabel: 'Filoyu Gör',
+        actionTarget: 'fleet',
+        autoDismissMs: 5000,
+      });
+    }
   },
 
   runEconomyTick: () => {
@@ -1344,9 +1427,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   refreshMarketSnapshot: () => {
     const state = get();
+    const playerLevel = Math.max(1, state.player?.level ?? state.player?.companyLevel ?? 1);
     const expired = expireOldContracts(state.contracts ?? [], state.currentTime);
-    if (expired !== state.contracts) {
-      set({ contracts: expired });
+    const balanced = balanceAvailableContractLevelMix(expired, playerLevel);
+    if (balanced !== state.contracts) {
+      set({ contracts: balanced });
       get().markSaveDirty();
     }
   },
@@ -1478,7 +1563,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
 
     if (newContracts.length > 0) {
-      set({ contracts: mergeContractsWithDedupe(state.contracts, newContracts) });
+      const merged = mergeContractsWithDedupe(state.contracts, newContracts);
+      set({
+        contracts: balanceAvailableContractLevelMix(merged, playerLevel),
+      });
       get().addGameEvent({
         time: state.currentTime,
         type: 'market',
@@ -1736,7 +1824,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const product = PRODUCT_BY_ID[contract.productId];
-    const truck = selectIdleTruckForContract(state.player.trucks, contract, product);
+    const truck = selectIdleTruckForContract(
+      state.player.trucks,
+      contract,
+      product,
+      state.currentTime,
+    );
     const driver = (state.player.drivers ?? []).find((candidate) => candidate.status === 'idle');
 
     if (!truck) {
@@ -2222,6 +2315,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     get().autoSave('delivery_completed');
+    get().processExpiredLeases();
   },
 
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => {
@@ -2247,6 +2341,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
         warehouses: merged.player!.warehouses,
         money: moneyAfterFail,
         reputation: Math.max(0, state.player.reputation - REPUTATION_LOSS),
+        failedDeliveries: (state.player.failedDeliveries ?? 0) + 1,
+        lateDeliveries:
+          reason === 'too_late'
+            ? (state.player.lateDeliveries ?? 0) + 1
+            : (state.player.lateDeliveries ?? 0),
       },
       marketNews: [
         {
@@ -2314,6 +2413,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       comfort: template.comfort,
       condition: template.condition,
       purchasePrice: template.purchasePrice,
+      ownershipType: 'owned',
       currentCityId: state.player.homeCityId ?? 'izmir',
       homeCityId: state.player.homeCityId ?? 'izmir',
       status: 'idle',
@@ -2352,6 +2452,97 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
   },
 
+  leaseTruck: (catalogId: string): TradeActionResult => {
+    const state = get();
+    const template = findTruckMarketItem(catalogId);
+    if (!template) {
+      return {
+        success: false,
+        message: 'Kamyon bulunamadı.',
+      };
+    }
+
+    const weeklyLeaseCost = template.weeklyLeaseCost;
+    if (!weeklyLeaseCost || weeklyLeaseCost <= 0) {
+      return {
+        success: false,
+        message: 'Bu kamyon için kiralama seçeneği yok.',
+      };
+    }
+
+    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const requiredLevel = resolveTruckMarketRequiredLevel(template);
+    if (playerLevel < requiredLevel) {
+      return {
+        success: false,
+        message: `Bu kamyon için şirket seviyen Level ${requiredLevel} olmalı.`,
+      };
+    }
+
+    if (state.player.money < weeklyLeaseCost) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUNDS',
+        message: `Haftalık kira için ${formatNotificationMoney(weeklyLeaseCost)} gerekli.`,
+      };
+    }
+
+    const instanceId = `${catalogId}-lease-${Date.now()}`;
+    const leaseExpiresAt = state.currentTime + operatingCostBalance.leaseDurationHours;
+    const newTruck: Truck = {
+      id: instanceId,
+      catalogId,
+      name: `${template.name} (Kiralık)`,
+      capacity: template.capacity,
+      fuelConsumptionPerKm: template.fuelConsumptionPerKm,
+      speed: template.speed,
+      reliability: template.reliability,
+      maintenanceCost: template.maintenanceCost,
+      comfort: template.comfort,
+      condition: template.condition,
+      purchasePrice: template.purchasePrice,
+      ownershipType: 'leased',
+      leasePeriod: 'weekly',
+      leaseDailyCost: Math.round(weeklyLeaseCost / timeBalance.daysPerWeek),
+      leaseExpiresAt,
+      leaseExpired: false,
+      currentCityId: state.player.homeCityId ?? 'izmir',
+      homeCityId: state.player.homeCityId ?? 'izmir',
+      status: 'idle',
+    };
+
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - weeklyLeaseCost,
+        trucks: [...state.player.trucks, newTruck],
+      },
+      financeLedger: prependFinanceLedger(state.financeLedger ?? [], {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'truck_lease',
+        amount: weeklyLeaseCost,
+        description: `${template.name} · 7 günlük kira`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Kamyon kiralandı',
+          message: `${template.name} 7 gün için kiralandı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+    get().autoSave('purchase');
+    return {
+      success: true,
+      message: `${template.name} 7 gün kiralandı.`,
+    };
+  },
+
   hireDriver: (poolId: string): TradeActionResult => {
     const state = get();
     const template = findDriverPoolItem(poolId);
@@ -2385,19 +2576,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (state.player.money < template.hiringFee) {
+    const hireCost = template.hiringFee;
+    if (state.player.money < hireCost) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
-        message: `Şoför işe almak için ${formatNotificationMoney(template.hiringFee)} gerekli.`,
+        message: `Şoför işe almak için ${formatNotificationMoney(hireCost)} gerekli.`,
       };
     }
 
     const { hiringFee, comingSoon: _comingSoon, ...driverFields } = template;
+    const dailySalary = driverFields.salaryPerDay ?? operatingCostBalance.fallbackDriverDailySalary;
     const newDriver: Driver = {
       ...driverFields,
       id: poolId,
       poolId,
+      dailySalary,
+      salaryPerDay: dailySalary,
+      salaryPeriod: 'daily',
+      hireCost,
       assignedTruckId: null,
       status: 'idle',
     };
@@ -2405,9 +2602,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       player: {
         ...state.player,
-        money: state.player.money - hiringFee,
+        money: state.player.money - hireCost,
         drivers: [...state.player.drivers, newDriver],
       },
+      financeLedger: prependFinanceLedger(state.financeLedger ?? [], {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'driver_hire',
+        amount: hireCost,
+        description: `${template.name} işe alım`,
+      }),
       eventLog: prependGameEvent(
         state.eventLog,
         {
@@ -2548,6 +2752,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       id: `warehouse-${cityId}-${resolvedType}-${Date.now()}`,
       cityId,
       capacityTons: tradingBalance.defaultWarehouseCapacityTons,
+      capacityTon: tradingBalance.defaultWarehouseCapacityTons,
+      dailyOperatingCost: Math.round(
+        warehouseBalance.baseDailyRent * costModifier * typeCostMultiplier,
+      ),
+      openCost,
       upgradeTier: 1,
       warehouseType: resolvedType,
       qualityProtection: resolvedType === 'cold' ? 1 : 0.5,
@@ -3122,6 +3331,57 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     get().markSaveDirty();
     get().autoSave('debug_cash_change');
+  },
+
+  debugAdvanceOneDay: () => {
+    get().advanceTime(timeBalance.hoursPerDay);
+  },
+
+  debugProcessDailyCosts: () => {
+    get().processDailyOperatingCosts();
+  },
+
+  debugExpireLeaseTruck: () => {
+    const state = get();
+    const leasedTruck = state.player.trucks.find(
+      (truck) =>
+        (truck.ownershipType ?? 'owned') === 'leased' &&
+        !truck.leaseExpired &&
+        truck.status === 'idle',
+    );
+    if (!leasedTruck) {
+      return;
+    }
+
+    set({
+      player: {
+        ...state.player,
+        trucks: state.player.trucks.map((truck) =>
+          truck.id === leasedTruck.id
+            ? { ...truck, leaseExpiresAt: state.currentTime - 1 }
+            : truck,
+        ),
+      },
+    });
+    get().processExpiredLeases();
+  },
+
+  debugGetEconomyBalanceSummary: () => {
+    const state = get();
+    const breakdown = calculateDailyOperatingCostBreakdown(state.player);
+    const msPerHour = getMsPerGameHour(state.gameSpeed);
+    const leasedCount = state.player.trucks.filter(
+      (t) => (t.ownershipType ?? 'owned') === 'leased' && !t.leaseExpired,
+    ).length;
+    return [
+      `Zaman: ${msPerHour}ms/saat (speed ${state.gameSpeed}x)`,
+      `Günlük sabit gider: $${breakdown.total}`,
+      `  Şoför: $${breakdown.driverSalaries}`,
+      `  Depo: $${breakdown.warehouseOperating}`,
+      `  Operasyon: $${breakdown.operations}`,
+      `Aktif kiralık kamyon: ${leasedCount}`,
+      `Nakit: $${state.player.money}`,
+    ].join('\n');
   },
 
   addMarketNews: (news) => {

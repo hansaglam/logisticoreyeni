@@ -11,10 +11,10 @@
  *   yPct: 100 -> görselin alt kenarı
  *
  * NASIL KALİBRE EDİLİR:
- * 1) WorldMapCanvas'ı `calibrationMode` prop'u ile aç.
+ * 1) src/config/debug.ts içinde mapCalibrationEnabled: true yap.
  * 2) Haritanın üzerinde şehrin olması gereken noktaya dokun.
- * 3) Konsola basılan { id: 'tap', xPct, yPct } değerini buraya kopyala.
- * 4) calibrationMode'u kapat.
+ * 3) Konsola basılan { xPct, yPct } değerini buraya kopyala.
+ * 4) mapCalibrationEnabled'ı tekrar false yap.
  *
  * Aşağıdaki değerler SADECE PLACEHOLDER'DIR — kendi görseline göre
  * kalibrasyon modunu kullanarak güncellemen gerekir.

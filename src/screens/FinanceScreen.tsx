@@ -28,6 +28,17 @@ import {
   normalizeWarehouse,
   summarizeFinanceLedger,
 } from '../simulation/trading';
+import {
+  calculateDailyOperatingCostBreakdown,
+  getDriverDailySalary,
+  getWarehouseDailyOperatingCost,
+  getWeeklyLeaseBurden,
+} from '../simulation/dailyOperatingCosts';
+import {
+  calculateCompanyScore,
+  formatCompanyScore,
+  getCompanyScoreBreakdown,
+} from '../simulation/companyScore';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type {
@@ -183,6 +194,43 @@ function getLedgerDisplay(entry: FinanceLedgerEntry): {
         title: description ?? 'Boş kamyon transferi',
         categoryLabel: 'Transfer',
       };
+    case 'driver_salary':
+      return {
+        icon: 'driver',
+        title: description ?? 'Şoför maaşı',
+        categoryLabel: 'Sabit gider',
+      };
+    case 'driver_hire':
+      return {
+        icon: 'driver',
+        title: description ?? 'Şoför işe alma',
+        categoryLabel: 'Yatırım',
+      };
+    case 'warehouse_rent':
+      return {
+        icon: 'warehouse',
+        title: description ?? 'Depo gideri',
+        categoryLabel: 'Sabit gider',
+      };
+    case 'truck_lease':
+    case 'truck_rental':
+      return {
+        icon: 'truck',
+        title: description ?? 'Kamyon kirası',
+        categoryLabel: 'Sabit gider',
+      };
+    case 'operations':
+      return {
+        icon: 'company',
+        title: description ?? 'Genel operasyon',
+        categoryLabel: 'Sabit gider',
+      };
+    case 'daily_operating_cost':
+      return {
+        icon: 'expense',
+        title: description ?? 'Günlük operasyon gideri',
+        categoryLabel: 'Sabit gider',
+      };
     default:
       return {
         icon: entry.type === 'income' ? 'revenue' : 'expense',
@@ -190,6 +238,20 @@ function getLedgerDisplay(entry: FinanceLedgerEntry): {
         categoryLabel: 'Diğer',
       };
   }
+}
+
+function sumLedgerByCategories(
+  entries: FinanceLedgerEntry[],
+  categories: FinanceLedgerCategory[],
+  type: 'income' | 'expense',
+): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.type !== type) continue;
+    if (!categories.includes(entry.category)) continue;
+    total += entry.amount ?? 0;
+  }
+  return total;
 }
 
 function aggregateOtherLedgerIncome(
@@ -228,9 +290,11 @@ interface BreakdownLine {
 function BreakdownCard({
   lines,
   hint,
+  formatValue = formatMoney,
 }: {
   lines: BreakdownLine[];
   hint?: string;
+  formatValue?: (value: number) => string;
 }) {
   return (
     <AppCard style={styles.breakdownCard} padded={false}>
@@ -249,7 +313,7 @@ function BreakdownCard({
             </Text>
           </View>
           <Text style={[styles.breakdownValue, { color: line.color ?? colors.textPrimary }]}>
-            {formatMoney(line.amount)}
+            {formatValue(line.amount)}
           </Text>
         </View>
       ))}
@@ -320,6 +384,9 @@ export default function FinanceScreen() {
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
+  const cities = useGameStore((state) => state.cities) ?? [];
+  const products = useGameStore((state) => state.products) ?? [];
+  const currentTime = useGameStore((state) => state.currentTime);
 
   const trucks: Truck[] = player?.trucks ?? [];
   const drivers: Driver[] = player?.drivers ?? [];
@@ -334,18 +401,14 @@ export default function FinanceScreen() {
   };
 
   const calculateDailyDriverSalary = (): number => {
-    return drivers.reduce((sum, driver) => sum + (driver.salaryPerDay ?? 0), 0);
+    return drivers.reduce((sum, driver) => sum + getDriverDailySalary(driver), 0);
   };
 
   const calculateDailyWarehouseCost = (): number => {
-    return warehouses.reduce((sum, warehouse) => {
-      const city = CITIES_BY_ID[warehouse.cityId];
-      const modifier = city?.warehouseCostModifier ?? 1;
-      const rent = warehouse.capacityTons * WAREHOUSE_RENT_PER_TON * modifier;
-      const electricity = warehouse.capacityTons * WAREHOUSE_ELECTRICITY_PER_TON * modifier;
-      const staff = WAREHOUSE_STAFF_COST_PER_LEVEL;
-      return sum + rent + electricity + staff;
-    }, 0);
+    return warehouses.reduce(
+      (sum, warehouse) => sum + getWarehouseDailyOperatingCost(warehouse),
+      0,
+    );
   };
 
   const calculateMaintenanceExposure = (): number => {
@@ -391,7 +454,50 @@ export default function FinanceScreen() {
     return cash + truckValue + warehouseValue + reputationValue;
   };
 
-  const totalRevenue = useMemo(calculateTotalRevenue, [contracts]);
+  const projectedDailyCosts = useMemo(
+    () => calculateDailyOperatingCostBreakdown({ drivers, warehouses, trucks }),
+    [drivers, warehouses, trucks],
+  );
+
+  const ledgerTotals = useMemo(() => {
+    const contractIncome = sumLedgerByCategories(financeLedger, ['delivery_income'], 'income');
+    const contractRevenue =
+      contractIncome > 0
+        ? contractIncome
+        : contracts
+            .filter((c) => c.status === 'completed')
+            .reduce((sum, c) => sum + (c.payment ?? 0), 0);
+
+    return {
+      contractRevenue,
+      tradeSaleTotal: sumLedgerByCategories(financeLedger, ['trade_sale'], 'income'),
+      otherIncome: aggregateOtherLedgerIncome(financeLedger, [
+        'trade_sale',
+        'delivery_income',
+      ]),
+      deliveryFuelExpense: sumLedgerByCategories(financeLedger, ['delivery_expense'], 'expense'),
+      driverSalaryExpense: sumLedgerByCategories(financeLedger, ['driver_salary'], 'expense'),
+      warehouseRentExpense: sumLedgerByCategories(financeLedger, ['warehouse_rent'], 'expense'),
+      truckLeaseExpense: sumLedgerByCategories(
+        financeLedger,
+        ['truck_lease', 'truck_rental'],
+        'expense',
+      ),
+      operationsExpense: sumLedgerByCategories(financeLedger, ['operations'], 'expense'),
+      fleetPurchaseExpense: sumLedgerByCategories(financeLedger, ['fleet_purchase'], 'expense'),
+      warehouseOpenExpense: sumLedgerByCategories(financeLedger, ['warehouse_open'], 'expense'),
+      driverHireExpense: sumLedgerByCategories(financeLedger, ['driver_hire'], 'expense'),
+      tradePurchaseExpense: sumLedgerByCategories(financeLedger, ['trade_purchase'], 'expense'),
+      totalIncome: financeLedger
+        .filter((e) => e.type === 'income')
+        .reduce((sum, e) => sum + (e.amount ?? 0), 0),
+      totalExpense: financeLedger
+        .filter((e) => e.type === 'expense')
+        .reduce((sum, e) => sum + (e.amount ?? 0), 0),
+    };
+  }, [financeLedger, contracts]);
+
+  const totalRevenue = ledgerTotals.contractRevenue;
   const tradeSummary = useMemo(() => summarizeFinanceLedger(financeLedger), [financeLedger]);
   const totalExpenses = useMemo(calculateTotalExpenses, [
     activeDeliveries,
@@ -399,15 +505,83 @@ export default function FinanceScreen() {
     drivers,
     warehouses,
   ]);
-  const netProfit = totalRevenue + tradeSummary.tradeSaleTotal - totalExpenses - tradeSummary.tradePurchaseTotal;
-  const dailyFixedCosts = useMemo(
-    () => calculateDailyDriverSalary() + calculateDailyWarehouseCost(),
-    [drivers, warehouses],
-  );
+  const netProfit =
+    ledgerTotals.totalIncome > 0 || ledgerTotals.totalExpense > 0
+      ? ledgerTotals.totalIncome - ledgerTotals.totalExpense
+      : totalRevenue + tradeSummary.tradeSaleTotal - totalExpenses - tradeSummary.tradePurchaseTotal;
+  const dailyFixedCosts = projectedDailyCosts.total;
+  const weeklyLeaseBurden = useMemo(() => getWeeklyLeaseBurden(trucks), [trucks]);
   const companyValue = useMemo(calculateCompanyValue, [trucks, warehouses, player?.reputation, cash]);
   const inventoryStockValue = useMemo(
     () => calculateInventoryStockValue(warehouses),
     [warehouses],
+  );
+
+  const companyScoreBreakdown = useMemo(
+    () =>
+      getCompanyScoreBreakdown({
+        player,
+        cities,
+        products,
+        financeLedger,
+        currentTime,
+      }),
+    [player, cities, products, financeLedger, currentTime],
+  );
+
+  const companyScoreLines: BreakdownLine[] = useMemo(
+    () => [
+      { icon: 'cash', label: 'Nakit', amount: companyScoreBreakdown.cashScore, color: colors.success },
+      {
+        icon: 'truck',
+        label: 'Filo değeri',
+        amount: companyScoreBreakdown.truckValueScore,
+        color: colors.accentBlue,
+      },
+      {
+        icon: 'warehouse',
+        label: 'Depo değeri',
+        amount: companyScoreBreakdown.warehouseValueScore,
+        color: colors.accentAmber,
+      },
+      {
+        icon: 'market',
+        label: 'Stok değeri',
+        amount: companyScoreBreakdown.inventoryValueScore,
+        color: colors.info,
+      },
+      {
+        icon: 'contract',
+        label: 'Teslimat bonusu',
+        amount: companyScoreBreakdown.completedContractsScore,
+        color: colors.success,
+      },
+      {
+        icon: 'company',
+        label: 'İtibar bonusu',
+        amount: companyScoreBreakdown.reputationScore,
+        color: colors.accentAmber,
+      },
+      {
+        icon: 'upgrade',
+        label: 'Seviye bonusu',
+        amount: companyScoreBreakdown.levelScore,
+        color: colors.accentBlue,
+      },
+      {
+        icon: 'profit',
+        label: 'Haftalık ticaret bonusu',
+        amount: companyScoreBreakdown.weeklyTradeProfitScore,
+        color: colors.success,
+      },
+      {
+        icon: 'warning',
+        label: 'Cezalar',
+        amount: companyScoreBreakdown.penaltiesScore,
+        color: colors.danger,
+      },
+    ],
+    [companyScoreBreakdown],
   );
 
   const availableContractCount = useMemo(
@@ -504,47 +678,96 @@ export default function FinanceScreen() {
     tradeSummary.tradeSaleTotal > 0 ||
     inventoryStockValue > 0;
 
-  const fuelCosts = calculateActiveFuelCosts();
+  const fuelCosts =
+    ledgerTotals.deliveryFuelExpense > 0
+      ? ledgerTotals.deliveryFuelExpense
+      : calculateActiveFuelCosts();
   const maintenanceCosts = calculateMaintenanceExposure();
-  const driverSalaries = calculateDailyDriverSalary();
-  const warehouseCosts = calculateDailyWarehouseCost();
-  const otherIncome = aggregateOtherLedgerIncome(financeLedger, [
-    'trade_sale',
-    'delivery_income',
-  ]);
+  const driverSalaries =
+    ledgerTotals.driverSalaryExpense > 0
+      ? ledgerTotals.driverSalaryExpense
+      : calculateDailyDriverSalary();
+  const warehouseCosts =
+    ledgerTotals.warehouseRentExpense > 0
+      ? ledgerTotals.warehouseRentExpense
+      : calculateDailyWarehouseCost();
+  const truckLeaseCosts = ledgerTotals.truckLeaseExpense;
+  const operationsCosts = ledgerTotals.operationsExpense;
+  const otherIncome = ledgerTotals.otherIncome;
   const otherExpense = aggregateOtherLedgerExpense(financeLedger, [
     'trade_purchase',
     'delivery_expense',
     'fleet_purchase',
     'warehouse_open',
     'truck_transfer',
+    'driver_salary',
+    'warehouse_rent',
+    'truck_lease',
+    'truck_rental',
+    'operations',
+    'driver_hire',
+    'daily_operating_cost',
   ]);
 
-  const transferExpenseTotal = useMemo(
-    () =>
-      (financeLedger ?? [])
-        .filter((entry) => entry.category === 'truck_transfer' && entry.type === 'expense')
-        .reduce((sum, entry) => sum + (entry.amount ?? 0), 0),
-    [financeLedger],
-  );
-
   const incomeLines: BreakdownLine[] = [
-    { icon: 'contract', label: 'Sözleşme gelirleri', amount: totalRevenue, color: colors.success },
-    { icon: 'revenue', label: 'Ticaret satışları', amount: tradeSummary.tradeSaleTotal, color: colors.success },
-    { icon: 'profit', label: 'Teslimat bonusları', amount: 0, color: colors.textMuted },
-    { icon: 'warehouse', label: 'Depo satışları', amount: tradeSummary.tradeSaleTotal, color: colors.success },
+    {
+      icon: 'contract',
+      label: 'Sözleşme gelirleri',
+      amount: ledgerTotals.contractRevenue,
+      color: colors.success,
+    },
+    {
+      icon: 'revenue',
+      label: 'Ticaret satışları',
+      amount: ledgerTotals.tradeSaleTotal || tradeSummary.tradeSaleTotal,
+      color: colors.success,
+    },
     { icon: 'cash', label: 'Diğer gelirler', amount: otherIncome, color: colors.info },
   ];
 
-  const expenseLines: BreakdownLine[] = [
-    { icon: 'fuel', label: 'Yakıt giderleri', amount: fuelCosts, color: colors.danger },
-    { icon: 'repair', label: 'Bakım giderleri', amount: maintenanceCosts, color: colors.danger },
+  const deliveryExpenseLines: BreakdownLine[] = [
+    { icon: 'fuel', label: 'Yakıt', amount: fuelCosts, color: colors.danger },
+    { icon: 'repair', label: 'Bakım payı', amount: maintenanceCosts, color: colors.danger },
+    {
+      icon: 'warning',
+      label: 'Risk/ceza',
+      amount: calculateLatePenalties() + calculateFailedDeliveryPenalties(),
+      color: colors.textMuted,
+    },
+  ];
+
+  const fixedExpenseLines: BreakdownLine[] = [
     { icon: 'driver', label: 'Şoför maaşları', amount: driverSalaries, color: colors.danger },
     { icon: 'warehouse', label: 'Depo giderleri', amount: warehouseCosts, color: colors.danger },
-    { icon: 'truck', label: 'Boş transfer giderleri', amount: transferExpenseTotal, color: colors.danger },
-    { icon: 'market', label: 'Ürün alımları', amount: tradeSummary.tradePurchaseTotal, color: colors.danger },
-    { icon: 'warning', label: 'Gecikme cezaları', amount: calculateLatePenalties(), color: colors.textMuted },
-    { icon: 'alert', label: 'Diğer giderler', amount: otherExpense, color: colors.danger },
+    { icon: 'truck', label: 'Kamyon kiraları', amount: truckLeaseCosts, color: colors.danger },
+    { icon: 'company', label: 'Genel operasyon', amount: operationsCosts, color: colors.danger },
+  ];
+
+  const investmentExpenseLines: BreakdownLine[] = [
+    {
+      icon: 'truck',
+      label: 'Kamyon satın alma',
+      amount: ledgerTotals.fleetPurchaseExpense,
+      color: colors.danger,
+    },
+    {
+      icon: 'warehouse',
+      label: 'Depo açma',
+      amount: ledgerTotals.warehouseOpenExpense,
+      color: colors.danger,
+    },
+    {
+      icon: 'driver',
+      label: 'Şoför işe alma',
+      amount: ledgerTotals.driverHireExpense,
+      color: colors.danger,
+    },
+    {
+      icon: 'market',
+      label: 'Ürün satın alma',
+      amount: ledgerTotals.tradePurchaseExpense || tradeSummary.tradePurchaseTotal,
+      color: colors.danger,
+    },
   ];
 
   if (!player) {
@@ -576,14 +799,46 @@ export default function FinanceScreen() {
         <Text style={styles.summaryHint}>Teslimat gelirleri tamamlandığında net kâra yansır.</Text>
       ) : null}
 
-      <SectionTitle title="Gelir Dağılımı" compact />
+      <SectionTitle
+        title="Şirket Puanı Dağılımı"
+        subtitle={`Toplam: ${formatCompanyScore(companyScoreBreakdown.totalScore)}`}
+        compact
+      />
+      <BreakdownCard
+        lines={companyScoreLines}
+        formatValue={formatCompanyScore}
+        hint="Haftalık leaderboard sıralaması bu puana göre yapılacak. Sadece nakit değil, filo ve operasyon gücü de sayılır."
+      />
+
+      <SectionTitle title="Gelirler" compact />
       <BreakdownCard
         lines={incomeLines}
         hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
       />
 
-      <SectionTitle title="Gider Dağılımı" compact />
-      <BreakdownCard lines={expenseLines} />
+      <SectionTitle title="Teslimat Giderleri" compact />
+      <BreakdownCard lines={deliveryExpenseLines} />
+
+      <SectionTitle
+        title="Sabit Giderler"
+        subtitle={`Günlük tahmin: ${formatMoney(dailyFixedCosts)} · Haftalık kira yükü: ${formatMoney(weeklyLeaseBurden)}`}
+        compact
+      />
+      <BreakdownCard lines={fixedExpenseLines} />
+
+      <SectionTitle title="Tek Seferlik Yatırımlar" compact />
+      <BreakdownCard lines={investmentExpenseLines} />
+
+      {otherExpense > 0 ? (
+        <>
+          <SectionTitle title="Diğer Giderler" compact />
+          <BreakdownCard
+            lines={[
+              { icon: 'alert', label: 'Diğer', amount: otherExpense, color: colors.danger },
+            ]}
+          />
+        </>
+      ) : null}
 
       <SectionTitle title="Ticaret Performansı" compact />
       <AppCard style={styles.tradeCard} padded={false}>

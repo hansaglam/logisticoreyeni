@@ -485,7 +485,9 @@ interface ShopTruckCardProps {
   playerLevel: number;
   ownedCount: number;
   canBuy: boolean;
+  canLease: boolean;
   onBuy: (catalogId: string) => void;
+  onLease: (catalogId: string) => void;
 }
 
 function ShopTruckCard({
@@ -494,24 +496,38 @@ function ShopTruckCard({
   playerLevel,
   ownedCount,
   canBuy,
+  canLease,
   onBuy,
+  onLease,
 }: ShopTruckCardProps) {
   const safePlayerLevel = Math.max(1, playerLevel ?? 1);
   const requiredLevel = resolveTruckMarketRequiredLevel(template);
   const isLevelLocked = safePlayerLevel < requiredLevel;
-  const canAfford = playerMoney >= template.purchasePrice;
-  const disabled = !canBuy || !canAfford || isLevelLocked;
+  const weeklyLeaseCost = template.weeklyLeaseCost ?? 0;
+  const canAffordBuy = playerMoney >= template.purchasePrice;
+  const canAffordLease = weeklyLeaseCost > 0 && playerMoney >= weeklyLeaseCost;
+  const buyDisabled = !canBuy || !canAffordBuy || isLevelLocked;
+  const leaseDisabled = !canLease || !canAffordLease || isLevelLocked || weeklyLeaseCost <= 0;
   const tags = getTruckShopTags(template);
 
-  let buttonLabel = 'Satın Al';
+  let buyButtonLabel = 'Satın Al';
   if (isLevelLocked) {
-    buttonLabel = `Level ${requiredLevel} gerekli`;
+    buyButtonLabel = `Level ${requiredLevel} gerekli`;
   } else if (!canBuy) {
-    buttonLabel = 'Yakında';
-  } else if (!canAfford) {
-    buttonLabel = 'Nakit yetersiz';
+    buyButtonLabel = 'Yakında';
+  } else if (!canAffordBuy) {
+    buyButtonLabel = 'Nakit yetersiz';
   } else if (ownedCount > 0) {
-    buttonLabel = 'Tekrar Satın Al';
+    buyButtonLabel = 'Tekrar Satın Al';
+  }
+
+  let leaseButtonLabel = 'Haftalık Kirala';
+  if (isLevelLocked) {
+    leaseButtonLabel = `Level ${requiredLevel} gerekli`;
+  } else if (!canLease || weeklyLeaseCost <= 0) {
+    leaseButtonLabel = 'Kiralama yok';
+  } else if (!canAffordLease) {
+    leaseButtonLabel = 'Nakit yetersiz';
   }
 
   return (
@@ -539,6 +555,12 @@ function ShopTruckCard({
         {requiredLevel > 1 ? ` · Lv.${requiredLevel}` : ''}
       </Text>
 
+      {weeklyLeaseCost > 0 ? (
+        <Text style={styles.leaseHint}>
+          Haftalık kira: {formatMoney(weeklyLeaseCost)} · 7 gün
+        </Text>
+      ) : null}
+
       {ownedCount > 0 ? (
         <Text style={styles.ownedHint}>Filonda {ownedCount} adet mevcut</Text>
       ) : null}
@@ -551,17 +573,28 @@ function ShopTruckCard({
         </View>
       ) : null}
 
-      <ActionButton
-        label={buttonLabel}
-        onPress={() => onBuy(template.id)}
-        disabled={disabled}
-        variant="primary"
-        icon={isLevelLocked ? 'level' : 'plus'}
-        iconSize={13}
-        compact
-        fullWidth
-        style={styles.shopAction}
-      />
+      <View style={styles.shopButtonRow}>
+        <ActionButton
+          label={buyButtonLabel}
+          onPress={() => onBuy(template.id)}
+          disabled={buyDisabled}
+          variant="primary"
+          icon={isLevelLocked ? 'level' : 'plus'}
+          iconSize={13}
+          compact
+          style={styles.shopActionHalf}
+        />
+        <ActionButton
+          label={leaseButtonLabel}
+          onPress={() => onLease(template.id)}
+          disabled={leaseDisabled}
+          variant="secondary"
+          icon="truck"
+          iconSize={13}
+          compact
+          style={styles.shopActionHalf}
+        />
+      </View>
     </AppCard>
   );
 }
@@ -660,6 +693,7 @@ export default function FleetScreen() {
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
   const buyTruck = useGameStore((state) => state.buyTruck);
+  const leaseTruck = useGameStore((state) => state.leaseTruck);
   const hireDriver = useGameStore((state) => state.hireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
@@ -697,7 +731,7 @@ export default function FleetScreen() {
 
   const fleetSummary = useMemo(
     () => ({
-      idleTrucks: trucks.filter((t) => t.status === 'idle').length,
+      idleTrucks: trucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
       onRouteTrucks: trucks.filter((t) => t.status === 'on_route' || t.status === 'transferring').length,
       idleDrivers: drivers.filter((d) => d.status === 'idle').length,
       averageCondition: calculateAverageCondition(trucks),
@@ -742,6 +776,19 @@ export default function FleetScreen() {
       return;
     }
     setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon satın alındı' });
+  };
+
+  const handleLeaseTruck = (catalogId: string) => {
+    if (typeof leaseTruck !== 'function') {
+      setStatusMessage({ type: 'error', text: 'Kiralama henüz kullanılamıyor' });
+      return;
+    }
+    const result = leaseTruck(catalogId);
+    if (!result.success) {
+      setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
+      return;
+    }
+    setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon kiralandı' });
   };
 
   const handleHireDriver = (poolId: string) => {
@@ -907,7 +954,9 @@ export default function FleetScreen() {
                 playerLevel={playerLevel}
                 ownedCount={countOwnedTrucksOfCatalog(trucks, template.id)}
                 canBuy={typeof buyTruck === 'function'}
+                canLease={typeof leaseTruck === 'function'}
                 onBuy={handleBuyTruck}
+                onLease={handleLeaseTruck}
               />
             ))
           )}
@@ -1133,6 +1182,19 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: spacing.xs,
+  },
+  leaseHint: {
+    ...typography.caption,
+    color: colors.accentAmber,
+    marginTop: spacing.xs,
+  },
+  shopButtonRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginTop: 4,
+  },
+  shopActionHalf: {
+    flex: 1,
   },
   shopAction: {
     marginTop: 4,

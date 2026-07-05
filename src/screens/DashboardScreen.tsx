@@ -1,19 +1,17 @@
 /**
  * LogistiCore - Ana Dashboard Ekranı
  *
- * Premium dark command center — şirket özeti, filo, fırsatlar ve olay akışı.
+ * Sade, aksiyon odaklı komuta merkezi — özet metrikler, sonraki adım ve kritik akış.
  */
 
 import React, { useMemo } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import InfoBadge from '../components/common/InfoBadge';
 import type { TabKey } from '../components/BottomTabBar';
 import {
   ActionButton,
   AppCard,
   AppScreen,
-  EmptyState,
   GameIcon,
   IconButton,
   ProgressBar,
@@ -24,13 +22,20 @@ import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { deliveryBalance } from '../config/balance';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { getLevelProgress, getNextUnlockForLevel } from '../simulation/leveling';
+import { getLevelProgress } from '../simulation/leveling';
+import {
+  calculateTradeProfit,
+  getCityProductMarketPrice,
+  getWarehouseUsedCapacityTon,
+  normalizeWarehouse,
+} from '../simulation/trading';
 import { getRecentGameEvents, useGameStore } from '../store/gameStore';
 import { colors, radius, spacing, typography } from '../theme';
-import type { Contract, Delivery, FinanceLedgerEntry, GameEvent, MarketNews } from '../types/game';
+import type { Contract, Delivery, GameEvent, MarketNews, Player } from '../types/game';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
+  onOpenWarehouse?: () => void;
 }
 
 const LOW_CASH_THRESHOLD = 8_000;
@@ -75,87 +80,82 @@ function getProductName(productId: string): string {
   return PRODUCT_BY_ID[productId as keyof typeof PRODUCT_BY_ID]?.name ?? productId;
 }
 
-function getNextUnlockLabel(level: number): string {
-  const nextUnlock = getNextUnlockForLevel(level);
-  if (!nextUnlock) return 'Tüm temel açılımlar tamamlandı';
-  if (nextUnlock.status === 'coming_soon') return `${nextUnlock.title} · Yakında`;
-  return nextUnlock.title;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-type NextActionType = TabKey;
+type NextActionTarget = TabKey | 'warehouse';
 
 interface NextAction {
   title: string;
   subtitle: string;
   buttonLabel: string;
-  type: NextActionType;
+  target: NextActionTarget;
 }
 
 function resolveNextAction(
   cash: number,
   truckCount: number,
+  idleTrucks: number,
+  idleDrivers: number,
   runningDeliveries: Delivery[],
   availableContracts: Contract[],
+  hasTradeProfit: boolean,
 ): NextAction {
   if (truckCount === 0) {
     return {
       title: 'Filonu büyüt',
       subtitle: 'İlk kamyonunu alarak taşımacılığa başlayabilirsin.',
       buttonLabel: 'Filo Mağazası',
-      type: 'fleet',
-    };
-  }
-  if (cash < LOW_CASH_THRESHOLD) {
-    return {
-      title: 'Nakit dikkat',
-      subtitle: 'Düşük riskli kısa mesafe işler seçerek nakit akışını koru.',
-      buttonLabel: 'Sözleşmelere Git',
-      type: 'contracts',
+      target: 'fleet',
     };
   }
   if (runningDeliveries.length > 0) {
     return {
       title: 'Teslimat yolda',
-      subtitle: 'Aktif rotalarını harita üzerinden takip edebilirsin.',
+      subtitle: 'Yoldaki teslimatlarını takip et.',
       buttonLabel: 'Haritayı Aç',
-      type: 'map',
+      target: 'map',
+    };
+  }
+  if (idleTrucks > 0 && idleDrivers > 0 && availableContracts.length > 0) {
+    return {
+      title: 'Yeni sözleşme hazır',
+      subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
+      buttonLabel: 'Sözleşmeleri Gör',
+      target: 'contracts',
+    };
+  }
+  if (cash < LOW_CASH_THRESHOLD) {
+    return {
+      title: 'Nakit dikkat',
+      subtitle: 'Sabit giderler nakit rezervini zorluyor. Kârlı sözleşmelere odaklan.',
+      buttonLabel: 'En iyi fırsatlara bak',
+      target: 'contracts',
+    };
+  }
+  if (hasTradeProfit) {
+    return {
+      title: 'Ticaret fırsatı',
+      subtitle: 'Depodaki bazı ürünler kârla satılabilir.',
+      buttonLabel: 'Depoları Aç',
+      target: 'warehouse',
     };
   }
   if (availableContracts.length > 0) {
     return {
-      title: 'Yeni fırsatlar hazır',
-      subtitle: 'Boştaki ekibinle yeni bir sözleşme başlatabilirsin.',
+      title: 'Yeni sözleşme hazır',
+      subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
       buttonLabel: 'Sözleşmeleri Gör',
-      type: 'contracts',
+      target: 'contracts',
     };
   }
   return {
     title: 'Yeni iş bekleniyor',
     subtitle: 'Piyasa yeni fırsatlar oluşturdukça işler burada görünecek.',
     buttonLabel: 'İşleri Kontrol Et',
-    type: 'contracts',
+    target: 'contracts',
   };
-}
-
-function summarizeDailyFinance(
-  ledger: FinanceLedgerEntry[],
-  currentTime: number,
-): { revenue: number; expense: number; netProfit: number } {
-  const dayStart = Math.floor(currentTime / DAY_HOURS) * DAY_HOURS;
-  let revenue = 0;
-  let expense = 0;
-
-  for (const entry of ledger ?? []) {
-    if (entry.time < dayStart) continue;
-    if (entry.type === 'income') revenue += entry.amount;
-    else expense += entry.amount;
-  }
-
-  return { revenue, expense, netProfit: revenue - expense };
 }
 
 function getDeliveryStatusVariant(status: Delivery['status']): 'blue' | 'amber' | 'success' | 'danger' {
@@ -208,6 +208,39 @@ function estimateOpportunityProfit(contract: Contract, fuelPrice: number): numbe
   return contract.payment - fuelCost - driverCost - maintenanceCost;
 }
 
+function hasProfitableWarehouseStock(player: Player, currentTime: number): boolean {
+  for (const warehouse of player.warehouses ?? []) {
+    const city = CITIES_BY_ID[warehouse.cityId];
+    const normalized = normalizeWarehouse(warehouse, currentTime);
+    for (const item of normalized.inventory ?? []) {
+      const quantity = item.quantity ?? 0;
+      if (quantity <= 0) continue;
+      const currentPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
+      const profit = calculateTradeProfit(
+        currentPrice,
+        item.averageBuyPrice ?? 0,
+        quantity,
+        item.quality ?? 100,
+      );
+      if (profit > 0) return true;
+    }
+  }
+  return false;
+}
+
+function getWarehouseFillRatio(player: Player, currentTime: number): number {
+  const warehouses = player.warehouses ?? [];
+  let totalCapacity = 0;
+  let usedCapacity = 0;
+
+  for (const warehouse of warehouses) {
+    totalCapacity += warehouse.capacityTons ?? 0;
+    usedCapacity += getWarehouseUsedCapacityTon(normalizeWarehouse(warehouse, currentTime));
+  }
+
+  return totalCapacity > 0 ? usedCapacity / totalCapacity : 0;
+}
+
 /** Aynı title+type tekrarlarını Dashboard'da gizler — eventLog'a dokunmaz */
 function dedupeDashboardEvents(events: GameEvent[], limit = 3): GameEvent[] {
   const seen = new Set<string>();
@@ -242,11 +275,81 @@ function getEventAccent(event: GameEvent): string {
   return colors.textMuted;
 }
 
-function getEventBadgeVariant(event: GameEvent): 'success' | 'warning' | 'danger' | 'info' | 'muted' {
-  if (event.type === 'delivery' && event.title === 'Teslimat tamamlandı') return 'success';
-  if (event.importance === 'high') return 'danger';
-  if (event.importance === 'medium') return 'warning';
-  return 'muted';
+function normalizeDevelopmentCategory(event: GameEvent): string {
+  const title = event.title.toLowerCase();
+  if (event.type === 'delivery') return 'delivery';
+  if (title.includes('stok') || title.includes('depo') || event.type === 'warehouse') return 'stock';
+  if (title.includes('bakım') || title.includes('bakim')) return 'maintenance';
+  if (title.includes('satın') || title.includes('satin')) return 'purchase';
+  if (event.type === 'market' || event.type === 'finance') return 'market';
+  return event.type;
+}
+
+function eventPriorityScore(event: GameEvent): number {
+  if (event.type === 'delivery' && event.title === 'Teslimat tamamlandı') return 0;
+  if (event.importance === 'high') return 1;
+  if (event.importance === 'medium') return 2;
+  return 3;
+}
+
+interface DevelopmentItem {
+  id: string;
+  title: string;
+  message: string;
+  accent: string;
+}
+
+function buildRecentDevelopments(
+  news: MarketNews[],
+  events: GameEvent[],
+  limit = 3,
+): DevelopmentItem[] {
+  const items: DevelopmentItem[] = [];
+  const usedCategories = new Set<string>();
+
+  const sortedNews = [...news].sort((a, b) => {
+    const rank = { high: 0, medium: 1, low: 2 } as const;
+    return (rank[a.importance] ?? 2) - (rank[b.importance] ?? 2);
+  });
+
+  const topNews = sortedNews.find((item) => item.importance === 'high' || item.importance === 'medium');
+  if (topNews) {
+    usedCategories.add('news');
+    items.push({
+      id: `news-${topNews.id}`,
+      title: topNews.title,
+      message: topNews.message,
+      accent: getNewsAccent(topNews.importance),
+    });
+  }
+
+  const recentEvents = dedupeDashboardEvents(getRecentGameEvents(events, 20), 12).sort(
+    (a, b) => eventPriorityScore(a) - eventPriorityScore(b),
+  );
+
+  for (const event of recentEvents) {
+    if (items.length >= limit) break;
+    const category = normalizeDevelopmentCategory(event);
+    if (usedCategories.has(category)) continue;
+    usedCategories.add(category);
+    items.push({
+      id: event.id,
+      title: event.title,
+      message: event.message,
+      accent: getEventAccent(event),
+    });
+  }
+
+  if (items.length < limit && topNews && !usedCategories.has('news')) {
+    items.push({
+      id: `news-${topNews.id}`,
+      title: topNews.title,
+      message: topNews.message,
+      accent: getNewsAccent(topNews.importance),
+    });
+  }
+
+  return items.slice(0, limit);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,33 +373,12 @@ function StatLine({
   );
 }
 
-function MetricPanel({
-  title,
-  icon,
-  children,
-}: {
-  title: string;
-  icon: React.ComponentProps<typeof GameIcon>['name'];
-  children: React.ReactNode;
-}) {
-  return (
-    <AppCard style={styles.metricPanel} padded>
-      <View style={styles.metricPanelHeader}>
-        <View style={styles.metricIconWrap}>
-          <GameIcon name={icon} size={15} color={colors.accentBlue} />
-        </View>
-        <Text style={styles.metricPanelTitle}>{title}</Text>
-      </View>
-      {children}
-    </AppCard>
-  );
-}
-
 function CompanyHeaderCard({
   companyName,
   level,
   money,
   currentTime,
+  fuelPrice,
   isPaused,
   onTogglePause,
 }: {
@@ -304,6 +386,7 @@ function CompanyHeaderCard({
   level: number;
   money: number;
   currentTime: number;
+  fuelPrice: number;
   isPaused: boolean;
   onTogglePause: () => void;
 }) {
@@ -336,51 +419,78 @@ function CompanyHeaderCard({
           />
         </View>
       </View>
+
+      <View style={styles.headerFooter}>
+        <View style={styles.fuelPill}>
+          <GameIcon name="fuel" size={12} color={colors.warning} />
+          <Text style={styles.fuelPillText}>Yakıt ${fuelPrice.toFixed(2)}/L</Text>
+        </View>
+      </View>
     </AppCard>
   );
 }
 
-function FuelTrendPlaceholder() {
+function NextActionCard({
+  action,
+  onPress,
+}: {
+  action: NextAction;
+  onPress: () => void;
+}) {
   return (
-    <View style={styles.fuelTrend}>
-      {[0.4, 0.55, 0.5, 0.65, 0.6, 0.72, 0.68].map((h, i) => (
-        <View key={i} style={[styles.fuelTrendBar, { height: 18 * h }]} />
-      ))}
-    </View>
+    <AppCard variant="highlighted" style={styles.nextActionCard} padded>
+      <Text style={styles.nextActionTitle}>{action.title}</Text>
+      <Text style={styles.nextActionSubtitle}>{action.subtitle}</Text>
+      <ActionButton label={action.buttonLabel} onPress={onPress} variant="primary" />
+    </AppCard>
   );
 }
 
-function NewsItem({ news }: { news: MarketNews }) {
-  const accent = getNewsAccent(news.importance);
+function CompactSummaryCard({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: React.ComponentProps<typeof GameIcon>['name'];
+  children: React.ReactNode;
+}) {
   return (
-    <AppCard style={styles.newsItem} padded={false} variant="default">
-      <View style={[styles.newsAccent, { backgroundColor: accent }]} />
-      <View style={styles.newsContent}>
-        <Text style={styles.newsTitle} numberOfLines={1}>
-          {news.title}
-        </Text>
-        <Text style={styles.newsMessage} numberOfLines={2}>
-          {news.message}
+    <AppCard style={styles.summaryCard} padded>
+      <View style={styles.summaryHeader}>
+        <View style={styles.summaryIconWrap}>
+          <GameIcon name={icon} size={14} color={colors.accentBlue} />
+        </View>
+        <Text style={styles.summaryTitle}>{title}</Text>
+      </View>
+      {children}
+    </AppCard>
+  );
+}
+
+function CashWarningCard({ cash }: { cash: number }) {
+  return (
+    <AppCard style={styles.warningCard} padded>
+      <View style={styles.warningRow}>
+        <GameIcon name="warning" size={14} color={colors.warning} />
+        <Text style={styles.warningText}>
+          Nakit rezervi düşük ({formatMoney(cash)}). Sabit giderlere dikkat et.
         </Text>
       </View>
     </AppCard>
   );
 }
 
-function EventItem({ event }: { event: GameEvent }) {
-  const accent = getEventAccent(event);
+function DevelopmentItemRow({ item }: { item: DevelopmentItem }) {
   return (
-    <AppCard style={styles.newsItem} padded={false}>
-      <View style={[styles.newsAccent, { backgroundColor: accent }]} />
-      <View style={styles.newsContent}>
-        <View style={styles.eventHeader}>
-          <Text style={styles.newsTitle} numberOfLines={1}>
-            {event.title}
-          </Text>
-          <StatusBadge label={event.type} variant={getEventBadgeVariant(event)} size="sm" />
-        </View>
-        <Text style={styles.newsMessage} numberOfLines={2}>
-          {event.message}
+    <AppCard style={styles.developmentItem} padded={false}>
+      <View style={[styles.developmentAccent, { backgroundColor: item.accent }]} />
+      <View style={styles.developmentContent}>
+        <Text style={styles.developmentTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text style={styles.developmentMessage} numberOfLines={2}>
+          {item.message}
         </Text>
       </View>
     </AppCard>
@@ -391,28 +501,22 @@ function EventItem({ event }: { event: GameEvent }) {
 // Main screen
 // ---------------------------------------------------------------------------
 
-export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
+export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const marketNews = useGameStore((state) => state.marketNews) ?? [];
   const eventLog = useGameStore((state) => state.eventLog) ?? [];
-  const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
   const { tabBarHeight, bottomInset } = useTabBarLayout();
-  const scrollBottomPadding = tabBarHeight + bottomInset + 96;
+  const scrollBottomPadding = tabBarHeight + bottomInset + 110;
 
   const availableContracts = useMemo(
     () => contracts.filter((c) => c.status === 'available'),
-    [contracts],
-  );
-
-  const activeContracts = useMemo(
-    () => contracts.filter((c) => c.status === 'active'),
     [contracts],
   );
 
@@ -430,16 +534,11 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
         if (profitB !== profitA) return profitB - profitA;
         return b.payment - a.payment;
       })
-      .slice(0, 3);
+      .slice(0, 2);
   }, [availableContracts, globalEconomy?.fuelPrice]);
 
-  const deliveryPreview = useMemo(() => runningDeliveries.slice(0, 3), [runningDeliveries]);
+  const deliveryPreview = useMemo(() => runningDeliveries.slice(0, 2), [runningDeliveries]);
   const extraDeliveryCount = Math.max(0, runningDeliveries.length - deliveryPreview.length);
-  const recentNews = useMemo(() => marketNews.slice(0, 2), [marketNews]);
-  const recentEvents = useMemo(
-    () => dedupeDashboardEvents(getRecentGameEvents(eventLog, 12), 3),
-    [eventLog],
-  );
 
   const fleetSnapshot = useMemo(() => {
     const trucks = player?.trucks ?? [];
@@ -447,15 +546,13 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
     return {
       totalTrucks: trucks.length,
       idleTrucks: trucks.filter((t) => t.status === 'idle').length,
-      onRouteTrucks: trucks.filter((t) => t.status === 'on_route').length,
-      totalDrivers: drivers.length,
       idleDrivers: drivers.filter((d) => d.status === 'idle').length,
     };
   }, [player]);
 
-  const dailyFinance = useMemo(
-    () => summarizeDailyFinance(financeLedger, currentTime),
-    [financeLedger, currentTime],
+  const recentDevelopments = useMemo(
+    () => buildRecentDevelopments(marketNews, eventLog, 3),
+    [marketNews, eventLog],
   );
 
   if (!player) {
@@ -468,13 +565,22 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
   }
 
   const levelProgress = getLevelProgress(player);
-  const nextUnlockLabel = getNextUnlockLabel(levelProgress.level);
+  const fuelPrice = globalEconomy?.fuelPrice ?? 0;
+  const warehouseFillRatio = getWarehouseFillRatio(player, currentTime);
+  const tradeProfitAvailable = hasProfitableWarehouseStock(player, currentTime);
+
   const nextAction = resolveNextAction(
     player.money,
     fleetSnapshot.totalTrucks,
+    fleetSnapshot.idleTrucks,
+    fleetSnapshot.idleDrivers,
     runningDeliveries,
     availableContracts,
+    tradeProfitAvailable,
   );
+
+  const showCashWarning =
+    player.money < LOW_CASH_THRESHOLD && nextAction.target !== 'contracts';
 
   const handleNavigate = (tab: TabKey) => {
     try {
@@ -484,7 +590,17 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
     }
   };
 
-  const fuelPrice = globalEconomy?.fuelPrice ?? 0;
+  const handleNextAction = () => {
+    if (nextAction.target === 'warehouse') {
+      try {
+        onOpenWarehouse?.();
+      } catch {
+        // Depo yönlendirme hatası uygulamayı düşürmemeli.
+      }
+      return;
+    }
+    handleNavigate(nextAction.target);
+  };
 
   return (
     <AppScreen
@@ -498,216 +614,146 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
         level={levelProgress.level}
         money={player.money}
         currentTime={currentTime}
+        fuelPrice={fuelPrice}
         isPaused={isPaused}
         onTogglePause={isPaused ? resumeGame : pauseGame}
       />
 
-      <View style={styles.metricGrid}>
-        <View style={styles.metricGridItem}>
-          <MetricPanel title="Günlük Özet" icon="revenue">
-            <StatLine label="Gelir" value={formatMoney(dailyFinance.revenue)} valueColor={colors.success} />
-            <StatLine label="Gider" value={formatMoney(dailyFinance.expense)} valueColor={colors.danger} />
-            <StatLine
-              label="Net kâr"
-              value={formatMoney(dailyFinance.netProfit)}
-              valueColor={dailyFinance.netProfit >= 0 ? colors.success : colors.danger}
-            />
-          </MetricPanel>
-        </View>
+      <NextActionCard action={nextAction} onPress={handleNextAction} />
 
-        <View style={styles.metricGridItem}>
-          <MetricPanel title="Filo Durumu" icon="truck">
-            <StatLine label="Kamyon" value={`${fleetSnapshot.totalTrucks}`} />
-            <StatLine label="Şoför" value={`${fleetSnapshot.totalDrivers}`} />
-            <StatLine label="Yolda" value={`${fleetSnapshot.onRouteTrucks}`} valueColor={colors.accentBlue} />
-          </MetricPanel>
-        </View>
+      {showCashWarning ? <CashWarningCard cash={player.money} /> : null}
 
-        <View style={styles.metricGridItem}>
-          <MetricPanel title="Şirket Durumu" icon="level">
-            <View style={styles.reputationRow}>
-              <Text style={styles.statLineLabel}>İtibar</Text>
-              <View style={styles.reputationValueRow}>
-                <Text style={styles.statLineValue}>{Math.round(player.reputation)}/100</Text>
-                <InfoBadge
-                  title="İtibar Nedir?"
-                  description="İtibar, teslimat performansına göre değişir: başarılı teslimat +2, başarısız teslimat −5 puan. Şu an itibar hiçbir sözleşmeyi veya fiyatı etkilemiyor — yalnızca Finans ekranındaki şirket değeri hesabına katkı sağlıyor (her itibar puanı şirket değerine $100 ekler)."
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryCol}>
+          <CompactSummaryCard title="Şirket Özeti" icon="company">
+            <StatLine label="Nakit" value={formatMoney(player.money)} valueColor={colors.success} />
+            <StatLine label="Level" value={`${levelProgress.level}`} valueColor={colors.accentAmber} />
+            <StatLine label="İtibar" value={`${Math.round(player.reputation)}/100`} />
+            {!levelProgress.isMaxLevel ? (
+              <View style={styles.xpBlock}>
+                <View style={styles.xpRow}>
+                  <Text style={styles.statLineLabel}>XP</Text>
+                  <Text style={styles.xpValue}>
+                    {levelProgress.xp} / {levelProgress.xpToNextLevel}
+                  </Text>
+                </View>
+                <ProgressBar
+                  progress={levelProgress.progressRatio}
+                  color={colors.accentAmber}
+                  height={4}
                 />
               </View>
-            </View>
-            <StatLine label="Seviye" value={`Level ${levelProgress.level}`} valueColor={colors.accentAmber} />
-            <StatLine
-              label="XP"
-              value={
-                levelProgress.isMaxLevel
-                  ? 'Maksimum'
-                  : `${levelProgress.xp} / ${levelProgress.xpToNextLevel}`
-              }
-              valueColor={colors.accentBlue}
-            />
-          </MetricPanel>
+            ) : (
+              <StatLine label="XP" value="Maksimum" valueColor={colors.accentAmber} />
+            )}
+          </CompactSummaryCard>
         </View>
 
-        <View style={styles.metricGridItem}>
-          <MetricPanel title="Sözleşme Durumu" icon="contract">
-            <StatLine label="Müsait" value={`${availableContracts.length}`} valueColor={colors.accentAmber} />
-            <StatLine label="Aktif" value={`${activeContracts.length || runningDeliveries.length}`} />
-            <StatLine label="Tamamlanan" value={`${player.completedContracts ?? 0}`} valueColor={colors.success} />
-          </MetricPanel>
+        <View style={styles.summaryCol}>
+          <CompactSummaryCard title="Operasyon Özeti" icon="truck">
+            <StatLine label="Boşta kamyon" value={`${fleetSnapshot.idleTrucks}`} />
+            <StatLine
+              label="Aktif teslimat"
+              value={`${runningDeliveries.length}`}
+              valueColor={colors.accentBlue}
+            />
+            <StatLine
+              label="Müsait sözleşme"
+              value={`${availableContracts.length}`}
+              valueColor={colors.accentAmber}
+            />
+            <StatLine label="Depo doluluk" value={formatPercent(warehouseFillRatio)} />
+          </CompactSummaryCard>
         </View>
       </View>
 
-      <AppCard style={styles.levelCard} padded>
-        <View style={styles.levelHeader}>
-          <View style={styles.levelTitleRow}>
-            <Text style={styles.levelTitle}>Şirket Seviyesi</Text>
-            <InfoBadge
-              title="Seviye ve XP Nedir?"
-              description="XP; teslimat tamamlayarak, kârlı ticaret yaparak, kamyon/şoför satın alarak ve depo açarak kazanılır. Seviye yükseldikçe daha yüksek tonajlı sözleşmeler, yeni kamyon modelleri, daha deneyimli şoför kademeleri ve daha fazla depo hakkı açılır. 'Sıradaki açılım' satırı, bir sonraki seviyede açılacak en yakın özelliği gösterir; tüm gelecek açılımları listelemez."
-            />
-          </View>
-          <StatusBadge label={`Level ${levelProgress.level}`} variant="amber" size="md" />
-        </View>
-        <Text style={styles.xpLabel}>
-          {levelProgress.isMaxLevel
-            ? 'Maksimum seviye'
-            : `XP: ${levelProgress.xp} / ${levelProgress.xpToNextLevel}`}
-        </Text>
-        <ProgressBar
-          progress={levelProgress.isMaxLevel ? 1 : levelProgress.progressRatio}
-          color={colors.accentAmber}
-        />
-        <Text style={styles.xpHint}>Sıradaki açılım: {nextUnlockLabel}</Text>
-      </AppCard>
+      {deliveryPreview.length > 0 ? (
+        <>
+          <SectionTitle title="Aktif Teslimatlar" />
+          {deliveryPreview.map((delivery) => {
+            const truck = player.trucks?.find((t) => t.id === delivery.truckId);
+            const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
+            const statusVariant = getDeliveryStatusVariant(delivery.status);
 
-      <AppCard style={styles.fuelCard} padded>
-        <View style={styles.fuelRow}>
-          <View style={styles.fuelMain}>
-            <View style={styles.metricPanelHeader}>
-              <View style={styles.metricIconWrap}>
-                <GameIcon name="fuel" size={15} color={colors.warning} />
-              </View>
-              <Text style={styles.metricPanelTitle}>Yakıt Fiyatı</Text>
-            </View>
-            <Text style={styles.fuelPrice}>${fuelPrice.toFixed(2)} / L</Text>
-            <Text style={styles.fuelHint}>Güncel piyasa fiyatı</Text>
-          </View>
-          <FuelTrendPlaceholder />
-        </View>
-      </AppCard>
-
-      <AppCard variant="highlighted" style={styles.ctaCard} padded>
-        <Text style={styles.ctaTitle}>{nextAction.title}</Text>
-        <Text style={styles.ctaSubtitle}>{nextAction.subtitle}</Text>
-        <ActionButton
-          label={nextAction.buttonLabel}
-          onPress={() => handleNavigate(nextAction.type)}
-          variant="primary"
-        />
-      </AppCard>
-
-      <SectionTitle title="Aktif Teslimatlar" />
-      {deliveryPreview.length === 0 ? (
-        <EmptyState
-          title="Şu anda yolda teslimat yok."
-          icon="truck"
-          message="Yeni bir sözleşme başlattığında rotalar burada görünecek."
-        />
-      ) : (
-        deliveryPreview.map((delivery) => {
-          const truck = player.trucks?.find((t) => t.id === delivery.truckId);
-          const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
-          const statusVariant = getDeliveryStatusVariant(delivery.status);
-
-          return (
-            <AppCard key={delivery.id} style={styles.listCard} padded>
-              <View style={styles.listCardHeader}>
-                <View style={styles.listCardTitleRow}>
-                  <GameIcon name="route" size={16} color={colors.accentBlue} />
-                  <Text style={styles.listCardTitle} numberOfLines={1}>
-                    {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
+            return (
+              <AppCard key={delivery.id} style={styles.listCard} padded>
+                <View style={styles.listCardHeader}>
+                  <View style={styles.listCardTitleRow}>
+                    <GameIcon name="route" size={16} color={colors.accentBlue} />
+                    <Text style={styles.listCardTitle} numberOfLines={1}>
+                      {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
+                    </Text>
+                  </View>
+                  <StatusBadge label={getDeliveryStatusLabel(delivery.status)} variant={statusVariant} size="sm" />
+                </View>
+                <Text style={styles.listCardMeta}>
+                  {getProductName(delivery.productId)} · {delivery.amount.toFixed(1)} ton
+                  {truck ? ` · ${truck.name}` : ''}
+                </Text>
+                <View style={styles.deliveryProgressRow}>
+                  <ProgressBar progress={delivery.progress} color={colors.accentBlue} />
+                  <Text style={styles.progressLabel}>{formatPercent(delivery.progress)}</Text>
+                </View>
+                <View style={styles.listCardFooter}>
+                  <Text style={styles.listCardFooterText}>Kalan: {formatDuration(hoursLeft)}</Text>
+                  <Text style={[styles.listCardFooterText, { color: colors.success }]}>
+                    {formatMoney(delivery.estimatedProfit)} kâr
                   </Text>
                 </View>
-                <StatusBadge label={getDeliveryStatusLabel(delivery.status)} variant={statusVariant} size="sm" />
-              </View>
-              <Text style={styles.listCardMeta}>
-                {getProductName(delivery.productId)} · {delivery.amount.toFixed(1)} ton
-                {truck ? ` · ${truck.name}` : ''}
-              </Text>
-              <View style={styles.deliveryProgressRow}>
-                <ProgressBar progress={delivery.progress} color={colors.accentBlue} />
-                <Text style={styles.progressLabel}>{formatPercent(delivery.progress)}</Text>
-              </View>
-              <View style={styles.listCardFooter}>
-                <Text style={styles.listCardFooterText}>
-                  Kalan: {formatDuration(hoursLeft)}
-                </Text>
-                <Text style={[styles.listCardFooterText, { color: colors.success }]}>
-                  {formatMoney(delivery.estimatedProfit)} tahmini
-                </Text>
-              </View>
-            </AppCard>
-          );
-        })
-      )}
-      {extraDeliveryCount > 0 ? (
-        <Text style={styles.moreItemsHint}>+{extraDeliveryCount} teslimat daha yolda</Text>
+              </AppCard>
+            );
+          })}
+          {extraDeliveryCount > 0 ? (
+            <Text style={styles.moreItemsHint}>+{extraDeliveryCount} teslimat daha yolda</Text>
+          ) : null}
+        </>
       ) : null}
 
-      <SectionTitle title="En İyi Fırsatlar" style={styles.sectionSpaced} />
-      {topOpportunities.length === 0 ? (
-        <EmptyState
-          title="Henüz fırsat yok"
-          message="Piyasa yenilendiğinde en iyi sözleşmeler burada listelenecek."
-          icon="contract"
-        />
-      ) : (
-        topOpportunities.map((contract) => (
-          <AppCard key={contract.id} style={styles.opportunityCard} padded={false}>
-            <View style={styles.opportunityCardInner}>
-              <View style={styles.opportunityTopRow}>
-                <View style={styles.listCardTitleRow}>
-                  <GameIcon name="contract" size={14} color={colors.accentAmber} />
-                  <Text style={styles.opportunityRoute} numberOfLines={1}>
-                    {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
-                  </Text>
+      {topOpportunities.length > 0 ? (
+        <>
+          <SectionTitle title="En İyi Fırsatlar" style={styles.sectionSpaced} />
+          {topOpportunities.map((contract) => (
+            <AppCard key={contract.id} style={styles.opportunityCard} padded={false}>
+              <View style={styles.opportunityCardInner}>
+                <View style={styles.opportunityTopRow}>
+                  <View style={styles.listCardTitleRow}>
+                    <GameIcon name="contract" size={14} color={colors.accentAmber} />
+                    <Text style={styles.opportunityRoute} numberOfLines={1}>
+                      {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
+                    </Text>
+                  </View>
+                  <StatusBadge
+                    label={getContractRiskLabel(contract)}
+                    variant={getContractRiskVariant(contract)}
+                    size="sm"
+                  />
                 </View>
-                <StatusBadge
-                  label={getContractRiskLabel(contract)}
-                  variant={getContractRiskVariant(contract)}
-                  size="sm"
-                />
+                <View style={styles.opportunityBottomRow}>
+                  <Text style={styles.opportunityMeta} numberOfLines={1}>
+                    {getProductName(contract.productId)} · {formatDuration(contract.deadlineHours)}
+                  </Text>
+                  <Text style={styles.opportunityPayment}>{formatMoney(contract.payment)}</Text>
+                </View>
               </View>
-              <View style={styles.opportunityBottomRow}>
-                <Text style={styles.opportunityMeta} numberOfLines={1}>
-                  {getProductName(contract.productId)} · {formatDuration(contract.deadlineHours)}
-                </Text>
-                <Text style={styles.opportunityPayment}>{formatMoney(contract.payment)}</Text>
-              </View>
-            </View>
-          </AppCard>
-        ))
-      )}
-      <ActionButton
-        label="Tüm Sözleşmeleri Gör"
-        onPress={() => handleNavigate('contracts')}
-        variant="secondary"
-        style={styles.sectionAction}
-      />
+            </AppCard>
+          ))}
+          <ActionButton
+            label="Tüm Sözleşmeleri Gör"
+            onPress={() => handleNavigate('contracts')}
+            variant="secondary"
+            style={styles.sectionAction}
+          />
+        </>
+      ) : null}
 
-      <SectionTitle title="Piyasa Haberleri" style={styles.sectionSpaced} />
-      {recentNews.length === 0 ? (
-        <EmptyState title="Henüz haber yok" icon="market" />
-      ) : (
-        recentNews.map((news) => <NewsItem key={news.id} news={news} />)
-      )}
-
-      <SectionTitle title="Son Olaylar" style={styles.sectionSpaced} />
-      {recentEvents.length === 0 ? (
-        <EmptyState title="Henüz olay kaydı yok" icon="notification" />
-      ) : (
-        recentEvents.map((event) => <EventItem key={event.id} event={event} />)
-      )}
+      {recentDevelopments.length > 0 ? (
+        <>
+          <SectionTitle title="Son Gelişmeler" style={styles.sectionSpaced} />
+          {recentDevelopments.map((item) => (
+            <DevelopmentItemRow key={item.id} item={item} />
+          ))}
+        </>
+      ) : null}
     </AppScreen>
   );
 }
@@ -784,143 +830,122 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: colors.success,
   },
-
-  metricGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-  },
-  metricGridItem: {
-    flexGrow: 1,
-    flexBasis: '47%',
-    minWidth: 150,
-  },
-  metricPanel: {
-    flex: 1,
-  },
-  metricPanelHeader: {
+  headerFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  fuelPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.cardSoft,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  fuelPillText: {
+    ...typography.caption,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+
+  nextActionCard: {
+    marginBottom: spacing.xs,
+  },
+  nextActionTitle: {
+    ...typography.sectionTitle,
+    marginBottom: spacing.xs,
+  },
+  nextActionSubtitle: {
+    ...typography.bodySmall,
+    marginBottom: spacing.md,
+  },
+
+  warningCard: {
+    backgroundColor: colors.warningSoft,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  warningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.sm,
   },
-  metricIconWrap: {
-    width: 28,
-    height: 28,
+  warningText: {
+    ...typography.bodySmall,
+    flex: 1,
+    color: colors.warning,
+  },
+
+  summaryRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  summaryCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  summaryCard: {
+    flex: 1,
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  summaryIconWrap: {
+    width: 24,
+    height: 24,
     borderRadius: radius.sm,
     backgroundColor: colors.accentBlueSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  metricPanelTitle: {
+  summaryTitle: {
     ...typography.cardTitle,
-    fontSize: 13,
+    fontSize: 12,
   },
   statLine: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.xs,
+    paddingVertical: 3,
   },
   statLineLabel: {
-    ...typography.bodySmall,
+    ...typography.caption,
     color: colors.textMuted,
   },
   statLineValue: {
-    ...typography.bodySmall,
+    ...typography.caption,
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  reputationRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.xs,
-  },
-  reputationValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  levelCard: {
+  xpBlock: {
     marginTop: spacing.xs,
+    gap: 4,
   },
-  levelHeader: {
+  xpRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.sm,
   },
-  levelTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  levelTitle: {
-    ...typography.label,
-    textTransform: 'uppercase',
-  },
-  xpLabel: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  xpHint: {
+  xpValue: {
     ...typography.caption,
-    marginTop: spacing.sm,
-  },
-
-  fuelCard: {
-    marginTop: spacing.xs,
-  },
-  fuelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  fuelMain: {
-    flex: 1,
-  },
-  fuelPrice: {
-    ...typography.statValue,
-    fontSize: 22,
-    marginTop: spacing.xs,
-  },
-  fuelHint: {
-    ...typography.caption,
-    marginTop: spacing.xs,
-  },
-  fuelTrend: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 3,
-    height: 28,
-    marginLeft: spacing.md,
-  },
-  fuelTrendBar: {
-    width: 5,
-    borderRadius: 2,
-    backgroundColor: colors.accentBlue,
-    opacity: 0.55,
-  },
-
-  ctaCard: {
-    marginTop: spacing.xs,
-    marginBottom: spacing.xl,
-  },
-  ctaTitle: {
-    ...typography.sectionTitle,
-    marginBottom: spacing.xs,
-  },
-  ctaSubtitle: {
-    ...typography.bodySmall,
-    marginBottom: spacing.md,
+    fontWeight: '700',
+    color: colors.accentAmber,
   },
 
   sectionSpaced: {
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
   },
   sectionAction: {
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
 
   listCard: {
@@ -943,9 +968,10 @@ const styles = StyleSheet.create({
   listCardTitle: {
     ...typography.cardTitle,
     flex: 1,
+    fontSize: 13,
   },
   listCardMeta: {
-    ...typography.bodySmall,
+    ...typography.caption,
     marginBottom: spacing.sm,
   },
   deliveryProgressRow: {
@@ -973,8 +999,9 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     textAlign: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
+
   opportunityCard: {
     marginBottom: spacing.sm,
   },
@@ -1010,33 +1037,27 @@ const styles = StyleSheet.create({
     color: colors.accentAmber,
   },
 
-  newsItem: {
+  developmentItem: {
     marginBottom: spacing.sm,
     flexDirection: 'row',
     padding: 0,
     overflow: 'hidden',
   },
-  newsAccent: {
+  developmentAccent: {
     width: 4,
   },
-  newsContent: {
+  developmentContent: {
     flex: 1,
-    padding: spacing.md,
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
-  newsTitle: {
+  developmentTitle: {
     ...typography.cardTitle,
     fontSize: 12,
     marginBottom: 2,
   },
-  newsMessage: {
+  developmentMessage: {
     ...typography.caption,
     lineHeight: 16,
-  },
-  eventHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginBottom: 2,
   },
 });

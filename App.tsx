@@ -30,10 +30,14 @@ const TABS: TabDefinition[] = [
   { key: 'more', label: 'Daha Fazla', icon: 'more' },
 ];
 
-function renderActiveScreen(tab: TabKey, onNavigate: (tab: TabKey) => void): React.ReactElement {
+function renderActiveScreen(
+  tab: TabKey,
+  onNavigate: (tab: TabKey) => void,
+  onOpenWarehouse: () => void,
+): React.ReactElement {
   switch (tab) {
     case 'dashboard':
-      return <DashboardScreen onNavigate={onNavigate} />;
+      return <DashboardScreen onNavigate={onNavigate} onOpenWarehouse={onOpenWarehouse} />;
     case 'map':
       return <MapScreen onOpenContracts={() => onNavigate('contracts')} />;
     case 'contracts':
@@ -45,7 +49,7 @@ function renderActiveScreen(tab: TabKey, onNavigate: (tab: TabKey) => void): Rea
     case 'more':
       return <MoreScreen />;
     default:
-      return <DashboardScreen onNavigate={onNavigate} />;
+      return <DashboardScreen onNavigate={onNavigate} onOpenWarehouse={onOpenWarehouse} />;
   }
 }
 
@@ -54,6 +58,13 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const navigationRequest = useGameStore((state) => state.navigationRequest);
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
+
+  const handleOpenWarehouse = () => {
+    useGameStore.setState({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: 'warehouse',
+    });
+  };
 
   useEffect(() => {
     if (!navigationRequest) return;
@@ -64,7 +75,9 @@ function AppShell() {
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={UI.colors.background} />
-      <View style={styles.screenContainer}>{renderActiveScreen(activeTab, setActiveTab)}</View>
+      <View style={styles.screenContainer}>
+        {renderActiveScreen(activeTab, setActiveTab, handleOpenWarehouse)}
+      </View>
       <GameToast />
       <BottomTabBar tabs={TABS} activeTab={activeTab} onTabPress={setActiveTab} />
     </View>

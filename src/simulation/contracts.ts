@@ -101,6 +101,8 @@ export interface GenerateContractsOptions {
   idleMaxTruckCapacity?: number;
   playerLevel?: number;
   currentTime: number;
+  /** Boşta kamyonların bulunduğu şehirler — bu çıkışlardan iş üretimine öncelik */
+  idleTruckOriginCityIds?: string[];
 }
 
 /** Dahili: aday sözleşme skoru — en kârlı rotalar önce seçilir */
@@ -659,6 +661,8 @@ export function generateContracts(
       .map((contract) => getContractDedupeKey(contract)),
   );
 
+  const idleOriginCitySet = new Set(options.idleTruckOriginCityIds ?? []);
+
   for (const originCity of cityList) {
     for (const destinationCity of cityList) {
       if (originCity.id === destinationCity.id) {
@@ -752,13 +756,16 @@ export function generateContracts(
         const priceDiffRatio = calculatePriceDiffRatio(originMarket, destinationMarket);
         const routeKey = `${originCity.id}-${destinationCity.id}-${product.id}`;
         const marketPriorityBonus = priorityOpportunityKeys.has(routeKey) ? 60 : 0;
+        const idleOriginBonus = idleOriginCitySet.has(originCity.id) ? 25 : 0;
         const score =
           calculateContractScore(
             finalContract.payment,
             finalContract.urgency,
             finalContract.amount,
             priceDiffRatio,
-          ) + marketPriorityBonus;
+          ) +
+          marketPriorityBonus +
+          idleOriginBonus;
 
         candidates.push({ score, contract: finalContract });
       }
@@ -808,6 +815,7 @@ export interface ReplenishContractsParams {
   ownedMaxTruckCapacity?: number;
   idleMaxTruckCapacity?: number;
   playerLevel?: number;
+  idleTruckOriginCityIds?: string[];
 }
 
 export interface ReplenishContractsResult {
@@ -862,6 +870,7 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
       ownedMaxTruckCapacity: ownedMaxCapacity,
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
+      idleTruckOriginCityIds: params.idleTruckOriginCityIds,
     },
   );
 
@@ -958,6 +967,7 @@ export function refreshContractsFromMarket(
       ownedMaxTruckCapacity: ownedMaxCapacity,
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
+      idleTruckOriginCityIds: params.idleTruckOriginCityIds,
     },
   );
 

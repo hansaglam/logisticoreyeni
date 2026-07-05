@@ -18,9 +18,15 @@ import { getBottomInset } from '../constants/layout';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 import { getRoute as findRoute } from '../data/routes';
-import { getContractAvailability, getContractCargoWeight } from '../simulation/delivery';
+import {
+  getContractAvailability,
+  getContractCargoWeight,
+  isTruckAtContractOrigin,
+  resolveTruckCityId,
+} from '../simulation/delivery';
 import { useGameStore } from '../store/gameStore';
 import { colors, spacing, typography } from '../theme';
+import { formatMoney } from '../theme/format';
 import type { GameIconName } from '../theme/icons';
 import {
   ActionButton,
@@ -39,7 +45,7 @@ import type { Contract, Driver, GlobalEconomy, ProductId, Truck } from '../types
 const MIN_TRUCK_CONDITION = 30;
 const LOW_CONDITION_WARNING = 50;
 const START_BUTTON_HEIGHT = 50;
-const FOOTER_SCROLL_EXTRA = 32;
+const FOOTER_SCROLL_EXTRA = 40;
 const FOOTER_CONTENT_HEIGHT = 120;
 
 export type ContractAssignmentModalProps = {
@@ -53,7 +59,14 @@ export type ContractAssignmentModalProps = {
   onGoToFleet?: (subTab?: 'trucks' | 'drivers' | 'shop') => void;
 };
 
-type TruckIssue = 'eligible' | 'on_route' | 'maintenance' | 'capacity' | 'condition_blocked' | 'condition_warning';
+type TruckIssue =
+  | 'eligible'
+  | 'on_route'
+  | 'maintenance'
+  | 'wrong_city'
+  | 'capacity'
+  | 'condition_blocked'
+  | 'condition_warning';
 
 type DriverIssue = 'eligible' | 'on_route' | 'resting';
 
@@ -74,13 +87,6 @@ interface DriverOption {
 interface ContractSummaryFinancials {
   expense: number;
   profit: number;
-}
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  return `$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 }
 
 function formatTimeLeft(hours: number): string {
@@ -154,12 +160,19 @@ function estimateSummaryFinancials(
   };
 }
 
-function evaluateTruckOption(truck: Truck, cargoWeight: number): TruckOption {
+function evaluateTruckOption(
+  truck: Truck,
+  cargoWeight: number,
+  originCityId: string,
+): TruckOption {
   const capacity = truck.capacity ?? 0;
   const condition = truck.condition ?? 100;
 
   if (truck.status === 'on_route') {
-    return { truck, issue: 'on_route', label: 'Şu anda teslimatta', selectable: false };
+    return { truck, issue: 'on_route', label: 'Teslimatta', selectable: false };
+  }
+  if (truck.status === 'transferring') {
+    return { truck, issue: 'on_route', label: 'Yönlendiriliyor', selectable: false };
   }
   if (truck.status === 'maintenance') {
     return { truck, issue: 'maintenance', label: 'Bakım gerekli', selectable: false };
@@ -167,6 +180,18 @@ function evaluateTruckOption(truck: Truck, cargoWeight: number): TruckOption {
   if (truck.status !== 'idle') {
     return { truck, issue: 'on_route', label: 'Müsait değil', selectable: false };
   }
+
+  const truckCityId = resolveTruckCityId(truck);
+  if (originCityId && truckCityId !== originCityId) {
+    const cityName = getCityName(truckCityId);
+    return {
+      truck,
+      issue: 'wrong_city',
+      label: `${cityName}'da · çıkış şehrinde değil`,
+      selectable: false,
+    };
+  }
+
   if (capacity < cargoWeight) {
     return {
       truck,
@@ -219,6 +244,8 @@ function getTruckBadge(option: TruckOption): { label: string; variant: StatusBad
       return { label: 'KONDİSYON DÜŞÜK', variant: 'danger' };
     case 'on_route':
       return { label: 'YOLDA', variant: 'amber' };
+    case 'wrong_city':
+      return { label: 'KONUM UYGUN DEĞİL', variant: 'warning' };
     case 'maintenance':
       return { label: 'BAKIM', variant: 'danger' };
     default:
@@ -464,8 +491,11 @@ export default function ContractAssignmentModal({
   }, [contract, globalEconomy]);
 
   const truckOptions = useMemo(
-    () => safeTrucks.map((truck) => evaluateTruckOption(truck, cargoWeight)),
-    [safeTrucks, cargoWeight],
+    () =>
+      safeTrucks.map((truck) =>
+        evaluateTruckOption(truck, cargoWeight, contract?.originCityId ?? ''),
+      ),
+    [safeTrucks, cargoWeight, contract?.originCityId],
   );
 
   const driverOptions = useMemo(
@@ -480,7 +510,11 @@ export default function ContractAssignmentModal({
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
 
   const canConfirm =
-    !!selectedTruckOption?.selectable && !!selectedDriverOption?.selectable;
+    !!selectedTruckOption?.selectable &&
+    !!selectedDriverOption?.selectable &&
+    !!contract &&
+    !!selectedTruckOption &&
+    isTruckAtContractOrigin(selectedTruckOption.truck, contract);
 
   const scrollBottomPadding = useMemo(
     () => FOOTER_CONTENT_HEIGHT + bottomInset + FOOTER_SCROLL_EXTRA,
@@ -488,7 +522,7 @@ export default function ContractAssignmentModal({
   );
 
   const footerBottomPadding = useMemo(
-    () => bottomInset + spacing.md,
+    () => bottomInset + spacing.lg,
     [bottomInset],
   );
 

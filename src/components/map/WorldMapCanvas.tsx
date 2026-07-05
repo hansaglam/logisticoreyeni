@@ -17,7 +17,9 @@ import {
 import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
-import type { City, Contract, Delivery, Route } from '../../types/game';
+import { normalizeCityId } from '../../data/networkPositions';
+import type { City, Contract, Delivery, Route, TruckTransfer } from '../../types/game';
+import IdleTruckCountBadge from './IdleTruckCountBadge';
 
 const MAP_IMAGE = require('../../../assets/maps/turkey-relief.png');
 const mapImageSize = Image.resolveAssetSource(MAP_IMAGE);
@@ -40,6 +42,8 @@ const COLORS = {
   text: '#F9FAFB',
 };
 
+const TRANSFER_ROUTE_COLOR = '#64748B';
+const TRANSFER_ROUTE_OPACITY = 0.55;
 const ACTIVE_ROUTE_WIDTH = 1;
 const ACTIVE_ROUTE_OPACITY = 0.4;
 const ACTIVE_ROUTE_SELECTED_OPACITY = 0.6;
@@ -49,7 +53,9 @@ export type WorldMapCanvasProps = {
   routes?: Route[];
   contracts?: Contract[];
   activeDeliveries?: Delivery[];
+  activeTransfers?: TruckTransfer[];
   depotCityIds?: string[];
+  idleTruckCountByCity?: Record<string, number>;
   selectedFilter: NetworkFilterKey;
   featuredContract?: Contract | null;
   selectedContract?: Contract | null;
@@ -98,11 +104,20 @@ function pctToPixel(xPct: number, yPct: number, bounds: MapBounds) {
   };
 }
 
+function getIdleBadgeVisual(filter: NetworkFilterKey): { opacity: number; prominent: boolean } {
+  if (filter === 'trucks') return { opacity: 1, prominent: true };
+  if (filter === 'routes') return { opacity: 0.45, prominent: false };
+  if (filter === 'depots') return { opacity: 0.65, prominent: false };
+  return { opacity: 0.92, prominent: false };
+}
+
 export default function WorldMapCanvas({
   cities = [],
   routes: _routes = [],
   activeDeliveries = [],
+  activeTransfers = [],
   depotCityIds = [],
+  idleTruckCountByCity,
   selectedFilter,
   featuredContract: _featuredContract,
   selectedContract: _selectedContract,
@@ -144,6 +159,14 @@ export default function WorldMapCanvas({
   const showDepots = selectedFilter === 'all' || selectedFilter === 'depots';
   const showActiveRoutes =
     selectedFilter === 'all' || selectedFilter === 'trucks' || selectedFilter === 'routes';
+  const idleBadgeVisual = getIdleBadgeVisual(selectedFilter);
+  const showIdleTruckBadges =
+    selectedFilter === 'all' ||
+    selectedFilter === 'trucks' ||
+    selectedFilter === 'routes' ||
+    selectedFilter === 'depots';
+  const runningTransfers = (activeTransfers ?? []).filter((transfer) => transfer.status === 'active');
+  const showTransfers = showTrucks && runningTransfers.length > 0;
 
   return (
     <View style={styles.wrapper} onLayout={handleWrapperLayout}>
@@ -203,6 +226,46 @@ export default function WorldMapCanvas({
                 );
               })}
 
+            {showTransfers &&
+              runningTransfers.map((transfer) => {
+                const from = getWorldMapCityPosition(transfer.fromCityId);
+                const to = getWorldMapCityPosition(transfer.toCityId);
+                if (!from || !to) return null;
+                const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
+                const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
+                const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
+                const truckPos = pointOnQuadratic(
+                  Math.max(0, Math.min(1, transfer.progress)),
+                  p1.x,
+                  p1.y,
+                  cx,
+                  cy,
+                  p2.x,
+                  p2.y,
+                );
+                return (
+                  <React.Fragment key={transfer.id}>
+                    <Path
+                      d={d}
+                      stroke={TRANSFER_ROUTE_COLOR}
+                      strokeWidth={ACTIVE_ROUTE_WIDTH}
+                      strokeOpacity={TRANSFER_ROUTE_OPACITY}
+                      strokeDasharray="4 3"
+                      fill="none"
+                    />
+                    <Circle
+                      cx={truckPos.x}
+                      cy={truckPos.y}
+                      r={3}
+                      fill="#0F172A"
+                      stroke={TRANSFER_ROUTE_COLOR}
+                      strokeWidth={1.5}
+                      strokeOpacity={0.8}
+                    />
+                  </React.Fragment>
+                );
+              })}
+
             {cities.map((city) => {
               const pos = getWorldMapCityPosition(city.id);
               if (!pos) return null;
@@ -242,6 +305,34 @@ export default function WorldMapCanvas({
             })}
           </Svg>
           )}
+
+          {mapBounds.width > 0 && showIdleTruckBadges ? (
+            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              {cities.map((city) => {
+                const pos = getWorldMapCityPosition(city.id);
+                if (!pos) return null;
+
+                const idleCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
+                if (idleCount <= 0) return null;
+
+                const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
+
+                return (
+                  <IdleTruckCountBadge
+                    key={`idle-badge-${city.id}`}
+                    count={idleCount}
+                    opacity={idleBadgeVisual.opacity}
+                    prominent={idleBadgeVisual.prominent}
+                    style={{
+                      position: 'absolute',
+                      left: pixel.x + 5,
+                      top: pixel.y - 16,
+                    }}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
 
           {calibrationMode && mapBounds.width > 0 ? (
             <Pressable

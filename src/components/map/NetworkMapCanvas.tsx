@@ -21,6 +21,7 @@ import {
   routesMatchCityPair,
 } from '../../data/networkPositions';
 import type { City, CityProductState, Contract, Delivery, DeliveryStatus, Route } from '../../types/game';
+import { colors } from '../../theme';
 
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 const SHORTAGE_RATIO = 0.7;
@@ -39,6 +40,7 @@ export type NetworkMapCanvasProps = {
   contracts?: Contract[];
   activeDeliveries?: Delivery[];
   depotCityIds?: string[];
+  idleTruckCountByCity?: Record<string, number>;
   selectedFilter: NetworkFilterKey;
   /** En iyi / öne çıkan fırsat — rota highlight için */
   featuredContract?: Contract | null;
@@ -239,6 +241,65 @@ function NetworkGrid({ width, height }: { width: number; height: number }) {
   return <>{lines}</>;
 }
 
+function getFilterIdleBadgeOpacity(filter: NetworkFilterKey): number {
+  if (filter === 'trucks') return 1;
+  if (filter === 'routes') return 0.45;
+  if (filter === 'depots') return 0.65;
+  return 0.92;
+}
+
+function getFilterShowsIdleBadges(filter: NetworkFilterKey): boolean {
+  return filter === 'all' || filter === 'trucks' || filter === 'routes' || filter === 'depots';
+}
+
+function CityIdleTruckBadge({
+  cardX,
+  cardY,
+  count,
+  opacity,
+  prominent,
+}: {
+  cardX: number;
+  cardY: number;
+  count: number;
+  opacity: number;
+  prominent: boolean;
+}) {
+  const badgeWidth = prominent ? 30 : 28;
+  const badgeHeight = prominent ? 20 : 18;
+  const badgeX = cardX + NODE_CARD_WIDTH - badgeWidth + 4;
+  const badgeY = cardY - 6;
+  const textX = badgeX + badgeWidth / 2 + 4;
+  const iconX = badgeX + 7;
+
+  return (
+    <G opacity={opacity}>
+      <Rect
+        x={badgeX}
+        y={badgeY}
+        width={badgeWidth}
+        height={badgeHeight}
+        rx={badgeHeight / 2}
+        fill={colors.accentBlueSoft}
+        stroke={colors.accentBlue}
+        strokeWidth={prominent ? 1.5 : 1}
+      />
+      <Rect x={iconX} y={badgeY + 6} width={5} height={4} rx={1} fill={colors.accentBlue} />
+      <Rect x={iconX + 5} y={badgeY + 7} width={6} height={3} rx={0.8} fill={colors.accentBlue} />
+      <SvgText
+        x={textX}
+        y={badgeY + badgeHeight - 5}
+        fill={colors.accentBlue}
+        fontSize={prominent ? 11 : 10}
+        fontWeight="800"
+        textAnchor="middle"
+      >
+        {count}
+      </SvgText>
+    </G>
+  );
+}
+
 function CityNodeCard({
   cx,
   cy,
@@ -246,6 +307,10 @@ function CityNodeCard({
   statusLabel,
   borderColor,
   opacity,
+  idleTruckCount = 0,
+  idleBadgeOpacity = 1,
+  idleBadgeProminent = false,
+  showIdleBadge = true,
   onPress,
 }: {
   cx: number;
@@ -254,6 +319,10 @@ function CityNodeCard({
   statusLabel: CityStatusLabel;
   borderColor: string;
   opacity: number;
+  idleTruckCount?: number;
+  idleBadgeOpacity?: number;
+  idleBadgeProminent?: boolean;
+  showIdleBadge?: boolean;
   onPress?: () => void;
 }) {
   const x = cx - NODE_CARD_WIDTH / 2;
@@ -261,6 +330,15 @@ function CityNodeCard({
 
   return (
     <G opacity={opacity} onPress={onPress}>
+      {showIdleBadge && idleTruckCount > 0 ? (
+        <CityIdleTruckBadge
+          cardX={x}
+          cardY={y}
+          count={idleTruckCount}
+          opacity={idleBadgeOpacity}
+          prominent={idleBadgeProminent}
+        />
+      ) : null}
       <Rect
         x={x}
         y={y}
@@ -301,6 +379,7 @@ export default function NetworkMapCanvas({
   contracts = [],
   activeDeliveries = [],
   depotCityIds = [],
+  idleTruckCountByCity,
   selectedFilter,
   featuredContract,
   selectedContract,
@@ -327,6 +406,9 @@ export default function NetworkMapCanvas({
 
   const animatedProgress = useAnimatedDeliveryProgress(runningDeliveries);
   const depotSet = useMemo(() => new Set((depotCityIds ?? []).map(normalizeCityId)), [depotCityIds]);
+  const showIdleBadges = getFilterShowsIdleBadges(selectedFilter);
+  const idleBadgeOpacity = getFilterIdleBadgeOpacity(selectedFilter);
+  const idleBadgeProminent = selectedFilter === 'trucks';
 
   const highlightContract = featuredContract ?? null;
 
@@ -524,6 +606,7 @@ export default function NetworkMapCanvas({
             const statusLabel = getCityStatusLabel(city, hasDepot);
             const borderColor = getCityBorderColor(statusLabel);
             const opacity = getFilterCityOpacity(selectedFilter, hasDepot);
+            const idleTruckCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
 
             return (
               <CityNodeCard
@@ -534,6 +617,10 @@ export default function NetworkMapCanvas({
                 statusLabel={statusLabel}
                 borderColor={borderColor}
                 opacity={opacity}
+                idleTruckCount={idleTruckCount}
+                idleBadgeOpacity={idleBadgeOpacity}
+                idleBadgeProminent={idleBadgeProminent}
+                showIdleBadge={showIdleBadges}
                 onPress={() => onCityPress?.(city.id)}
               />
             );

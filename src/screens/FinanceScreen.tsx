@@ -23,14 +23,13 @@ import type { StatusBadgeVariant } from '../components/ui';
 import { economyBalance, financeBalance, warehouseBalance } from '../config/balance';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   getCityProductMarketPrice,
   normalizeWarehouse,
   summarizeFinanceLedger,
 } from '../simulation/trading';
 import { useGameStore } from '../store/gameStore';
-import { colors, spacing, typography } from '../theme';
+import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type {
   Contract,
   Delivery,
@@ -60,26 +59,13 @@ const MAX_ACTIVE_DELIVERIES = 3;
 const MAX_ALERTS = 3;
 const MAX_LEDGER_ENTRIES = 5;
 const HIGH_PROFIT_MARGIN = 0.9;
-const LIST_SCROLL_BOTTOM_EXTRA = 110;
 const DAY_HOURS = 24;
 const RUNNING_DELIVERY_STATUSES: Delivery['status'][] = ['preparing', 'on_route'];
 
 type HealthLabel = 'Güçlü' | 'Dengeli' | 'Riskli' | 'Kritik';
 
-function formatMoney(value: number): string {
-  const rounded = Math.round(Number.isFinite(value) ? value : 0);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-}
-
 function formatPercent(value: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
-}
-
-function formatTons(value: number): string {
-  return `${(Number.isFinite(value) ? value : 0).toFixed(1)} ton`;
+  return formatRatioPercent(value);
 }
 
 function getCityName(cityId: string): string {
@@ -190,6 +176,12 @@ function getLedgerDisplay(entry: FinanceLedgerEntry): {
         icon: 'warehouse',
         title: description ?? 'Depo açılışı',
         categoryLabel: 'Depo',
+      };
+    case 'truck_transfer':
+      return {
+        icon: 'truck',
+        title: description ?? 'Boş kamyon transferi',
+        categoryLabel: 'Transfer',
       };
     default:
       return {
@@ -334,8 +326,6 @@ export default function FinanceScreen() {
   const warehouses: Warehouse[] = player?.warehouses ?? [];
   const cash = player?.money ?? 0;
   const fuelPrice = globalEconomy?.fuelPrice ?? BASELINE_FUEL_PRICE;
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
-  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
 
   const calculateTotalRevenue = (): number => {
     return contracts
@@ -527,7 +517,16 @@ export default function FinanceScreen() {
     'delivery_expense',
     'fleet_purchase',
     'warehouse_open',
+    'truck_transfer',
   ]);
+
+  const transferExpenseTotal = useMemo(
+    () =>
+      (financeLedger ?? [])
+        .filter((entry) => entry.category === 'truck_transfer' && entry.type === 'expense')
+        .reduce((sum, entry) => sum + (entry.amount ?? 0), 0),
+    [financeLedger],
+  );
 
   const incomeLines: BreakdownLine[] = [
     { icon: 'contract', label: 'Sözleşme gelirleri', amount: totalRevenue, color: colors.success },
@@ -542,6 +541,7 @@ export default function FinanceScreen() {
     { icon: 'repair', label: 'Bakım giderleri', amount: maintenanceCosts, color: colors.danger },
     { icon: 'driver', label: 'Şoför maaşları', amount: driverSalaries, color: colors.danger },
     { icon: 'warehouse', label: 'Depo giderleri', amount: warehouseCosts, color: colors.danger },
+    { icon: 'truck', label: 'Boş transfer giderleri', amount: transferExpenseTotal, color: colors.danger },
     { icon: 'market', label: 'Ürün alımları', amount: tradeSummary.tradePurchaseTotal, color: colors.danger },
     { icon: 'warning', label: 'Gecikme cezaları', amount: calculateLatePenalties(), color: colors.textMuted },
     { icon: 'alert', label: 'Diğer giderler', amount: otherExpense, color: colors.danger },
@@ -558,7 +558,7 @@ export default function FinanceScreen() {
   }
 
   return (
-    <AppScreen scroll embedded scrollBottomPadding={listScrollBottomPadding}>
+    <AppScreen scroll embedded>
       <ScreenHeader
         title="Finans"
         subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"

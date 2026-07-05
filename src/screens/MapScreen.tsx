@@ -16,7 +16,10 @@ import {
 } from 'react-native';
 
 import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
+import { AppCard, GameIcon, ProgressBar, StatusBadge, type StatusBadgeVariant } from '../components/ui';
+import { normalizeCityId } from '../data/networkPositions';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { getContractAvailability } from '../simulation/delivery';
 import { findMarketOpportunities } from '../simulation/contracts';
 import {
   getRecommendedContractById,
@@ -29,10 +32,58 @@ import { getWorldMapCityPosition } from '../data/worldMapPositions';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import type { Contract, Delivery, DeliveryStatus, ProductId, RecommendedMapAction } from '../types/game';
+import type {
+  Contract,
+  Delivery,
+  DeliveryStatus,
+  Player,
+  ProductId,
+  RecommendedMapAction,
+  Truck,
+  TruckTransfer,
+} from '../types/game';
+import { formatMoney, formatRatioPercent } from '../theme';
+
+const DEFAULT_TRUCK_CITY_ID = 'izmir';
+
+function isTruckIdle(status: string): boolean {
+  return status === 'idle' || status === 'available' || status === 'BOŞTA';
+}
+
+function resolveMapTruckCityId(
+  truck: Pick<Truck, 'currentCityId' | 'homeCityId'>,
+  playerHomeCityId?: string,
+): string {
+  return normalizeCityId(
+    truck.currentCityId ?? truck.homeCityId ?? playerHomeCityId ?? DEFAULT_TRUCK_CITY_ID,
+  );
+}
+
+function buildIdleTruckCountByCity(
+  trucks: Player['trucks'] | undefined,
+  playerHomeCityId?: string,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const truck of trucks ?? []) {
+    if (!isTruckIdle(truck.status)) continue;
+    const cityId = resolveMapTruckCityId(truck, playerHomeCityId);
+    counts[cityId] = (counts[cityId] ?? 0) + 1;
+  }
+  return counts;
+}
 
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
+const MAX_TRUCK_TRACK_PREVIEW = 3;
+
+type MapContextualAction = 'contracts' | 'fleet' | 'market';
+
+interface MapContextualPrompt {
+  title: string;
+  message: string;
+  buttonLabel: string;
+  action: MapContextualAction;
+}
 
 const COLORS = {
   background: '#050A12',
@@ -54,14 +105,6 @@ const MAP_FILTERS: { key: NetworkFilterKey; label: string }[] = [
   { key: 'routes', label: 'Rotalar' },
   { key: 'opportunities', label: 'Fırsatlar' },
 ];
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-}
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -92,11 +135,263 @@ function getDeliveryStatusLabel(status: DeliveryStatus): string {
   return 'Aktif';
 }
 
-function ProgressBar({ progress, color }: { progress: number; color: string }) {
-  const clamped = Math.max(0, Math.min(1, progress));
+function safeProgress(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value ?? 0));
+}
+
+function formatRemainingShort(currentTime: number, estimatedArrivalTime: number | undefined): string {
+  if (!Number.isFinite(estimatedArrivalTime)) return '—';
+  const remaining = Math.max(0, (estimatedArrivalTime ?? 0) - currentTime);
+  const hrs = Math.floor(remaining);
+  const mins = Math.round((remaining - hrs) * 60);
+  if (hrs > 0 && mins <= 0) return `${hrs}s kaldı`;
+  if (hrs > 0) return `${hrs}s ${mins}dk kaldı`;
+  if (mins > 0) return `${mins}dk kaldı`;
+  return '—';
+}
+
+function getTruckTrackBadge(status: Truck['status']): { label: string; variant: StatusBadgeVariant } {
+  switch (status) {
+    case 'on_route':
+      return { label: 'TESLİMATTA', variant: 'blue' };
+    case 'transferring':
+      return { label: 'YÖNLENDİRİLİYOR', variant: 'info' };
+    case 'maintenance':
+      return { label: 'BAKIMDA', variant: 'danger' };
+    default:
+      return { label: 'BOŞTA', variant: 'success' };
+  }
+}
+
+function truckTrackSortPriority(status: Truck['status']): number {
+  switch (status) {
+    case 'on_route':
+      return 0;
+    case 'transferring':
+      return 1;
+    case 'idle':
+      return 2;
+    case 'maintenance':
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function resolveMapContextualPrompt(params: {
+  runningDeliveries: Delivery[];
+  runningTransfers: TruckTransfer[];
+  idleTruckCount: number;
+  hasStartableContracts: boolean;
+}): MapContextualPrompt {
+  if (params.runningDeliveries.length > 0) {
+    return {
+      title: 'Teslimat takipte',
+      message: 'Yoldaki teslimatlarının ilerlemesini takip edebilirsin.',
+      buttonLabel: 'Filoyu Gör',
+      action: 'fleet',
+    };
+  }
+
+  if (params.runningTransfers.length > 0) {
+    return {
+      title: 'Transfer yolda',
+      message: 'Yönlendirdiğin kamyon hedef şehre ulaşınca yeni işler için hazır olacak.',
+      buttonLabel: 'Filoyu Gör',
+      action: 'fleet',
+    };
+  }
+
+  if (params.idleTruckCount > 0 && params.hasStartableContracts) {
+    return {
+      title: 'Yeni rota hazır',
+      message: 'Boştaki kamyonların bulunduğu şehirlerden uygun işler var.',
+      buttonLabel: 'Sözleşmeleri Gör',
+      action: 'contracts',
+    };
+  }
+
+  if (params.idleTruckCount > 0) {
+    return {
+      title: 'Kamyon beklemede',
+      message:
+        'Boştaki kamyonların bulunduğu şehirlerde uygun iş yok. Kamyonu farklı şehre yönlendirebilirsin.',
+      buttonLabel: 'Filoyu Aç',
+      action: 'fleet',
+    };
+  }
+
+  return {
+    title: 'Fırsat Bekleniyor',
+    message: 'Piyasa yeni sözleşmeler oluşturdukça burada öneriler görünür.',
+    buttonLabel: 'Piyasayı Gör',
+    action: 'market',
+  };
+}
+
+function findDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery | undefined {
+  return deliveries.find(
+    (delivery) =>
+      delivery.truckId === truckId && ACTIVE_DELIVERY_STATUSES.includes(delivery.status),
+  );
+}
+
+function findTransferForTruck(truckId: string, transfers: TruckTransfer[]): TruckTransfer | undefined {
+  return transfers.find((transfer) => transfer.truckId === truckId && transfer.status === 'active');
+}
+
+interface TruckTrackCardProps {
+  truck: Truck;
+  delivery?: Delivery;
+  transfer?: TruckTransfer;
+  homeCityId?: string;
+  currentTime: number;
+}
+
+function TruckTrackCard({ truck, delivery, transfer, homeCityId, currentTime }: TruckTrackCardProps) {
+  const badge = getTruckTrackBadge(truck.status);
+  const cityId = resolveMapTruckCityId(truck, homeCityId);
+  const cityName = getCityName(cityId);
+
+  let routeLine = `Konum: ${cityName}`;
+  let metaLine: string | undefined = 'Yeni iş için hazır';
+  let progress: number | undefined;
+
+  if (truck.status === 'on_route' && delivery) {
+    routeLine = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
+    progress = safeProgress(delivery.progress);
+    metaLine = `Teslimat · ${formatRemainingShort(currentTime, delivery.estimatedArrivalTime)}`;
+  } else if (truck.status === 'transferring' && transfer) {
+    routeLine = `${getCityName(transfer.fromCityId)} → ${getCityName(transfer.toCityId)}`;
+    progress = safeProgress(transfer.progress);
+    metaLine = `Boş transfer · ${formatRemainingShort(currentTime, transfer.estimatedArrivalAt)}`;
+  } else if (truck.status === 'maintenance') {
+    routeLine = `Konum: ${cityName}`;
+    metaLine = 'Tamir tamamlanana kadar işe çıkamaz';
+  }
+
   return (
-    <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, { width: `${clamped * 100}%`, backgroundColor: color }]} />
+    <AppCard style={styles.trackCard} padded>
+      <View style={styles.trackCardRow}>
+        <View style={styles.trackIconBox}>
+          <GameIcon name="truck" size={16} color={COLORS.cyan} />
+        </View>
+        <View style={styles.trackCardMain}>
+          <View style={styles.trackCardHeader}>
+            <Text style={styles.trackCardTitle} numberOfLines={1}>
+              {truck.name}
+            </Text>
+            <StatusBadge label={badge.label} variant={badge.variant} size="sm" />
+          </View>
+          <Text style={styles.trackRouteLine} numberOfLines={1}>
+            {routeLine}
+          </Text>
+          {metaLine ? (
+            <Text style={styles.trackMetaLine} numberOfLines={2}>
+              {metaLine}
+            </Text>
+          ) : null}
+          {progress != null ? (
+            <View style={styles.trackProgress}>
+              <ProgressBar progress={progress} color={COLORS.cyan} height={3} />
+            </View>
+          ) : null}
+        </View>
+      </View>
+    </AppCard>
+  );
+}
+
+interface TruckTrackingSectionProps {
+  trucks: Truck[];
+  deliveries: Delivery[];
+  transfers: TruckTransfer[];
+  idleTruckCountByCity: Record<string, number>;
+  homeCityId?: string;
+  currentTime: number;
+  onOpenFleet: () => void;
+}
+
+function TruckTrackingSection({
+  trucks,
+  deliveries,
+  transfers,
+  idleTruckCountByCity,
+  homeCityId,
+  currentTime,
+  onOpenFleet,
+}: TruckTrackingSectionProps) {
+  const sortedTrucks = useMemo(
+    () =>
+      [...trucks].sort(
+        (a, b) => truckTrackSortPriority(a.status) - truckTrackSortPriority(b.status),
+      ),
+    [trucks],
+  );
+
+  const previewTrucks = sortedTrucks.slice(0, MAX_TRUCK_TRACK_PREVIEW);
+  const extraTruckCount = Math.max(0, sortedTrucks.length - previewTrucks.length);
+
+  const idleCityChips = useMemo(
+    () =>
+      Object.entries(idleTruckCountByCity)
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([cityId, count]) => ({
+          cityId,
+          label: `${getCityName(cityId)} ${count}`,
+        })),
+    [idleTruckCountByCity],
+  );
+
+  if (trucks.length === 0) {
+    return null;
+  }
+
+  return (
+    <View style={styles.trackingSection}>
+      <View style={styles.trackingHeader}>
+        <Text style={styles.trackingTitle}>Kamyon Takip</Text>
+        <Text style={styles.trackingSubtitle}>Boşta, transferde ve teslimattaki araçlarını izle</Text>
+      </View>
+
+      {idleCityChips.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.cityChipScroll}
+          contentContainerStyle={styles.cityChipRow}
+        >
+          {idleCityChips.map((chip) => (
+            <View key={chip.cityId} style={styles.cityChip}>
+              <Text style={styles.cityChipText}>{chip.label}</Text>
+            </View>
+          ))}
+        </ScrollView>
+      ) : (
+        <Text style={styles.noIdleChipText}>Boşta kamyon yok</Text>
+      )}
+
+      {previewTrucks.map((truck) => (
+        <TruckTrackCard
+          key={truck.id}
+          truck={truck}
+          delivery={findDeliveryForTruck(truck.id, deliveries)}
+          transfer={findTransferForTruck(truck.id, transfers)}
+          homeCityId={homeCityId}
+          currentTime={currentTime}
+        />
+      ))}
+
+      {extraTruckCount > 0 ? (
+        <Text style={styles.moreTrucksHint}>+{extraTruckCount} araç daha</Text>
+      ) : null}
+
+      <TouchableOpacity style={styles.fleetLinkButton} onPress={onOpenFleet} activeOpacity={0.85}>
+        <Text style={styles.fleetLinkText}>Tüm Filoyu Gör</Text>
+        <Text style={styles.fleetLinkChevron}>›</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -107,8 +402,10 @@ interface RecommendedActionCardProps {
   delivery?: Delivery;
   runningDeliveries: Delivery[];
   currentTime: number;
+  contextualPrompt: MapContextualPrompt;
   onDeliverySelect: (deliveryId: string) => void;
   onActionPress: () => void;
+  onContextualPress: () => void;
 }
 
 function RecommendedActionCard({
@@ -117,17 +414,19 @@ function RecommendedActionCard({
   delivery,
   runningDeliveries,
   currentTime,
+  contextualPrompt,
   onDeliverySelect,
   onActionPress,
+  onContextualPress,
 }: RecommendedActionCardProps) {
   if (action.type === 'active_delivery' && delivery) {
     return (
       <View style={styles.infoCard}>
         <View style={styles.cardHeaderRow}>
           <View style={styles.cardTitleBlock}>
-            <Text style={styles.cardEyebrow}>{action.title}</Text>
+            <Text style={styles.cardEyebrow}>ÖNERİLEN AKSİYON</Text>
             <Text style={styles.cardTitle} numberOfLines={1}>
-              {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
+              {contextualPrompt.title}
             </Text>
           </View>
           <Text style={styles.cardStatusBadge}>{getDeliveryStatusLabel(delivery.status)}</Text>
@@ -135,17 +434,17 @@ function RecommendedActionCard({
 
         <View style={styles.cardBodyRow}>
           <View style={styles.cardThumb}>
-            <Text style={styles.cardThumbIcon}>🚚</Text>
+            <GameIcon name="truck" size={18} color={COLORS.cyan} />
           </View>
           <View style={styles.cardContent}>
             <Text style={styles.cardMetaLine} numberOfLines={1}>
-              {getProductName(delivery.productId)} · {delivery.amount.toFixed(1)} ton ·{' '}
-              {formatPercent(delivery.progress)} · {formatDistance(delivery.distanceKm)}
+              {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)} ·{' '}
+              {formatRatioPercent(delivery.progress)}
             </Text>
             <Text style={styles.cardMetaLine} numberOfLines={2}>
-              {formatRemainingHours(currentTime, delivery.estimatedArrivalTime)} · {action.reason}
+              {formatRemainingHours(currentTime, delivery.estimatedArrivalTime)} · {contextualPrompt.message}
             </Text>
-            <ProgressBar progress={delivery.progress} color={COLORS.green} />
+            <ProgressBar progress={safeProgress(delivery.progress)} color={COLORS.green} height={3} />
           </View>
         </View>
 
@@ -173,8 +472,8 @@ function RecommendedActionCard({
           </View>
         ) : null}
 
-        <TouchableOpacity style={styles.cardButton} onPress={onActionPress} activeOpacity={0.85}>
-          <Text style={styles.cardButtonText}>{action.buttonLabel}</Text>
+        <TouchableOpacity style={styles.cardButton} onPress={onContextualPress} activeOpacity={0.85}>
+          <Text style={styles.cardButtonText}>{contextualPrompt.buttonLabel}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -185,9 +484,9 @@ function RecommendedActionCard({
       <View style={styles.infoCard}>
         <View style={styles.cardHeaderRow}>
           <View style={styles.cardTitleBlock}>
-            <Text style={styles.cardEyebrow}>{action.title}</Text>
+            <Text style={styles.cardEyebrow}>ÖNERİLEN AKSİYON</Text>
             <Text style={styles.cardTitle} numberOfLines={1}>
-              {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
+              Yeni rota hazır
             </Text>
             <Text style={styles.cardMetaLine} numberOfLines={1}>
               {getProductName(contract.productId)} · {getRecommendedContractTons(contract).toFixed(1)} ton ·{' '}
@@ -197,14 +496,14 @@ function RecommendedActionCard({
               Tahmini kâr {formatMoney(action.estimatedProfit)} · {action.riskLabel}
             </Text>
             <Text style={styles.cardReasonLine} numberOfLines={2}>
-              {action.reason}
+              {contextualPrompt.message}
             </Text>
           </View>
           <Text style={styles.cardPayment}>{formatMoney(contract.payment)}</Text>
         </View>
 
         <TouchableOpacity style={styles.cardButton} onPress={onActionPress} activeOpacity={0.85}>
-          <Text style={styles.cardButtonText}>{action.buttonLabel}</Text>
+          <Text style={styles.cardButtonText}>Sözleşmeleri Gör</Text>
         </TouchableOpacity>
       </View>
     );
@@ -213,10 +512,10 @@ function RecommendedActionCard({
   return (
     <View style={styles.infoCard}>
       <Text style={styles.cardEyebrow}>ÖNERİLEN AKSİYON</Text>
-      <Text style={styles.cardEmptyTitle}>{action.title}</Text>
-      <Text style={styles.cardMetaLine}>{action.reason}</Text>
-      <TouchableOpacity style={styles.cardButton} onPress={onActionPress} activeOpacity={0.85}>
-        <Text style={styles.cardButtonText}>{action.buttonLabel}</Text>
+      <Text style={styles.cardEmptyTitle}>{contextualPrompt.title}</Text>
+      <Text style={styles.cardMetaLine}>{contextualPrompt.message}</Text>
+      <TouchableOpacity style={styles.cardButton} onPress={onContextualPress} activeOpacity={0.85}>
+        <Text style={styles.cardButtonText}>{contextualPrompt.buttonLabel}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -229,11 +528,12 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const products = useGameStore((state) => state.products) ?? [];
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
+  const { scrollBottomPadding } = useTabBarLayout();
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
@@ -290,8 +590,13 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   );
 
   const idleTrucks = useMemo(
-    () => (player?.trucks ?? []).filter((truck) => truck.status === 'idle'),
+    () => (player?.trucks ?? []).filter((truck) => isTruckIdle(truck.status)),
     [player?.trucks],
+  );
+
+  const idleTruckCountByCity = useMemo(
+    () => buildIdleTruckCountByCity(player?.trucks, player?.homeCityId),
+    [player?.trucks, player?.homeCityId],
   );
 
   const userSelectedContract = useMemo(() => {
@@ -355,6 +660,33 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
 
+  const runningTransfers = useMemo(
+    () => (activeTransfers ?? []).filter((transfer) => transfer.status === 'active'),
+    [activeTransfers],
+  );
+
+  const trucks = player?.trucks ?? [];
+  const drivers = player?.drivers ?? [];
+
+  const hasStartableContracts = useMemo(
+    () =>
+      availableContracts.some((contract) =>
+        getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
+      ),
+    [availableContracts, trucks, drivers, playerLevel],
+  );
+
+  const contextualPrompt = useMemo(
+    () =>
+      resolveMapContextualPrompt({
+        runningDeliveries,
+        runningTransfers,
+        idleTruckCount: idleTrucks.length,
+        hasStartableContracts,
+      }),
+    [runningDeliveries, runningTransfers, idleTrucks.length, hasStartableContracts],
+  );
+
   const recommendedAction = useMemo(
     () =>
       getRecommendedMapAction({
@@ -413,6 +745,26 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     setSelectedContractId(contractId);
     setSelectedMapFilter('opportunities');
     setStatusMessage('Fırsat seçildi — alt kartta detayları gör');
+  };
+
+  const handleContextualPress = () => {
+    switch (contextualPrompt.action) {
+      case 'contracts':
+        onOpenContracts?.();
+        break;
+      case 'fleet':
+        requestNavigationToFleet('trucks');
+        break;
+      case 'market':
+        useGameStore.setState({ navigationRequest: { tab: 'market' } });
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleOpenFleet = () => {
+    requestNavigationToFleet('trucks');
   };
 
   const handleRecommendedActionPress = () => {
@@ -487,7 +839,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: tabBarHeight + bottomInset + 48 },
+          { paddingBottom: scrollBottomPadding },
         ]}
       >
         <View style={styles.header}>
@@ -552,7 +904,9 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           routes={routes}
           contracts={contracts}
           activeDeliveries={activeDeliveries}
+          activeTransfers={activeTransfers}
           depotCityIds={depotCityIds}
+          idleTruckCountByCity={idleTruckCountByCity}
           selectedFilter={selectedMapFilter}
           featuredContract={featuredContract}
           selectedContract={userSelectedContract}
@@ -569,8 +923,20 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           delivery={recommendedDelivery}
           runningDeliveries={runningDeliveries}
           currentTime={currentTime}
+          contextualPrompt={contextualPrompt}
           onDeliverySelect={handleDeliveryPress}
           onActionPress={handleRecommendedActionPress}
+          onContextualPress={handleContextualPress}
+        />
+
+        <TruckTrackingSection
+          trucks={trucks}
+          deliveries={activeDeliveries}
+          transfers={activeTransfers}
+          idleTruckCountByCity={idleTruckCountByCity}
+          homeCityId={player.homeCityId}
+          currentTime={currentTime}
+          onOpenFleet={handleOpenFleet}
         />
       </ScrollView>
     </SafeAreaView>
@@ -851,15 +1217,131 @@ const styles = StyleSheet.create({
     color: COLORS.accent,
   },
 
-  progressTrack: {
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#1E293B',
-    overflow: 'hidden',
-    marginTop: 4,
+  trackingSection: {
+    marginTop: 14,
   },
-  progressFill: {
-    height: '100%',
-    borderRadius: 3,
+  trackingHeader: {
+    marginBottom: 8,
+  },
+  trackingTitle: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  trackingSubtitle: {
+    color: COLORS.muted,
+    fontSize: 11,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  cityChipScroll: {
+    marginHorizontal: -16,
+    marginBottom: 10,
+  },
+  cityChipRow: {
+    paddingHorizontal: 16,
+    gap: 8,
+    flexDirection: 'row',
+  },
+  cityChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: COLORS.card2,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  cityChipText: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  noIdleChipText: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  trackCard: {
+    marginBottom: 8,
+  },
+  trackCardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  trackIconBox: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: COLORS.card2,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trackCardMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  trackCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 2,
+  },
+  trackCardTitle: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1,
+  },
+  trackRouteLine: {
+    color: COLORS.text,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  trackMetaLine: {
+    color: COLORS.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 1,
+  },
+  trackProgress: {
+    marginTop: 6,
+  },
+  moreTrucksHint: {
+    color: COLORS.muted,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  fleetLinkButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.card,
+    marginTop: 2,
+  },
+  fleetLinkText: {
+    color: COLORS.muted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  fleetLinkChevron: {
+    color: COLORS.muted,
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: -1,
   },
 });

@@ -21,9 +21,11 @@ import type {
   Product,
   Route,
   StoreGameState,
+  TruckTransfer,
   Warehouse,
 } from '../types/game';
 import { normalizeWarehouse } from '../simulation/trading';
+import { normalizeTruckCity } from '../simulation/delivery';
 import { normalizePlayerProgress } from '../simulation/leveling';
 
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
@@ -57,6 +59,8 @@ export interface SaveGamePayload {
   routes: Route[];
   contracts: Contract[];
   activeDeliveries: Delivery[];
+  activeTransfers?: TruckTransfer[];
+  completedTransfers?: TruckTransfer[];
   globalEconomy: GlobalEconomy;
   marketNews: MarketNews[];
   eventLog: GameEvent[];
@@ -134,9 +138,10 @@ export function getSaveProvider(): SaveProvider {
 }
 
 export function serializeGameState(state: StoreGameState): SaveGamePayload {
-  const player: Player = normalizePlayerProgress({
+  const homeCityId = state.player.homeCityId ?? 'izmir';
+  const player: Player = normalizeLoadedPlayer({
     ...structuredClone(state.player),
-    warehouses: normalizePlayerWarehouses(state.player.warehouses),
+    homeCityId,
   });
 
   return {
@@ -160,6 +165,8 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     routes: structuredClone(state.routes),
     contracts: structuredClone(state.contracts),
     activeDeliveries: structuredClone(state.activeDeliveries),
+    activeTransfers: structuredClone(state.activeTransfers ?? []),
+    completedTransfers: structuredClone(state.completedTransfers ?? []),
     globalEconomy: structuredClone(state.globalEconomy),
     marketNews: structuredClone(state.marketNews),
     eventLog: structuredClone(state.eventLog),
@@ -171,6 +178,21 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
 
 function normalizePlayerWarehouses(warehouses: Warehouse[]): Warehouse[] {
   return (warehouses ?? []).map((warehouse) => normalizeWarehouse(warehouse));
+}
+
+function normalizePlayerTrucks(trucks: Player['trucks'], homeCityId: string): Player['trucks'] {
+  const fallbackHome = homeCityId || 'izmir';
+  return (trucks ?? []).map((truck) => normalizeTruckCity(truck, fallbackHome));
+}
+
+export function normalizeLoadedPlayer(player: Player): Player {
+  const homeCityId = player.homeCityId ?? 'izmir';
+  return normalizePlayerProgress({
+    ...player,
+    homeCityId,
+    warehouses: normalizePlayerWarehouses(player.warehouses ?? []),
+    trucks: normalizePlayerTrucks(player.trucks, homeCityId),
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -282,9 +304,9 @@ export function validateSavePayload(payload: unknown): payload is SaveGamePayloa
 
 export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
   const economyTickInterval = 24;
-  const player: Player = normalizePlayerProgress({
+  const player: Player = normalizeLoadedPlayer({
     ...payload.player,
-    warehouses: normalizePlayerWarehouses(payload.player.warehouses ?? []),
+    warehouses: payload.player.warehouses ?? [],
   });
 
   return {
@@ -299,6 +321,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     routes: payload.routes,
     contracts: payload.contracts,
     activeDeliveries: payload.activeDeliveries,
+    activeTransfers: payload.activeTransfers ?? [],
+    completedTransfers: payload.completedTransfers ?? [],
     globalEconomy: payload.globalEconomy,
     marketNews: payload.marketNews,
     eventLog: payload.eventLog,

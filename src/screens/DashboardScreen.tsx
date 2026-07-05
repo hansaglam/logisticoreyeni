@@ -24,14 +24,18 @@ import { deliveryBalance } from '../config/balance';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getLevelProgress } from '../simulation/leveling';
 import {
+  getContractAvailability,
+  getIdleTruckOriginCityIds,
+} from '../simulation/delivery';
+import {
   calculateTradeProfit,
   getCityProductMarketPrice,
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
 } from '../simulation/trading';
 import { getRecentGameEvents, useGameStore } from '../store/gameStore';
-import { colors, radius, spacing, typography } from '../theme';
-import type { Contract, Delivery, GameEvent, MarketNews, Player } from '../types/game';
+import { colors, formatGameTimeCompact, formatMoney, formatRatioPercent, formatUnitPrice, radius, spacing, typography } from '../theme';
+import type { Contract, Delivery, Driver, GameEvent, MarketNews, Player, Truck, TruckTransfer } from '../types/game';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
@@ -39,35 +43,11 @@ interface DashboardScreenProps {
 }
 
 const LOW_CASH_THRESHOLD = 8_000;
-const DAY_HOURS = 24;
-
-// ---------------------------------------------------------------------------
-// Formatters
-// ---------------------------------------------------------------------------
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-}
-
-function formatTime(hours: number): string {
-  const totalHours = Math.max(0, Math.floor(hours));
-  const day = Math.floor(totalHours / DAY_HOURS) + 1;
-  const hourOfDay = totalHours % DAY_HOURS;
-  return `Gün ${day} · ${hourOfDay.toString().padStart(2, '0')}:00`;
-}
-
-function formatPercent(value: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
-}
 
 function formatDuration(hours: number): string {
   const totalHours = Math.max(0, Math.round(hours));
-  const days = Math.floor(totalHours / DAY_HOURS);
-  const remainingHours = totalHours % DAY_HOURS;
+  const days = Math.floor(totalHours / 24);
+  const remainingHours = totalHours % 24;
   if (days > 0) return `${days}g ${remainingHours}s`;
   return `${remainingHours}s`;
 }
@@ -93,6 +73,34 @@ interface NextAction {
   target: NextActionTarget;
 }
 
+function countStartableContracts(
+  contracts: Contract[],
+  trucks: Truck[],
+  drivers: Driver[],
+  playerLevel: number,
+): number {
+  return contracts.filter(
+    (contract) => getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
+  ).length;
+}
+
+function hasIdleTrucksWaitingForOriginContracts(
+  availableContracts: Contract[],
+  idleTrucks: number,
+  trucks: Truck[],
+  drivers: Driver[],
+  playerLevel: number,
+): boolean {
+  if (idleTrucks <= 0 || availableContracts.length === 0) return false;
+  const startableCount = countStartableContracts(
+    availableContracts,
+    trucks,
+    drivers,
+    playerLevel,
+  );
+  return startableCount === 0;
+}
+
 function resolveNextAction(
   cash: number,
   truckCount: number,
@@ -100,6 +108,9 @@ function resolveNextAction(
   idleDrivers: number,
   runningDeliveries: Delivery[],
   availableContracts: Contract[],
+  trucks: Truck[],
+  drivers: Driver[],
+  playerLevel: number,
   hasTradeProfit: boolean,
 ): NextAction {
   if (truckCount === 0) {
@@ -118,13 +129,36 @@ function resolveNextAction(
       target: 'map',
     };
   }
-  if (idleTrucks > 0 && idleDrivers > 0 && availableContracts.length > 0) {
-    return {
-      title: 'Yeni sözleşme hazır',
-      subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
-      buttonLabel: 'Sözleşmeleri Gör',
-      target: 'contracts',
-    };
+  if (idleTrucks > 0 && idleDrivers > 0) {
+    const startableCount = countStartableContracts(
+      availableContracts,
+      trucks,
+      drivers,
+      playerLevel,
+    );
+    if (startableCount > 0) {
+      return {
+        title: 'Yeni sözleşme hazır',
+        subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
+        buttonLabel: 'Sözleşmeleri Gör',
+        target: 'contracts',
+      };
+    }
+    if (hasIdleTrucksWaitingForOriginContracts(
+      availableContracts,
+      idleTrucks,
+      trucks,
+      drivers,
+      playerLevel,
+    )) {
+      return {
+        title: 'Kamyon konumu bekliyor',
+        subtitle:
+          'Boştaki kamyonlarının bulunduğu şehirlerde yeni fırsat oluşmasını bekleyebilirsin.',
+        buttonLabel: 'İşleri Kontrol Et',
+        target: 'contracts',
+      };
+    }
   }
   if (cash < LOW_CASH_THRESHOLD) {
     return {
@@ -143,12 +177,20 @@ function resolveNextAction(
     };
   }
   if (availableContracts.length > 0) {
-    return {
-      title: 'Yeni sözleşme hazır',
-      subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
-      buttonLabel: 'Sözleşmeleri Gör',
-      target: 'contracts',
-    };
+    const startableCount = countStartableContracts(
+      availableContracts,
+      trucks,
+      drivers,
+      playerLevel,
+    );
+    if (startableCount > 0) {
+      return {
+        title: 'Yeni sözleşme hazır',
+        subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
+        buttonLabel: 'Sözleşmeleri Gör',
+        target: 'contracts',
+      };
+    }
   }
   return {
     title: 'Yeni iş bekleniyor',
@@ -403,7 +445,7 @@ function CompanyHeaderCard({
               {companyName}
             </Text>
             <Text style={styles.headerMeta}>
-              Level {level} · {formatTime(currentTime)}
+              Level {level} · {formatGameTimeCompact(currentTime)}
             </Text>
           </View>
         </View>
@@ -423,7 +465,7 @@ function CompanyHeaderCard({
       <View style={styles.headerFooter}>
         <View style={styles.fuelPill}>
           <GameIcon name="fuel" size={12} color={colors.warning} />
-          <Text style={styles.fuelPillText}>Yakıt ${fuelPrice.toFixed(2)}/L</Text>
+          <Text style={styles.fuelPillText}>Yakıt {formatUnitPrice(fuelPrice, '/L')}</Text>
         </View>
       </View>
     </AppCard>
@@ -505,6 +547,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const marketNews = useGameStore((state) => state.marketNews) ?? [];
   const eventLog = useGameStore((state) => state.eventLog) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
@@ -512,8 +555,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
-  const scrollBottomPadding = tabBarHeight + bottomInset + 110;
+  const { scrollBottomPadding } = useTabBarLayout();
 
   const availableContracts = useMemo(
     () => contracts.filter((c) => c.status === 'available'),
@@ -527,7 +569,14 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   const topOpportunities = useMemo(() => {
     const fuelPrice = globalEconomy?.fuelPrice ?? 0;
+    const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+    const fleetTrucks = player?.trucks ?? [];
+    const fleetDrivers = player?.drivers ?? [];
     return [...availableContracts]
+      .filter(
+        (contract) =>
+          getContractAvailability(contract, fleetTrucks, fleetDrivers, level).canStart,
+      )
       .sort((a, b) => {
         const profitA = estimateOpportunityProfit(a, fuelPrice);
         const profitB = estimateOpportunityProfit(b, fuelPrice);
@@ -535,23 +584,35 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         return b.payment - a.payment;
       })
       .slice(0, 2);
-  }, [availableContracts, globalEconomy?.fuelPrice]);
+  }, [availableContracts, globalEconomy?.fuelPrice, player]);
 
   const deliveryPreview = useMemo(() => runningDeliveries.slice(0, 2), [runningDeliveries]);
   const extraDeliveryCount = Math.max(0, runningDeliveries.length - deliveryPreview.length);
+  const transferPreview = useMemo(
+    () => (activeTransfers ?? []).filter((transfer) => transfer.status === 'active').slice(0, 1),
+    [activeTransfers],
+  );
 
   const fleetSnapshot = useMemo(() => {
-    const trucks = player?.trucks ?? [];
-    const drivers = player?.drivers ?? [];
+    const snapshotTrucks = player?.trucks ?? [];
+    const snapshotDrivers = player?.drivers ?? [];
     return {
-      totalTrucks: trucks.length,
-      idleTrucks: trucks.filter((t) => t.status === 'idle').length,
-      idleDrivers: drivers.filter((d) => d.status === 'idle').length,
+      totalTrucks: snapshotTrucks.length,
+      idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle').length,
+      idleDrivers: snapshotDrivers.filter((d) => d.status === 'idle').length,
     };
   }, [player]);
 
+  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const trucks = player?.trucks ?? [];
+  const drivers = player?.drivers ?? [];
+  const idleOriginCityIds = useMemo(
+    () => getIdleTruckOriginCityIds(trucks, player?.homeCityId),
+    [trucks, player?.homeCityId],
+  );
+
   const recentDevelopments = useMemo(
-    () => buildRecentDevelopments(marketNews, eventLog, 3),
+    () => buildRecentDevelopments(marketNews, eventLog, 2),
     [marketNews, eventLog],
   );
 
@@ -576,6 +637,9 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     fleetSnapshot.idleDrivers,
     runningDeliveries,
     availableContracts,
+    trucks,
+    drivers,
+    playerLevel,
     tradeProfitAvailable,
   );
 
@@ -662,7 +726,13 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
               value={`${availableContracts.length}`}
               valueColor={colors.accentAmber}
             />
-            <StatLine label="Depo doluluk" value={formatPercent(warehouseFillRatio)} />
+            <StatLine label="Depo doluluk" value={formatRatioPercent(warehouseFillRatio)} />
+            {idleOriginCityIds.length > 0 ? (
+              <StatLine
+                label="Boşta şehir"
+                value={idleOriginCityIds.map((id) => getCityName(id)).join(', ')}
+              />
+            ) : null}
           </CompactSummaryCard>
         </View>
       </View>
@@ -692,7 +762,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
                 </Text>
                 <View style={styles.deliveryProgressRow}>
                   <ProgressBar progress={delivery.progress} color={colors.accentBlue} />
-                  <Text style={styles.progressLabel}>{formatPercent(delivery.progress)}</Text>
+                  <Text style={styles.progressLabel}>{formatRatioPercent(delivery.progress)}</Text>
                 </View>
                 <View style={styles.listCardFooter}>
                   <Text style={styles.listCardFooterText}>Kalan: {formatDuration(hoursLeft)}</Text>
@@ -706,6 +776,37 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
           {extraDeliveryCount > 0 ? (
             <Text style={styles.moreItemsHint}>+{extraDeliveryCount} teslimat daha yolda</Text>
           ) : null}
+        </>
+      ) : null}
+
+      {transferPreview.length > 0 ? (
+        <>
+          <SectionTitle title="Boş Transfer" style={styles.sectionSpaced} />
+          {transferPreview.map((transfer: TruckTransfer) => {
+            const truck = player?.trucks?.find((candidate) => candidate.id === transfer.truckId);
+            const hoursLeft = Math.max(0, transfer.estimatedArrivalAt - currentTime);
+            return (
+              <AppCard key={transfer.id} style={styles.listCard} padded>
+                <View style={styles.listCardHeader}>
+                  <View style={styles.listCardTitleRow}>
+                    <GameIcon name="truck" size={16} color={colors.info} />
+                    <Text style={styles.listCardTitle} numberOfLines={1}>
+                      {getCityName(transfer.fromCityId)} → {getCityName(transfer.toCityId)}
+                    </Text>
+                  </View>
+                  <StatusBadge label="Boş transfer" variant="blue" size="sm" />
+                </View>
+                <Text style={styles.listCardMeta}>
+                  {truck?.name ?? 'Kamyon'} · {formatMoney(transfer.totalCost)} maliyet
+                </Text>
+                <View style={styles.deliveryProgressRow}>
+                  <ProgressBar progress={transfer.progress} color={colors.info} />
+                  <Text style={styles.progressLabel}>{formatRatioPercent(transfer.progress)}</Text>
+                </View>
+                <Text style={styles.listCardFooterText}>Kalan: {formatDuration(hoursLeft)}</Text>
+              </AppCard>
+            );
+          })}
         </>
       ) : null}
 

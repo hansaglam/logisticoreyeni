@@ -25,9 +25,11 @@ import type {
   ProductId,
   SimulationGameState,
   StartDeliveryResult,
+  StartTruckTransferResult,
   StoreGameState,
   TradeActionResult,
   Truck,
+  TruckTransfer,
   Warehouse,
   WarehouseType,
 } from '../types/game';
@@ -72,10 +74,19 @@ import {
   DeliveryError,
   failDelivery as failDeliverySim,
   formatCapacityExceededMessage,
+  getIdleTruckOriginCityIds,
+  normalizeTruckCity,
+  resolveTruckCityId,
   selectIdleTruckForContract,
   randomBetween as deliveryRandomBetween,
   updateDeliveryProgress,
 } from '../simulation/delivery';
+import {
+  createTruckTransfer,
+  resolveTransferRoute,
+  selectDriverForTransfer,
+  updateTransferProgress,
+} from '../simulation/truckTransfer';
 import {
   calculateTradeBuyCost,
   calculateTradeProfit,
@@ -122,6 +133,7 @@ import {
   clearSavedGame,
   hasSavedGame,
   loadGameState,
+  normalizeLoadedPlayer,
   SAVE_GAME_VERSION,
   saveGameState,
 } from '../storage/saveGame';
@@ -158,6 +170,7 @@ let gameInitPromise: Promise<void> | null = null;
 
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
 const completedDeliveryNotificationIds = new Set<string>();
+const completedTransferNotificationIds = new Set<string>();
 
 export type NavigationTab = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'market' | 'more';
 
@@ -173,6 +186,8 @@ export type AutoSaveReason =
   | 'delivery_completed'
   | 'delivery_failed'
   | 'delivery_started'
+  | 'transfer_started'
+  | 'transfer_completed'
   | 'purchase'
   | 'level_up'
   | 'repair'
@@ -192,6 +207,8 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'delivery_completed',
   'delivery_failed',
   'delivery_started',
+  'transfer_started',
+  'transfer_completed',
   'purchase',
   'level_up',
   'repair',
@@ -299,6 +316,10 @@ function buildContractRefreshParams(state: StoreGameState) {
     maxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
     ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
     idleMaxTruckCapacity,
+    idleTruckOriginCityIds: getIdleTruckOriginCityIds(
+      state.player.trucks,
+      state.player.homeCityId,
+    ),
   };
 }
 
@@ -457,6 +478,7 @@ function createNotificationId(suffix: string): string {
 
 function resetTransientGameUiState(): void {
   completedDeliveryNotificationIds.clear();
+  completedTransferNotificationIds.clear();
 }
 
 function formatFailureReason(reason: DeliveryFailureReason): string {
@@ -627,6 +649,8 @@ export function createInitialGameState(): StoreGameState {
     routes: structuredClone(ROUTES),
     contracts,
     activeDeliveries: [],
+    activeTransfers: [],
+    completedTransfers: [],
     globalEconomy,
     marketNews: [
       {
@@ -707,6 +731,9 @@ export interface GameStore extends StoreGameState {
   startDelivery: (contractId: string, truckId: string, driverId: string) => StartDeliveryResult;
   startDeliveryAutoAssign: (contractId: string) => StartDeliveryResult;
   updateDeliveries: (hoursPassed: number) => void;
+  updateTransfers: (hoursPassed: number) => void;
+  startTruckTransfer: (params: { truckId: string; toCityId: string; driverId?: string }) => StartTruckTransferResult;
+  completeTruckTransferById: (transferId: string) => void;
   completeDeliveryById: (deliveryId: string) => void;
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => void;
   buyTruck: (catalogId: string) => TradeActionResult;
@@ -1011,7 +1038,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return false;
       }
 
-      set({ ...saved, player: normalizePlayerProgress(saved.player), saveStatus: get().saveStatus });
+      set({
+        ...saved,
+        player: normalizeLoadedPlayer(saved.player),
+        saveStatus: get().saveStatus,
+      });
       resetTransientGameUiState();
       set({
         notifications: [],
@@ -1132,6 +1163,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ currentTime: newTime });
 
     get().updateDeliveries(scaledHours);
+    get().updateTransfers(scaledHours);
 
     const stateAfterDelivery = get();
     const qualityResult = processWarehouseQualityDegradation(
@@ -1195,13 +1227,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const expiredContracts = expireOldContracts(state.contracts, state.currentTime);
+    const refreshParams = buildContractRefreshParams(state);
     const replenishResult = replenishAvailableContracts({
+      ...refreshParams,
       cities: updatedCitiesRecord,
-      routes: state.routes,
-      products: state.products,
       globalEconomy,
       contracts: expiredContracts,
-      currentTime: state.currentTime,
     });
     const { contracts: updatedContracts, newContracts } = replenishResult;
 
@@ -1439,6 +1470,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         playerLevel,
         ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
         idleMaxTruckCapacity,
+        idleTruckOriginCityIds: getIdleTruckOriginCityIds(
+          state.player.trucks,
+          state.player.homeCityId,
+        ),
       },
     );
 
@@ -1500,7 +1535,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message:
           truck.status === 'maintenance'
             ? 'Kamyon bakımda. Teslimat için boşta bir kamyon seç.'
-            : 'Seçilen kamyon şu anda teslimatta.',
+            : truck.status === 'transferring'
+              ? 'Kamyon şu anda yönlendiriliyor.'
+              : 'Seçilen kamyon şu anda teslimatta.',
       };
     }
 
@@ -1518,6 +1555,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
         success: false,
         errorCode: 'DRIVER_BUSY',
         message: 'Seçilen şoför şu anda görevde.',
+      };
+    }
+
+    const originCityId = contract.originCityId;
+    if (!originCityId) {
+      return {
+        success: false,
+        errorCode: 'DELIVERY_CREATE_FAILED',
+        message: 'Sözleşmenin çıkış şehri tanımlı değil.',
+      };
+    }
+
+    const truckCityId = resolveTruckCityId(truck, state.player.homeCityId);
+    if (truckCityId !== originCityId) {
+      const fromCityName = getCityName(originCityId);
+      const truckCityName = getCityName(truckCityId);
+      return {
+        success: false,
+        errorCode: 'TRUCK_NOT_AT_ORIGIN',
+        message: `Bu sözleşme ${fromCityName} çıkışlı. Seçilen kamyon şu anda ${truckCityName} şehrinde.`,
       };
     }
 
@@ -1760,6 +1817,281 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
+  updateTransfers: (hoursPassed: number) => {
+    if (hoursPassed <= 0) {
+      return;
+    }
+
+    const state = get();
+    const transfersToComplete: string[] = [];
+
+    const updatedTransfers = (state.activeTransfers ?? []).map((transfer) => {
+      if (transfer.status !== 'active') {
+        return transfer;
+      }
+
+      const updated = updateTransferProgress(transfer, hoursPassed);
+      if (updated.progress >= 1) {
+        transfersToComplete.push(updated.id);
+      }
+      return updated;
+    });
+
+    set({ activeTransfers: updatedTransfers });
+
+    for (const transferId of transfersToComplete) {
+      const current = get().activeTransfers.find((transfer) => transfer.id === transferId);
+      if (current && current.status === 'active' && current.progress >= 1) {
+        get().completeTruckTransferById(transferId);
+      }
+    }
+  },
+
+  startTruckTransfer: (params: {
+    truckId: string;
+    toCityId: string;
+    driverId?: string;
+  }): StartTruckTransferResult => {
+    const state = get();
+    const truck = state.player.trucks.find((candidate) => candidate.id === params.truckId);
+    if (!truck) {
+      return {
+        success: false,
+        errorCode: 'TRUCK_NOT_FOUND',
+        message: 'Kamyon bulunamadı.',
+      };
+    }
+
+    if (truck.status !== 'idle') {
+      return {
+        success: false,
+        errorCode: 'TRUCK_BUSY',
+        message:
+          truck.status === 'transferring'
+            ? 'Kamyon şu anda yönlendiriliyor.'
+            : truck.status === 'on_route'
+              ? 'Kamyon şu anda yolda.'
+              : 'Kamyon şu anda müsait değil.',
+      };
+    }
+
+    const fromCityId = resolveTruckCityId(truck, state.player.homeCityId);
+    if (!fromCityId) {
+      return {
+        success: false,
+        errorCode: 'TRANSFER_CREATE_FAILED',
+        message: 'Kamyon konumu belirlenemedi.',
+      };
+    }
+
+    if (fromCityId === params.toCityId) {
+      return {
+        success: false,
+        errorCode: 'SAME_CITY',
+        message: 'Bu kamyon zaten bu şehirde.',
+      };
+    }
+
+    if (!CITIES_BY_ID[params.toCityId]) {
+      return {
+        success: false,
+        errorCode: 'CITY_NOT_FOUND',
+        message: 'Hedef şehir bulunamadı.',
+      };
+    }
+
+    const route = resolveTransferRoute(state.routes, fromCityId, params.toCityId);
+    if (!route) {
+      return {
+        success: false,
+        errorCode: 'ROUTE_NOT_FOUND',
+        message: 'Bu şehirler arasında rota bulunamadı.',
+      };
+    }
+
+    const driver =
+      (params.driverId
+        ? state.player.drivers.find(
+            (candidate) => candidate.id === params.driverId && candidate.status === 'idle',
+          )
+        : undefined) ?? selectDriverForTransfer(truck.id, state.player.drivers);
+
+    if (!driver) {
+      return {
+        success: false,
+        errorCode: 'NO_IDLE_DRIVER',
+        message: 'Boş transfer için müsait şoför gerekiyor.',
+      };
+    }
+
+    const fuelPrice = state.globalEconomy?.fuelPrice ?? economyBalance.baseFuelPrice;
+    let transfer: TruckTransfer;
+    try {
+      transfer = createTruckTransfer({
+        truck,
+        driver,
+        fromCityId,
+        toCityId: params.toCityId,
+        route,
+        fuelPrice,
+        currentTime: state.currentTime,
+        sequence: (state.activeTransfers ?? []).length + 1,
+      });
+    } catch {
+      return {
+        success: false,
+        errorCode: 'TRANSFER_CREATE_FAILED',
+        message: 'Transfer oluşturulamadı.',
+      };
+    }
+
+    if (state.player.money < transfer.totalCost) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUNDS',
+        message: 'Nakit yetersiz.',
+      };
+    }
+
+    const fromCityName = getCityName(fromCityId);
+    const toCityName = getCityName(params.toCityId);
+    const routeLabel = `${fromCityName} → ${toCityName}`;
+
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === truck.id ? { ...candidate, status: 'transferring' as const } : candidate,
+    );
+    const updatedDrivers = state.player.drivers.map((candidate) =>
+      candidate.id === driver.id
+        ? { ...candidate, status: 'driving' as const, assignedTruckId: truck.id }
+        : candidate,
+    );
+
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - transfer.totalCost,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+      },
+      activeTransfers: [...(state.activeTransfers ?? []), transfer],
+      financeLedger: prependFinanceLedger(state.financeLedger ?? [], {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'truck_transfer',
+        amount: transfer.totalCost,
+        description: `Boş kamyon transferi · ${routeLabel}`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Boş transfer başladı',
+          message: `${truck.name}, ${routeLabel} rotasına çıktı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    try {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'info',
+        title: 'Transfer başladı',
+        message: `${truck.name}, ${toCityName} yönüne çıktı.`,
+        autoDismissMs: 2500,
+      });
+    } catch (error) {
+      console.warn('[gameStore] transfer start notification failed:', error);
+    }
+
+    get().autoSave('transfer_started');
+    return { success: true, transferId: transfer.id, message: 'Transfer başladı.' };
+  },
+
+  completeTruckTransferById: (transferId: string) => {
+    const state = get();
+    const transferEventId = `event_transfer_complete_${transferId}`;
+
+    if (
+      completedTransferNotificationIds.has(transferId) ||
+      state.eventLog.some((event) => event.id === transferEventId)
+    ) {
+      return;
+    }
+
+    const transfer = (state.activeTransfers ?? []).find((candidate) => candidate.id === transferId);
+    if (!transfer || transfer.status !== 'active' || transfer.progress < 1) {
+      return;
+    }
+
+    const truck = state.player.trucks.find((candidate) => candidate.id === transfer.truckId);
+    if (!truck) {
+      return;
+    }
+
+    const toCityName = getCityName(transfer.toCityId);
+    const completedTransfer: TruckTransfer = { ...transfer, status: 'completed', progress: 1 };
+
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === transfer.truckId
+        ? {
+            ...candidate,
+            status: 'idle' as const,
+            currentCityId: transfer.toCityId,
+          }
+        : candidate,
+    );
+
+    const updatedDrivers = state.player.drivers.map((candidate) => {
+      if (transfer.driverId && candidate.id === transfer.driverId) {
+        return { ...candidate, status: 'idle' as const, assignedTruckId: transfer.truckId };
+      }
+      return candidate;
+    });
+
+    set({
+      player: {
+        ...state.player,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+      },
+      activeTransfers: (state.activeTransfers ?? []).filter(
+        (candidate) => candidate.id !== transferId,
+      ),
+      completedTransfers: [completedTransfer, ...(state.completedTransfers ?? [])].slice(0, 50),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          id: transferEventId,
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Boş transfer tamamlandı',
+          message: `${truck.name}, ${toCityName} şehrine ulaştı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    completedTransferNotificationIds.add(transferId);
+
+    try {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'success',
+        title: 'Kamyon ulaştı',
+        message: `${truck.name}, ${toCityName} konumunda yeni işler için hazır.`,
+        autoDismissMs: 3000,
+      });
+    } catch (error) {
+      console.warn('[gameStore] transfer complete notification failed:', error);
+    }
+
+    get().autoSave('transfer_completed');
+  },
+
   completeDeliveryById: (deliveryId: string) => {
     const state = get();
     const deliveryEventId = `event_delivery_complete_${deliveryId}`;
@@ -1815,6 +2147,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const xpGain = calculateDeliveryXp(distanceKm, netProfit, riskTier);
     const notificationMessage = `Teslimat tamamlandı · +${xpGain} XP`;
     const eventMessage = `${routeLabel} teslimatı tamamlandı. Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
+    const completedTruck = newSimState.trucks.find((t) => t.id === delivery.truckId);
+    const destinationCityName = getCityName(delivery.destinationCityId);
+    const truckArrivalMessage = completedTruck
+      ? `${completedTruck.name} ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`
+      : `Kamyon ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`;
 
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterComplete);
 
@@ -1843,14 +2180,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ...state.marketNews,
       ].slice(0, MARKET_NEWS_MAX_COUNT),
       eventLog: prependGameEvent(
-        state.eventLog,
+        prependGameEvent(
+          state.eventLog,
+          {
+            id: deliveryEventId,
+            time: state.currentTime,
+            type: 'delivery',
+            title: 'Teslimat tamamlandı',
+            message: eventMessage,
+            importance: 'high',
+          },
+          state.currentTime,
+        ),
         {
-          id: deliveryEventId,
           time: state.currentTime,
-          type: 'delivery',
-          title: 'Teslimat tamamlandı',
-          message: eventMessage,
-          importance: 'high',
+          type: 'fleet',
+          title: 'Kamyon konumu güncellendi',
+          message: truckArrivalMessage,
+          importance: 'medium',
         },
         state.currentTime,
       ),
@@ -1967,7 +2314,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       comfort: template.comfort,
       condition: template.condition,
       purchasePrice: template.purchasePrice,
-      currentCityId: state.player.homeCityId,
+      currentCityId: state.player.homeCityId ?? 'izmir',
+      homeCityId: state.player.homeCityId ?? 'izmir',
       status: 'idle',
     };
 
@@ -2089,6 +2437,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     if (truck.status === 'on_route') {
       throw new Error('Yoldaki kamyon tamir edilemez.');
+    }
+
+    if (truck.status === 'transferring') {
+      throw new Error('Yönlendirilen kamyon tamir edilemez.');
     }
 
     const condition = truck.condition ?? 100;

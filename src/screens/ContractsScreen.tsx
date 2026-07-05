@@ -35,10 +35,12 @@ import {
   calculateTravelHours,
   getContractAvailability,
   getContractCargoWeight,
+  getIdleTruckOriginCityIds,
+  hasIdleTruckAtOrigin,
   selectIdleTruckForContract,
 } from '../simulation/delivery';
 import { useGameStore } from '../store/gameStore';
-import { colors, spacing } from '../theme';
+import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import type {
   Contract,
@@ -63,7 +65,6 @@ const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const MARKET_HIGHLIGHT_TIMEOUT_MS = 8000;
 const DAY_HOURS = 24;
 const LIST_FILTER: FilterKey = 'bestPayment';
-const LIST_SCROLL_BOTTOM_EXTRA = 110;
 
 const COLORS = {
   background: colors.background,
@@ -82,12 +83,8 @@ type SegmentKey = 'available' | 'active' | 'completed';
 
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
 
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+function formatPercent(value: number): string {
+  return formatRatioPercent(value);
 }
 
 function formatHours(hours: number): string {
@@ -114,10 +111,6 @@ function formatTimeLeft(hours: number): string {
   return `${m}dk`;
 }
 
-function formatPercent(value: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
-}
-
 function getActionPillLabel(availability: ContractAvailability): string {
   switch (availability.reason) {
     case 'LEVEL_INSUFFICIENT':
@@ -128,6 +121,8 @@ function getActionPillLabel(availability: ContractAvailability): string {
     case 'NO_DRIVERS':
     case 'NO_IDLE_DRIVERS':
       return 'Şoför Yok';
+    case 'NO_TRUCK_AT_ORIGIN':
+      return 'Çıkışta Kamyon Yok';
     case 'CAPACITY_INSUFFICIENT':
       return 'Kapasite Yetersiz';
     case 'TRUCK_CONDITION_TOO_LOW':
@@ -418,6 +413,9 @@ function getContractSortPriority(
   if (availability.reason === 'NO_DRIVERS' || availability.reason === 'NO_IDLE_DRIVERS') {
     return priority + 120;
   }
+  if (availability.reason === 'NO_TRUCK_AT_ORIGIN') {
+    return priority + 125;
+  }
   if (availability.reason === 'CAPACITY_INSUFFICIENT') {
     return priority + 130;
   }
@@ -584,6 +582,35 @@ function CompactStatRow({ availableCount, activeCount, bestPayment }: CompactSta
   );
 }
 
+interface OriginCitiesBannerProps {
+  trucks: Truck[];
+}
+
+function OriginCitiesBanner({ trucks }: OriginCitiesBannerProps) {
+  const idleCount = (trucks ?? []).filter((truck) => truck.status === 'idle').length;
+  const originCityIds = getIdleTruckOriginCityIds(trucks);
+
+  if (idleCount === 0) {
+    return (
+      <View style={styles.originBanner}>
+        <Text style={styles.originBannerText}>
+          Boşta kamyon yok. Yeni iş almak için teslimatın bitmesini bekle.
+        </Text>
+      </View>
+    );
+  }
+
+  const cityLabels = originCityIds.map((cityId) => getCityName(cityId)).join(', ');
+
+  return (
+    <View style={styles.originBanner}>
+      <Text style={styles.originBannerText} numberOfLines={2}>
+        Uygun çıkış şehirleri: {cityLabels || getCityName('izmir')}
+      </Text>
+    </View>
+  );
+}
+
 interface ContractCardProps {
   contract: Contract;
   trucks: Truck[];
@@ -610,6 +637,7 @@ function ContractCard({
   const { financials, risk } = analysis;
   const urgent = isUrgentContract(contract);
   const pillLabel = getActionPillLabel(availability);
+  const hasTruckAtOrigin = hasIdleTruckAtOrigin(trucks, contract.originCityId);
   const riskSoft = urgent && risk.label === 'Yüksek risk';
   const riskOutline = getRiskOutlineStyle(risk.label, riskSoft);
 
@@ -631,6 +659,7 @@ function ContractCard({
       style={[
         styles.listCard,
         isPinnedMarketMatch && styles.listCardHighlight,
+        !availability.canStart && styles.listCardDimmed,
       ]}
     >
       {isPinnedMarketMatch ? (
@@ -675,6 +704,18 @@ function ContractCard({
         </Text>
         <View style={styles.cardFooterActions}>
           <View style={styles.cardFooterBadges}>
+            {hasTruckAtOrigin ? (
+              <View style={[styles.miniBadge, styles.originReadyBadge]}>
+                <GameIcon name="truck" size={9} color={COLORS.green} />
+                <Text style={[styles.miniBadgeText, { color: COLORS.green }]}>Kamyon hazır</Text>
+              </View>
+            ) : availability.reason === 'NO_TRUCK_AT_ORIGIN' ? (
+              <View style={[styles.miniBadge, styles.originMissingBadge]}>
+                <Text style={[styles.miniBadgeText, { color: COLORS.muted }]}>
+                  Bu şehirde kamyon yok
+                </Text>
+              </View>
+            ) : null}
             {urgent ? (
               <View style={[styles.miniBadge, styles.urgentBadge]}>
                 <GameIcon name="urgent" size={9} color={COLORS.red} />
@@ -824,8 +865,7 @@ export default function ContractsScreen() {
   const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
   const setHighlightedContractId = useGameStore((state) => state.setHighlightedContractId);
   const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
-  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
+  const { tabBarHeight, scrollBottomPadding } = useTabBarLayout();
 
   const scrollRef = useRef<ScrollViewType>(null);
 
@@ -1061,6 +1101,8 @@ export default function ContractsScreen() {
           bestPayment={topSummary.bestPayment}
         />
 
+        <OriginCitiesBanner trucks={trucks} />
+
         <ContractsTabBar
           segments={tabSegments}
           activeKey={activeSegment}
@@ -1072,7 +1114,7 @@ export default function ContractsScreen() {
           style={styles.listScroll}
           contentContainerStyle={[
             styles.listScrollContent,
-            { paddingBottom: listScrollBottomPadding },
+            { paddingBottom: scrollBottomPadding },
           ]}
           showsVerticalScrollIndicator={false}
         >
@@ -1239,7 +1281,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   compactStatRow: {
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
     minHeight: 30,
     paddingVertical: 7,
     paddingHorizontal: spacing.sm,
@@ -1248,6 +1290,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     justifyContent: 'center',
+  },
+  originBanner: {
+    marginBottom: spacing.sm,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+    backgroundColor: colors.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  originBannerText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  listCardDimmed: {
+    opacity: 0.72,
+  },
+  originReadyBadge: {
+    borderColor: 'rgba(74, 222, 128, 0.45)',
+    backgroundColor: 'rgba(74, 222, 128, 0.08)',
+  },
+  originMissingBadge: {
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.card,
   },
   compactStatText: {
     fontSize: 11,

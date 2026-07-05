@@ -9,7 +9,7 @@ export function useTabBarLayout() {
   const insets = useAppSafeAreaInsets();
   const bottomInset = getBottomInset(insets);
   const tabBarHeight = getTabBarHeight(bottomInset);
-  const scrollBottomPadding = getScrollBottomPadding(tabBarHeight);
+  const scrollBottomPadding = getScrollBottomPadding(tabBarHeight, bottomInset);
 
   return {
     bottomInset,

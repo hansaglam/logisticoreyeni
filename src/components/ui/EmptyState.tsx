@@ -12,6 +12,8 @@ interface EmptyStateProps {
   icon?: GameIconName;
   actionLabel?: string;
   onAction?: () => void;
+  /** Ana sayfa vb. için daha az yer kaplayan boş durum */
+  compact?: boolean;
 }
 
 export default function EmptyState({
@@ -20,14 +22,17 @@ export default function EmptyState({
   icon = 'inventory',
   actionLabel,
   onAction,
+  compact = false,
 }: EmptyStateProps) {
   return (
-    <View style={styles.container}>
-      <View style={styles.iconWrap}>
-        <GameIcon name={icon} size={28} color={colors.textMuted} />
+    <View style={[styles.container, compact && styles.containerCompact]}>
+      <View style={[styles.iconWrap, compact && styles.iconWrapCompact]}>
+        <GameIcon name={icon} size={compact ? 22 : 28} color={colors.textMuted} />
       </View>
-      <Text style={styles.title}>{title}</Text>
-      {message ? <Text style={styles.message}>{message}</Text> : null}
+      <Text style={[styles.title, compact && styles.titleCompact]}>{title}</Text>
+      {message ? (
+        <Text style={[styles.message, compact && styles.messageCompact]}>{message}</Text>
+      ) : null}
       {actionLabel && onAction ? (
         <ActionButton label={actionLabel} onPress={onAction} variant="secondary" style={styles.action} />
       ) : null}
@@ -66,5 +71,23 @@ const styles = StyleSheet.create({
   },
   action: {
     marginTop: spacing.lg,
+  },
+  containerCompact: {
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+  },
+  iconWrapCompact: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginBottom: spacing.sm,
+  },
+  titleCompact: {
+    fontSize: 13,
+  },
+  messageCompact: {
+    fontSize: 12,
+    marginTop: spacing.xs,
+    maxWidth: 260,
   },
 });

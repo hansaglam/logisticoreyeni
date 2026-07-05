@@ -32,6 +32,7 @@ import {
 } from '../simulation/warehouseStorage';
 import type { StorageSuitability } from '../simulation/warehouseStorage';
 import { colors, spacing, typography } from '../theme';
+import { formatMoney } from '../theme/format';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import { IconButton, ProductIcon } from './ui';
 import type { City, Product, WarehouseType } from '../types/game';
@@ -72,13 +73,6 @@ export interface TradeProductModalProps {
   onConfirm: (quantity: number, warehouseId?: string) => void;
   onClose: () => void;
   onOpenWarehouses?: () => void;
-}
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(Number.isFinite(value) ? value : 0);
-  return `$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 }
 
 function formatTons(value: number): string {
@@ -249,7 +243,7 @@ export default function TradeProductModal({
         <View
           style={[
             styles.sheet,
-            { maxHeight: sheetMaxHeight, paddingBottom: bottomInset + spacing.sm },
+            { maxHeight: sheetMaxHeight, paddingBottom: bottomInset + spacing.lg },
           ]}
         >
           <View style={styles.handleWrap}>
@@ -521,7 +515,7 @@ export default function TradeProductModal({
             ) : null}
           </ScrollView>
 
-          <View style={styles.footer}>
+          <View style={[styles.footer, { paddingBottom: bottomInset + spacing.sm }]}>
             <TouchableOpacity
               style={[styles.confirmButton, !canConfirm && styles.confirmButtonDisabled]}
               onPress={handleConfirmPress}

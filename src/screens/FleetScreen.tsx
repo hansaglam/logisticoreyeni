@@ -35,11 +35,12 @@ import {
   type DriverMarketItem,
 } from '../data/drivers';
 import { CITIES_BY_ID } from '../data/cities';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { calculateTruckRepairCost } from '../simulation/delivery';
+import { calculateTruckRepairCost, resolveTruckCityId } from '../simulation/delivery';
+import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
+import TruckTransferModal from '../components/TruckTransferModal';
 import { useGameStore } from '../store/gameStore';
-import { colors, spacing, typography } from '../theme';
-import type { Delivery, DeliveryStatus, Driver, Truck } from '../types/game';
+import { colors, formatDisplayPercent, formatIdleTruckReadyHint, formatMoney, formatRatioPercent, spacing, typography } from '../theme';
+import type { Delivery, DeliveryStatus, Driver, Truck, TruckTransfer } from '../types/game';
 
 const CONDITION_GOOD_THRESHOLD = 70;
 const CONDITION_FAIR_THRESHOLD = 40;
@@ -51,7 +52,6 @@ const FUEL_EFFICIENT_THRESHOLD = 65;
 const EXPERIENCED_THRESHOLD = 65;
 const FAST_SPEED_THRESHOLD = 40;
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
-const LIST_SCROLL_BOTTOM_EXTRA = 110;
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 
 type FleetTab = 'trucks' | 'drivers' | 'shop';
@@ -63,24 +63,12 @@ const FLEET_TABS = [
   { key: 'shop' as const, label: 'Mağaza', icon: 'market' as const },
 ];
 
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-}
-
 function formatRemainingHours(currentTime: number, estimatedArrivalTime: number): string {
   const remaining = Math.max(0, estimatedArrivalTime - currentTime);
   const hrs = Math.floor(remaining);
   const mins = Math.round((remaining - hrs) * 60);
   if (hrs > 0) return `${hrs}s ${mins}dk`;
   return `${mins}dk`;
-}
-
-function formatPercent(progress: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`;
 }
 
 function getCityName(cityId: string): string {
@@ -113,10 +101,19 @@ function calculateAverageCondition(trucks: Truck[]): number {
   return total / trucks.length;
 }
 
+function findActiveTransferForTruckLocal(
+  truckId: string,
+  transfers: TruckTransfer[],
+): TruckTransfer | undefined {
+  return findActiveTransferForTruck(truckId, transfers);
+}
+
 function getTruckStatusBadge(status: Truck['status']): { label: string; variant: StatusBadgeVariant } {
   switch (status) {
     case 'on_route':
       return { label: 'YOLDA', variant: 'blue' };
+    case 'transferring':
+      return { label: 'YÖNLENDİRİLİYOR', variant: 'blue' };
     case 'maintenance':
       return { label: 'BAKIM', variant: 'danger' };
     default:
@@ -216,16 +213,17 @@ function FleetMetricStrip({
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.metricStrip}
     >
-      <SmallStatPill label="Kamyon" value={String(truckCount)} icon="truck" accentColor={colors.accentBlue} compact />
-      <SmallStatPill label="Şoför" value={String(driverCount)} icon="driver" accentColor={colors.info} compact />
-      <SmallStatPill label="Boşta" value={String(idleTrucks)} icon="success" accentColor={colors.success} compact />
-      <SmallStatPill label="Yolda" value={String(onRouteTrucks)} icon="route" accentColor={colors.accentBlue} compact />
+      <SmallStatPill label="Kamyon" value={String(truckCount)} icon="truck" accentColor={colors.accentBlue} layout="chip" dense />
+      <SmallStatPill label="Şoför" value={String(driverCount)} icon="driver" accentColor={colors.info} layout="chip" dense />
+      <SmallStatPill label="Boşta" value={String(idleTrucks)} icon="success" accentColor={colors.success} layout="chip" dense />
+      <SmallStatPill label="Yolda" value={String(onRouteTrucks)} icon="route" accentColor={colors.accentBlue} layout="chip" dense />
       <SmallStatPill
-        label="Ort. kondisyon"
-        value={`${Math.round(averageCondition)}%`}
+        label="Kondisyon"
+        value={formatDisplayPercent(averageCondition)}
         icon="maintenance"
         accentColor={getConditionColor(averageCondition)}
-        compact
+        layout="chip"
+        dense
       />
     </ScrollView>
   );
@@ -235,27 +233,45 @@ interface OwnedTruckCardProps {
   truck: Truck;
   playerMoney: number;
   delivery?: Delivery;
+  transfer?: TruckTransfer;
+  drivers: Driver[];
+  homeCityId?: string;
   currentTime: number;
   onRepair: (truck: Truck) => void;
+  onTransfer: (truck: Truck, targetCityId?: string) => void;
 }
 
 function OwnedTruckCard({
   truck,
   playerMoney,
   delivery,
+  transfer,
+  drivers,
+  homeCityId,
   currentTime,
   onRepair,
+  onTransfer,
 }: OwnedTruckCardProps) {
   const truckCondition = truck.condition ?? 100;
   const conditionColor = getConditionColor(truckCondition);
   const repairCost = calculateTruckRepairCost(truck);
   const isOnRoute = truck.status === 'on_route';
+  const isTransferring = truck.status === 'transferring';
   const isIdle = truck.status === 'idle';
   const canAfford = playerMoney >= repairCost;
   const statusBadge = getTruckStatusBadge(truck.status);
   const maintenanceBadge = getMaintenanceBadge(truckCondition);
   const showRepairButton = isIdle && truckCondition < 100 && truckCondition < REPAIR_HIDE_THRESHOLD;
-  const showGoodMaintenance = isIdle && truckCondition >= REPAIR_HIDE_THRESHOLD;
+  const truckCityId = resolveTruckCityId(truck, homeCityId);
+  const truckCityName = getCityName(truckCityId);
+  const destinationCityName = delivery
+    ? getCityName(delivery.destinationCityId)
+    : transfer
+      ? getCityName(transfer.toCityId)
+      : truckCityName;
+  const hasIdleDriver = !!selectDriverForTransfer(truck.id, drivers);
+  const canTransfer = isIdle && hasIdleDriver;
+  const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
 
   return (
     <AppCard style={styles.fleetCard} padded>
@@ -276,7 +292,7 @@ function OwnedTruckCard({
       </View>
 
       <Text style={styles.statsRow}>
-        {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
+        Konum: {truckCityName} · {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
       </Text>
 
       {isOnRoute && delivery ? (
@@ -290,11 +306,29 @@ function OwnedTruckCard({
           <View style={styles.inlineRouteMetaRow}>
             <GameIcon name="time" size={11} color={colors.textMuted} />
             <Text style={styles.routeMeta}>
-              {formatPercent(delivery.progress)} ·{' '}
-              {formatRemainingHours(currentTime, delivery.estimatedArrivalTime)} kaldı
+              {formatRatioPercent(delivery.progress)} · {destinationCityName}'ya gidiyor
             </Text>
           </View>
           <ProgressBar progress={delivery.progress} color={colors.accentBlue} height={3} />
+        </View>
+      ) : null}
+
+      {isTransferring && transfer ? (
+        <View style={styles.inlineRouteBlock}>
+          <View style={styles.inlineRouteRow}>
+            <GameIcon name="route" size={12} color={colors.info} />
+            <Text style={styles.routeText} numberOfLines={1}>
+              {getCityName(transfer.fromCityId)} → {getCityName(transfer.toCityId)}
+            </Text>
+          </View>
+          <View style={styles.inlineRouteMetaRow}>
+            <GameIcon name="time" size={11} color={colors.textMuted} />
+            <Text style={styles.routeMeta}>
+              Boş transfer · {formatRatioPercent(transfer.progress)} ·{' '}
+              {formatRemainingHours(currentTime, transfer.estimatedArrivalAt)} kaldı
+            </Text>
+          </View>
+          <ProgressBar progress={transfer.progress} color={colors.info} height={3} />
         </View>
       ) : null}
 
@@ -322,14 +356,44 @@ function OwnedTruckCard({
             compact
             style={styles.compactAction}
           />
-        ) : showGoodMaintenance ? (
-          <Text style={styles.footerSuccess}>Bakımı iyi</Text>
-        ) : isIdle ? (
-          <Text style={styles.footerMuted}>Yeni sözleşme için hazır</Text>
-        ) : truck.status === 'maintenance' ? (
-          <Text style={styles.footerMuted}>Tamir tamamlanmadan işe çıkamaz</Text>
         ) : isOnRoute ? (
           <Text style={styles.footerMuted}>Teslimat sürüyor</Text>
+        ) : isTransferring ? (
+          <Text style={styles.footerMuted}>Boş transfer sürüyor</Text>
+        ) : truck.status === 'maintenance' ? (
+          <Text style={styles.footerMuted}>Tamir tamamlanmadan işe çıkamaz</Text>
+        ) : isIdle ? (
+          <View style={styles.transferActionsRow}>
+            <ActionButton
+              label={hasIdleDriver ? 'Yönlendir' : 'Şoför gerekli'}
+              onPress={() => onTransfer(truck)}
+              disabled={!canTransfer}
+              variant="secondary"
+              icon="route"
+              iconSize={13}
+              compact
+              style={styles.compactAction}
+            />
+            {showRecallIzmir ? (
+              <ActionButton
+                label="İzmir'e Çağır"
+                onPress={() => onTransfer(truck, 'izmir')}
+                disabled={!canTransfer}
+                variant="secondary"
+                icon="warehouse"
+                iconSize={13}
+                compact
+                style={styles.compactAction}
+              />
+            ) : null}
+          </View>
+        ) : null}
+        {isIdle && !hasIdleDriver ? (
+          <Text style={styles.footerMuted}>Yönlendirme için boşta şoför gerekiyor.</Text>
+        ) : isIdle ? (
+          <Text style={styles.idleLocationHint} numberOfLines={2}>
+            {formatIdleTruckReadyHint(truckCityId, truckCityName)}
+          </Text>
         ) : null}
       </View>
     </AppCard>
@@ -394,7 +458,7 @@ function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: Owne
           <View style={styles.inlineRouteMetaRow}>
             <GameIcon name="time" size={11} color={colors.textMuted} />
             <Text style={styles.routeMeta}>
-              {formatPercent(activeDelivery.progress)} ·{' '}
+              {formatRatioPercent(activeDelivery.progress)} ·{' '}
               {formatRemainingHours(currentTime, activeDelivery.estimatedArrivalTime)} kaldı
             </Text>
           </View>
@@ -593,18 +657,18 @@ function ShopDriverCard({
 export default function FleetScreen() {
   const player = useGameStore((state) => state.player);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
   const buyTruck = useGameStore((state) => state.buyTruck);
   const hireDriver = useGameStore((state) => state.hireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
 
   const [activeTab, setActiveTab] = useState<FleetTab>('trucks');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
-
-  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
+  const [transferModalTruck, setTransferModalTruck] = useState<Truck | null>(null);
+  const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
 
   useEffect(() => {
     if (!pendingFleetSubTab) return;
@@ -634,7 +698,7 @@ export default function FleetScreen() {
   const fleetSummary = useMemo(
     () => ({
       idleTrucks: trucks.filter((t) => t.status === 'idle').length,
-      onRouteTrucks: trucks.filter((t) => t.status === 'on_route').length,
+      onRouteTrucks: trucks.filter((t) => t.status === 'on_route' || t.status === 'transferring').length,
       idleDrivers: drivers.filter((d) => d.status === 'idle').length,
       averageCondition: calculateAverageCondition(trucks),
     }),
@@ -693,6 +757,15 @@ export default function FleetScreen() {
     setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işe alındı' });
   };
 
+  const handleOpenTransfer = (truck: Truck, targetCityId?: string) => {
+    if (!selectDriverForTransfer(truck.id, drivers)) {
+      setStatusMessage({ type: 'error', text: 'Yönlendirme için boşta şoför gerekiyor.' });
+      return;
+    }
+    setTransferTargetCityId(targetCityId);
+    setTransferModalTruck(truck);
+  };
+
   if (!player) {
     return (
       <AppScreen>
@@ -704,7 +777,7 @@ export default function FleetScreen() {
   }
 
   return (
-    <AppScreen scroll scrollBottomPadding={listScrollBottomPadding}>
+    <AppScreen scroll>
       <ScreenHeader
         title="Filo"
         subtitle="Kamyonlarını, şoförlerini ve satın alımları yönet"
@@ -769,8 +842,12 @@ export default function FleetScreen() {
                   truck={truck}
                   playerMoney={playerMoney}
                   delivery={findActiveDeliveryForTruck(truck.id, activeDeliveries)}
+                  transfer={findActiveTransferForTruckLocal(truck.id, activeTransfers)}
+                  drivers={drivers}
+                  homeCityId={player.homeCityId}
                   currentTime={currentTime}
                   onRepair={handleRepair}
+                  onTransfer={handleOpenTransfer}
                 />
               ))}
               {showFleetTip ? (
@@ -858,6 +935,18 @@ export default function FleetScreen() {
           )}
         </View>
       ) : null}
+
+      <TruckTransferModal
+        visible={transferModalTruck != null}
+        truck={transferModalTruck}
+        initialToCityId={transferTargetCityId}
+        onClose={() => {
+          setTransferModalTruck(null);
+          setTransferTargetCityId(undefined);
+        }}
+        onStarted={(message) => setStatusMessage({ type: 'success', text: message })}
+        onError={(message) => setStatusMessage({ type: 'error', text: message })}
+      />
     </AppScreen>
   );
 }
@@ -981,6 +1070,12 @@ const styles = StyleSheet.create({
   cardFooter: {
     marginTop: 6,
     alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  transferActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
   },
   compactAction: {
     minHeight: 34,
@@ -990,6 +1085,13 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontWeight: '500',
     marginTop: 2,
+  },
+  idleLocationHint: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '600',
+    marginTop: 4,
+    lineHeight: 16,
   },
   footerSuccess: {
     ...typography.caption,

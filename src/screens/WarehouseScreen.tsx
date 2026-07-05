@@ -39,7 +39,6 @@ import {
 } from '../config/levelConfig';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   calculateTradeProfit,
   getCityProductMarketPrice,
@@ -56,7 +55,7 @@ import {
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
 import { useGameStore } from '../store/gameStore';
-import { colors, spacing, typography } from '../theme';
+import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type { City, CityProductState, Product, ProductId, Warehouse, WarehouseType } from '../types/game';
 
 const DEFAULT_RENT_PER_TON = warehouseBalance.rentPerTon;
@@ -72,7 +71,6 @@ const HIGH_VOLATILITY_THRESHOLD = 15;
 const MAX_CITY_OPPORTUNITIES = 3;
 const MAX_STRATEGY_TIPS = 3;
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
-const LIST_SCROLL_BOTTOM_EXTRA = 110;
 
 const CAPACITY_OK_THRESHOLD = 0.7;
 const CAPACITY_WARN_THRESHOLD = 0.9;
@@ -108,21 +106,8 @@ interface PortfolioMetrics {
   estimatedProfit: number;
 }
 
-function formatMoney(value: number): string {
-  const rounded = Math.round(Number.isFinite(value) ? value : 0);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-}
-
-function formatTons(value: number): string {
-  const safe = Number.isFinite(value) ? value : 0;
-  return `${safe.toFixed(1)} ton`;
-}
-
 function formatPercent(value: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+  return formatRatioPercent(value);
 }
 
 function getCityName(cityId: string): string {
@@ -369,6 +354,7 @@ function WarehouseMetricStrip({
           icon="warehouse"
           accentColor={colors.info}
           layout="chip"
+          dense
         />
       </View>
       <View style={styles.metricPillWrap}>
@@ -378,6 +364,7 @@ function WarehouseMetricStrip({
           icon="inventory"
           accentColor={colors.accentBlue}
           layout="chip"
+          dense
         />
       </View>
       <View style={styles.metricPillWrap}>
@@ -387,11 +374,12 @@ function WarehouseMetricStrip({
           icon="package"
           accentColor={colors.success}
           layout="chip"
+          dense
         />
       </View>
       <View style={styles.metricPillWrap}>
         <SmallStatPill
-          label="Günlük gider"
+          label="Gider"
           value={formatMoney(dailyCost)}
           icon="expense"
           accentColor={colors.danger}
@@ -400,20 +388,22 @@ function WarehouseMetricStrip({
       </View>
       <View style={styles.metricPillWrap}>
         <SmallStatPill
-          label="Ürün çeşidi"
+          label="Çeşit"
           value={String(productCount)}
           icon="product"
           accentColor={colors.accentAmber}
           layout="chip"
+          dense
         />
       </View>
       <View style={styles.metricPillWrap}>
         <SmallStatPill
-          label="Stok değeri"
+          label="Değer"
           value={formatMoney(inventoryValue)}
           icon="cash"
           accentColor={colors.success}
           layout="chip"
+          dense
         />
       </View>
     </ScrollView>
@@ -629,11 +619,12 @@ function WarehouseCard({
         <ActionButton
           label="Yükselt"
           onPress={() => onUpgrade(warehouse)}
-          variant="secondary"
+          variant={upgradeDisabled ? 'secondary' : 'primary'}
           disabled={upgradeDisabled}
           compact
           icon="upgrade"
-          iconSize={14}
+          iconSize={13}
+          style={upgradeDisabled ? styles.upgradeButtonDisabled : undefined}
         />
       </View>
     </AppCard>
@@ -716,8 +707,6 @@ export default function WarehouseScreen() {
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
   const [sellWarehouse, setSellWarehouse] = useState<Warehouse | null>(null);
   const [sellProductId, setSellProductId] = useState<ProductId | null>(null);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
-  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
 
   const scrollRef = useRef<ScrollView>(null);
   const opportunitiesOffsetRef = useRef(0);
@@ -854,7 +843,7 @@ export default function WarehouseScreen() {
   }
 
   return (
-    <AppScreen scroll scrollRef={scrollRef} scrollBottomPadding={listScrollBottomPadding}>
+    <AppScreen scroll scrollRef={scrollRef}>
       <ScreenHeader
         title="Depolar"
         subtitle="Stoklarını, kapasiteni ve ticaret kârını yönet"
@@ -1113,7 +1102,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   metricPillWrap: {
-    minWidth: 100,
+    minWidth: 88,
   },
 
   limitHint: {
@@ -1284,7 +1273,11 @@ const styles = StyleSheet.create({
   upgradeHelperText: {
     ...typography.caption,
     fontSize: 10,
+    lineHeight: 13,
     color: colors.textMuted,
+  },
+  upgradeButtonDisabled: {
+    opacity: 0.55,
   },
   levelLockText: {
     ...typography.caption,

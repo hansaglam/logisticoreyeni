@@ -19,11 +19,14 @@ import type {
   Truck,
 } from '../types/game';
 import { truckBalance } from '../config/balance';
+import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
 
 // ---------------------------------------------------------------------------
 // Sabitler
 // ---------------------------------------------------------------------------
+
+export const DEFAULT_TRUCK_CITY_ID = 'izmir';
 
 /** Şoför hız etkisi çarpanı — speed ±100 skalasında */
 const DRIVER_SPEED_EFFECT = 0.28;
@@ -118,9 +121,58 @@ export function isTruckIdle(truck: Truck): boolean {
   return truck.status === 'idle';
 }
 
+/** Kamyon boş transferde mi? */
+export function isTruckTransferring(truck: Truck): boolean {
+  return truck.status === 'transferring';
+}
+
 /** Şoför görev için boşta mı? */
 export function isDriverIdle(driver: Driver): boolean {
   return driver.status === 'idle';
+}
+
+export function resolveTruckCityId(truck: Truck, fallbackHomeCityId?: string): string {
+  return truck.currentCityId ?? truck.homeCityId ?? fallbackHomeCityId ?? DEFAULT_TRUCK_CITY_ID;
+}
+
+export function normalizeTruckCity(truck: Truck, fallbackHomeCityId?: string): Truck {
+  const currentCityId = resolveTruckCityId(truck, fallbackHomeCityId);
+  return {
+    ...truck,
+    currentCityId,
+    homeCityId: truck.homeCityId ?? fallbackHomeCityId ?? currentCityId,
+  };
+}
+
+export function getIdleTruckOriginCityIds(
+  trucks: Truck[] | undefined,
+  fallbackHomeCityId?: string,
+): string[] {
+  const cities = new Set<string>();
+  for (const truck of getIdleTrucks(trucks)) {
+    cities.add(resolveTruckCityId(truck, fallbackHomeCityId));
+  }
+  return [...cities];
+}
+
+export function hasIdleTruckAtOrigin(
+  trucks: Truck[] | undefined,
+  originCityId: string | undefined,
+  fallbackHomeCityId?: string,
+): boolean {
+  if (!originCityId) return false;
+  return getIdleTrucks(trucks).some(
+    (truck) => resolveTruckCityId(truck, fallbackHomeCityId) === originCityId,
+  );
+}
+
+export function isTruckAtContractOrigin(
+  truck: Truck,
+  contract: Pick<Contract, 'originCityId'>,
+  fallbackHomeCityId?: string,
+): boolean {
+  if (!contract.originCityId) return false;
+  return resolveTruckCityId(truck, fallbackHomeCityId) === contract.originCityId;
 }
 
 export function getIdleTrucks(trucks: Truck[] | undefined): Truck[] {
@@ -156,7 +208,12 @@ export function selectIdleTruckForContract(
   if (!resolved) return undefined;
 
   return (trucks ?? [])
-    .filter((truck) => isTruckIdle(truck) && canTruckCarryContract(truck, contract, resolved))
+    .filter(
+      (truck) =>
+        isTruckIdle(truck) &&
+        isTruckAtContractOrigin(truck, contract) &&
+        canTruckCarryContract(truck, contract, resolved),
+    )
     .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0))[0];
 }
 
@@ -238,6 +295,32 @@ export function getContractAvailability(
     };
   }
 
+  const originCityId = contract.originCityId;
+  if (!originCityId) {
+    return {
+      canStart: false,
+      reason: 'NO_TRUCK_AT_ORIGIN',
+      buttonLabel: 'Çıkışta Kamyon Yok',
+      title: 'Geçersiz sözleşme',
+      message: 'Bu sözleşmenin çıkış şehri tanımlı değil.',
+      maxIdleTruckCapacity,
+      requiredCapacity,
+    };
+  }
+
+  if (!hasIdleTruckAtOrigin(truckList, originCityId)) {
+    const fromCityName = CITIES_BY_ID[originCityId]?.name ?? originCityId;
+    return {
+      canStart: false,
+      reason: 'NO_TRUCK_AT_ORIGIN',
+      buttonLabel: 'Çıkışta Kamyon Yok',
+      title: 'Çıkışta kamyon yok',
+      message: `Bu iş ${fromCityName} çıkışlı. Bu şehirde boşta kamyonun yok.`,
+      maxIdleTruckCapacity,
+      requiredCapacity,
+    };
+  }
+
   const fittingTruck = selectIdleTruckForContract(truckList, contract, product);
   if (!fittingTruck) {
     return {
@@ -297,6 +380,8 @@ export function getContractAvailabilityWarningText(
       return 'Şoför yok';
     case 'NO_IDLE_DRIVERS':
       return 'Müsait şoför yok';
+    case 'NO_TRUCK_AT_ORIGIN':
+      return 'Çıkışta kamyon yok';
     case 'CAPACITY_INSUFFICIENT':
       return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
     case 'TRUCK_CONDITION_TOO_LOW':
@@ -320,6 +405,8 @@ export function availabilityReasonToStartDeliveryErrorCode(
       return 'DRIVER_NOT_FOUND';
     case 'NO_IDLE_DRIVERS':
       return 'DRIVER_BUSY';
+    case 'NO_TRUCK_AT_ORIGIN':
+      return 'NO_TRUCK_AT_ORIGIN';
     case 'CAPACITY_INSUFFICIENT':
       return 'CAPACITY_INSUFFICIENT';
     case 'TRUCK_CONDITION_TOO_LOW':

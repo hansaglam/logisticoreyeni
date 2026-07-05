@@ -30,6 +30,7 @@ export const STARTER_TRUCK: Truck = {
   condition: 88,
   purchasePrice: 45_000,
   currentCityId: 'izmir',
+  homeCityId: 'izmir',
   status: 'idle',
 };
 

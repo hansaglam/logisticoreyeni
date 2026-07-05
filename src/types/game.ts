@@ -162,7 +162,7 @@ export interface Route {
 // ---------------------------------------------------------------------------
 
 /** Kamyon durumu */
-export type TruckStatus = 'idle' | 'on_route' | 'maintenance';
+export type TruckStatus = 'idle' | 'on_route' | 'maintenance' | 'transferring';
 
 /** Oyuncuya ait bir kamyon */
 export interface Truck {
@@ -188,6 +188,8 @@ export interface Truck {
   catalogId?: string;
   /** Kamyonun bulunduğu şehir */
   currentCityId: string;
+  /** Ana üs / satın alındığı şehir — eski kayıtlarda yoksa currentCityId kullanılır */
+  homeCityId?: string;
   status: TruckStatus;
 }
 
@@ -336,6 +338,29 @@ export interface Delivery {
 }
 
 // ---------------------------------------------------------------------------
+// Boş kamyon transferi
+// ---------------------------------------------------------------------------
+
+export type TruckTransferStatus = 'active' | 'completed' | 'cancelled';
+
+/** Boş kamyon yönlendirme / geri çağırma görevi */
+export interface TruckTransfer {
+  id: string;
+  truckId: string;
+  driverId?: string;
+  fromCityId: string;
+  toCityId: string;
+  distanceKm: number;
+  startedAt: number;
+  estimatedArrivalAt: number;
+  progress: number;
+  fuelCost: number;
+  driverCost: number;
+  totalCost: number;
+  status: TruckTransferStatus;
+}
+
+// ---------------------------------------------------------------------------
 // Depo
 // ---------------------------------------------------------------------------
 
@@ -389,6 +414,7 @@ export type FinanceLedgerCategory =
   | 'delivery_expense'
   | 'fleet_purchase'
   | 'warehouse_open'
+  | 'truck_transfer'
   | 'other';
 
 /** Gelir/gider kaydı — save'e yazılır */
@@ -635,6 +661,10 @@ export interface StoreGameState {
   contracts: Contract[];
   /** Aktif ve geçmiş teslimatlar */
   activeDeliveries: Delivery[];
+  /** Aktif boş kamyon transferleri */
+  activeTransfers: TruckTransfer[];
+  /** Tamamlanan boş kamyon transferleri */
+  completedTransfers?: TruckTransfer[];
   globalEconomy: GlobalEconomy;
   marketNews: MarketNews[];
   /** Oyuncu ve geliştirici olay günlüğü */
@@ -673,7 +703,9 @@ export type StartDeliveryErrorCode =
   | 'TRUCK_CONDITION_TOO_LOW'
   | 'ROUTE_NOT_FOUND'
   | 'INSUFFICIENT_FUNDS'
-  | 'DELIVERY_CREATE_FAILED';
+  | 'DELIVERY_CREATE_FAILED'
+  | 'TRUCK_NOT_AT_ORIGIN'
+  | 'NO_TRUCK_AT_ORIGIN';
 
 export type ContractAvailabilityReason =
   | 'LEVEL_INSUFFICIENT'
@@ -681,6 +713,7 @@ export type ContractAvailabilityReason =
   | 'NO_IDLE_TRUCKS'
   | 'NO_DRIVERS'
   | 'NO_IDLE_DRIVERS'
+  | 'NO_TRUCK_AT_ORIGIN'
   | 'CAPACITY_INSUFFICIENT'
   | 'TRUCK_CONDITION_TOO_LOW'
   | 'OK';
@@ -701,4 +734,21 @@ export interface StartDeliveryResult {
   success: boolean;
   errorCode?: StartDeliveryErrorCode;
   message?: string;
+}
+
+export type StartTruckTransferErrorCode =
+  | 'TRUCK_NOT_FOUND'
+  | 'TRUCK_BUSY'
+  | 'SAME_CITY'
+  | 'CITY_NOT_FOUND'
+  | 'ROUTE_NOT_FOUND'
+  | 'NO_IDLE_DRIVER'
+  | 'INSUFFICIENT_FUNDS'
+  | 'TRANSFER_CREATE_FAILED';
+
+export interface StartTruckTransferResult {
+  success: boolean;
+  errorCode?: StartTruckTransferErrorCode;
+  message?: string;
+  transferId?: string;
 }

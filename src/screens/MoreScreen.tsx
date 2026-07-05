@@ -19,10 +19,9 @@ import {
 } from '../components/ui';
 import type { GameIconName } from '../theme/icons';
 import { CITIES_BY_ID } from '../data/cities';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getLevelProgress } from '../simulation/leveling';
 import { useGameStore } from '../store/gameStore';
-import { colors, spacing, typography } from '../theme';
+import { colors, formatMoney, spacing, typography } from '../theme';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import DebugSimulationScreen from './DebugSimulationScreen';
 import FinanceScreen from './FinanceScreen';
@@ -87,16 +86,6 @@ const MODULE_ITEMS: ModuleItem[] = [
 ];
 
 const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
-
-const LIST_SCROLL_BOTTOM_EXTRA = 110;
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(Number.isFinite(value) ? value : 0);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-}
 
 function getCityName(cityId: string | undefined): string {
   if (!cityId) return 'Bilinmeyen şehir';
@@ -199,8 +188,6 @@ export default function MoreScreen() {
   const player = useGameStore((state) => state.player);
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
   const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
-  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
 
   useEffect(() => {
     if (!pendingMoreSubRoute) return;
@@ -259,7 +246,7 @@ export default function MoreScreen() {
   const xpProgress = levelProgress?.progressRatio ?? 0;
 
   return (
-    <AppScreen scroll scrollBottomPadding={listScrollBottomPadding}>
+    <AppScreen scroll>
       <ScreenHeader
         title="Şirket"
         subtitle="Şirketini, finansını ve yönetim araçlarını kontrol et"

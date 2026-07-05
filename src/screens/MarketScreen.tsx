@@ -27,7 +27,6 @@ import {
 import type { StatusBadgeVariant } from '../components/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { countExactMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
 import {
   getCityProductMarketPrice,
@@ -44,7 +43,17 @@ import {
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
 import { useGameStore } from '../store/gameStore';
-import { colors, spacing, typography } from '../theme';
+import {
+  colors,
+  formatGameTimeCompact,
+  formatMoney,
+  formatPriceChangeDisplay,
+  formatStockDisplay,
+  formatUnitPrice,
+  isFuelExpensiveForDisplay,
+  spacing,
+  typography,
+} from '../theme';
 import type { City, CityProductState, MarketOpportunity, Product, ProductId, Route } from '../types/game';
 
 const CRITICAL_SHORTAGE_RATIO = 0.35;
@@ -52,11 +61,8 @@ const HIGH_SURPLUS_RATIO = 1.5;
 const SHORTAGE_THRESHOLD = 0.7;
 const SURPLUS_THRESHOLD = 1.2;
 const STATUS_MESSAGE_TIMEOUT_MS = 2000;
-const LIST_SCROLL_BOTTOM_EXTRA = 110;
 const MAX_OPPORTUNITIES = 3;
 const OPPORTUNITY_SCORE_CAP = 2500;
-const PRICE_CHANGE_MIN_PERCENT = -99;
-const PRICE_CHANGE_MAX_PERCENT = 150;
 
 type MarketTab = 'products' | 'opportunities';
 type MarketStatus = 'Kritik Kıtlık' | 'Kıtlık' | 'Dengeli' | 'Fazla' | 'Yüksek Fazla';
@@ -87,14 +93,6 @@ interface MarketAlert {
   criticalShortage: MarketHighlight | null;
   highestSurplus: MarketHighlight | null;
   bestOpportunity: MarketOpportunity | null;
-}
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}$${Math.abs(rounded)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 }
 
 /** Ham piyasa skorunu 0-100 aralığına normalize eder — yalnızca UI gösterimi */
@@ -139,30 +137,6 @@ function getOpportunityPotential(normalizedScore: number): {
     return { label: 'Orta', variant: 'warning' };
   }
   return { label: 'Zayıf', variant: 'muted' };
-}
-
-function clampPriceChangePercent(changeRatio: number): number | null {
-  if (!Number.isFinite(changeRatio)) return null;
-  const pct = changeRatio * 100;
-  if (!Number.isFinite(pct)) return null;
-  return Math.max(PRICE_CHANGE_MIN_PERCENT, Math.min(PRICE_CHANGE_MAX_PERCENT, pct));
-}
-
-function formatDisplayPriceChange(changeRatio: number): string | null {
-  const clamped = clampPriceChangePercent(changeRatio);
-  if (clamped === null) return null;
-  if (clamped === 0) return '0%';
-  if (clamped >= PRICE_CHANGE_MAX_PERCENT) return '150+%';
-  if (clamped <= PRICE_CHANGE_MIN_PERCENT) return `${PRICE_CHANGE_MIN_PERCENT}%`;
-  if (clamped > 0) return `+${Math.round(clamped)}%`;
-  return `${Math.round(clamped)}%`;
-}
-
-function formatTimeCompact(hours: number): string {
-  const totalHours = Math.max(0, Math.floor(hours));
-  const day = Math.floor(totalHours / 24) + 1;
-  const hourOfDay = totalHours % 24;
-  return `G${day} · ${hourOfDay.toString().padStart(2, '0')}:00`;
 }
 
 function getProductName(productId: string): string {
@@ -340,17 +314,19 @@ function MarketMetricStrip({
     >
       <SmallStatPill
         label="Yakıt"
-        value={`$${fuelPrice.toFixed(2)}/L`}
+        value={formatUnitPrice(fuelPrice, '/L')}
         icon="fuel"
-        accentColor={colors.accentAmber}
+        accentColor={isFuelExpensiveForDisplay(fuelPrice) ? colors.danger : colors.accentAmber}
         layout="chip"
+        dense
       />
       <SmallStatPill
         label="Zaman"
-        value={formatTimeCompact(currentTime)}
+        value={formatGameTimeCompact(currentTime)}
         icon="time"
         accentColor={colors.info}
         layout="chip"
+        dense
       />
       <SmallStatPill
         label="Kritik"
@@ -358,13 +334,15 @@ function MarketMetricStrip({
         icon="warning"
         accentColor={criticalCount > 0 ? colors.danger : colors.success}
         layout="chip"
+        dense
       />
       <SmallStatPill
         label="Fırsat"
-        value={`${opportunityCount} adet`}
+        value={`${opportunityCount}`}
         icon="contract"
         accentColor={colors.accentBlue}
         layout="chip"
+        dense
       />
     </ScrollView>
   );
@@ -372,6 +350,7 @@ function MarketMetricStrip({
 
 function FuelPriceCard({ fuelPrice }: { fuelPrice: number }) {
   const trendBars = [0.5, 0.65, 0.58, 0.72, 0.68, 0.85];
+  const expensive = isFuelExpensiveForDisplay(fuelPrice);
 
   return (
     <AppCard style={styles.fuelCard} padded={false}>
@@ -381,7 +360,7 @@ function FuelPriceCard({ fuelPrice }: { fuelPrice: number }) {
         </View>
         <View style={styles.fuelMain}>
           <Text style={styles.fuelLabel}>Yakıt Fiyatı</Text>
-          <Text style={styles.fuelValue}>${fuelPrice.toFixed(2)} / L</Text>
+          <Text style={styles.fuelValue}>{formatUnitPrice(fuelPrice, ' / L')}</Text>
         </View>
         <View style={styles.fuelTrendMini}>
           {trendBars.map((height, index) => (
@@ -398,7 +377,11 @@ function FuelPriceCard({ fuelPrice }: { fuelPrice: number }) {
             />
           ))}
         </View>
-        <StatusBadge label="Canlı" variant="amber" size="sm" />
+        {expensive ? (
+          <StatusBadge label="Yakıt pahalı" variant="warning" size="sm" />
+        ) : (
+          <StatusBadge label="Canlı" variant="amber" size="sm" />
+        )}
       </View>
     </AppCard>
   );
@@ -502,9 +485,10 @@ function ProductMarketCard({
   const statusVariant = getMarketStatusVariant(status);
   const hint = getOpportunityHint(market);
   const priceChange = getPriceChangePercent(market);
-  const priceChangeLabel = formatDisplayPriceChange(priceChange);
-  const priceChangePositive = (clampPriceChangePercent(priceChange) ?? 0) >= 0;
+  const priceChangeLabel = formatPriceChangeDisplay(priceChange);
+  const priceChangePositive = (priceChange ?? 0) >= 0;
   const progressValue = Math.min(stockRatio, 2) / 2;
+  const stockDisplay = formatStockDisplay(market.stock, market.targetStock);
 
   return (
     <AppCard style={styles.productCard} padded={false}>
@@ -514,14 +498,19 @@ function ProductMarketCard({
         </View>
         <View style={styles.cardMain}>
           <View style={styles.productTitleRow}>
-            <Text style={styles.productName} numberOfLines={1}>
+            <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">
               {getProductName(market.productId)}
             </Text>
             <StatusBadge label={status} variant={statusVariant} size="sm" />
           </View>
-          <Text style={styles.productStock} numberOfLines={1}>
-            Stok {market.stock.toFixed(1)} / {market.targetStock.toFixed(1)} ton
+          <Text style={styles.productStock} numberOfLines={1} ellipsizeMode="tail">
+            {stockDisplay.primary}
           </Text>
+          {stockDisplay.detail ? (
+            <Text style={styles.productStockDetail} numberOfLines={1} ellipsizeMode="tail">
+              {stockDisplay.detail}
+            </Text>
+          ) : null}
         </View>
         <View style={styles.cardRight}>
           <Text style={styles.productPrice}>{formatMoney(market.currentPrice)}</Text>
@@ -652,7 +641,6 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     (state) => state.openContractsForMarketOpportunity,
   );
   const buyProductForWarehouse = useGameStore((state) => state.buyProductForWarehouse);
-  const { tabBarHeight, bottomInset } = useTabBarLayout();
 
   const [activeTab, setActiveTab] = useState<MarketTab>('products');
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
@@ -660,7 +648,6 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
   const [tradeProductId, setTradeProductId] = useState<ProductId | null>(null);
 
-  const listScrollBottomPadding = tabBarHeight + bottomInset + LIST_SCROLL_BOTTOM_EXTRA;
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
 
   useEffect(() => {
@@ -883,7 +870,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   }
 
   return (
-    <AppScreen scroll scrollBottomPadding={listScrollBottomPadding}>
+    <AppScreen scroll>
       <ScreenHeader
         title="Piyasa"
         subtitle="Stokları, fiyatları ve taşıma fırsatlarını analiz et"
@@ -1232,6 +1219,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.textSecondary,
     marginTop: 2,
+  },
+  productStockDetail: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 1,
   },
   productPrice: {
     ...typography.bodySmall,

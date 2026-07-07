@@ -31,14 +31,12 @@ import {
 import { useGameStore } from '../store/gameStore';
 import { getWorldMapCityPosition } from '../data/worldMapPositions';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getCityName, getProductName } from '../utils/entityLookup';
 import type {
   Contract,
   Delivery,
   DeliveryStatus,
   Player,
-  ProductId,
   RecommendedMapAction,
   Truck,
   TruckTransfer,
@@ -120,14 +118,6 @@ function formatRemainingHours(currentTime: number, estimatedArrivalTime: number)
   const hrs = Math.floor(remaining);
   const mins = Math.round((remaining - hrs) * 60);
   return `${hrs} sa ${mins.toString().padStart(2, '0')} dk kaldı`;
-}
-
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
 }
 
 function getDeliveryStatusLabel(status: DeliveryStatus): string {

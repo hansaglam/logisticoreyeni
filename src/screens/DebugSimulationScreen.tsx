@@ -20,8 +20,7 @@ import { useGameStore, getRecentGameEvents } from '../store/gameStore';
 import InternalTestInfoPanel from '../components/InternalTestInfoPanel';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getCityName, getProductName } from '../utils/entityLookup';
 import { canTruckCarryContract, getDeliveryIntegrityStats } from '../simulation/delivery';
 import {
   calculateCompanyScore,
@@ -137,14 +136,6 @@ function formatPercent(value: number): string {
 
 function formatTons(value: number): string {
   return `${value.toFixed(1)} ton`;
-}
-
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
 }
 
 // ---------------------------------------------------------------------------
@@ -878,9 +869,19 @@ export default function DebugSimulationScreen() {
               maxOfflineChargeDays: {dailyOperatingCostDebug?.maxOfflineChargeDays ?? 0}
             </Text>
             <Text style={styles.levelDebugLine}>
+              elapsedOperatingDays: {dailyOperatingCostDebug?.elapsedOperatingDays ?? '—'}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              chargedOperatingDays: {dailyOperatingCostDebug?.chargedOperatingDays ?? '—'}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              skippedOperatingDaysDueToCap:{' '}
+              {dailyOperatingCostDebug?.skippedOperatingDaysDueToCap ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
               lastCharge:{' '}
               {dailyOperatingCostDebug?.lastCharge
-                ? `${dailyOperatingCostDebug.lastCharge.days} gün · ${formatMoney(dailyOperatingCostDebug.lastCharge.total)} · ${dailyOperatingCostDebug.lastCharge.reason}`
+                ? `${dailyOperatingCostDebug.lastCharge.elapsedDays} gün geçti · ${dailyOperatingCostDebug.lastCharge.days} gün kesildi · ${formatMoney(dailyOperatingCostDebug.lastCharge.total)} · ${dailyOperatingCostDebug.lastCharge.reason}`
                 : '—'}
             </Text>
           </View>

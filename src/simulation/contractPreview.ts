@@ -39,12 +39,27 @@ export const CONTRACT_RISK_LABELS: Record<ContractRiskLevel, string> = {
   high: 'Yüksek Risk',
 };
 
+/** Sözleşme kartı / atama modalı bilgi metni */
+export const CONTRACT_OPERATIONAL_PROFIT_INFO =
+  'İş kârı, teslimata bağlı tahmini giderler düşüldükten sonraki değerdir. Günlük şoför ve depo giderleri Finans ekranında ayrı izlenir.';
+
+/** Atama modalı kısa açıklama */
+export const CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT =
+  'Yakıt ve teslimat giderleri düşülmüştür. Günlük şoför/depo giderleri ayrıca işletme giderlerinde izlenir.';
+
 export interface ContractPreview {
   estimatedTravelHours: number;
   estimatedFuelCost: number;
   estimatedMaintenanceCost: number;
-  estimatedTotalCost: number;
+  /** Yakıt + bakım tahmini — günlük sabit giderler dahil değil */
+  estimatedTripCost: number;
   estimatedGrossPayment: number;
+  /** Ödeme − estimatedTripCost — günlük şoför/depo giderleri dahil değil */
+  estimatedOperationalProfit: number;
+  excludesDailyFixedCosts: true;
+  /** @deprecated `estimatedTripCost` kullanın */
+  estimatedTotalCost: number;
+  /** @deprecated `estimatedOperationalProfit` kullanın */
   estimatedNetProfit: number;
   estimatedMarginPercent: number;
   riskLevel: ContractRiskLevel;
@@ -201,14 +216,14 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     estimatedMaintenanceCost = estimateMaintenanceCostFallback(contract, route);
   }
 
-  const estimatedTotalCost = estimatedFuelCost + estimatedMaintenanceCost;
-  const estimatedNetProfit = calculateDeliveryProfit(
+  const estimatedTripCost = estimatedFuelCost + estimatedMaintenanceCost;
+  const estimatedOperationalProfit = calculateDeliveryProfit(
     contract,
     estimatedFuelCost,
     estimatedMaintenanceCost,
     0,
   );
-  const estimatedMarginPercent = payment > 0 ? estimatedNetProfit / payment : 0;
+  const estimatedMarginPercent = payment > 0 ? estimatedOperationalProfit / payment : 0;
 
   const { riskLevel, riskLabel } = calculateContractRiskLevel(contract, route, product);
   const isUrgent = isUrgentContractPreview(contract, estimatedTravelHours);
@@ -217,9 +232,12 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     estimatedTravelHours,
     estimatedFuelCost,
     estimatedMaintenanceCost,
-    estimatedTotalCost,
+    estimatedTripCost,
     estimatedGrossPayment: payment,
-    estimatedNetProfit,
+    estimatedOperationalProfit,
+    excludesDailyFixedCosts: true,
+    estimatedTotalCost: estimatedTripCost,
+    estimatedNetProfit: estimatedOperationalProfit,
     estimatedMarginPercent,
     riskLevel,
     riskLabel,

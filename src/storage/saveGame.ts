@@ -19,6 +19,7 @@ import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/l
 import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals } from '../utils/financeLedger';
+import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
 import type {
   City,
   Contract,
@@ -28,10 +29,12 @@ import type {
   FinanceTotals,
   GlobalEconomy,
   MarketNews,
+  MissionsState,
   Player,
   Product,
   Route,
   StoreGameState,
+  TutorialState,
   TruckTransfer,
   Warehouse,
 } from '../types/game';
@@ -91,6 +94,8 @@ export interface SaveGamePayload {
   lastContractGenerationTime?: number;
   lastMarketRefreshTime?: number;
   lastDailyCleanupTime?: number;
+  tutorial?: TutorialState;
+  missions?: MissionsState;
 }
 
 export interface SaveBackupStatus {
@@ -264,6 +269,12 @@ export function createDefaultSaveFallbacks(
     ),
     lastMarketRefreshTime: safeNumber(payload.lastMarketRefreshTime, 0),
     lastDailyCleanupTime: safeNumber(payload.lastDailyCleanupTime, 0),
+    tutorial: normalizeTutorialState(
+      isRecord(payload.tutorial) ? (payload.tutorial as Partial<TutorialState>) : undefined,
+    ),
+    missions: normalizeMissionsState(
+      isRecord(payload.missions) ? (payload.missions as Partial<MissionsState>) : undefined,
+    ),
     meta: {
       savedAt: safeNumber(metaRecord.savedAt, Date.now()),
       currentTime: safeNumber(metaRecord.currentTime, currentTime),
@@ -349,6 +360,8 @@ export function normalizeSavePayload(
     lastContractGenerationTime: withFallbacks.lastContractGenerationTime as number,
     lastMarketRefreshTime: withFallbacks.lastMarketRefreshTime as number,
     lastDailyCleanupTime: withFallbacks.lastDailyCleanupTime as number,
+    tutorial: withFallbacks.tutorial as TutorialState,
+    missions: withFallbacks.missions as MissionsState,
   };
 }
 
@@ -477,11 +490,6 @@ export function migrateSavePayload(rawPayload: unknown): SaveGamePayload | null 
   }
 
   return normalized;
-}
-
-/** @deprecated migrateSavePayload kullanın — geriye dönük uyumluluk */
-export function validateSavePayload(payload: unknown): payload is SaveGamePayload {
-  return migrateSavePayload(payload) !== null;
 }
 
 async function backupCorruptedSave(rawString: string): Promise<void> {
@@ -674,6 +682,8 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastContractGenerationTime: state.lastContractGenerationTime,
     lastMarketRefreshTime: state.lastMarketRefreshTime,
     lastDailyCleanupTime: state.lastDailyCleanupTime,
+    tutorial: structuredClone(state.tutorial),
+    missions: structuredClone(state.missions),
   };
 }
 
@@ -709,6 +719,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     eventLog: payload.eventLog,
     financeLedger: payload.financeLedger ?? [],
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
+    tutorial: normalizeTutorialState(payload.tutorial),
+    missions: normalizeMissionsState(payload.missions),
   };
 }
 

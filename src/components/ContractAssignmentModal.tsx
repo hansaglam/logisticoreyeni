@@ -13,11 +13,13 @@ import {
   View,
 } from 'react-native';
 
-import { deliveryBalance } from '../config/balance';
 import { getBottomInset } from '../constants/layout';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
-import { getRoute as findRoute } from '../data/routes';
+import { getCityName, getProductName } from '../utils/entityLookup';
+import {
+  buildContractPreview,
+  CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT,
+  CONTRACT_OPERATIONAL_PROFIT_INFO,
+} from '../simulation/contractPreview';
 import {
   getContractAvailability,
   getContractCargoWeight,
@@ -40,7 +42,7 @@ import {
 } from './ui';
 import type { StatusBadgeVariant } from './ui';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
-import type { Contract, Driver, GlobalEconomy, ProductId, Truck } from '../types/game';
+import type { Contract, Driver, Truck } from '../types/game';
 
 const MIN_TRUCK_CONDITION = 30;
 const LOW_CONDITION_WARNING = 50;
@@ -97,14 +99,6 @@ function formatTimeLeft(hours: number): string {
   return `${m}dk`;
 }
 
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? 'Bilinmeyen yük';
-}
-
 function getTruckStatusLabel(status: Truck['status']): string {
   switch (status) {
     case 'idle':
@@ -135,29 +129,6 @@ function getConditionColor(condition: number): string {
   if (condition >= 70) return colors.success;
   if (condition >= 40) return colors.accentAmber;
   return colors.danger;
-}
-
-function estimateSummaryFinancials(
-  contract: Contract,
-  globalEconomy: GlobalEconomy | null,
-): ContractSummaryFinancials | null {
-  if (!globalEconomy) return null;
-
-  const fuelCost =
-    contract.distanceKm * globalEconomy.fuelPrice * deliveryBalance.fuelCostEstimateMultiplier;
-  const travelHours = contract.distanceKm / deliveryBalance.defaultAverageSpeed;
-  const driverCost =
-    (deliveryBalance.fallbackDriverSalaryPerDay / 24) *
-    travelHours *
-    deliveryBalance.driverCostMultiplier;
-  const routeDifficulty = findRoute(contract.originCityId, contract.destinationCityId)?.difficulty ?? 0.5;
-  const maintenanceCost = contract.distanceKm * deliveryBalance.maintenanceCostPerKm * routeDifficulty;
-  const expense = fuelCost + driverCost + maintenanceCost;
-
-  return {
-    expense,
-    profit: contract.payment - expense,
-  };
 }
 
 function evaluateTruckOption(
@@ -485,11 +456,6 @@ export default function ContractAssignmentModal({
     return getContractAvailability(contract, safeTrucks, safeDrivers, playerLevel);
   }, [contract, safeTrucks, safeDrivers, playerLevel]);
 
-  const summaryFinancials = useMemo(() => {
-    if (!contract) return null;
-    return estimateSummaryFinancials(contract, globalEconomy);
-  }, [contract, globalEconomy]);
-
   const truckOptions = useMemo(
     () =>
       safeTrucks.map((truck) =>
@@ -508,6 +474,33 @@ export default function ContractAssignmentModal({
 
   const selectedTruckOption = truckOptions.find((option) => option.truck.id === selectedTruckId);
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
+
+  const summaryFinancials = useMemo((): ContractSummaryFinancials | null => {
+    if (!contract) return null;
+
+    const preview = buildContractPreview({
+      contract,
+      globalEconomy: globalEconomy ?? undefined,
+      trucks: safeTrucks,
+      drivers: safeDrivers,
+      companyLevel: playerLevel,
+      truck: selectedTruckOption?.truck,
+      driver: selectedDriverOption?.driver,
+    });
+
+    return {
+      expense: preview.estimatedTripCost,
+      profit: preview.estimatedOperationalProfit,
+    };
+  }, [
+    contract,
+    globalEconomy,
+    safeTrucks,
+    safeDrivers,
+    playerLevel,
+    selectedTruckOption?.truck,
+    selectedDriverOption?.driver,
+  ]);
 
   const canConfirm =
     !!selectedTruckOption?.selectable &&
@@ -711,7 +704,12 @@ export default function ContractAssignmentModal({
             {summaryFinancials ? (
               <>
                 <View style={styles.summaryFinanceItem}>
-                  <Text style={styles.summaryFinanceLabel}>Tahmini kâr</Text>
+                  <Pressable
+                    onPress={() => Alert.alert('İş kârı', CONTRACT_OPERATIONAL_PROFIT_INFO)}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.summaryFinanceLabel}>İş kârı ⓘ</Text>
+                  </Pressable>
                   <Text
                     style={[
                       styles.summaryProfit,
@@ -725,12 +723,15 @@ export default function ContractAssignmentModal({
                   </Text>
                 </View>
                 <View style={styles.summaryFinanceItem}>
-                  <Text style={styles.summaryFinanceLabel}>Gider</Text>
+                  <Text style={styles.summaryFinanceLabel}>İş gideri</Text>
                   <Text style={styles.summaryExpense}>{formatMoney(summaryFinancials.expense)}</Text>
                 </View>
               </>
             ) : null}
           </View>
+          {summaryFinancials ? (
+            <Text style={styles.summaryFinanceHint}>{CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT}</Text>
+          ) : null}
         </AppCard>
 
         <ScrollView
@@ -868,6 +869,12 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textMuted,
     fontWeight: '700',
+  },
+  summaryFinanceHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+    lineHeight: 16,
   },
   scroll: {
     flex: 1,

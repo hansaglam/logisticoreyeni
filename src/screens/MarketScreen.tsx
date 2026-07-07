@@ -25,7 +25,8 @@ import {
   StatusBadge,
 } from '../components/ui';
 import type { StatusBadgeVariant } from '../components/ui';
-import { countMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
+import { findMarketOpportunities } from '../simulation/contracts';
+import { countMarketContractMatches } from '../utils/marketContractMatch';
 import { getSafeFuelPrice } from '../simulation/economy';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import {
@@ -650,6 +651,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     (state) => state.openContractsForMarketOpportunity,
   );
   const buyProductForWarehouse = useGameStore((state) => state.buyProductForWarehouse);
+  const notifyMarketScreenOpened = useGameStore((state) => state.notifyMarketScreenOpened);
 
   const [activeTab, setActiveTab] = useState<MarketTab>('products');
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
@@ -658,6 +660,10 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const [tradeProductId, setTradeProductId] = useState<ProductId | null>(null);
 
   const fuelPrice = getSafeFuelPrice(globalEconomy);
+
+  useEffect(() => {
+    notifyMarketScreenOpened();
+  }, [notifyMarketScreenOpened]);
 
   useEffect(() => {
     if (!selectedCityId && cities.length > 0) {

@@ -8,6 +8,7 @@ import React, { useMemo } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import type { TabKey } from '../components/BottomTabBar';
+import StarterMissionsCard from '../components/StarterMissionsCard';
 import {
   ActionButton,
   AppCard,
@@ -19,6 +20,7 @@ import {
   StatusBadge,
 } from '../components/ui';
 import { deliveryBalance } from '../config/balance';
+import { getTutorialStep } from '../config/tutorial';
 import {
   calculateCompanyScore,
   formatCompanyScore,
@@ -481,6 +483,29 @@ function CompanyHeaderCard({
   );
 }
 
+function TutorialStepCard({
+  title,
+  description,
+  ctaLabel,
+  onPress,
+}: {
+  title: string;
+  description: string;
+  ctaLabel: string;
+  onPress: () => void;
+}) {
+  return (
+    <AppCard variant="highlighted" style={styles.nextActionCard} padded>
+      <View style={styles.tutorialBadgeWrap}>
+        <StatusBadge label="Sıradaki Adım" variant="amber" size="sm" />
+      </View>
+      <Text style={styles.nextActionTitle}>{title}</Text>
+      <Text style={styles.nextActionSubtitle}>{description}</Text>
+      <ActionButton label={ctaLabel} onPress={onPress} variant="primary" />
+    </AppCard>
+  );
+}
+
 function NextActionCard({
   action,
   onPress,
@@ -547,7 +572,7 @@ function ExpenseSummaryCard({
         valueColor={colors.danger}
       />
       <Text style={styles.expenseHint}>
-        Günlük sabit gider, cash&apos;ten kesilecek şoför/depo/operasyon tahminidir.
+        Günlük sabit gider; şoför maaşı, depo ve operasyon maliyetlerini içerir.
       </Text>
       <StatLine
         label="Aktif kiralık kamyon"
@@ -609,6 +634,9 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
+  const tutorial = useGameStore((state) => state.tutorial);
+  const notifyActiveDeliverySeen = useGameStore((state) => state.notifyActiveDeliverySeen);
+  const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
   const { scrollBottomPadding } = useTabBarLayout();
 
   const availableContracts = useMemo(
@@ -620,6 +648,16 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
     [activeDeliveries],
   );
+
+  React.useEffect(() => {
+    syncMissionProgress();
+  }, [syncMissionProgress, player?.completedContracts, financeLedger.length, activeDeliveries.length]);
+
+  React.useEffect(() => {
+    if (runningDeliveries.length > 0) {
+      notifyActiveDeliverySeen();
+    }
+  }, [runningDeliveries.length, notifyActiveDeliverySeen]);
 
   const topOpportunities = useMemo(() => {
     const fuelPrice = getSafeFuelPrice(globalEconomy);
@@ -740,6 +778,16 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     handleNavigate(nextAction.target);
   };
 
+  const showTutorialCard = tutorial?.isEnabled && !tutorial?.isCompleted;
+  const tutorialStep = showTutorialCard
+    ? getTutorialStep(tutorial.currentStepId)
+    : undefined;
+
+  const handleTutorialPress = () => {
+    if (!tutorialStep) return;
+    handleNavigate(tutorialStep.targetScreen);
+  };
+
   return (
     <AppScreen
       scroll
@@ -758,7 +806,18 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         onTogglePause={isPaused ? resumeGame : pauseGame}
       />
 
-      <NextActionCard action={nextAction} onPress={handleNextAction} />
+      {showTutorialCard && tutorialStep ? (
+        <TutorialStepCard
+          title={tutorialStep.title}
+          description={tutorialStep.description}
+          ctaLabel={tutorialStep.ctaLabel}
+          onPress={handleTutorialPress}
+        />
+      ) : (
+        <NextActionCard action={nextAction} onPress={handleNextAction} />
+      )}
+
+      <StarterMissionsCard />
 
       {showCashWarning ? <CashWarningCard cash={player.money} /> : null}
 
@@ -1064,6 +1123,10 @@ const styles = StyleSheet.create({
 
   nextActionCard: {
     marginBottom: spacing.xs,
+  },
+  tutorialBadgeWrap: {
+    marginBottom: spacing.sm,
+    alignSelf: 'flex-start',
   },
   nextActionTitle: {
     ...typography.sectionTitle,

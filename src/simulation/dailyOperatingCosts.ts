@@ -28,8 +28,6 @@ export interface DailyOperatingCostBreakdown {
   chargedTruckLeaseTotal: number;
   operations: number;
   total: number;
-  /** @deprecated chargedTruckLeaseTotal ile aynı — geriye uyumluluk */
-  truckRental: number;
 }
 
 export function getDriverDailySalary(driver: Driver): number {
@@ -110,7 +108,6 @@ export function calculateDailyOperatingCostBreakdown(
     warehouseOperating,
     truckLeaseDailyAccrual,
     chargedTruckLeaseTotal,
-    truckRental: chargedTruckLeaseTotal,
     operations,
     total,
   };
@@ -167,6 +164,7 @@ export function buildSummarizedDailyOperatingCostLedgerEntry(
   breakdown: DailyOperatingCostBreakdown,
   currentTime: number,
   days: number,
+  elapsedDays?: number,
 ): Omit<FinanceLedgerEntry, 'id'> | null {
   const safeDays = Math.max(1, Math.floor(days));
   if (breakdown.total <= 0) {
@@ -191,6 +189,7 @@ export function buildSummarizedDailyOperatingCostLedgerEntry(
       ledgerBreakdown,
       safeDays,
       breakdown.truckLeaseDailyAccrual,
+      elapsedDays,
     ),
     breakdown: ledgerBreakdown,
   };
@@ -209,12 +208,82 @@ export function computeElapsedOperatingDays(
   return Math.floor((target - last) / hoursPerDay);
 }
 
+export function normalizeOperatingCostDays(days: number): number {
+  if (!Number.isFinite(days)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(days));
+}
+
+export function resolveOperatingCostElapsedDays(
+  elapsedDays: number | undefined,
+  chargedDays: number,
+): number {
+  const charged = normalizeOperatingCostDays(chargedDays);
+  const elapsed =
+    elapsedDays != null ? normalizeOperatingCostDays(elapsedDays) : charged;
+  return Math.max(charged, elapsed);
+}
+
+export function getSkippedOperatingDaysDueToCap(
+  elapsedDays: number,
+  chargedDays: number,
+): number {
+  const elapsed = normalizeOperatingCostDays(elapsedDays);
+  const charged = Math.min(normalizeOperatingCostDays(chargedDays), elapsed);
+  return Math.max(0, elapsed - charged);
+}
+
+export function formatOperatingCostNotificationMessage(
+  params: {
+    elapsedDays: number;
+    chargedDays: number;
+    amount: number;
+  },
+  formatAmount: (amount: number) => string,
+): string {
+  const elapsed = resolveOperatingCostElapsedDays(params.elapsedDays, params.chargedDays);
+  const charged = Math.min(normalizeOperatingCostDays(params.chargedDays), elapsed);
+  const safeAmount = Number.isFinite(params.amount) ? params.amount : 0;
+  const amountText = formatAmount(safeAmount);
+
+  if (charged <= 0) {
+    return '';
+  }
+
+  if (elapsed > charged) {
+    return `${elapsed} gün geçti. Oyuncu dostu limit nedeniyle yalnızca ${charged} günlük sabit gider kesildi: ${amountText}`;
+  }
+
+  const dayLabel = charged === 1 ? '1 günlük' : `${charged} günlük`;
+  return `${dayLabel} sabit gider ödendi: ${amountText}`;
+}
+
+export function formatOperatingCostEventLogMessage(params: {
+  elapsedDays: number;
+  chargedDays: number;
+}): string {
+  const elapsed = resolveOperatingCostElapsedDays(params.elapsedDays, params.chargedDays);
+  const charged = Math.min(normalizeOperatingCostDays(params.chargedDays), elapsed);
+
+  if (charged <= 0) {
+    return '';
+  }
+
+  if (elapsed > charged) {
+    return `${elapsed} günlük zaman atlaması işlendi. Maksimum offline gider limiti nedeniyle ${charged} günlük gider kesildi.`;
+  }
+
+  const dayLabel = charged === 1 ? '1 günlük' : `${charged} günlük`;
+  return `${dayLabel} işletme gideri işlendi.`;
+}
+
 export function summarizeDailyOperatingCostsFromLedger(
   entries: FinanceLedgerEntry[] | undefined,
 ): DailyOperatingCostBreakdown {
   let driverSalaries = 0;
   let warehouseOperating = 0;
-  let truckRental = 0;
+  let chargedTruckLeaseTotal = 0;
   let operations = 0;
   let total = 0;
 
@@ -228,7 +297,7 @@ export function summarizeDailyOperatingCostsFromLedger(
         warehouseOperating += entry.amount;
         break;
       case 'truck_rental':
-        truckRental += entry.amount;
+        chargedTruckLeaseTotal += entry.amount;
         break;
       case 'operations':
         operations += entry.amount;
@@ -242,15 +311,14 @@ export function summarizeDailyOperatingCostsFromLedger(
   }
 
   if (total === 0) {
-    total = driverSalaries + warehouseOperating + truckRental + operations;
+    total = driverSalaries + warehouseOperating + chargedTruckLeaseTotal + operations;
   }
 
   return {
     driverSalaries,
     warehouseOperating,
     truckLeaseDailyAccrual: 0,
-    chargedTruckLeaseTotal: truckRental,
-    truckRental,
+    chargedTruckLeaseTotal,
     operations,
     total,
   };

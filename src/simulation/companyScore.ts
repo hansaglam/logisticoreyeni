@@ -171,8 +171,6 @@ export function getCompanyScoreBreakdown(state: CompanyScoreGameState): CompanyS
   return {
     ...breakdownContributions,
     penaltyCostScore,
-    /** @deprecated Negatif ceza katkısı. `penaltyScore` kullanın. */
-    penaltiesScore: penaltyScore,
     totalScore,
     truckValue: clampScore(truckValue),
     warehouseValue: clampScore(warehouseValue),

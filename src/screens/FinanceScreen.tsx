@@ -40,12 +40,10 @@ import { calculateDeliverySettlement } from '../simulation/delivery';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type {
-  Contract,
   Delivery,
   Driver,
   FinanceLedgerEntry,
   Truck,
-  Warehouse,
 } from '../types/game';
 
 const MAINTENANCE_WARNING_CONDITION = financeBalance.truckConditionThreshold;
@@ -326,15 +324,12 @@ export default function FinanceScreen() {
     dailyOperatingCost,
     weeklyLeaseBurden,
     recentEntries: recentLedgerEntries,
+    tradePurchaseTotal,
+    tradeSaleTotal,
+    tradeNetProfit,
   } = financeSummary;
 
   const dailyFixedCosts = dailyOperatingCost.total;
-
-  const tradeSummary = {
-    tradePurchaseTotal: financeSummary.tradePurchaseTotal,
-    tradeSaleTotal: financeSummary.tradeSaleTotal,
-    tradeNetProfit: financeSummary.tradeNetProfit,
-  };
 
   const inventoryStockValue = useMemo(
     () => calculateInventoryStockValue(warehouses, cities),
@@ -493,9 +488,7 @@ export default function FinanceScreen() {
   const showRevenueHint = showNetProfitHint;
   const showFallbackHint = financeSummary.source === 'fallback';
   const hasTradeActivity =
-    tradeSummary.tradePurchaseTotal > 0 ||
-    tradeSummary.tradeSaleTotal > 0 ||
-    inventoryStockValue > 0;
+    tradePurchaseTotal > 0 || tradeSaleTotal > 0 || inventoryStockValue > 0;
 
   const contractRevenue = getCategoryAmount(financeSummary.incomeByCategory, 'Sözleşme Geliri');
   const otherIncome = sumCategoriesExcept(financeSummary.incomeByCategory, [
@@ -518,7 +511,7 @@ export default function FinanceScreen() {
     {
       icon: 'revenue',
       label: 'Ticaret satışları',
-      amount: tradeSummary.tradeSaleTotal,
+      amount: tradeSaleTotal,
       color: colors.success,
     },
     { icon: 'cash', label: 'Diğer gelirler', amount: otherIncome, color: colors.info },
@@ -595,7 +588,7 @@ export default function FinanceScreen() {
     {
       icon: 'market',
       label: 'Ürün satın alma',
-      amount: tradeSummary.tradePurchaseTotal,
+      amount: tradePurchaseTotal,
       color: colors.danger,
     },
   ];
@@ -660,7 +653,7 @@ export default function FinanceScreen() {
         compact
       />
       <Text style={styles.breakdownHint}>
-        Günlük sabit gider, mevcut filo ve depolara göre tahmini günlük maliyettir.
+        Günlük sabit gider; şoför maaşı, depo ve operasyon maliyetlerini içerir.
       </Text>
       <BreakdownCard lines={fixedExpenseLines} />
 
@@ -687,7 +680,7 @@ export default function FinanceScreen() {
                 Ürün alımları
               </Text>
               <Text style={[styles.tradeValue, { color: colors.danger }]} numberOfLines={1}>
-                {formatMoney(tradeSummary.tradePurchaseTotal)}
+                {formatMoney(tradePurchaseTotal)}
               </Text>
             </View>
             <View style={styles.tradeRow}>
@@ -695,7 +688,7 @@ export default function FinanceScreen() {
                 Ürün satışları
               </Text>
               <Text style={[styles.tradeValue, { color: colors.success }]} numberOfLines={1}>
-                {formatMoney(tradeSummary.tradeSaleTotal)}
+                {formatMoney(tradeSaleTotal)}
               </Text>
             </View>
             <View style={styles.tradeRow}>
@@ -706,13 +699,12 @@ export default function FinanceScreen() {
                 style={[
                   styles.tradeValue,
                   {
-                    color:
-                      tradeSummary.tradeNetProfit >= 0 ? colors.success : colors.danger,
+                    color: tradeNetProfit >= 0 ? colors.success : colors.danger,
                   },
                 ]}
                 numberOfLines={1}
               >
-                {formatMoney(tradeSummary.tradeNetProfit)}
+                {formatMoney(tradeNetProfit)}
               </Text>
             </View>
             <View style={[styles.tradeRow, styles.tradeRowLast]}>

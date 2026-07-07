@@ -30,6 +30,7 @@ import type {
   TradeActionResult,
   Truck,
   TruckTransfer,
+  TutorialStepId,
   Warehouse,
   WarehouseType,
 } from '../types/game';
@@ -128,15 +129,36 @@ import {
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
 import {
+  completeTutorialStepState,
+  dismissTutorialStepState,
+  getMissionProgress,
+  setCurrentTutorialStepState,
+  syncMissionsState,
+  tutorialOnActiveDeliverySeen,
+  tutorialOnContractAssignmentOpened,
+  tutorialOnContractsOpened,
+  tutorialOnDeliveryStarted,
+  tutorialOnFirstDeliveryCompleted,
+  tutorialOnMarketOpened,
+} from '../utils/missionProgress';
+import type { MissionProgressResult } from '../utils/missionProgress';
+import {
   calculateWarehouseDailyOperatingCostBreakdown,
   estimateWarehouseUpgradeCost,
 } from '../utils/warehouseCalculations';
 import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { createDefaultMissionsState } from '../config/missions';
+import { getMissionById } from '../config/missions';
+import { createDefaultTutorialState } from '../config/tutorial';
 import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
   computeElapsedOperatingDays,
+  formatOperatingCostEventLogMessage,
+  formatOperatingCostNotificationMessage,
+  getSkippedOperatingDaysDueToCap,
   processExpiredTruckLeases,
+  resolveOperatingCostElapsedDays,
   type DailyOperatingCostReason,
 } from '../simulation/dailyOperatingCosts';
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
@@ -660,8 +682,13 @@ export interface DailyOperatingCostDebugSnapshot {
   hoursUntilNextDailyCost: number;
   dailyOperatingCost: number;
   maxOfflineChargeDays: number;
+  elapsedOperatingDays: number | null;
+  chargedOperatingDays: number | null;
+  skippedOperatingDaysDueToCap: number;
   lastCharge: {
     days: number;
+    elapsedDays: number;
+    skippedDays: number;
     total: number;
     at: number;
     reason: DailyOperatingCostReason;
@@ -670,6 +697,7 @@ export interface DailyOperatingCostDebugSnapshot {
 
 export interface ProcessDailyOperatingCostsOptions {
   days?: number;
+  elapsedDays?: number;
   reason?: DailyOperatingCostReason;
   currentTime?: number;
   lastDailyOperatingCostTime?: number;
@@ -689,7 +717,10 @@ function buildDailyOperatingCostDebugSnapshot(
     currentTime,
     hoursUntilNextDailyCost: Math.max(0, nextDue - currentTime),
     dailyOperatingCost: breakdown.total,
-    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays,
+    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays ?? 3,
+    elapsedOperatingDays: lastCharge?.elapsedDays ?? null,
+    chargedOperatingDays: lastCharge?.days ?? null,
+    skippedOperatingDaysDueToCap: lastCharge?.skippedDays ?? 0,
     lastCharge,
   };
 }
@@ -814,7 +845,6 @@ export function createInitialGameState(): StoreGameState {
           warehouseType: 'standard',
           qualityProtection: 0.5,
           inventory: [],
-          storedProducts: {},
           usedCapacityTon: 0,
         },
       ],
@@ -849,6 +879,8 @@ export function createInitialGameState(): StoreGameState {
     ],
     financeLedger: [],
     financeTotals: createEmptyFinanceTotals(),
+    tutorial: createDefaultTutorialState(),
+    missions: createDefaultMissionsState(),
   };
 }
 
@@ -946,6 +978,19 @@ export interface GameStore extends StoreGameState {
     productId: ProductId;
     quantity: number;
   }) => TradeActionResult;
+  completeTutorialStep: (stepId: TutorialStepId) => void;
+  setCurrentTutorialStep: (stepId: TutorialStepId) => void;
+  dismissTutorialStep: (stepId: TutorialStepId) => void;
+  resetTutorial: () => void;
+  notifyContractsScreenOpened: () => void;
+  notifyContractAssignmentOpened: () => void;
+  notifyTutorialDeliveryStarted: () => void;
+  notifyActiveDeliverySeen: () => void;
+  notifyFirstDeliveryCompleted: () => void;
+  notifyMarketScreenOpened: () => void;
+  syncMissionProgress: () => void;
+  getMissionProgressValue: (missionId: string) => MissionProgressResult;
+  claimMissionReward: (missionId: string) => { success: boolean; message?: string };
   addCompanyXp: (amount: number, reason?: string) => void;
   checkLevelUp: () => void;
   getLevelBenefits: (level?: number) => LevelBenefits;
@@ -979,7 +1024,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     currentTime: 0,
     hoursUntilNextDailyCost: DAILY_COST_INTERVAL_HOURS,
     dailyOperatingCost: 0,
-    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays,
+    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays ?? 3,
+    elapsedOperatingDays: null,
+    chargedOperatingDays: null,
+    skippedOperatingDaysDueToCap: 0,
     lastCharge: null,
   },
   saveStatus: createSaveStatusSnapshot(false),
@@ -1111,6 +1159,208 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
 
     get().replenishContractsIfNeeded();
+  },
+
+  completeTutorialStep: (stepId) => {
+    const state = get();
+    set({
+      tutorial: completeTutorialStepState(state.tutorial ?? createDefaultTutorialState(), stepId),
+    });
+    get().markSaveDirty();
+  },
+
+  setCurrentTutorialStep: (stepId) => {
+    const state = get();
+    set({
+      tutorial: setCurrentTutorialStepState(state.tutorial ?? createDefaultTutorialState(), stepId),
+    });
+    get().markSaveDirty();
+  },
+
+  dismissTutorialStep: (stepId) => {
+    const state = get();
+    set({
+      tutorial: dismissTutorialStepState(state.tutorial ?? createDefaultTutorialState(), stepId),
+    });
+    get().markSaveDirty();
+  },
+
+  resetTutorial: () => {
+    set({ tutorial: createDefaultTutorialState() });
+    get().markSaveDirty();
+  },
+
+  notifyContractsScreenOpened: () => {
+    const state = get();
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    set({ tutorial: tutorialOnContractsOpened(tutorial) });
+    get().markSaveDirty();
+  },
+
+  notifyContractAssignmentOpened: () => {
+    const state = get();
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    set({ tutorial: tutorialOnContractAssignmentOpened(tutorial) });
+    get().markSaveDirty();
+  },
+
+  notifyTutorialDeliveryStarted: () => {
+    const state = get();
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    const missions = state.missions ?? createDefaultMissionsState();
+    const nextMissions = syncMissionsState(
+      {
+        ...missions,
+        flags: { ...missions.flags, deliveryStarted: true },
+      },
+      state,
+    );
+    set({
+      tutorial: tutorialOnDeliveryStarted(tutorial),
+      missions: nextMissions,
+    });
+    get().markSaveDirty();
+  },
+
+  notifyActiveDeliverySeen: () => {
+    const state = get();
+    if ((state.activeDeliveries?.length ?? 0) === 0) {
+      return;
+    }
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    set({ tutorial: tutorialOnActiveDeliverySeen(tutorial) });
+    get().markSaveDirty();
+  },
+
+  notifyFirstDeliveryCompleted: () => {
+    const state = get();
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
+    set({
+      tutorial: tutorialOnFirstDeliveryCompleted(tutorial),
+      missions,
+    });
+    get().markSaveDirty();
+  },
+
+  notifyMarketScreenOpened: () => {
+    const state = get();
+    const missions = state.missions ?? createDefaultMissionsState();
+    const nextMissions = syncMissionsState(
+      {
+        ...missions,
+        flags: { ...missions.flags, marketOpened: true },
+        activeMissionIds: missions.activeMissionIds.includes('open_market')
+          ? missions.activeMissionIds
+          : [...missions.activeMissionIds, 'open_market'],
+      },
+      state,
+    );
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    set({
+      tutorial: tutorialOnMarketOpened(tutorial),
+      missions: nextMissions,
+    });
+    get().markSaveDirty();
+  },
+
+  syncMissionProgress: () => {
+    const state = get();
+    const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
+    set({ missions });
+    get().markSaveDirty();
+  },
+
+  getMissionProgressValue: (missionId) => {
+    const state = get();
+    return getMissionProgress(missionId, state);
+  },
+
+  claimMissionReward: (missionId) => {
+    const state = get();
+    const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
+
+    if (missions.claimedMissionRewardIds.includes(missionId)) {
+      return { success: false, message: 'Ödül zaten alındı.' };
+    }
+
+    const progress = getMissionProgress(missionId, { ...state, missions });
+    if (!progress.isComplete) {
+      return { success: false, message: 'Görev henüz tamamlanmadı.' };
+    }
+
+    const mission = getMissionById(missionId);
+    if (!mission) {
+      return { success: false, message: 'Görev bulunamadı.' };
+    }
+
+    const moneyReward = mission.reward.money ?? 0;
+    const xpReward = mission.reward.xp ?? 0;
+    const diamondReward = mission.reward.diamonds ?? 0;
+    const reputationReward = mission.reward.reputation ?? 0;
+
+    const ledgerPatch =
+      moneyReward > 0
+        ? patchFinanceLedger(state, {
+            time: state.currentTime,
+            type: 'income',
+            category: 'bonus',
+            amount: moneyReward,
+            title: 'Görev Ödülü',
+            description: mission.title,
+          })
+        : null;
+
+    const claimedMissionRewardIds = [...missions.claimedMissionRewardIds, missionId];
+    const completedMissionIds = missions.completedMissionIds.includes(missionId)
+      ? missions.completedMissionIds
+      : [...missions.completedMissionIds, missionId];
+
+    set({
+      player: {
+        ...state.player,
+        money: (state.player.money ?? 0) + moneyReward,
+        diamonds: (state.player.diamonds ?? 0) + diamondReward,
+        reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
+      },
+      missions: {
+        ...missions,
+        claimedMissionRewardIds,
+        completedMissionIds,
+      },
+      financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
+      financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title: 'Görev tamamlandı',
+          message: `${mission.title} ödülü alındı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    if (xpReward > 0) {
+      get().addCompanyXp(xpReward, 'mission_reward');
+    }
+
+    try {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'success',
+        title: 'Görev tamamlandı',
+        message: `${mission.title} ödülü alındı.`,
+        autoDismissMs: 3500,
+      });
+    } catch (error) {
+      console.warn('[gameStore] mission reward notification failed:', error);
+    }
+
+    get().markSaveDirty();
+    return { success: true };
   },
 
   addCompanyXp: (amount: number, _reason?: string) => {
@@ -1484,15 +1734,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
 
     if (elapsedDays > 0) {
-      const chargedDays = Math.min(
-        elapsedDays,
-        operatingCostBalance.maxOfflineChargeDays,
-      );
+      const maxOfflineDays = operatingCostBalance.maxOfflineChargeDays ?? 3;
+      const chargedDays = Math.min(elapsedDays, maxOfflineDays);
       const newLastDailyOperatingCostTime =
         lastDailyOperatingCostTime + elapsedDays * DAILY_COST_INTERVAL_HOURS;
 
       get().processDailyOperatingCosts({
         days: chargedDays,
+        elapsedDays,
         reason:
           elapsedDays > 1 || chargedDays < elapsedDays
             ? 'offline_catchup'
@@ -1580,9 +1829,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => {
     const state = get();
-    const chargedDays = Math.max(1, Math.floor(options?.days ?? 1));
+    const chargedDays = Math.max(0, Math.floor(options?.days ?? 1));
     const currentTime = options?.currentTime ?? state.currentTime ?? 0;
     const reason = options?.reason ?? 'daily_tick';
+    const elapsedDays = resolveOperatingCostElapsedDays(options?.elapsedDays, chargedDays);
+    const skippedDays = getSkippedOperatingDaysDueToCap(elapsedDays, chargedDays);
+
+    if (chargedDays <= 0) {
+      if (options?.lastDailyOperatingCostTime != null) {
+        set({
+          lastDailyOperatingCostTime: options.lastDailyOperatingCostTime,
+          dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
+            {
+              ...state,
+              currentTime,
+              lastDailyOperatingCostTime: options.lastDailyOperatingCostTime,
+            },
+            state.dailyOperatingCostDebug?.lastCharge ?? null,
+          ),
+        });
+      }
+      return;
+    }
 
     const breakdown = calculateDailyOperatingCostBreakdown(state.player);
     if (breakdown.total <= 0) {
@@ -1607,6 +1875,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       breakdown,
       currentTime,
       chargedDays,
+      elapsedDays,
     );
 
     let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | null = null;
@@ -1616,10 +1885,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const lastCharge = {
       days: chargedDays,
+      elapsedDays,
+      skippedDays,
       total: totalCost,
       at: currentTime,
       reason,
     };
+
+    const notificationMessage = formatOperatingCostNotificationMessage(
+      { elapsedDays, chargedDays, amount: totalCost },
+      formatNotificationMoney,
+    );
+    const eventLogMessage = formatOperatingCostEventLogMessage({
+      elapsedDays,
+      chargedDays,
+    });
+    const shouldSurfaceCatchup =
+      elapsedDays > chargedDays ||
+      chargedDays > 1 ||
+      reason === 'offline_catchup';
 
     const patch: Partial<GameStore> = {
       player: {
@@ -1645,14 +1929,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       patch.lastDailyOperatingCostTime = options.lastDailyOperatingCostTime;
     }
 
-    if (chargedDays > 1) {
+    if (shouldSurfaceCatchup && eventLogMessage) {
       patch.eventLog = prependGameEvent(
         state.eventLog,
         {
           time: currentTime,
           type: 'system',
           title: 'İşletme giderleri işlendi',
-          message: `${chargedDays} günlük sabit gider ödendi: ${formatNotificationMoney(totalCost)}`,
+          message: eventLogMessage,
           importance: 'medium',
         },
         currentTime,
@@ -1661,16 +1945,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     set(patch);
 
-    if (
-      chargedDays > 1 &&
-      operatingCostBalance.notifyWhenMultipleDaysCharged
-    ) {
+    const shouldNotify =
+      elapsedDays > chargedDays ||
+      (chargedDays > 1 && operatingCostBalance.notifyWhenMultipleDaysCharged);
+
+    if (shouldNotify && notificationMessage) {
       try {
         get().addNotification({
           time: currentTime,
           type: 'info',
           title: 'İşletme giderleri işlendi',
-          message: `${chargedDays} günlük sabit gider ödendi: ${formatNotificationMoney(totalCost)}`,
+          message: notificationMessage,
           autoDismissMs: 4000,
         });
       } catch (error) {
@@ -2232,6 +2517,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     get().autoSave('delivery_started');
+    get().notifyTutorialDeliveryStarted();
     return { success: true };
   },
 
@@ -2818,6 +3104,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     completedDeliveryNotificationIds.add(deliveryId);
 
     get().addCompanyXp(xpGain, 'delivery_completed');
+    get().notifyFirstDeliveryCompleted();
+    get().syncMissionProgress();
 
     try {
       get().addNotification({
@@ -3309,7 +3597,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       warehouseType: resolvedType,
       qualityProtection: resolvedType === 'cold' ? 1 : 0.5,
       inventory: [] as Warehouse['inventory'],
-      storedProducts: {} as Warehouse['storedProducts'],
       usedCapacityTon: 0,
     };
 
@@ -3622,6 +3909,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     get().markSaveDirty();
     get().autoSave('warehouse');
+    const latest = get();
+    const missions = latest.missions ?? createDefaultMissionsState();
+    set({
+      missions: syncMissionsState(
+        {
+          ...missions,
+          flags: { ...missions.flags, tradePurchased: true },
+          activeMissionIds: missions.activeMissionIds.includes('first_trade')
+            ? missions.activeMissionIds
+            : [...missions.activeMissionIds, 'first_trade'],
+        },
+        latest,
+      ),
+    });
     return {
       success: true,
       message: `${quantity.toFixed(1)} ton ${productName} depoya eklendi.`,

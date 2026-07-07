@@ -229,11 +229,15 @@ export function hasDeliveryCompletionLedgerEntry(
 
 export function formatDailyOperatingCostDescription(
   breakdown: FinanceLedgerBreakdown,
-  days: number,
+  chargedDays: number,
   leaseDailyAccrual = 0,
+  elapsedDays?: number,
 ): string {
-  const safeDays = Math.max(1, Math.floor(days));
-  const dayLabel = safeDays === 1 ? '1 günlük' : `${safeDays} günlük`;
+  const charged = Math.max(1, Math.floor(Number.isFinite(chargedDays) ? chargedDays : 1));
+  const elapsed = Math.max(
+    charged,
+    Math.floor(Number.isFinite(elapsedDays ?? charged) ? (elapsedDays ?? charged) : charged),
+  );
   const parts = [
     `Şoför: $${breakdown.driverSalary}`,
     `Depo: $${breakdown.warehouseOperating}`,
@@ -241,8 +245,13 @@ export function formatDailyOperatingCostDescription(
   ];
 
   if (leaseDailyAccrual > 0) {
-    parts.push(`Kiralık kamyon günlük karşılık: $${leaseDailyAccrual * safeDays}`);
+    parts.push(`Kiralık kamyon günlük karşılık: $${leaseDailyAccrual * charged}`);
   }
 
+  if (elapsed > charged) {
+    return `${elapsed} gün geçti, ${charged} günlük sabit gider kesildi. ${parts.join(' · ')}`;
+  }
+
+  const dayLabel = charged === 1 ? '1 günlük' : `${charged} günlük`;
   return `${dayLabel} sabit gider işlendi. ${parts.join(' · ')}`;
 }

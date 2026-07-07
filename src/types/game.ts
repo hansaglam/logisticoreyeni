@@ -419,11 +419,9 @@ export interface Warehouse {
   capacityTons: number;
   /**
    * Depodaki ürün envanteri.
-   * Eski kayıtlar için storedProducts fallback olarak kullanılır.
+   * Eski save kayıtlarındaki legacy `storedProducts` migration sırasında inventory'ye dönüştürülür.
    */
   inventory?: WarehouseInventoryItem[];
-  /** @deprecated inventory kullanın — eski kayıt uyumluluğu */
-  storedProducts?: Partial<Record<ProductId, number>>;
   /** Önbellek — yoksa inventory toplamından hesaplanır */
   usedCapacityTon?: number;
   /** Depo yükseltme kademesi: 1=küçük, 2=orta, 3=büyük */
@@ -721,10 +719,6 @@ export interface CompanyScoreBreakdown {
   penaltyScore: number;
   /** Pozitif ceza büyüklüğü — yalnızca bilgi amaçlı */
   penaltyCostScore: number;
-  /**
-   * @deprecated Negatif ceza katkısı. `penaltyScore` kullanın.
-   */
-  penaltiesScore: number;
   totalScore: number;
   truckValue: number;
   warehouseValue: number;
@@ -745,6 +739,33 @@ export interface MarketNews {
   cityId?: string;
   productId?: ProductId;
   importance: MarketNewsImportance;
+}
+
+export type TutorialStepId =
+  | 'open_contracts'
+  | 'select_contract'
+  | 'assign_team'
+  | 'track_delivery'
+  | 'complete_delivery'
+  | 'open_market';
+
+export interface TutorialState {
+  isEnabled: boolean;
+  isCompleted: boolean;
+  currentStepId: TutorialStepId;
+  completedStepIds: string[];
+  dismissedStepIds: string[];
+}
+
+export interface MissionsState {
+  activeMissionIds: string[];
+  completedMissionIds: string[];
+  claimedMissionRewardIds: string[];
+  flags: {
+    marketOpened: boolean;
+    deliveryStarted: boolean;
+    tradePurchased: boolean;
+  };
 }
 
 /**
@@ -785,6 +806,10 @@ export interface StoreGameState {
   financeLedger: FinanceLedgerEntry[];
   /** Kümülatif gelir/gider toplamları — ledger kırpılsa bile korunur */
   financeTotals?: FinanceTotals;
+  /** V1 başlangıç rehberi */
+  tutorial: TutorialState;
+  /** Başlangıç görevleri */
+  missions: MissionsState;
 }
 
 /**
@@ -802,9 +827,6 @@ export interface SimulationGameState {
   contracts: Contract[];
   deliveries: Delivery[];
 }
-
-/** @deprecated SimulationGameState kullanın */
-export type GameState = SimulationGameState;
 
 /** Teslimat başlatma sonucu */
 export type StartDeliveryErrorCode =

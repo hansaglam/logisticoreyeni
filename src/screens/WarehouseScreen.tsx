@@ -398,7 +398,7 @@ function InventoryRow({
           <Text style={styles.inventoryName} numberOfLines={1} ellipsizeMode="tail">
             {getProductName(productId)}
           </Text>
-          <Text style={styles.inventoryQty} numberOfLines={1}>
+          <Text style={styles.inventoryQty} numberOfLines={1} ellipsizeMode="tail">
             {formatTons(quantity)}
           </Text>
         </View>
@@ -1158,9 +1158,10 @@ const styles = StyleSheet.create({
   },
   inventoryTitleRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
+    minWidth: 0,
   },
   inventoryName: {
     ...typography.bodySmall,

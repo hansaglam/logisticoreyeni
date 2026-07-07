@@ -4,9 +4,14 @@
  */
 
 import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
 import { ROUTES_BY_ID } from '../data/routes';
 import type { City, Product, ProductId, Route } from '../types/game';
+
+/** Döngüsel import riskini önlemek için ürün haritasına çağrı anında erişilir. */
+function getProductByIdRecord(): Record<ProductId, Product> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('../data/products').PRODUCT_BY_ID as Record<ProductId, Product>;
+}
 
 const warnedUnknownProducts = new Set<string>();
 const warnedUnknownCities = new Set<string>();
@@ -34,7 +39,7 @@ export function isProductId(value: string): value is ProductId {
   if (!value || typeof value !== 'string') {
     return false;
   }
-  return Object.prototype.hasOwnProperty.call(PRODUCT_BY_ID, value);
+  return Object.prototype.hasOwnProperty.call(getProductByIdRecord(), value);
 }
 
 export function getProductByIdSafe(productId?: string | null): Product | null {
@@ -45,7 +50,7 @@ export function getProductByIdSafe(productId?: string | null): Product | null {
     warnOnce('product', productId);
     return null;
   }
-  return PRODUCT_BY_ID[productId];
+  return getProductByIdRecord()[productId];
 }
 
 export function getProductName(productId?: string | null): string {

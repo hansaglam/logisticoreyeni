@@ -340,7 +340,7 @@ function getPreviewProfit(
   contract: Contract,
   previewById: Map<string, ContractPreview>,
 ): number {
-  return previewById.get(contract.id)?.estimatedNetProfit ?? 0;
+  return previewById.get(contract.id)?.estimatedOperationalProfit ?? 0;
 }
 
 function isRouteContractFilter(
@@ -769,8 +769,8 @@ function ContractCard({
   const riskSoft = urgent && preview.riskLevel === 'high';
   const riskOutline = getRiskOutlineStyle(preview.riskLevel, riskSoft);
   const payment = contract.payment ?? 0;
-  const estimatedProfit = preview.estimatedNetProfit ?? 0;
-  const totalExpense = preview.estimatedTotalCost ?? 0;
+  const estimatedProfit = preview.estimatedOperationalProfit ?? 0;
+  const totalExpense = preview.estimatedTripCost ?? 0;
   const profitMargin = preview.estimatedMarginPercent ?? 0;
   const footerBadges = buildContractFooterBadges({
     availability,
@@ -845,14 +845,14 @@ function ContractCard({
             numberOfLines={1}
             ellipsizeMode="tail"
           >
-            Kâr {formatMoney(estimatedProfit)}
+            İş kârı {formatMoney(estimatedProfit)}
           </Text>
         </View>
       </View>
 
       <View style={styles.cardFooter}>
         <Text style={styles.cardFinanceLine} numberOfLines={1} ellipsizeMode="tail">
-          Gider {formatMoney(totalExpense)} · Marj {formatPercent(profitMargin)}
+          İş gideri {formatMoney(totalExpense)} · Marj {formatPercent(profitMargin)}
         </Text>
 
         <View style={styles.cardBadgeRow}>
@@ -1034,6 +1034,8 @@ export default function ContractsScreen() {
   const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
   const setHighlightedContractId = useGameStore((state) => state.setHighlightedContractId);
   const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
+  const notifyContractsScreenOpened = useGameStore((state) => state.notifyContractsScreenOpened);
+  const notifyContractAssignmentOpened = useGameStore((state) => state.notifyContractAssignmentOpened);
   const { tabBarHeight, scrollBottomPadding } = useTabBarLayout();
 
   const scrollRef = useRef<ScrollViewType>(null);
@@ -1042,6 +1044,10 @@ export default function ContractsScreen() {
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
+
+  useEffect(() => {
+    notifyContractsScreenOpened();
+  }, [notifyContractsScreenOpened]);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -1206,6 +1212,7 @@ export default function ContractsScreen() {
   const openAssignmentModal = (contract: Contract) => {
     setAssignmentContract(contract);
     setAssignmentModalVisible(true);
+    notifyContractAssignmentOpened();
   };
 
   const closeAssignmentModal = () => {

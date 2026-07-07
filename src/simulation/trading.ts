@@ -26,6 +26,16 @@ import { toProductMarket } from './economy';
 
 // TODO: Add warehouse-to-warehouse cargo transfer in V2.
 
+/** Eski save kayıtlarındaki legacy storedProducts alanını okur */
+function readLegacyStoredProducts(
+  warehouse: Warehouse,
+): Partial<Record<ProductId, number>> {
+  const legacy = (warehouse as Warehouse & {
+    storedProducts?: Partial<Record<ProductId, number>>;
+  }).storedProducts;
+  return legacy ?? {};
+}
+
 export function getCityProductMarketPrice(city: City | undefined, productId: ProductId): number {
   if (!city?.products?.[productId]) {
     return 0;
@@ -46,7 +56,7 @@ export function normalizeWarehouseInventory(
     return warehouse.inventory.map((item) => normalizeInventoryItem(item, warehouse, currentTime));
   }
 
-  const legacy = warehouse.storedProducts ?? {};
+  const legacy = readLegacyStoredProducts(warehouse);
   const warehouseType = resolveWarehouseType(warehouse.warehouseType);
   return Object.entries(legacy)
     .filter(([, quantity]) => (quantity ?? 0) > 0)
@@ -88,10 +98,6 @@ export function normalizeWarehouse(warehouse: Warehouse, currentTime = 0): Wareh
       (resolveWarehouseType(warehouse.warehouseType) === 'cold' ? 1 : 0.5),
     inventory,
     usedCapacityTon,
-    storedProducts: inventory.reduce<Partial<Record<ProductId, number>>>((acc, item) => {
-      acc[item.productId] = item.quantity;
-      return acc;
-    }, {}),
   };
 }
 

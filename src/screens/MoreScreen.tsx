@@ -25,9 +25,10 @@ import { colors, formatMoney, spacing, typography } from '../theme';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import DebugSimulationScreen from './DebugSimulationScreen';
 import FinanceScreen from './FinanceScreen';
+import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
 
-type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug';
+type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions';
 
 interface ModuleItem {
   key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
@@ -51,6 +52,12 @@ const MODULE_ITEMS: ModuleItem[] = [
     label: 'Depolar',
     subtitle: 'Stok, kapasite ve ticaret ürünlerini yönet',
     icon: 'warehouse',
+  },
+  {
+    key: 'missions',
+    label: 'Görevler',
+    subtitle: 'Başlangıç hedeflerini ve ödülleri takip et',
+    icon: 'contract',
   },
   {
     key: 'stats',
@@ -230,6 +237,14 @@ export default function MoreScreen() {
       <View style={styles.embeddedRoot}>
         <SubNavBar title="Finans" onBack={() => setRoute('menu')} />
         <FinanceScreen />
+      </View>
+    );
+  }
+
+  if (route === 'missions') {
+    return (
+      <View style={styles.embeddedRoot}>
+        <MissionsScreen onBack={() => setRoute('menu')} />
       </View>
     );
   }

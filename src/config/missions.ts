@@ -20,9 +20,9 @@ export interface MissionConfig {
 
 export const STARTER_MISSIONS: MissionConfig[] = [
   {
-    id: 'first_contract',
-    title: 'İlk İşini Seç',
-    description: 'Bir sözleşme seç ve ekibini ata.',
+    id: 'first_contract_start',
+    title: 'İlk İşini Başlat',
+    description: 'Bir sözleşme seç, kamyon ve şoför atayarak teslimatı başlat.',
     targetValue: 1,
     reward: { money: 500, xp: 25 },
     category: 'starter',
@@ -71,7 +71,7 @@ export function getMissionById(missionId: string): MissionConfig | undefined {
 
 export function createDefaultMissionsState(): MissionsState {
   return {
-    activeMissionIds: ['first_contract', 'first_delivery', 'first_profit'],
+    activeMissionIds: ['first_contract_start', 'first_delivery', 'first_profit'],
     completedMissionIds: [],
     claimedMissionRewardIds: [],
     flags: {

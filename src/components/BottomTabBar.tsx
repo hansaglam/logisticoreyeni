@@ -9,12 +9,23 @@ import {
   TAB_ITEM_MIN_HEIGHT,
 } from '../constants/layout';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { TutorialTarget } from '../tutorial/TutorialTarget';
+import type { TutorialTargetId } from '../tutorial/types';
 import { colors, typography } from '../theme';
 import type { GameIconName } from '../theme/icons';
 import { isSafeAreaContextAvailable } from '../utils/safeArea';
 import GameIcon from './ui/GameIcon';
 
 export type TabKey = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'market' | 'more';
+
+const TAB_TARGET_IDS: Record<TabKey, TutorialTargetId> = {
+  dashboard: 'tab-dashboard',
+  map: 'tab-map',
+  contracts: 'tab-contracts',
+  fleet: 'tab-fleet',
+  market: 'tab-market',
+  more: 'tab-more',
+};
 
 export interface TabDefinition {
   key: TabKey;
@@ -34,28 +45,34 @@ function TabButtons({ tabs, activeTab, onTabPress }: BottomTabBarProps) {
       {tabs.map((tab) => {
         const isActive = tab.key === activeTab;
         return (
-          <TouchableOpacity
+          <TutorialTarget
             key={tab.key}
-            style={[
-              styles.tabButton,
-              isActive && styles.tabButtonActive,
-              isActive && { minHeight: TAB_ACTIVE_MIN_HEIGHT },
-            ]}
-            onPress={() => onTabPress(tab.key)}
-            activeOpacity={0.85}
+            id={TAB_TARGET_IDS[tab.key]}
+            onTutorialPress={() => onTabPress(tab.key)}
+            style={styles.tabTargetWrap}
           >
-            <GameIcon
-              name={tab.icon}
-              size={18}
-              color={isActive ? colors.accentBlue : colors.textMuted}
-            />
-            <Text
-              style={[styles.tabLabel, isActive && styles.tabLabelActive]}
-              numberOfLines={1}
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                isActive && styles.tabButtonActive,
+                isActive && { minHeight: TAB_ACTIVE_MIN_HEIGHT },
+              ]}
+              onPress={() => onTabPress(tab.key)}
+              activeOpacity={0.85}
             >
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
+              <GameIcon
+                name={tab.icon}
+                size={18}
+                color={isActive ? colors.accentBlue : colors.textMuted}
+              />
+              <Text
+                style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+                numberOfLines={1}
+              >
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          </TutorialTarget>
         );
       })}
     </>
@@ -115,6 +132,9 @@ const styles = StyleSheet.create({
     minHeight: BASE_TAB_HEIGHT,
     paddingTop: TAB_BAR_TOP_PADDING,
     paddingHorizontal: 4,
+  },
+  tabTargetWrap: {
+    flex: 1,
   },
   tabButton: {
     flex: 1,

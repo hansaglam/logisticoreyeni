@@ -47,6 +47,15 @@ export function normalizeTutorialState(raw?: Partial<TutorialState> | null): Tut
   };
 }
 
+function migrateLegacyMissionId(missionId: string): string {
+  return missionId === 'first_contract' ? 'first_contract_start' : missionId;
+}
+
+function migrateMissionIdList(ids: string[]): string[] {
+  const migrated = ids.map(migrateLegacyMissionId);
+  return [...new Set(migrated)];
+}
+
 export function normalizeMissionsState(raw?: Partial<MissionsState> | null): MissionsState {
   const defaults = createDefaultMissionsState();
   if (!raw) {
@@ -54,14 +63,15 @@ export function normalizeMissionsState(raw?: Partial<MissionsState> | null): Mis
   }
 
   const flags = raw.flags ?? defaults.flags;
+  const activeMissionIds =
+    safeStringArray(raw.activeMissionIds).length > 0
+      ? migrateMissionIdList(safeStringArray(raw.activeMissionIds))
+      : defaults.activeMissionIds;
 
   return {
-    activeMissionIds:
-      safeStringArray(raw.activeMissionIds).length > 0
-        ? safeStringArray(raw.activeMissionIds)
-        : defaults.activeMissionIds,
-    completedMissionIds: safeStringArray(raw.completedMissionIds),
-    claimedMissionRewardIds: safeStringArray(raw.claimedMissionRewardIds),
+    activeMissionIds,
+    completedMissionIds: migrateMissionIdList(safeStringArray(raw.completedMissionIds)),
+    claimedMissionRewardIds: migrateMissionIdList(safeStringArray(raw.claimedMissionRewardIds)),
     flags: {
       marketOpened: flags.marketOpened === true,
       deliveryStarted: flags.deliveryStarted === true,
@@ -96,6 +106,16 @@ function getContractIncomeTotal(
     .reduce((sum, entry) => sum + (entry.amount ?? 0), 0);
 }
 
+function countStartedDeliveries(
+  state: Pick<StoreGameState, 'player' | 'activeDeliveries' | 'missions'>,
+): number {
+  const missions = state.missions ?? createDefaultMissionsState();
+  const hasActive = (state.activeDeliveries?.length ?? 0) > 0;
+  const hasCompleted = (state.player.completedContracts ?? 0) > 0;
+  const flagged = missions.flags.deliveryStarted === true;
+  return hasActive || hasCompleted || flagged ? 1 : 0;
+}
+
 export function getMissionProgress(
   missionId: string,
   state: Pick<StoreGameState, 'player' | 'financeTotals' | 'financeLedger' | 'activeDeliveries' | 'missions'>,
@@ -106,13 +126,9 @@ export function getMissionProgress(
   let current = 0;
 
   switch (missionId) {
+    case 'first_contract_start':
     case 'first_contract':
-      current =
-        missions.flags.deliveryStarted ||
-        (state.activeDeliveries?.length ?? 0) > 0 ||
-        (state.player.completedContracts ?? 0) > 0
-          ? 1
-          : 0;
+      current = countStartedDeliveries(state);
       break;
     case 'first_delivery':
       current = state.player.completedContracts ?? 0;

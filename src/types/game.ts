@@ -757,6 +757,13 @@ export interface TutorialState {
   dismissedStepIds: string[];
 }
 
+export type SpotlightTutorialId = 'first_contract' | 'track_delivery' | 'market_basics';
+
+export interface SpotlightTutorialPersistence {
+  completedIds: SpotlightTutorialId[];
+  skippedIds: SpotlightTutorialId[];
+}
+
 export interface MissionsState {
   activeMissionIds: string[];
   completedMissionIds: string[];
@@ -808,6 +815,7 @@ export interface StoreGameState {
   financeTotals?: FinanceTotals;
   /** V1 başlangıç rehberi */
   tutorial: TutorialState;
+  spotlightTutorial: SpotlightTutorialPersistence;
   /** Başlangıç görevleri */
   missions: MissionsState;
 }

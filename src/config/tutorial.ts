@@ -14,7 +14,7 @@ export const TUTORIAL_STEPS: TutorialStepConfig[] = [
     id: 'open_contracts',
     title: 'İlk sözleşmeni bul',
     description:
-      'Başlamak için Sözleşmeler ekranından uygun bir taşıma işi seç.',
+      'Sözleşmeler ekranından kamyonunun bulunduğu şehirden çıkan uygun bir işi seç.',
     targetScreen: 'contracts',
     ctaLabel: 'Sözleşmelere Git',
   },

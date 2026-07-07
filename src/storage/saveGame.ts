@@ -20,6 +20,7 @@ import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals } from '../utils/financeLedger';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
+import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
 import type {
   City,
   Contract,
@@ -33,6 +34,7 @@ import type {
   Player,
   Product,
   Route,
+  SpotlightTutorialPersistence,
   StoreGameState,
   TutorialState,
   TruckTransfer,
@@ -96,6 +98,7 @@ export interface SaveGamePayload {
   lastDailyCleanupTime?: number;
   tutorial?: TutorialState;
   missions?: MissionsState;
+  spotlightTutorial?: SpotlightTutorialPersistence;
 }
 
 export interface SaveBackupStatus {
@@ -275,6 +278,11 @@ export function createDefaultSaveFallbacks(
     missions: normalizeMissionsState(
       isRecord(payload.missions) ? (payload.missions as Partial<MissionsState>) : undefined,
     ),
+    spotlightTutorial: normalizeSpotlightTutorialState(
+      isRecord(payload.spotlightTutorial)
+        ? (payload.spotlightTutorial as Partial<SpotlightTutorialPersistence>)
+        : undefined,
+    ),
     meta: {
       savedAt: safeNumber(metaRecord.savedAt, Date.now()),
       currentTime: safeNumber(metaRecord.currentTime, currentTime),
@@ -362,6 +370,7 @@ export function normalizeSavePayload(
     lastDailyCleanupTime: withFallbacks.lastDailyCleanupTime as number,
     tutorial: withFallbacks.tutorial as TutorialState,
     missions: withFallbacks.missions as MissionsState,
+    spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
   };
 }
 
@@ -523,6 +532,20 @@ async function clearMainSaveSlot(): Promise<void> {
     await AsyncStorage.removeItem(SAVE_STORAGE_KEY);
   } catch (error) {
     console.warn('[saveGame] clearMainSaveSlot failed:', error);
+    throw error;
+  }
+}
+
+/** Debug/test — ana kayıt ve isteğe bağlı yedek anahtarlarını temizler. */
+export async function clearAllDebugSaves(options?: { includeBackups?: boolean }): Promise<void> {
+  try {
+    await clearMainSaveSlot();
+    if (options?.includeBackups !== false) {
+      await AsyncStorage.multiRemove([SAVE_BACKUP_INVALID_KEY, SAVE_BACKUP_MIGRATED_KEY]);
+    }
+  } catch (error) {
+    console.warn('[saveGame] clearAllDebugSaves failed:', error);
+    throw error;
   }
 }
 
@@ -684,6 +707,7 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastDailyCleanupTime: state.lastDailyCleanupTime,
     tutorial: structuredClone(state.tutorial),
     missions: structuredClone(state.missions),
+    spotlightTutorial: structuredClone(state.spotlightTutorial),
   };
 }
 
@@ -721,6 +745,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
     tutorial: normalizeTutorialState(payload.tutorial),
     missions: normalizeMissionsState(payload.missions),
+    spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
   };
 }
 
@@ -811,6 +836,7 @@ export async function clearSavedGame(): Promise<void> {
     await activeSaveProvider.clear();
   } catch (error) {
     console.warn('[saveGame] clearSavedGame failed:', error);
+    throw error;
   }
 }
 

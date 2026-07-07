@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
+import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   ActionButton,
   AppCard,
@@ -990,12 +991,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               icon="route"
             />
           ) : (
-            opportunities.map((opportunity) => {
+            opportunities.map((opportunity, index) => {
               const matchCounts = opportunityMatchCounts.get(opportunity.id) ?? {
                 exactMatchesCount: 0,
                 relatedMatchesCount: 0,
               };
-              return (
+              const card = (
                 <OpportunityCard
                   key={opportunity.id}
                   opportunity={opportunity}
@@ -1003,6 +1004,16 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                   relatedMatchesCount={matchCounts.relatedMatchesCount}
                   onViewContracts={handleOpenContractsForOpportunity}
                 />
+              );
+
+              if (index !== 0) {
+                return card;
+              }
+
+              return (
+                <TutorialTarget key={opportunity.id} id="market-first-opportunity">
+                  {card}
+                </TutorialTarget>
               );
             })
           )}

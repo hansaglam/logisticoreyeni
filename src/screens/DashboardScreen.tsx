@@ -9,6 +9,8 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import type { TabKey } from '../components/BottomTabBar';
 import StarterMissionsCard from '../components/StarterMissionsCard';
+import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
+import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   ActionButton,
   AppCard,
@@ -778,7 +780,9 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     handleNavigate(nextAction.target);
   };
 
-  const showTutorialCard = tutorial?.isEnabled && !tutorial?.isCompleted;
+  const isSpotlightActive = useSpotlightTutorialStore((state) => state.isActive);
+  const showTutorialCard =
+    tutorial?.isEnabled && !tutorial?.isCompleted && !isSpotlightActive;
   const tutorialStep = showTutorialCard
     ? getTutorialStep(tutorial.currentStepId)
     : undefined;
@@ -900,12 +904,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       {deliveryPreview.length > 0 ? (
         <>
           <SectionTitle title="Aktif Teslimatlar" />
-          {deliveryPreview.map((delivery) => {
+          {deliveryPreview.map((delivery, index) => {
             const truck = player.trucks?.find((t) => t.id === delivery.truckId);
             const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
             const statusVariant = getDeliveryStatusVariant(delivery.status);
 
-            return (
+            const card = (
               <AppCard key={delivery.id} style={styles.listCard} padded>
                 <View style={styles.listCardHeader}>
                   <View style={styles.listCardTitleRow}>
@@ -931,6 +935,16 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
                   </Text>
                 </View>
               </AppCard>
+            );
+
+            if (index !== 0) {
+              return card;
+            }
+
+            return (
+              <TutorialTarget key={delivery.id} id="dashboard-active-delivery">
+                {card}
+              </TutorialTarget>
             );
           })}
           {extraDeliveryCount > 0 ? (

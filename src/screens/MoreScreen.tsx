@@ -23,6 +23,8 @@ import { getLevelProgress } from '../simulation/leveling';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
+import { restartSpotlightTutorial } from '../hooks/useSpotlightTutorialTriggers';
+import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import DebugSimulationScreen from './DebugSimulationScreen';
 import FinanceScreen from './FinanceScreen';
 import MissionsScreen from './MissionsScreen';
@@ -86,7 +88,7 @@ const MODULE_ITEMS: ModuleItem[] = [
   {
     key: 'debug',
     label: 'Simülasyon Testi',
-    subtitle: 'Yalnızca test sürümünde kullanılmalı',
+    subtitle: 'Internal test araçları',
     icon: 'maintenance',
     badge: { label: 'DEBUG', variant: 'amber' },
   },
@@ -101,6 +103,10 @@ const MODULE_ITEMS: ModuleItem[] = [
 ];
 
 const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
+
+const VISIBLE_MODULE_ITEMS = __DEV__
+  ? MODULE_ITEMS
+  : MODULE_ITEMS.filter((item) => item.key !== 'debug');
 
 function getCityName(cityId: string | undefined): string {
   if (!cityId) return 'Bilinmeyen şehir';
@@ -308,7 +314,7 @@ export default function MoreScreen() {
 
       <SectionTitle title="Yönetim Modülleri" compact />
 
-      {MODULE_ITEMS.map((item) => (
+      {VISIBLE_MODULE_ITEMS.map((item) => (
         <ListRowCard
           key={item.key}
           title={item.label}
@@ -326,12 +332,52 @@ export default function MoreScreen() {
         />
       ))}
 
-      <AppCard variant="soft" style={styles.debugNoteCard} padded={false}>
-        <GameIcon name="warning" size={14} color={colors.accentAmber} />
-        <Text style={styles.debugNoteText}>
-          Simülasyon Testi internal test aracıdır. Production öncesi gizlenecek.
-        </Text>
-      </AppCard>
+      {__DEV__ ? (
+        <AppCard variant="soft" style={styles.debugNoteCard} padded>
+          <SectionTitle title="Tutorial (Test)" compact />
+          <Text style={styles.debugNoteText}>
+            Spotlight tutorial akışlarını yeniden başlatmak için aşağıdaki butonları kullan.
+          </Text>
+          <View style={styles.tutorialRestartRow}>
+            <TouchableOpacity
+              style={styles.tutorialRestartButton}
+              onPress={() => restartSpotlightTutorial('first_contract')}
+            >
+              <Text style={styles.tutorialRestartText}>İlk Sözleşme</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.tutorialRestartButton}
+              onPress={() => restartSpotlightTutorial('track_delivery')}
+            >
+              <Text style={styles.tutorialRestartText}>Teslimat Takibi</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.tutorialRestartButton}
+              onPress={() => restartSpotlightTutorial('market_basics')}
+            >
+              <Text style={styles.tutorialRestartText}>Piyasa</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity
+            onPress={() => {
+              useGameStore.getState().resetSpotlightTutorials();
+              useSpotlightTutorialStore.getState().resetActive();
+              Alert.alert('Tutorial sıfırlandı', 'Tüm spotlight tutorial ilerlemesi temizlendi.');
+            }}
+          >
+            <Text style={styles.tutorialResetAll}>Tüm tutorial kaydını sıfırla</Text>
+          </TouchableOpacity>
+        </AppCard>
+      ) : null}
+
+      {__DEV__ ? (
+        <AppCard variant="soft" style={styles.debugNoteCard} padded={false}>
+          <GameIcon name="warning" size={14} color={colors.accentAmber} />
+          <Text style={styles.debugNoteText}>
+            Simülasyon Testi internal test aracıdır. Production öncesi gizlenecek.
+          </Text>
+        </AppCard>
+      ) : null}
     </AppScreen>
   );
 }
@@ -522,5 +568,30 @@ const styles = StyleSheet.create({
     flex: 1,
     lineHeight: 15,
     color: colors.textSecondary,
+  },
+  tutorialRestartRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  tutorialRestartButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 10,
+    backgroundColor: colors.accentBlueSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+  },
+  tutorialRestartText: {
+    ...typography.caption,
+    color: colors.accentBlue,
+    fontWeight: '700',
+  },
+  tutorialResetAll: {
+    ...typography.caption,
+    color: colors.accentAmber,
+    fontWeight: '700',
   },
 });

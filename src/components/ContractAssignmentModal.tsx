@@ -42,6 +42,8 @@ import {
 } from './ui';
 import type { StatusBadgeVariant } from './ui';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
+import TutorialOverlay from './tutorial/TutorialOverlay';
+import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
 
 const MIN_TRUCK_CONDITION = 30;
@@ -750,14 +752,26 @@ export default function ContractAssignmentModal({
             subtitle="Bu sözleşme için uygun kamyonu seç."
           >
             {renderNoTruckCard()}
-            {truckOptions.map((option) => (
-              <TruckCard
-                key={option.truck.id}
-                option={option}
-                selected={option.truck.id === selectedTruckId}
-                onSelect={() => setSelectedTruckId(option.truck.id)}
-              />
-            ))}
+            {truckOptions.map((option, index) => {
+              const card = (
+                <TruckCard
+                  key={option.truck.id}
+                  option={option}
+                  selected={option.truck.id === selectedTruckId}
+                  onSelect={() => setSelectedTruckId(option.truck.id)}
+                />
+              );
+
+              if (index !== 0) {
+                return card;
+              }
+
+              return (
+                <TutorialTarget key={option.truck.id} id="assignment-truck-card">
+                  {card}
+                </TutorialTarget>
+              );
+            })}
           </AssignmentSection>
 
           <AssignmentSection
@@ -766,14 +780,26 @@ export default function ContractAssignmentModal({
             subtitle="Teslimatı yapacak şoförü seç."
           >
             {renderNoDriverCard()}
-            {driverOptions.map((option) => (
-              <DriverCard
-                key={option.driver.id}
-                option={option}
-                selected={option.driver.id === selectedDriverId}
-                onSelect={() => setSelectedDriverId(option.driver.id)}
-              />
-            ))}
+            {driverOptions.map((option, index) => {
+              const card = (
+                <DriverCard
+                  key={option.driver.id}
+                  option={option}
+                  selected={option.driver.id === selectedDriverId}
+                  onSelect={() => setSelectedDriverId(option.driver.id)}
+                />
+              );
+
+              if (index !== 0) {
+                return card;
+              }
+
+              return (
+                <TutorialTarget key={option.driver.id} id="assignment-driver-card">
+                  {card}
+                </TutorialTarget>
+              );
+            })}
           </AssignmentSection>
         </ScrollView>
 
@@ -782,21 +808,31 @@ export default function ContractAssignmentModal({
           {!canConfirm ? (
             <Text style={styles.footerHint}>Başlamak için uygun kamyon ve şoför seç.</Text>
           ) : null}
-          <ActionButton
-            label="Teslimatı Başlat"
-            icon="truck"
-            onPress={() => {
+          <TutorialTarget
+            id="assignment-start-button"
+            onTutorialPress={() => {
               if (selectedTruckId && selectedDriverId && canConfirm) {
                 onConfirm(selectedTruckId, selectedDriverId);
               }
             }}
-            disabled={!canConfirm}
-            fullWidth
-            variant="primary"
-            style={styles.startButton}
-          />
+          >
+            <ActionButton
+              label="Teslimatı Başlat"
+              icon="truck"
+              onPress={() => {
+                if (selectedTruckId && selectedDriverId && canConfirm) {
+                  onConfirm(selectedTruckId, selectedDriverId);
+                }
+              }}
+              disabled={!canConfirm}
+              fullWidth
+              variant="primary"
+              style={styles.startButton}
+            />
+          </TutorialTarget>
         </View>
       </View>
+      <TutorialOverlay layer="modal" />
     </Modal>
   );
 }

@@ -24,6 +24,7 @@ import type {
   MarketOpportunity,
   ProductId,
   SimulationGameState,
+  SpotlightTutorialId,
   StartDeliveryResult,
   StartTruckTransferResult,
   StoreGameState,
@@ -77,6 +78,7 @@ import {
   processContractGenerationSchedule,
   type ContractGenerationDebugSnapshot,
 } from '../simulation/contracts';
+import { ensureStarterContracts } from '../simulation/starterContracts';
 import {
   availabilityReasonToStartDeliveryErrorCode,
   calculateDeliverySettlement,
@@ -151,6 +153,12 @@ import { createDefaultMissionsState } from '../config/missions';
 import { getMissionById } from '../config/missions';
 import { createDefaultTutorialState } from '../config/tutorial';
 import {
+  clearSpotlightTutorialProgressState,
+  createDefaultSpotlightTutorialState,
+  markSpotlightTutorialCompletedState,
+  markSpotlightTutorialSkippedState,
+} from '../tutorial/spotlightTutorialState';
+import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
   computeElapsedOperatingDays,
@@ -183,6 +191,7 @@ import {
 } from '../simulation/leveling';
 import type { ApplyXpResult, LevelBenefits } from '../simulation/leveling';
 import {
+  clearAllDebugSaves,
   clearSavedGame,
   getSaveBackupStatus,
   hasSavedGame,
@@ -577,6 +586,30 @@ function resetTransientGameUiState(): void {
   completedTransferNotificationIds.clear();
 }
 
+function createFreshGameStorePatch(): Partial<GameStore> {
+  const freshState = createInitialGameState();
+  return {
+    ...freshState,
+    notifications: [],
+    navigationRequest: null,
+    pendingMoreSubRoute: null,
+    pendingFleetSubTab: null,
+    marketContractFilter: null,
+    highlightedContractId: null,
+    contractGenerationDebug: createEmptyContractGenerationDebug(0),
+    deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
+    dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
+      {
+        ...freshState,
+        lastDailyOperatingCostTime: 0,
+      },
+      null,
+    ),
+    isGameReady: true,
+    saveError: null,
+  };
+}
+
 function formatFailureReason(reason: DeliveryFailureReason): string {
   switch (reason) {
     case 'breakdown':
@@ -805,9 +838,27 @@ export function createInitialGameState(): StoreGameState {
       playerLevel: 1,
       ownedMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
       idleMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
+      idleTruckOriginCityIds: ['izmir'],
     },
   );
-  const contracts = balanceAvailableContractLevelMix(rawContracts, 1);
+  const balancedContracts = balanceAvailableContractLevelMix(rawContracts, 1);
+  const starterPlayer = {
+    level: 1,
+    companyLevel: 1,
+    homeCityId: 'izmir' as const,
+    trucks: [structuredClone(STARTER_TRUCK)],
+    drivers: [structuredClone(STARTER_DRIVER)],
+  };
+  const contracts = ensureStarterContracts({
+    contracts: balancedContracts,
+    cities: citiesToRecord(cities),
+    routes: ROUTES,
+    products: PRODUCTS,
+    globalEconomy,
+    player: starterPlayer,
+    currentTime: 0,
+    minCount: 2,
+  });
 
   return {
     currentTime: 0,
@@ -881,6 +932,7 @@ export function createInitialGameState(): StoreGameState {
     financeTotals: createEmptyFinanceTotals(),
     tutorial: createDefaultTutorialState(),
     missions: createDefaultMissionsState(),
+    spotlightTutorial: createDefaultSpotlightTutorialState(),
   };
 }
 
@@ -921,6 +973,20 @@ export interface GameStore extends StoreGameState {
   saveGame: () => Promise<void>;
   loadGame: (preloaded?: Awaited<ReturnType<typeof loadGameStateWithMeta>>) => Promise<boolean>;
   clearSave: () => Promise<void>;
+  /** Debug/test — AsyncStorage kaydını siler ve tamamen yeni oyun başlatır */
+  resetGameForTesting: () => Promise<void>;
+  getDebugSaveInfo: () => {
+    hasHydrated: boolean;
+    hasSavedGame: boolean;
+    gameDay: number;
+    currentTime: number;
+    tutorialStepId: TutorialStepId;
+    tutorialCompletedStepIds: string[];
+    spotlightCompletedIds: string[];
+    spotlightSkippedIds: string[];
+    missionsCompletedIds: string[];
+    missionsClaimedRewardIds: string[];
+  };
   autoSave: (reason?: AutoSaveReason) => void;
   markSaveDirty: () => void;
   setAutoSaveEnabled: (enabled: boolean) => void;
@@ -982,6 +1048,11 @@ export interface GameStore extends StoreGameState {
   setCurrentTutorialStep: (stepId: TutorialStepId) => void;
   dismissTutorialStep: (stepId: TutorialStepId) => void;
   resetTutorial: () => void;
+  markSpotlightTutorialCompleted: (tutorialId: SpotlightTutorialId) => void;
+  markSpotlightTutorialSkipped: (tutorialId: SpotlightTutorialId) => void;
+  clearSpotlightTutorialProgress: (tutorialId: SpotlightTutorialId) => void;
+  resetSpotlightTutorials: () => void;
+  ensureStarterContractsForTutorial: () => void;
   notifyContractsScreenOpened: () => void;
   notifyContractAssignmentOpened: () => void;
   notifyTutorialDeliveryStarted: () => void;
@@ -1187,6 +1258,80 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   resetTutorial: () => {
     set({ tutorial: createDefaultTutorialState() });
+    get().markSaveDirty();
+  },
+
+  markSpotlightTutorialCompleted: (tutorialId) => {
+    const state = get();
+    set({
+      spotlightTutorial: markSpotlightTutorialCompletedState(
+        state.spotlightTutorial ?? createDefaultSpotlightTutorialState(),
+        tutorialId,
+      ),
+    });
+    get().markSaveDirty();
+    get().autoSave('manual');
+  },
+
+  markSpotlightTutorialSkipped: (tutorialId) => {
+    const state = get();
+    set({
+      spotlightTutorial: markSpotlightTutorialSkippedState(
+        state.spotlightTutorial ?? createDefaultSpotlightTutorialState(),
+        tutorialId,
+      ),
+    });
+    get().markSaveDirty();
+    get().autoSave('manual');
+  },
+
+  clearSpotlightTutorialProgress: (tutorialId) => {
+    const state = get();
+    set({
+      spotlightTutorial: clearSpotlightTutorialProgressState(
+        state.spotlightTutorial ?? createDefaultSpotlightTutorialState(),
+        tutorialId,
+      ),
+    });
+    get().markSaveDirty();
+  },
+
+  resetSpotlightTutorials: () => {
+    set({ spotlightTutorial: createDefaultSpotlightTutorialState() });
+    get().markSaveDirty();
+  },
+
+  ensureStarterContractsForTutorial: () => {
+    const state = get();
+    if (!state.player) {
+      return;
+    }
+
+    const nextContracts = ensureStarterContracts({
+      contracts: state.contracts ?? [],
+      cities: citiesToRecord(state.cities),
+      routes: state.routes ?? ROUTES,
+      products: state.products ?? PRODUCTS,
+      globalEconomy: state.globalEconomy,
+      player: state.player,
+      currentTime: state.currentTime,
+      minCount: 1,
+    });
+
+    if (nextContracts.length === state.contracts.length) {
+      let changed = false;
+      for (let index = 0; index < nextContracts.length; index += 1) {
+        if (nextContracts[index]?.id !== state.contracts[index]?.id) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) {
+        return;
+      }
+    }
+
+    set({ contracts: nextContracts });
     get().markSaveDirty();
   },
 
@@ -1611,6 +1756,83 @@ export const useGameStore = create<GameStore>((set, get) => ({
     resetAutoSaveTracking(0);
     await get().saveGame();
     await get().refreshSaveStatus();
+  },
+
+  resetGameForTesting: async () => {
+    isLoadingSave = true;
+    isSavingGame = true;
+    patchSaveStatus(set, { isLoadingSave: true, isSaving: true });
+
+    try {
+      await clearAllDebugSaves({ includeBackups: true });
+      resetTransientGameUiState();
+
+      set(createFreshGameStorePatch());
+
+      resetAutoSaveTracking(0);
+      hasHydratedGame = true;
+      saveDirty = false;
+
+      await saveGameState(get());
+      lastAutoSaveAt = Date.now();
+      lastSavedGameTime = 0;
+
+      patchSaveStatus(set, {
+        hasSave: true,
+        hasValidSave: true,
+        lastSavedAt: lastAutoSaveAt,
+        isDirty: false,
+        isSaving: false,
+        lastSaveError: null,
+        migratedFromVersion: null,
+        backup: { invalid: false, migrated: false },
+      });
+
+      get().refreshContractsFromMarket();
+      get().ensureStarterContractsForTutorial();
+      get().addNotification({
+        time: get().currentTime,
+        type: 'success',
+        title: 'Test kaydı sıfırlandı',
+        message: 'Test kaydı sıfırlandı. Yeni oyun başlatıldı.',
+      });
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('./spotlightTutorialStore').useSpotlightTutorialStore.getState().resetActive();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Test kaydı sıfırlanamadı.';
+      console.warn('[gameStore] resetGameForTesting failed:', error);
+      patchSaveStatus(set, { lastSaveError: message });
+      get().addNotification({
+        time: get().currentTime,
+        type: 'error',
+        title: 'Sıfırlama başarısız',
+        message,
+      });
+    } finally {
+      isLoadingSave = false;
+      isSavingGame = false;
+      patchSaveStatus(set, { isLoadingSave: false, isSaving: false });
+      await get().refreshSaveStatus();
+    }
+  },
+
+  getDebugSaveInfo: () => {
+    const state = get();
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    const missions = state.missions ?? createDefaultMissionsState();
+    const spotlight = state.spotlightTutorial ?? createDefaultSpotlightTutorialState();
+    return {
+      hasHydrated: hasHydratedGame,
+      hasSavedGame: state.saveStatus.hasSave,
+      gameDay: Math.floor(state.currentTime / 24) + 1,
+      currentTime: state.currentTime,
+      tutorialStepId: tutorial.currentStepId,
+      tutorialCompletedStepIds: tutorial.completedStepIds,
+      spotlightCompletedIds: spotlight.completedIds,
+      spotlightSkippedIds: spotlight.skippedIds,
+      missionsCompletedIds: missions.completedMissionIds,
+      missionsClaimedRewardIds: missions.claimedMissionRewardIds,
+    };
   },
 
   autoSave: (reason?: AutoSaveReason) => {

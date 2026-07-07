@@ -4,7 +4,7 @@
  * Piyasadaki taşıma sözleşmelerini premium dark UI ile yönetme ekranı.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   SafeAreaView,
@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
+import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   AppScreen,
   EmptyState,
@@ -51,6 +52,7 @@ import {
   hasIdleTruckAtOrigin,
 } from '../simulation/delivery';
 import { useGameStore } from '../store/gameStore';
+import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import type {
@@ -1125,6 +1127,39 @@ export default function ContractsScreen() {
     marketContractFilter,
   ]);
 
+  const firstTutorialContractId = useMemo(() => {
+    for (const contract of filteredContracts) {
+      const preview = contractPreviewById.get(contract.id);
+      if (preview?.availability.canStart) {
+        return contract.id;
+      }
+    }
+    return filteredContracts[0]?.id ?? null;
+  }, [contractPreviewById, filteredContracts]);
+
+  const hasActiveMarketFilter =
+    isMarketOpportunityFilter(marketContractFilter) || isRouteContractFilter(marketContractFilter);
+
+  useEffect(() => {
+    if (!__DEV__) {
+      return;
+    }
+    const spotlight = useSpotlightTutorialStore.getState();
+    if (
+      spotlight.isActive &&
+      spotlight.tutorialId === 'first_contract' &&
+      spotlight.currentStepIndex === 1 &&
+      spotlight.activeTab === 'contracts' &&
+      !firstTutorialContractId
+    ) {
+      console.warn('[tutorial] No starter contract found for first_contract tutorial');
+    }
+  }, [firstTutorialContractId]);
+
+  const scrollTutorialContractIntoView = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }, []);
+
   const completedPreviewById = useMemo(() => {
     if (!globalEconomy) {
       return new Map<string, ContractPreview>();
@@ -1357,8 +1392,18 @@ export default function ContractsScreen() {
 
               {availableContracts.length === 0 ? (
                 <EmptyState
-                  title="Şu anda uygun sözleşme yok"
+                  title="Şu anda piyasada sözleşme yok."
                   message="Piyasa yeni fırsatlar oluşturdukça burada görünecek."
+                  icon="contract"
+                />
+              ) : filteredContracts.length === 0 ? (
+                <EmptyState
+                  title="Bu filtreye uygun sözleşme yok."
+                  message={
+                    hasActiveMarketFilter
+                      ? 'Filtreyi temizleyerek tüm müsait sözleşmeleri görebilirsin.'
+                      : 'Farklı bir filtre seçerek veya piyasanın yenilenmesini bekleyerek tekrar dene.'
+                  }
                   icon="contract"
                 />
               ) : (
@@ -1368,9 +1413,8 @@ export default function ContractsScreen() {
                     return null;
                   }
 
-                  return (
+                  const card = (
                     <ContractCard
-                      key={contract.id}
                       contract={contract}
                       preview={preview}
                       trucks={player.trucks ?? []}
@@ -1383,6 +1427,21 @@ export default function ContractsScreen() {
                       }
                       onPress={() => openAssignmentModal(contract)}
                     />
+                  );
+
+                  if (contract.id !== firstTutorialContractId) {
+                    return <React.Fragment key={contract.id}>{card}</React.Fragment>;
+                  }
+
+                  return (
+                    <TutorialTarget
+                      key={contract.id}
+                      id="contract-first-card"
+                      onTutorialPress={() => openAssignmentModal(contract)}
+                      scrollIntoView={scrollTutorialContractIntoView}
+                    >
+                      {card}
+                    </TutorialTarget>
                   );
                 })
               )}

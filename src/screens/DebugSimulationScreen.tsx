@@ -8,6 +8,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -486,6 +487,8 @@ export default function DebugSimulationScreen() {
   const saveGame = useGameStore((state) => state.saveGame);
   const loadGame = useGameStore((state) => state.loadGame);
   const clearSave = useGameStore((state) => state.clearSave);
+  const resetGameForTesting = useGameStore((state) => state.resetGameForTesting);
+  const getDebugSaveInfo = useGameStore((state) => state.getDebugSaveInfo);
   const saveStatus = useGameStore((state) => state.saveStatus);
   const saveError = useGameStore((state) => state.saveError);
   const refreshSaveStatus = useGameStore((state) => state.refreshSaveStatus);
@@ -753,6 +756,52 @@ export default function DebugSimulationScreen() {
       setError(error instanceof Error ? error.message : 'Clear save failed');
     }
   };
+
+  const handleResetTestSave = () => {
+    Alert.alert(
+      'Test kaydı sıfırlansın mı?',
+      'Bu işlem mevcut oyun kaydını siler ve yeni oyun başlatır.',
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Sıfırla',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await resetGameForTesting();
+                await refreshSaveStatus();
+                setSuccess('Test kaydı sıfırlandı. Yeni oyun başlatıldı.');
+              } catch (error) {
+                setError(error instanceof Error ? error.message : 'Test kaydı sıfırlanamadı');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const tutorial = useGameStore((state) => state.tutorial);
+  const missions = useGameStore((state) => state.missions);
+
+  const debugSaveInfo = useMemo(
+    () => getDebugSaveInfo(),
+    [
+      currentTime,
+      isGameReady,
+      saveStatus.hasSave,
+      saveStatus.isLoadingSave,
+      tutorial?.currentStepId,
+      tutorial?.completedStepIds,
+      missions?.completedMissionIds,
+      missions?.claimedMissionRewardIds,
+    ],
+  );
+  const debugTutorialStepId = tutorial?.currentStepId ?? debugSaveInfo.tutorialStepId;
+  const debugTutorialCompleted = tutorial?.completedStepIds ?? debugSaveInfo.tutorialCompletedStepIds;
+  const debugMissionsCompleted = missions?.completedMissionIds ?? debugSaveInfo.missionsCompletedIds;
+  const debugMissionsClaimed = missions?.claimedMissionRewardIds ?? debugSaveInfo.missionsClaimedRewardIds;
 
   const handleResetGame = () => {
     try {
@@ -1277,7 +1326,85 @@ export default function DebugSimulationScreen() {
         {/* TODO: Hide Save Status debug panel in production builds. */}
         <Section title="Save Status">
           <View style={styles.saveStatusCard}>
+            <DebugButton
+              label="Test Kaydını Sıfırla"
+              onPress={handleResetTestSave}
+              variant="danger"
+            />
+            <Text style={styles.debugNoteText}>
+              AsyncStorage kaydını siler, tutorial ve görevleri sıfırlar, yeni oyun başlatır.
+            </Text>
             <View style={styles.statGrid}>
+              <StatItem
+                label="Game Day"
+                value={`G${debugSaveInfo.gameDay}`}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Current Time"
+                value={`${debugSaveInfo.currentTime.toFixed(1)}h`}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Has Hydrated"
+                value={debugSaveInfo.hasHydrated ? 'Yes' : 'No'}
+                color={debugSaveInfo.hasHydrated ? COLORS.success : COLORS.danger}
+              />
+              <StatItem
+                label="Has Saved Game"
+                value={debugSaveInfo.hasSavedGame ? 'Yes' : 'No'}
+                color={debugSaveInfo.hasSavedGame ? COLORS.success : COLORS.textMuted}
+              />
+              <StatItem
+                label="Tutorial Step"
+                value={debugTutorialStepId}
+                color={COLORS.primary}
+              />
+              <StatItem
+                label="Tutorial Done"
+                value={
+                  debugTutorialCompleted.length > 0
+                    ? debugTutorialCompleted.join(', ')
+                    : '—'
+                }
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Missions Done"
+                value={
+                  debugMissionsCompleted.length > 0 ? debugMissionsCompleted.join(', ') : '—'
+                }
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Rewards Claimed"
+                value={
+                  debugMissionsClaimed.length > 0 ? debugMissionsClaimed.join(', ') : '—'
+                }
+                color={COLORS.secondary}
+              />
+            </View>
+          </View>
+          <View style={styles.saveStatusCard}>
+            <View style={styles.statGrid}>
+              <StatItem
+                label="Spotlight Done"
+                value={
+                  debugSaveInfo.spotlightCompletedIds.length > 0
+                    ? debugSaveInfo.spotlightCompletedIds.join(', ')
+                    : '—'
+                }
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Spotlight Skipped"
+                value={
+                  debugSaveInfo.spotlightSkippedIds.length > 0
+                    ? debugSaveInfo.spotlightSkippedIds.join(', ')
+                    : '—'
+                }
+                color={COLORS.secondary}
+              />
               <StatItem
                 label="Save Exists"
                 value={saveStatus.hasSave ? 'Yes' : 'No'}

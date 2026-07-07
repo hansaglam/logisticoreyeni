@@ -10,7 +10,10 @@ import { ActivityIndicator, AppState, StatusBar, StyleSheet, Text, View } from '
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
 import BottomTabBar, { type TabDefinition, type TabKey } from './src/components/BottomTabBar';
 import GameToast from './src/components/GameToast';
+import TutorialOverlay from './src/components/tutorial/TutorialOverlay';
 import { useGameLoop } from './src/hooks/useGameLoop';
+import { useSpotlightTutorialTriggers } from './src/hooks/useSpotlightTutorialTriggers';
+import { useSpotlightTutorialStore } from './src/store/spotlightTutorialStore';
 import { useGameStore } from './src/store/gameStore';
 
 import DashboardScreen from './src/screens/DashboardScreen';
@@ -56,8 +59,18 @@ function renderActiveScreen(
 function AppShell() {
   useGameLoop();
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const isGameReady = useGameStore((state) => state.isGameReady);
   const navigationRequest = useGameStore((state) => state.navigationRequest);
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
+
+  useSpotlightTutorialTriggers({ activeTab, isGameReady });
+
+  useEffect(() => {
+    useSpotlightTutorialStore.getState().setTabNavigator(setActiveTab);
+    return () => {
+      useSpotlightTutorialStore.getState().setTabNavigator(null);
+    };
+  }, []);
 
   const handleOpenWarehouse = () => {
     useGameStore.setState({
@@ -79,6 +92,7 @@ function AppShell() {
         {renderActiveScreen(activeTab, setActiveTab, handleOpenWarehouse)}
       </View>
       <GameToast />
+      <TutorialOverlay layer="root" />
       <BottomTabBar tabs={TABS} activeTab={activeTab} onTabPress={setActiveTab} />
     </View>
   );

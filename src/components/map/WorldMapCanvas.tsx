@@ -5,18 +5,15 @@
  * marker'ları. Tüm overlay koordinatları tek mapBounds kaynağından hesaplanır.
  */
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
-  ImageBackground,
   LayoutChangeEvent,
-  PanResponder,
   Pressable,
   StyleSheet,
-  Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { Asset } from 'expo-asset';
 import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 
 import { debugConfig } from '../../config/debug';
@@ -26,17 +23,20 @@ import type { City, Contract, Delivery, Route, TruckTransfer } from '../../types
 import IdleTruckCountBadge from './IdleTruckCountBadge';
 
 const MAP_IMAGE = require('../../../assets/maps/turkey-relief.png');
-const mapImageSize = Image.resolveAssetSource(MAP_IMAGE);
-const MAP_ASPECT_RATIO = mapImageSize.width / mapImageSize.height;
+
+function resolveMapAspectRatio(): number {
+  const source = Image.resolveAssetSource(MAP_IMAGE);
+  if (source?.width && source?.height && source.height > 0) {
+    return source.width / source.height;
+  }
+  return 1.55;
+}
+
+const MAP_ASPECT_RATIO = resolveMapAspectRatio();
 
 // Enable debugConfig.mapCalibrationEnabled temporarily to calibrate map city positions.
 // Tap on the map and copy xPct/yPct values into worldMapPositions.ts.
-// Recommended: reset zoom to 1 before calibrating (inverse transform is applied if zoomed).
 const MAP_CALIBRATION_ENABLED = debugConfig.mapCalibrationEnabled;
-
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 2.5;
-const ZOOM_STEP = 0.25;
 
 export type NetworkFilterKey = 'all' | 'trucks' | 'depots' | 'routes' | 'opportunities';
 
@@ -51,9 +51,6 @@ const COLORS = {
   pinDepot: '#38BDF8',
   pinStroke: '#0F172A',
   text: '#F9FAFB',
-  zoomAccent: '#38BDF8',
-  zoomPanelBg: '#0F172A',
-  zoomPanelBorder: '#1E293B',
 };
 
 const TRANSFER_ROUTE_COLOR = '#64748B';
@@ -84,49 +81,6 @@ export type WorldMapCanvasProps = {
 interface MapBounds {
   width: number;
   height: number;
-}
-
-interface PanOffset {
-  x: number;
-  y: number;
-}
-
-function clampZoom(value: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
-}
-
-function getMaxPan(bounds: MapBounds, zoom: number): PanOffset {
-  if (zoom <= MIN_ZOOM || bounds.width === 0 || bounds.height === 0) {
-    return { x: 0, y: 0 };
-  }
-  return {
-    x: (bounds.width * (zoom - 1)) / 2,
-    y: (bounds.height * (zoom - 1)) / 2,
-  };
-}
-
-function clampPan(pan: PanOffset, bounds: MapBounds, zoom: number): PanOffset {
-  const max = getMaxPan(bounds, zoom);
-  return {
-    x: Math.min(max.x, Math.max(-max.x, pan.x)),
-    y: Math.min(max.y, Math.max(-max.y, pan.y)),
-  };
-}
-
-/** Viewport tap → harita içerik koordinatı (scale-from-center + pan ters dönüşüm) */
-function viewportToMapContent(
-  viewportX: number,
-  viewportY: number,
-  bounds: MapBounds,
-  zoom: number,
-  pan: PanOffset,
-): { x: number; y: number } {
-  const centerX = bounds.width / 2;
-  const centerY = bounds.height / 2;
-  return {
-    x: (viewportX - centerX - pan.x) / zoom + centerX,
-    y: (viewportY - centerY - pan.y) / zoom + centerY,
-  };
 }
 
 function buildCurvePath(x1: number, y1: number, x2: number, y2: number, bend = 0.18) {
@@ -168,59 +122,6 @@ function getIdleBadgeVisual(filter: NetworkFilterKey): { opacity: number; promin
   return { opacity: 0.92, prominent: false };
 }
 
-interface MapZoomControlsProps {
-  zoom: number;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onReset: () => void;
-}
-
-function MapZoomControls({ zoom, onZoomIn, onZoomOut, onReset }: MapZoomControlsProps) {
-  const atMin = zoom <= MIN_ZOOM;
-  const atMax = zoom >= MAX_ZOOM;
-
-  return (
-    <View style={styles.zoomControls} pointerEvents="box-none">
-      {zoom > MIN_ZOOM ? (
-        <View style={styles.zoomBadge}>
-          <Text style={styles.zoomBadgeText}>{zoom.toFixed(1)}x</Text>
-        </View>
-      ) : null}
-      <View style={styles.zoomPanel}>
-        <TouchableOpacity
-          style={styles.zoomButton}
-          onPress={onZoomIn}
-          disabled={atMax}
-          activeOpacity={0.7}
-          accessibilityLabel="Yakınlaştır"
-        >
-          <Text style={[styles.zoomButtonText, atMax && styles.zoomButtonTextDisabled]}>+</Text>
-        </TouchableOpacity>
-        <View style={styles.zoomDivider} />
-        <TouchableOpacity
-          style={styles.zoomButton}
-          onPress={onZoomOut}
-          disabled={atMin}
-          activeOpacity={0.7}
-          accessibilityLabel="Uzaklaştır"
-        >
-          <Text style={[styles.zoomButtonText, atMin && styles.zoomButtonTextDisabled]}>−</Text>
-        </TouchableOpacity>
-        <View style={styles.zoomDivider} />
-        <TouchableOpacity
-          style={styles.zoomButton}
-          onPress={onReset}
-          disabled={atMin}
-          activeOpacity={0.7}
-          accessibilityLabel="Sıfırla"
-        >
-          <Text style={[styles.zoomButtonText, atMin && styles.zoomButtonTextDisabled]}>⌖</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
 export default function WorldMapCanvas({
   cities = [],
   routes: _routes = [],
@@ -239,9 +140,29 @@ export default function WorldMapCanvas({
   calibrationMode = false,
 }: WorldMapCanvasProps) {
   const [containerWidth, setContainerWidth] = useState(0);
-  const [zoom, setZoom] = useState(MIN_ZOOM);
-  const [pan, setPan] = useState<PanOffset>({ x: 0, y: 0 });
-  const panStartRef = useRef<PanOffset>({ x: 0, y: 0 });
+  const [mapImageReady, setMapImageReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const asset = Asset.fromModule(MAP_IMAGE);
+        await asset.downloadAsync();
+        if (!cancelled && __DEV__) {
+          console.log('[map] asset preloaded', asset.localUri ?? asset.uri);
+        }
+      } catch (error) {
+        if (!cancelled && __DEV__) {
+          console.warn('[map] asset preload failed', error);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const mapBounds = useMemo<MapBounds>(() => {
     const width = containerWidth;
@@ -256,75 +177,31 @@ export default function WorldMapCanvas({
     }
   }, []);
 
-  const applyZoom = useCallback(
-    (nextZoom: number) => {
-      const clamped = clampZoom(nextZoom);
-      setZoom(clamped);
-      if (clamped <= MIN_ZOOM) {
-        setPan({ x: 0, y: 0 });
-        return;
-      }
-      setPan((current) => clampPan(current, mapBounds, clamped));
-    },
-    [mapBounds],
-  );
-
-  const zoomIn = useCallback(() => {
-    applyZoom(zoom + ZOOM_STEP);
-  }, [applyZoom, zoom]);
-
-  const zoomOut = useCallback(() => {
-    applyZoom(zoom - ZOOM_STEP);
-  }, [applyZoom, zoom]);
-
-  const resetZoom = useCallback(() => {
-    setZoom(MIN_ZOOM);
-    setPan({ x: 0, y: 0 });
-  }, []);
-
   const handleCalibrationTap = useCallback(
     (viewportX: number, viewportY: number) => {
       if (!MAP_CALIBRATION_ENABLED || mapBounds.width === 0 || mapBounds.height === 0) {
         return;
       }
-      const content = viewportToMapContent(viewportX, viewportY, mapBounds, zoom, pan);
-      const xPct = Math.round((content.x / mapBounds.width) * 1000) / 10;
-      const yPct = Math.round((content.y / mapBounds.height) * 1000) / 10;
-      console.log('[calibration]', { xPct, yPct, zoom });
+      const xPct = Math.round((viewportX / mapBounds.width) * 1000) / 10;
+      const yPct = Math.round((viewportY / mapBounds.height) * 1000) / 10;
+      console.log('[calibration]', { xPct, yPct });
     },
-    [mapBounds, pan, zoom],
+    [mapBounds],
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_event, gestureState) =>
-          zoom > MIN_ZOOM &&
-          (Math.abs(gestureState.dx) > 4 || Math.abs(gestureState.dy) > 4),
-        onPanResponderGrant: () => {
-          panStartRef.current = pan;
-        },
-        onPanResponderMove: (_event, gestureState) => {
-          const nextPan = clampPan(
-            {
-              x: panStartRef.current.x + gestureState.dx,
-              y: panStartRef.current.y + gestureState.dy,
-            },
-            mapBounds,
-            zoom,
-          );
-          setPan(nextPan);
-        },
-      }),
-    [mapBounds, pan, zoom],
-  );
+  const handleMapImageLoad = useCallback(() => {
+    setMapImageReady(true);
+    if (__DEV__) {
+      console.log('[map] image loaded');
+    }
+  }, []);
 
-  const mapTransformStyle = useMemo(
-    () => ({
-      transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale: zoom }],
-    }),
-    [pan.x, pan.y, zoom],
-  );
+  const handleMapImageError = useCallback(() => {
+    setMapImageReady(false);
+    if (__DEV__) {
+      console.warn('[map] image failed to load');
+    }
+  }, []);
 
   const showTrucks = selectedFilter === 'all' || selectedFilter === 'trucks';
   const showDepots = selectedFilter === 'all' || selectedFilter === 'depots';
@@ -346,172 +223,176 @@ export default function WorldMapCanvas({
 
   return (
     <View style={styles.wrapper} onLayout={handleWrapperLayout}>
-      <View style={[styles.viewport, viewportStyle]} {...(zoom > MIN_ZOOM ? panResponder.panHandlers : {})}>
+      <View style={[styles.viewport, viewportStyle]}>
         <View
-          style={[
+          collapsable={false}
+          style={
             containerWidth > 0
               ? { width: mapBounds.width, height: mapBounds.height }
-              : styles.viewportPlaceholder,
-            mapTransformStyle,
-          ]}
+              : styles.viewportPlaceholder
+          }
         >
-          <ImageBackground
+          <Image
             source={MAP_IMAGE}
-            style={styles.mapFill}
-            imageStyle={styles.mapImageInner}
-          >
-            {mapBounds.width > 0 && (
-              <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
-                {showActiveRoutes &&
-                  showTrucks &&
-                  activeDeliveries.map((delivery) => {
-                    const from = getWorldMapCityPosition(delivery.originCityId);
-                    const to = getWorldMapCityPosition(delivery.destinationCityId);
-                    if (!from || !to) return null;
-                    const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
-                    const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
-                    const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
-                    const isSelected = delivery.id === selectedDeliveryId;
-                    const truckPos = pointOnQuadratic(
-                      Math.max(0, Math.min(1, delivery.progress)),
-                      p1.x,
-                      p1.y,
-                      cx,
-                      cy,
-                      p2.x,
-                      p2.y,
-                    );
-                    return (
-                      <React.Fragment key={delivery.id}>
-                        <Path
-                          d={d}
-                          stroke={COLORS.routeActive}
-                          strokeWidth={ACTIVE_ROUTE_WIDTH}
-                          strokeOpacity={isSelected ? ACTIVE_ROUTE_SELECTED_OPACITY : ACTIVE_ROUTE_OPACITY}
-                          fill="none"
-                        />
-                        <Circle
-                          cx={truckPos.x}
-                          cy={truckPos.y}
-                          r={isSelected ? 4 : 3}
-                          fill="#0F172A"
-                          stroke={COLORS.routeActive}
-                          strokeWidth={1.5}
-                          strokeOpacity={isSelected ? 0.85 : 0.65}
-                          onPress={() => onDeliveryPress?.(delivery.id)}
-                        />
-                      </React.Fragment>
-                    );
-                  })}
+            style={[StyleSheet.absoluteFill, styles.mapImage]}
+            resizeMode="cover"
+            onLoad={handleMapImageLoad}
+            onError={handleMapImageError}
+          />
 
-                {showTransfers &&
-                  runningTransfers.map((transfer) => {
-                    const from = getWorldMapCityPosition(transfer.fromCityId);
-                    const to = getWorldMapCityPosition(transfer.toCityId);
-                    if (!from || !to) return null;
-                    const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
-                    const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
-                    const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
-                    const truckPos = pointOnQuadratic(
-                      Math.max(0, Math.min(1, transfer.progress)),
-                      p1.x,
-                      p1.y,
-                      cx,
-                      cy,
-                      p2.x,
-                      p2.y,
-                    );
-                    return (
-                      <React.Fragment key={transfer.id}>
-                        <Path
-                          d={d}
-                          stroke={TRANSFER_ROUTE_COLOR}
-                          strokeWidth={ACTIVE_ROUTE_WIDTH}
-                          strokeOpacity={TRANSFER_ROUTE_OPACITY}
-                          strokeDasharray="4 3"
-                          fill="none"
-                        />
-                        <Circle
-                          cx={truckPos.x}
-                          cy={truckPos.y}
-                          r={3}
-                          fill="#0F172A"
-                          stroke={TRANSFER_ROUTE_COLOR}
-                          strokeWidth={1.5}
-                          strokeOpacity={0.8}
-                        />
-                      </React.Fragment>
-                    );
-                  })}
+          {!mapImageReady ? <View style={styles.mapImageFallback} pointerEvents="none" /> : null}
 
-                {cities.map((city) => {
-                  const pos = getWorldMapCityPosition(city.id);
-                  if (!pos) return null;
-                  const isDepot = depotCityIds.includes(city.id);
-                  if (isDepot && !showDepots) return null;
-
-                  const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
-                  const fill = isDepot ? COLORS.pinDepot : COLORS.pinFill;
-                  const showLabel = LABELED_CITY_IDS.has(city.id);
-
+          {mapBounds.width > 0 && (
+            <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
+              {showActiveRoutes &&
+                showTrucks &&
+                activeDeliveries.map((delivery) => {
+                  const from = getWorldMapCityPosition(delivery.originCityId);
+                  const to = getWorldMapCityPosition(delivery.destinationCityId);
+                  if (!from || !to) return null;
+                  const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
+                  const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
+                  const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
+                  const isSelected = delivery.id === selectedDeliveryId;
+                  const truckPos = pointOnQuadratic(
+                    Math.max(0, Math.min(1, delivery.progress)),
+                    p1.x,
+                    p1.y,
+                    cx,
+                    cy,
+                    p2.x,
+                    p2.y,
+                  );
                   return (
-                    <React.Fragment key={city.id}>
-                      <Circle
-                        cx={pixel.x}
-                        cy={pixel.y}
-                        r={PIN_RADIUS}
-                        fill={fill}
-                        stroke={COLORS.pinStroke}
-                        strokeWidth={PIN_STROKE_WIDTH}
-                        onPress={() => onCityPress?.(city.id)}
+                    <React.Fragment key={delivery.id}>
+                      <Path
+                        d={d}
+                        stroke={COLORS.routeActive}
+                        strokeWidth={ACTIVE_ROUTE_WIDTH}
+                        strokeOpacity={isSelected ? ACTIVE_ROUTE_SELECTED_OPACITY : ACTIVE_ROUTE_OPACITY}
+                        fill="none"
                       />
-                      {showLabel ? (
-                        <SvgText
-                          x={pixel.x}
-                          y={pixel.y + PIN_LABEL_OFFSET}
-                          fill={COLORS.text}
-                          fontSize={9}
-                          fontWeight="700"
-                          textAnchor="middle"
-                          onPress={() => onCityPress?.(city.id)}
-                        >
-                          {city.name}
-                        </SvgText>
-                      ) : null}
+                      <Circle
+                        cx={truckPos.x}
+                        cy={truckPos.y}
+                        r={isSelected ? 4 : 3}
+                        fill="#0F172A"
+                        stroke={COLORS.routeActive}
+                        strokeWidth={1.5}
+                        strokeOpacity={isSelected ? 0.85 : 0.65}
+                        onPress={() => onDeliveryPress?.(delivery.id)}
+                      />
                     </React.Fragment>
                   );
                 })}
-              </Svg>
-            )}
 
-            {mapBounds.width > 0 && showIdleTruckBadges ? (
-              <View style={StyleSheet.absoluteFill} pointerEvents="none">
-                {cities.map((city) => {
-                  const pos = getWorldMapCityPosition(city.id);
-                  if (!pos) return null;
-
-                  const idleCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
-                  if (idleCount <= 0) return null;
-
-                  const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
-
+              {showTransfers &&
+                runningTransfers.map((transfer) => {
+                  const from = getWorldMapCityPosition(transfer.fromCityId);
+                  const to = getWorldMapCityPosition(transfer.toCityId);
+                  if (!from || !to) return null;
+                  const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
+                  const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
+                  const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
+                  const truckPos = pointOnQuadratic(
+                    Math.max(0, Math.min(1, transfer.progress)),
+                    p1.x,
+                    p1.y,
+                    cx,
+                    cy,
+                    p2.x,
+                    p2.y,
+                  );
                   return (
-                    <IdleTruckCountBadge
-                      key={`idle-badge-${city.id}`}
-                      count={idleCount}
-                      opacity={idleBadgeVisual.opacity}
-                      prominent={idleBadgeVisual.prominent}
-                      style={{
-                        position: 'absolute',
-                        left: pixel.x + 5,
-                        top: pixel.y - 16,
-                      }}
-                    />
+                    <React.Fragment key={transfer.id}>
+                      <Path
+                        d={d}
+                        stroke={TRANSFER_ROUTE_COLOR}
+                        strokeWidth={ACTIVE_ROUTE_WIDTH}
+                        strokeOpacity={TRANSFER_ROUTE_OPACITY}
+                        strokeDasharray="4 3"
+                        fill="none"
+                      />
+                      <Circle
+                        cx={truckPos.x}
+                        cy={truckPos.y}
+                        r={3}
+                        fill="#0F172A"
+                        stroke={TRANSFER_ROUTE_COLOR}
+                        strokeWidth={1.5}
+                        strokeOpacity={0.8}
+                      />
+                    </React.Fragment>
                   );
                 })}
-              </View>
-            ) : null}
-          </ImageBackground>
+
+              {cities.map((city) => {
+                const pos = getWorldMapCityPosition(city.id);
+                if (!pos) return null;
+                const isDepot = depotCityIds.includes(city.id);
+                if (isDepot && !showDepots) return null;
+
+                const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
+                const fill = isDepot ? COLORS.pinDepot : COLORS.pinFill;
+                const showLabel = LABELED_CITY_IDS.has(city.id);
+
+                return (
+                  <React.Fragment key={city.id}>
+                    <Circle
+                      cx={pixel.x}
+                      cy={pixel.y}
+                      r={PIN_RADIUS}
+                      fill={fill}
+                      stroke={COLORS.pinStroke}
+                      strokeWidth={PIN_STROKE_WIDTH}
+                      onPress={() => onCityPress?.(city.id)}
+                    />
+                    {showLabel ? (
+                      <SvgText
+                        x={pixel.x}
+                        y={pixel.y + PIN_LABEL_OFFSET}
+                        fill={COLORS.text}
+                        fontSize={9}
+                        fontWeight="700"
+                        textAnchor="middle"
+                        onPress={() => onCityPress?.(city.id)}
+                      >
+                        {city.name}
+                      </SvgText>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })}
+            </Svg>
+          )}
+
+          {mapBounds.width > 0 && showIdleTruckBadges ? (
+            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              {cities.map((city) => {
+                const pos = getWorldMapCityPosition(city.id);
+                if (!pos) return null;
+
+                const idleCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
+                if (idleCount <= 0) return null;
+
+                const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
+
+                return (
+                  <IdleTruckCountBadge
+                    key={`idle-badge-${city.id}`}
+                    count={idleCount}
+                    opacity={idleBadgeVisual.opacity}
+                    prominent={idleBadgeVisual.prominent}
+                    style={{
+                      position: 'absolute',
+                      left: pixel.x + 5,
+                      top: pixel.y - 16,
+                    }}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
         </View>
 
         {MAP_CALIBRATION_ENABLED && calibrationMode && mapBounds.width > 0 ? (
@@ -524,13 +405,6 @@ export default function WorldMapCanvas({
           />
         ) : null}
       </View>
-
-      <MapZoomControls
-        zoom={zoom}
-        onZoomIn={zoomIn}
-        onZoomOut={zoomOut}
-        onReset={resetZoom}
-      />
     </View>
   );
 }
@@ -546,63 +420,18 @@ const styles = StyleSheet.create({
   },
   viewport: {
     overflow: 'hidden',
-    backgroundColor: '#0B1220',
+    backgroundColor: '#111827',
   },
   viewportPlaceholder: {
     width: '100%',
     aspectRatio: MAP_ASPECT_RATIO,
   },
-  mapFill: {
+  mapImage: {
     width: '100%',
     height: '100%',
   },
-  mapImageInner: {
-    resizeMode: 'cover',
-  },
-  zoomControls: {
-    position: 'absolute',
-    right: 12,
-    bottom: 12,
-    alignItems: 'flex-end',
-    gap: 6,
-  },
-  zoomBadge: {
-    backgroundColor: COLORS.zoomPanelBg,
-    borderColor: COLORS.zoomPanelBorder,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  zoomBadgeText: {
-    color: COLORS.zoomAccent,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  zoomPanel: {
-    backgroundColor: COLORS.zoomPanelBg,
-    borderColor: COLORS.zoomPanelBorder,
-    borderWidth: 1,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  zoomButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  zoomButtonText: {
-    color: COLORS.zoomAccent,
-    fontSize: 22,
-    fontWeight: '600',
-    lineHeight: 24,
-  },
-  zoomButtonTextDisabled: {
-    opacity: 0.35,
-  },
-  zoomDivider: {
-    height: 1,
-    backgroundColor: COLORS.zoomPanelBorder,
+  mapImageFallback: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#1E293B',
   },
 });

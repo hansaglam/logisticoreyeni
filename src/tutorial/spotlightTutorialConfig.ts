@@ -1,0 +1,136 @@
+import type { SpotlightTutorialDefinition } from './types';
+
+export const SPOTLIGHT_TUTORIALS: Record<
+  SpotlightTutorialDefinition['id'],
+  SpotlightTutorialDefinition
+> = {
+  first_contract: {
+    id: 'first_contract',
+    steps: [
+      {
+        id: 'first_contract_open_contracts',
+        targetId: 'tab-contracts',
+        title: 'İlk sözleşmeni bul',
+        description: 'Başlamak için İşler sekmesine dokun.',
+        interactionMode: 'navigate',
+        navigateTab: 'contracts',
+        requiredTab: 'dashboard',
+        primaryButtonLabel: "İşler'e Git",
+        layer: 'root',
+        showPointer: true,
+        targetPadding: 6,
+      },
+      {
+        id: 'select_contract_card',
+        targetId: 'contract-first-card',
+        title: 'Uygun işi seç',
+        description: 'Bu kart başlangıç için uygun. Detayları açmak için dokun.',
+        interactionMode: 'tap_target',
+        requiredTab: 'contracts',
+        primaryButtonLabel: 'İşi Seç',
+        layer: 'root',
+        showPointer: true,
+        targetPadding: 6,
+        fallbackTitle: 'Uygun iş bekleniyor',
+        fallbackDescription:
+          'Şu anda alınabilir sözleşme yok. Piyasa birkaç oyun saati içinde yeni işler oluşturur.',
+      },
+      {
+        id: 'select_truck',
+        targetId: 'assignment-truck-card',
+        title: 'Kamyon kapasitesi',
+        description: 'Kamyonun yükü taşıyabilecek kapasitede olmalı.',
+        interactionMode: 'next',
+        primaryButtonLabel: 'Sonraki',
+        layer: 'modal',
+        showPointer: false,
+        targetPadding: 6,
+      },
+      {
+        id: 'select_driver',
+        targetId: 'assignment-driver-card',
+        title: 'Şoför seçimi',
+        description: 'Teslimat için boşta bir şoför gerekir.',
+        interactionMode: 'next',
+        primaryButtonLabel: 'Sonraki',
+        layer: 'modal',
+        showPointer: false,
+        targetPadding: 6,
+      },
+      {
+        id: 'start_delivery',
+        targetId: 'assignment-start-button',
+        title: 'Teslimatı başlat',
+        description: 'Her şey hazır. Butona dokun ve ilk teslimatını başlat.',
+        interactionMode: 'complete_action',
+        primaryButtonLabel: 'Teslimatı Başlat',
+        layer: 'modal',
+        showPointer: true,
+        pointerOffset: { y: -4 },
+        targetPadding: 8,
+      },
+    ],
+  },
+  track_delivery: {
+    id: 'track_delivery',
+    steps: [
+      {
+        id: 'open_dashboard_tab',
+        targetId: 'tab-dashboard',
+        title: 'Teslimatı takip et',
+        description: 'Aktif teslimatını Ana Sayfa üzerinden izleyebilirsin.',
+        interactionMode: 'navigate',
+        navigateTab: 'dashboard',
+        primaryButtonLabel: "Ana Sayfa'ya Git",
+        layer: 'root',
+        showPointer: true,
+        targetPadding: 6,
+      },
+      {
+        id: 'view_active_delivery',
+        targetId: 'dashboard-active-delivery',
+        title: 'Aktif teslimat',
+        description: 'Teslimat ilerlemesini buradan takip et.',
+        interactionMode: 'next',
+        requiredTab: 'dashboard',
+        primaryButtonLabel: 'Sonraki',
+        layer: 'root',
+        showPointer: true,
+        targetPadding: 8,
+      },
+    ],
+  },
+  market_basics: {
+    id: 'market_basics',
+    steps: [
+      {
+        id: 'open_market_tab',
+        targetId: 'tab-market',
+        title: 'Piyasayı keşfet',
+        description: 'Fiyat farklarını görmek için Piyasa sekmesine dokun.',
+        interactionMode: 'navigate',
+        navigateTab: 'market',
+        primaryButtonLabel: 'Piyasaya Git',
+        layer: 'root',
+        showPointer: true,
+        targetPadding: 6,
+      },
+      {
+        id: 'view_market_opportunity',
+        targetId: 'market-first-opportunity',
+        title: 'Piyasa fırsatı',
+        description: 'Ucuz al, depoda beklet, fiyat yükselince sat.',
+        interactionMode: 'next',
+        requiredTab: 'market',
+        primaryButtonLabel: 'Sonraki',
+        layer: 'root',
+        showPointer: true,
+        targetPadding: 8,
+      },
+    ],
+  },
+};
+
+export function getSpotlightTutorial(id: SpotlightTutorialDefinition['id']) {
+  return SPOTLIGHT_TUTORIALS[id];
+}

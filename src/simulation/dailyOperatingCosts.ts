@@ -1,27 +1,35 @@
 /**
  * Günlük operasyon giderleri — şoför maaşları, depo, genel operasyon.
+ *
+ * Kiralık kamyon (V1): haftalık kira kiralama anında peşin tahsil edilir (truck_lease ledger).
+ * leaseDailyCost yalnızca UI tahmini içindir; günlük cash kesintisine dahil edilmez.
  */
 
+import { operatingCostBalance, timeBalance } from '../config/balance';
 import {
-  operatingCostBalance,
-  timeBalance,
-  warehouseBalance,
-} from '../config/balance';
-import { CITIES_BY_ID } from '../data/cities';
+  calculateWarehouseDailyOperatingCost,
+} from '../utils/warehouseCalculations';
 import type {
   Driver,
+  FinanceLedgerBreakdown,
   FinanceLedgerEntry,
   Player,
   Truck,
   Warehouse,
 } from '../types/game';
+import { formatDailyOperatingCostDescription } from '../utils/financeLedger';
 
 export interface DailyOperatingCostBreakdown {
   driverSalaries: number;
   warehouseOperating: number;
-  truckRental: number;
+  /** Bilgi amaçlı — aktif kiralık kamyonların günlük karşılığı; cash'ten kesilmez */
+  truckLeaseDailyAccrual: number;
+  /** Günlük işletme giderinde cash'ten kesilecek kira (V1: her zaman 0) */
+  chargedTruckLeaseTotal: number;
   operations: number;
   total: number;
+  /** @deprecated chargedTruckLeaseTotal ile aynı — geriye uyumluluk */
+  truckRental: number;
 }
 
 export function getDriverDailySalary(driver: Driver): number {
@@ -33,21 +41,39 @@ export function getDriverDailySalary(driver: Driver): number {
 }
 
 export function getWarehouseDailyOperatingCost(warehouse: Warehouse): number {
-  if (warehouse.dailyOperatingCost != null && warehouse.dailyOperatingCost > 0) {
-    return warehouse.dailyOperatingCost;
+  return calculateWarehouseDailyOperatingCost(warehouse);
+}
+
+export function isActiveLeasedTruck(truck: Truck): boolean {
+  return (truck.ownershipType ?? 'owned') === 'leased' && !truck.leaseExpired;
+}
+
+/** Aktif kiralık kamyonların günlük karşılık toplamı — yalnızca bilgi amaçlı */
+export function getTruckLeaseDailyAccrual(trucks: Truck[] | undefined): number {
+  return (trucks ?? []).reduce((sum, truck) => {
+    if (!isActiveLeasedTruck(truck)) {
+      return sum;
+    }
+    return sum + (truck.leaseDailyCost ?? 0);
+  }, 0);
+}
+
+export function getTruckWeeklyLeaseCost(truck: Truck): number {
+  if (!isActiveLeasedTruck(truck)) {
+    return 0;
   }
+  if (truck.leaseWeeklyCost != null && truck.leaseWeeklyCost > 0) {
+    return truck.leaseWeeklyCost;
+  }
+  if (truck.leaseDailyCost != null && truck.leaseDailyCost > 0) {
+    return truck.leaseDailyCost * timeBalance.daysPerWeek;
+  }
+  return 0;
+}
 
-  const city = CITIES_BY_ID[warehouse.cityId];
-  const modifier = city?.warehouseCostModifier ?? 1;
-  const tier = warehouse.upgradeTier ?? 1;
-  const capacity = warehouse.capacityTons ?? warehouse.capacityTon ?? 80;
-
-  const rent = capacity * warehouseBalance.rentPerTon * modifier;
-  const electricity = capacity * warehouseBalance.electricityPerTon * modifier;
-  const staff = warehouseBalance.staffCostPerLevel * tier;
-
-  const computed = Math.round(rent + electricity + staff);
-  return computed > 0 ? computed : operatingCostBalance.fallbackWarehouseDailyCost;
+/** Aktif kiralık kamyonların toplam haftalık kira yükü — peşin ödenmiş dönem için bilgi amaçlı */
+export function getWeeklyLeaseBurden(trucks: Truck[] | undefined): number {
+  return (trucks ?? []).reduce((sum, truck) => sum + getTruckWeeklyLeaseCost(truck), 0);
 }
 
 export function calculateDailyOperatingCostBreakdown(
@@ -63,7 +89,8 @@ export function calculateDailyOperatingCostBreakdown(
     0,
   );
 
-  const truckRental = 0;
+  const truckLeaseDailyAccrual = getTruckLeaseDailyAccrual(player.trucks);
+  const chargedTruckLeaseTotal = 0;
 
   const ownedTruckCount = (player.trucks ?? []).filter(
     (truck) => (truck.ownershipType ?? 'owned') === 'owned' && !truck.leaseExpired,
@@ -75,12 +102,15 @@ export function calculateDailyOperatingCostBreakdown(
     ownedTruckCount * operatingCostBalance.operationsPerOwnedTruck +
     driverCount * operatingCostBalance.operationsPerDriver;
 
-  const total = driverSalaries + warehouseOperating + truckRental + operations;
+  const total =
+    driverSalaries + warehouseOperating + operations + chargedTruckLeaseTotal;
 
   return {
     driverSalaries,
     warehouseOperating,
-    truckRental,
+    truckLeaseDailyAccrual,
+    chargedTruckLeaseTotal,
+    truckRental: chargedTruckLeaseTotal,
     operations,
     total,
   };
@@ -130,6 +160,55 @@ export function buildDailyOperatingCostLedgerEntries(
   return entries;
 }
 
+export type DailyOperatingCostReason = 'daily_tick' | 'offline_catchup' | 'debug';
+
+/** Tek özet ledger kaydı — çok günlük kesintilerde şişmeyi önler */
+export function buildSummarizedDailyOperatingCostLedgerEntry(
+  breakdown: DailyOperatingCostBreakdown,
+  currentTime: number,
+  days: number,
+): Omit<FinanceLedgerEntry, 'id'> | null {
+  const safeDays = Math.max(1, Math.floor(days));
+  if (breakdown.total <= 0) {
+    return null;
+  }
+
+  const totalCost = breakdown.total * safeDays;
+  const ledgerBreakdown: FinanceLedgerBreakdown = {
+    driverSalary: breakdown.driverSalaries * safeDays,
+    warehouseOperating: breakdown.warehouseOperating * safeDays,
+    generalOperations: breakdown.operations * safeDays,
+    chargedTruckLease: breakdown.chargedTruckLeaseTotal * safeDays,
+  };
+
+  return {
+    time: currentTime,
+    type: 'expense',
+    category: 'daily_operating_cost',
+    amount: totalCost,
+    title: safeDays === 1 ? 'Günlük işletme giderleri' : 'İşletme giderleri',
+    description: formatDailyOperatingCostDescription(
+      ledgerBreakdown,
+      safeDays,
+      breakdown.truckLeaseDailyAccrual,
+    ),
+    breakdown: ledgerBreakdown,
+  };
+}
+
+export function computeElapsedOperatingDays(
+  lastDailyOperatingCostTime: number,
+  newTime: number,
+  hoursPerDay = timeBalance.hoursPerDay,
+): number {
+  const last = Number.isFinite(lastDailyOperatingCostTime) ? lastDailyOperatingCostTime : 0;
+  const target = Number.isFinite(newTime) ? newTime : 0;
+  if (target <= last) {
+    return 0;
+  }
+  return Math.floor((target - last) / hoursPerDay);
+}
+
 export function summarizeDailyOperatingCostsFromLedger(
   entries: FinanceLedgerEntry[] | undefined,
 ): DailyOperatingCostBreakdown {
@@ -166,7 +245,15 @@ export function summarizeDailyOperatingCostsFromLedger(
     total = driverSalaries + warehouseOperating + truckRental + operations;
   }
 
-  return { driverSalaries, warehouseOperating, truckRental, operations, total };
+  return {
+    driverSalaries,
+    warehouseOperating,
+    truckLeaseDailyAccrual: 0,
+    chargedTruckLeaseTotal: truckRental,
+    truckRental,
+    operations,
+    total,
+  };
 }
 
 export interface ExpiredLeaseResult {
@@ -174,7 +261,7 @@ export interface ExpiredLeaseResult {
   expiredTruckNames: string[];
 }
 
-/** Kira süresi dolmuş boşta kamyonları pasifleştirir */
+/** Kira süresi dolmuş boşta kamyonları pasifleştirir — V1 auto-renew yok */
 export function processExpiredTruckLeases(
   trucks: Truck[],
   currentTime: number,
@@ -206,16 +293,4 @@ export function processExpiredTruckLeases(
   });
 
   return { trucks: updatedTrucks, expiredTruckNames };
-}
-
-export function getWeeklyLeaseBurden(trucks: Truck[]): number {
-  return trucks.reduce((sum, truck) => {
-    if ((truck.ownershipType ?? 'owned') !== 'leased' || truck.leaseExpired) {
-      return sum;
-    }
-    if (truck.leasePeriod === 'weekly' && truck.leaseDailyCost != null) {
-      return sum + truck.leaseDailyCost * timeBalance.daysPerWeek;
-    }
-    return sum;
-  }, 0);
 }

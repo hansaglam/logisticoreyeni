@@ -38,6 +38,12 @@ export const operatingCostBalance = {
   operationsPerDriver: 15,
   /** Haftalık kira süresi (oyun saati) */
   leaseDurationHours: 7 * 24,
+  /** Offline / büyük zaman atlamasında en fazla kesilecek gün sayısı */
+  maxOfflineChargeDays: 3,
+  /** advanceTime başına en fazla ledger kaydı */
+  maxDailyCostEntriesPerAdvance: 1,
+  /** Birden fazla gün kesildiğinde oyuncuya bildirim göster */
+  notifyWhenMultipleDaysCharged: true,
 } as const;
 
 export function getMsPerGameHour(gameSpeed: number): number {
@@ -132,6 +138,50 @@ export const contractBalance = {
   largeContractTonnage: 22,
 } as const;
 
+/** Kademeli sözleşme üretim zamanlaması */
+export const contractGenerationBalance = {
+  minAvailableContracts: 10,
+  targetAvailableContracts: 16,
+  maxAvailableContracts: 24,
+
+  smallGenerationIntervalHours: 3,
+  mediumGenerationIntervalHours: 6,
+  dailyCleanupIntervalHours: 24,
+
+  minContractsPerSmallTick: 1,
+  maxContractsPerSmallTick: 3,
+
+  minContractsPerMediumTick: 3,
+  maxContractsPerMediumTick: 6,
+
+  maxContractsGeneratedAtOnce: 6,
+
+  /** Tek advanceTime çağrısında işlenecek maksimum küçük tick (3s) */
+  maxSmallTicksProcessedAtOnce: 4,
+  /** Tek advanceTime çağrısında işlenecek maksimum orta tick (6s) */
+  maxMediumTicksProcessedAtOnce: 3,
+  /** Günlük cleanup — elapsed ne olursa olsun tek sefer */
+  maxDailyCleanupTicksProcessedAtOnce: 1,
+
+  /** Yeni oyun başlangıcı sözleşme sayısı — alt sınır */
+  initialContractsMin: 12,
+  /** Yeni oyun başlangıcı sözleşme sayısı — üst sınır */
+  initialContractsMax: 15,
+
+  /** Manuel piyasa yenilemede eklenebilecek maksimum (düşük stokta) */
+  manualRefreshMaxContracts: 3,
+} as const;
+
+/** Sözleşme teklif süresi (oyun saati) — iş tipine göre */
+export const contractExpiryBalance = {
+  urgentMinHours: 6,
+  urgentMaxHours: 10,
+  normalMinHours: 12,
+  normalMaxHours: 20,
+  longMinHours: 18,
+  longMaxHours: 30,
+} as const;
+
 export const deliveryBalance = {
   /** Sözleşme/tahmin ekranlarında varsayılan ortalama hız (km/saat) */
   defaultAverageSpeed: 60,
@@ -191,6 +241,8 @@ export const warehouseBalance = {
   coldOpenCostMultiplier: 1.6,
   /** Soğuk depo günlük elektrik çarpanı */
   coldElectricityMultiplier: 2.5,
+  /** Depo yükseltme maliyeti: baseOpenCost × oran × şehir modifier */
+  upgradeCostRatio: 0.5,
 } as const;
 
 export const warehouseStorageBalance = {
@@ -286,6 +338,8 @@ export const balanceConfig = {
   operatingCost: operatingCostBalance,
   economy: economyBalance,
   contract: contractBalance,
+  contractGeneration: contractGenerationBalance,
+  contractExpiry: contractExpiryBalance,
   contractLevel: contractLevelBalance,
   delivery: deliveryBalance,
   truck: truckBalance,
@@ -299,6 +353,8 @@ export type TimeBalance = typeof timeBalance;
 export type OperatingCostBalance = typeof operatingCostBalance;
 export type EconomyBalance = typeof economyBalance;
 export type ContractBalance = typeof contractBalance;
+export type ContractGenerationBalance = typeof contractGenerationBalance;
+export type ContractExpiryBalance = typeof contractExpiryBalance;
 export type DeliveryBalance = typeof deliveryBalance;
 export type TruckBalance = typeof truckBalance;
 export type WarehouseBalance = typeof warehouseBalance;

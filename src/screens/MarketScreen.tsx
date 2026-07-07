@@ -25,9 +25,9 @@ import {
   StatusBadge,
 } from '../components/ui';
 import type { StatusBadgeVariant } from '../components/ui';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
-import { countExactMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
+import { countMarketContractMatches, findMarketOpportunities } from '../simulation/contracts';
+import { getSafeFuelPrice } from '../simulation/economy';
+import { getCityName, getProductName } from '../utils/entityLookup';
 import {
   getCityProductMarketPrice,
   getCityProductStock,
@@ -137,14 +137,6 @@ function getOpportunityPotential(normalizedScore: number): {
     return { label: 'Orta', variant: 'warning' };
   }
   return { label: 'Zayıf', variant: 'muted' };
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? productId;
-}
-
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
 }
 
 function getProductMarket(
@@ -553,17 +545,21 @@ function ProductMarketCard({
 
 function OpportunityCard({
   opportunity,
-  matchingContractsCount,
+  exactMatchesCount,
+  relatedMatchesCount,
   onViewContracts,
 }: {
   opportunity: MarketOpportunity;
-  matchingContractsCount: number;
+  exactMatchesCount: number;
+  relatedMatchesCount: number;
   onViewContracts: (opportunity: MarketOpportunity) => void;
 }) {
   const normalizedScore = normalizeOpportunityScore(opportunity.score);
   const strength = getOpportunityStrength(normalizedScore);
   const potential = getOpportunityPotential(normalizedScore);
-  const hasActiveContracts = matchingContractsCount > 0;
+  const hasExactMatches = exactMatchesCount > 0;
+  const hasRelatedMatches = relatedMatchesCount > 0;
+  const hasAnyMatches = hasExactMatches || hasRelatedMatches;
 
   return (
     <AppCard style={styles.opportunityCard} padded>
@@ -597,13 +593,26 @@ function OpportunityCard({
           Skor: <Text style={styles.opportunityValue}>{formatOpportunityScoreDisplay(opportunity.score)}</Text>
         </Text>
         <Text style={styles.opportunityLine} numberOfLines={1}>
-          {hasActiveContracts ? (
-            <>
-              Uygun sözleşme:{' '}
-              <Text style={[styles.opportunityValue, { color: colors.success }]}>
-                {matchingContractsCount}
+          {hasAnyMatches ? (
+            hasExactMatches && hasRelatedMatches ? (
+              <Text style={styles.opportunityValue}>
+                {exactMatchesCount} tam · {relatedMatchesCount} yakın iş
               </Text>
-            </>
+            ) : hasExactMatches ? (
+              <>
+                Tam eşleşme:{' '}
+                <Text style={[styles.opportunityValue, { color: colors.success }]}>
+                  {exactMatchesCount}
+                </Text>
+              </>
+            ) : (
+              <>
+                Yakın iş:{' '}
+                <Text style={[styles.opportunityValue, { color: colors.accentAmber }]}>
+                  {relatedMatchesCount}
+                </Text>
+              </>
+            )
           ) : (
             <Text style={styles.opportunityPending}>Uygun sözleşme bekleniyor</Text>
           )}
@@ -648,7 +657,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
   const [tradeProductId, setTradeProductId] = useState<ProductId | null>(null);
 
-  const fuelPrice = globalEconomy?.fuelPrice ?? 0;
+  const fuelPrice = getSafeFuelPrice(globalEconomy);
 
   useEffect(() => {
     if (!selectedCityId && cities.length > 0) {
@@ -683,11 +692,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   );
 
   const opportunityMatchCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<string, { exactMatchesCount: number; relatedMatchesCount: number }>();
     for (const opportunity of opportunities) {
       counts.set(
         opportunity.id,
-        countExactMarketContractMatches(availableContracts, {
+        countMarketContractMatches(availableContracts, {
           fromCityId: opportunity.fromCityId,
           toCityId: opportunity.toCityId,
           productId: opportunity.productId,
@@ -975,14 +984,21 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               icon="route"
             />
           ) : (
-            opportunities.map((opportunity) => (
-              <OpportunityCard
-                key={opportunity.id}
-                opportunity={opportunity}
-                matchingContractsCount={opportunityMatchCounts.get(opportunity.id) ?? 0}
-                onViewContracts={handleOpenContractsForOpportunity}
-              />
-            ))
+            opportunities.map((opportunity) => {
+              const matchCounts = opportunityMatchCounts.get(opportunity.id) ?? {
+                exactMatchesCount: 0,
+                relatedMatchesCount: 0,
+              };
+              return (
+                <OpportunityCard
+                  key={opportunity.id}
+                  opportunity={opportunity}
+                  exactMatchesCount={matchCounts.exactMatchesCount}
+                  relatedMatchesCount={matchCounts.relatedMatchesCount}
+                  onViewContracts={handleOpenContractsForOpportunity}
+                />
+              );
+            })
           )}
         </View>
       ) : null}

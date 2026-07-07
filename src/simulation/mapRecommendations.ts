@@ -3,8 +3,9 @@
  */
 
 import { deliveryBalance } from '../config/balance';
-import { PRODUCT_BY_ID } from '../data/products';
 import { getRoute as findRoute } from '../data/routes';
+import { getProductByIdSafe } from '../utils/entityLookup';
+import { clamp } from '../utils/math';
 import type {
   City,
   Contract,
@@ -52,20 +53,16 @@ interface ScoredContract {
   reason: string;
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function getRiskLabel(contract: Contract): string {
   const route = findRoute(contract.originCityId, contract.destinationCityId);
-  const product = PRODUCT_BY_ID[contract.productId];
+  const product = getProductByIdSafe(contract.productId);
   const difficulty = route?.difficulty ?? 0.5;
   const deadlinePressure = clamp(1 - contract.deadlineHours / 48, 0, 1);
   const riskScore =
     contract.urgency * 0.35 +
     deadlinePressure * 0.25 +
     difficulty * 0.25 +
-    product.perishability * 0.15;
+    (product?.perishability ?? 0) * 0.15;
 
   if (riskScore >= 0.6) return 'Yüksek risk';
   if (riskScore >= 0.35) return 'Orta risk';
@@ -142,8 +139,8 @@ function scoreEligibleContract(
     return null;
   }
 
-  const product = PRODUCT_BY_ID[contract.productId];
-  const suggestedTruck = selectIdleTruckForContract(trucks, contract, product);
+  const product = getProductByIdSafe(contract.productId);
+  const suggestedTruck = selectIdleTruckForContract(trucks, contract, product ?? undefined);
   const suggestedDriver = getIdleDrivers(drivers)[0];
   const estimatedProfit = estimateContractProfit(
     contract,
@@ -415,6 +412,6 @@ export function getRecommendedDeliveryById(
 
 /** Öneri kartında gösterilecek ton bilgisi */
 export function getRecommendedContractTons(contract: Contract): number {
-  const product = PRODUCT_BY_ID[contract.productId];
-  return getContractCargoWeight(contract, product);
+  const product = getProductByIdSafe(contract.productId);
+  return getContractCargoWeight(contract, product ?? undefined);
 }

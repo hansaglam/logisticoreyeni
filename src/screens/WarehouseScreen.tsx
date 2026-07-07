@@ -29,7 +29,6 @@ import {
   StatusBadge,
 } from '../components/ui';
 import type { StatusBadgeVariant } from '../components/ui';
-import { warehouseBalance } from '../config/balance';
 import {
   canOpenMoreWarehouses,
   getMaxWarehousesForLevel,
@@ -37,14 +36,23 @@ import {
   getWarehouseUpgradeRequiredLevel,
   isWarehouseCityUnlocked,
 } from '../config/levelConfig';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getCityByIdSafe, getCityName, getProductName } from '../utils/entityLookup';
 import {
   calculateTradeProfit,
   getCityProductMarketPrice,
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
 } from '../simulation/trading';
+import {
+  calculateWarehouseDailyOperatingCostBreakdown,
+  estimateNewWarehouseDailyOperatingCost,
+  estimateWarehouseOpenCost,
+  estimateWarehouseUpgradeCost,
+  getWarehouseCapacityTons,
+  getWarehouseUpgradeTier,
+  type WarehouseCostInput,
+  type WarehouseDailyCostBreakdown,
+} from '../utils/warehouseCalculations';
 import {
   cityHasWarehouseType,
   getEffectiveSellPrice,
@@ -58,20 +66,12 @@ import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type { City, CityProductState, Product, ProductId, Warehouse, WarehouseType } from '../types/game';
 
-const DEFAULT_RENT_PER_TON = warehouseBalance.rentPerTon;
-const DEFAULT_ELECTRICITY_PER_TON = warehouseBalance.electricityPerTon;
-const DEFAULT_STAFF_COST_PER_LEVEL = warehouseBalance.staffCostPerLevel;
-
-const BASE_OPEN_COST = warehouseBalance.baseOpenCost;
-const BASE_DAILY_RENT = warehouseBalance.baseDailyRent;
-
 const SHORTAGE_RATIO_THRESHOLD = 0.7;
 const SURPLUS_RATIO_THRESHOLD = 1.2;
 const HIGH_VOLATILITY_THRESHOLD = 15;
 const MAX_CITY_OPPORTUNITIES = 3;
 const MAX_STRATEGY_TIPS = 3;
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
-
 const CAPACITY_OK_THRESHOLD = 0.7;
 const CAPACITY_WARN_THRESHOLD = 0.9;
 
@@ -81,24 +81,12 @@ const STORAGE_STRATEGY_TIPS: string[] = [
   'Depo büyütmek esneklik sağlar ama günlük sabit giderleri artırır.',
 ];
 
-type WarehouseLike = Warehouse & {
+type WarehouseLike = WarehouseCostInput & {
   name?: string;
-  level?: number;
-  capacity?: number;
   usedCapacity?: number;
-  rent?: number;
-  electricityCost?: number;
-  staffCost?: number;
   quality?: number;
   stocks?: Record<string, number>;
 };
-
-interface WarehouseDailyCost {
-  rent: number;
-  electricityCost: number;
-  staffCost: number;
-  total: number;
-}
 
 interface PortfolioMetrics {
   productCount: number;
@@ -110,24 +98,16 @@ function formatPercent(value: number): string {
   return formatRatioPercent(value);
 }
 
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? 'Bilinmeyen şehir';
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? 'Bilinmeyen ürün';
-}
-
 function getWarehouseCity(warehouse: WarehouseLike): City | undefined {
-  return CITIES_BY_ID[warehouse.cityId];
+  return getCityByIdSafe(warehouse.cityId) ?? undefined;
 }
 
 function getWarehouseCapacity(warehouse: WarehouseLike): number {
-  return warehouse.capacity ?? warehouse.capacityTons ?? 0;
+  return getWarehouseCapacityTons(warehouse);
 }
 
 function getWarehouseLevel(warehouse: WarehouseLike): number {
-  return warehouse.upgradeTier ?? warehouse.level ?? 1;
+  return getWarehouseUpgradeTier(warehouse);
 }
 
 function calculateWarehouseUsedCapacity(warehouse: WarehouseLike): number {
@@ -145,27 +125,8 @@ function calculateWarehouseFreeCapacity(warehouse: WarehouseLike): number {
   return Math.max(0, free);
 }
 
-function calculateWarehouseDailyCost(warehouse: WarehouseLike): WarehouseDailyCost {
-  const capacity = getWarehouseCapacity(warehouse);
-  const level = getWarehouseLevel(warehouse);
-  const city = getWarehouseCity(warehouse);
-  const costModifier = city?.warehouseCostModifier ?? 1;
-  const warehouseType = resolveWarehouseType(warehouse.warehouseType);
-  const coldElectricityMultiplier =
-    warehouseType === 'cold' ? warehouseBalance.coldElectricityMultiplier : 1;
-
-  const rent = warehouse.rent ?? capacity * DEFAULT_RENT_PER_TON * costModifier;
-  const electricityCost =
-    (warehouse.electricityCost ?? capacity * DEFAULT_ELECTRICITY_PER_TON * costModifier) *
-    coldElectricityMultiplier;
-  const staffCost = warehouse.staffCost ?? level * DEFAULT_STAFF_COST_PER_LEVEL;
-
-  return {
-    rent,
-    electricityCost,
-    staffCost,
-    total: rent + electricityCost + staffCost,
-  };
+function calculateWarehouseDailyCost(warehouse: WarehouseLike): WarehouseDailyCostBreakdown {
+  return calculateWarehouseDailyOperatingCostBreakdown(warehouse, getWarehouseCity(warehouse));
 }
 
 function calculateTotalWarehouseCapacity(warehouses: WarehouseLike[]): number {
@@ -232,17 +193,11 @@ function getCityOpportunityScore(city: City): number {
 }
 
 function getEstimatedOpenCost(city: City, warehouseType: WarehouseType = 'standard'): number {
-  const modifier = city.warehouseCostModifier ?? 1;
-  const typeMultiplier =
-    warehouseType === 'cold' ? warehouseBalance.coldOpenCostMultiplier : 1;
-  return BASE_OPEN_COST * modifier * typeMultiplier;
+  return estimateWarehouseOpenCost(city, warehouseType);
 }
 
 function getEstimatedDailyRent(city: City, warehouseType: WarehouseType = 'standard'): number {
-  const modifier = city.warehouseCostModifier ?? 1;
-  const coldMultiplier =
-    warehouseType === 'cold' ? warehouseBalance.coldElectricityMultiplier : 1;
-  return BASE_DAILY_RENT * modifier * (warehouseType === 'cold' ? 1.35 : 1) * (coldMultiplier > 1 ? 1.1 : 1);
+  return estimateNewWarehouseDailyOperatingCost(city.id, warehouseType, city);
 }
 
 function calculatePortfolioMetrics(
@@ -440,15 +395,17 @@ function InventoryRow({
       <ProductIcon productId={productId} size={24} color={colors.info} />
       <View style={styles.inventoryMain}>
         <View style={styles.inventoryTitleRow}>
-          <Text style={styles.inventoryName} numberOfLines={1}>
+          <Text style={styles.inventoryName} numberOfLines={1} ellipsizeMode="tail">
             {getProductName(productId)}
           </Text>
-          <Text style={styles.inventoryQty}>{formatTons(quantity)}</Text>
+          <Text style={styles.inventoryQty} numberOfLines={1}>
+            {formatTons(quantity)}
+          </Text>
         </View>
-        <Text style={styles.inventoryMeta} numberOfLines={1}>
+        <Text style={styles.inventoryMeta} numberOfLines={1} ellipsizeMode="tail">
           Alış: {formatMoney(averageBuyPrice)} / ton
         </Text>
-        <Text style={styles.inventoryMeta} numberOfLines={1}>
+        <Text style={styles.inventoryMeta} numberOfLines={1} ellipsizeMode="tail">
           Güncel: {formatMoney(currentPrice)} / ton
         </Text>
         {showColdHint ? (
@@ -467,7 +424,7 @@ function InventoryRow({
         ) : null}
       </View>
       <View style={styles.inventoryRight}>
-        <Text style={[styles.inventoryProfit, { color: profitColor }]} numberOfLines={1}>
+        <Text style={[styles.inventoryProfit, { color: profitColor }]} numberOfLines={1} ellipsizeMode="tail">
           {profitLabel}: {profitPositive ? '+' : ''}
           {formatMoney(estimatedProfit)}
         </Text>
@@ -509,9 +466,7 @@ function WarehouseCard({
   const isUpgradeMaxed = upgradeRequiredLevel == null;
   const isUpgradeLevelLocked =
     upgradeRequiredLevel != null && safePlayerLevel < upgradeRequiredLevel;
-  const estimatedUpgradeCost = Math.round(
-    warehouseBalance.baseOpenCost * 0.5 * (city?.warehouseCostModifier ?? 1),
-  );
+  const estimatedUpgradeCost = estimateWarehouseUpgradeCost(city, warehouse.cityId);
   const canAffordUpgrade = playerMoney >= estimatedUpgradeCost;
   const warehouseType = resolveWarehouseType(warehouse.warehouseType);
 
@@ -532,10 +487,10 @@ function WarehouseCard({
           <GameIcon name="warehouse" size={18} color={colors.accentBlue} />
         </View>
         <View style={styles.warehouseHeaderText}>
-          <Text style={styles.warehouseTitle} numberOfLines={1}>
+          <Text style={styles.warehouseTitle} numberOfLines={1} ellipsizeMode="tail">
             {city?.name ?? getCityName(warehouse.cityId)}
           </Text>
-          <Text style={styles.warehouseMeta} numberOfLines={1}>
+          <Text style={styles.warehouseMeta} numberOfLines={1} ellipsizeMode="tail">
             {warehouseTypeLabel} · Seviye {getWarehouseLevel(warehouse)}
           </Text>
         </View>
@@ -1136,10 +1091,15 @@ const styles = StyleSheet.create({
   warehouseTitle: {
     ...typography.cardTitle,
     fontSize: 14,
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 18,
   },
   warehouseMeta: {
     ...typography.caption,
     marginTop: 2,
+    minWidth: 0,
+    lineHeight: 15,
   },
 
   capacityBlock: {
@@ -1206,17 +1166,23 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     fontWeight: '700',
     flex: 1,
+    minWidth: 0,
+    lineHeight: 16,
   },
   inventoryQty: {
     ...typography.caption,
     color: colors.textSecondary,
     fontWeight: '700',
+    flexShrink: 0,
+    lineHeight: 15,
   },
   inventoryMeta: {
     ...typography.caption,
     fontSize: 10,
     color: colors.textMuted,
     marginTop: 2,
+    minWidth: 0,
+    lineHeight: 14,
   },
   inventoryHint: {
     fontSize: 10,
@@ -1231,6 +1197,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   inventoryRight: {
+    flexShrink: 0,
     alignItems: 'flex-end',
     gap: 4,
     minWidth: 76,
@@ -1239,6 +1206,8 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     textAlign: 'right',
+    flexShrink: 0,
+    lineHeight: 14,
   },
   sellButton: {
     minHeight: 32,

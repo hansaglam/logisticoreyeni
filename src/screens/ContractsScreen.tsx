@@ -25,19 +25,30 @@ import {
   ProgressBar,
   ProductIcon,
 } from '../components/ui';
-import { deliveryBalance } from '../config/balance';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
 import { getRoute as findRoute } from '../data/routes';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { getCityName, getProductByIdSafe, getProductName } from '../utils/entityLookup';
 import { dedupeAvailableContracts, getContractFilterSortTier } from '../simulation/contracts';
 import {
-  calculateTravelHours,
+  buildContractPreview,
+  type ContractPreview,
+  type ContractRiskLevel,
+} from '../simulation/contractPreview';
+import {
+  countMarketContractMatches,
+  getContractMarketSortScore,
+  getMarketContractMatchTier,
+  getMarketMatchBadgeVariant,
+  isExactMarketContractMatch,
+  MARKET_MATCH_BADGE_LABEL,
+  type MarketContractMatchTier,
+  type MarketMatchBadgeVariant,
+} from '../utils/marketContractMatch';
+import {
   getContractAvailability,
   getContractCargoWeight,
   getIdleTruckOriginCityIds,
   hasIdleTruckAtOrigin,
-  selectIdleTruckForContract,
 } from '../simulation/delivery';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
@@ -47,20 +58,11 @@ import type {
   ContractAvailability,
   Delivery,
   Driver,
-  GlobalEconomy,
   MarketContractFilter,
-  Product,
   ProductId,
-  Route,
   Truck,
 } from '../types/game';
 
-const FALLBACK_FUEL_RATE_PER_KM = deliveryBalance.fuelCostEstimateMultiplier;
-const FALLBACK_AVERAGE_SPEED_KMH = deliveryBalance.defaultAverageSpeed;
-const FALLBACK_DRIVER_SALARY_PER_DAY = deliveryBalance.fallbackDriverSalaryPerDay;
-const URGENT_URGENCY_THRESHOLD = 0.75;
-const URGENT_DEADLINE_SLACK = 0.95;
-const LONG_ROUTE_KM = 350;
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const MARKET_HIGHLIGHT_TIMEOUT_MS = 8000;
 const DAY_HOURS = 24;
@@ -132,6 +134,20 @@ const TRUCK_UNAVAILABLE_BADGE = {
   borderColor: 'rgba(245, 158, 11, 0.65)',
 } as const;
 
+const NO_TRUCK_IN_ORIGIN_BADGE = {
+  label: 'Şehirde kamyon yok',
+  textColor: '#F59E0B',
+  backgroundColor: 'rgba(245, 158, 11, 0.14)',
+  borderColor: 'rgba(245, 158, 11, 0.7)',
+} as const;
+
+const NO_IDLE_TRUCK_IN_ORIGIN_BADGE = {
+  label: 'Şehirde müsait kamyon yok',
+  textColor: '#FBBF24',
+  backgroundColor: 'rgba(245, 158, 11, 0.10)',
+  borderColor: 'rgba(245, 158, 11, 0.5)',
+} as const;
+
 function createTruckUnavailableBadge(): ContractCardBadge {
   return {
     key: 'availability',
@@ -139,6 +155,18 @@ function createTruckUnavailableBadge(): ContractCardBadge {
     textColor: TRUCK_UNAVAILABLE_BADGE.textColor,
     backgroundColor: TRUCK_UNAVAILABLE_BADGE.backgroundColor,
     borderColor: TRUCK_UNAVAILABLE_BADGE.borderColor,
+    warning: true,
+  };
+}
+
+function createOriginTruckBadge(kind: 'missing' | 'busy'): ContractCardBadge {
+  const style = kind === 'missing' ? NO_TRUCK_IN_ORIGIN_BADGE : NO_IDLE_TRUCK_IN_ORIGIN_BADGE;
+  return {
+    key: 'availability',
+    label: style.label,
+    textColor: style.textColor,
+    backgroundColor: style.backgroundColor,
+    borderColor: style.borderColor,
     warning: true,
   };
 }
@@ -180,9 +208,21 @@ function getAvailabilityBadge(
       };
     }
     case 'NO_TRUCK_AT_ORIGIN':
+    case 'NO_TRUCK_IN_ORIGIN_CITY':
+      return createOriginTruckBadge('missing');
+    case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
+      return createOriginTruckBadge('busy');
     case 'NO_TRUCKS':
-    case 'NO_IDLE_TRUCKS':
       return createTruckUnavailableBadge();
+    case 'NO_IDLE_TRUCKS':
+      return {
+        key: 'availability',
+        label: 'Müsait kamyon yok',
+        textColor: '#FBBF24',
+        backgroundColor: 'rgba(245, 158, 11, 0.10)',
+        borderColor: 'rgba(245, 158, 11, 0.5)',
+        warning: true,
+      };
     case 'NO_DRIVERS':
     case 'NO_IDLE_DRIVERS':
       return {
@@ -195,7 +235,7 @@ function getAvailabilityBadge(
     case 'CAPACITY_INSUFFICIENT':
       return {
         key: 'availability',
-        label: 'Kapasite yok',
+        label: 'Kapasite yetersiz',
         textColor: COLORS.muted,
         backgroundColor: colors.cardSoft,
         borderColor: COLORS.border,
@@ -203,7 +243,7 @@ function getAvailabilityBadge(
     case 'TRUCK_CONDITION_TOO_LOW':
       return {
         key: 'availability',
-        label: 'Tamir gerekli',
+        label: 'Kondisyon düşük',
         textColor: COLORS.muted,
         backgroundColor: colors.cardSoft,
         borderColor: COLORS.border,
@@ -267,21 +307,22 @@ function buildContractFooterBadges(params: {
 function formatRiskDisplayLabel(label: string): string {
   if (label === 'Yüksek risk') return 'Yüksek Risk';
   if (label === 'Orta risk') return 'Orta Risk';
-  return 'Düşük Risk';
+  if (label === 'Düşük risk') return 'Düşük Risk';
+  return label || 'Düşük Risk';
 }
 
 function getRiskOutlineStyle(
-  label: string,
+  riskLevel: ContractRiskLevel,
   soft = false,
 ): { backgroundColor: string; borderColor: string; color: string } {
-  if (label === 'Yüksek risk') {
+  if (riskLevel === 'high') {
     return {
       backgroundColor: COLORS.card,
       borderColor: soft ? 'rgba(248, 113, 113, 0.45)' : COLORS.red,
       color: soft ? 'rgba(248, 113, 113, 0.85)' : COLORS.red,
     };
   }
-  if (label === 'Orta risk') {
+  if (riskLevel === 'medium') {
     return {
       backgroundColor: COLORS.card,
       borderColor: colors.accentAmber,
@@ -295,223 +336,104 @@ function getRiskOutlineStyle(
   };
 }
 
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as ProductId]?.name ?? 'Bilinmeyen yük';
-}
-
-function getProductById(productId: ProductId): Product {
-  return PRODUCT_BY_ID[productId];
-}
-
-function getRoute(originCityId: string, destinationCityId: string): Route | undefined {
-  return findRoute(originCityId, destinationCityId);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function estimateContractTravelHours(contract: Contract, truck?: Truck, driver?: Driver): number {
-  const route = getRoute(contract.originCityId, contract.destinationCityId);
-  if (truck && driver && route) {
-    try {
-      const product = getProductById(contract.productId);
-      return calculateTravelHours(contract, truck, driver, route, product);
-    } catch {
-      /* fallback below */
-    }
-  }
-  if (contract.distanceKm > 0) {
-    return contract.distanceKm / FALLBACK_AVERAGE_SPEED_KMH;
-  }
-  return 0;
-}
-
-function getRiskMultiplier(riskLabel: string): number {
-  if (riskLabel === 'Yüksek risk') return deliveryBalance.riskReserveHigh;
-  if (riskLabel === 'Orta risk') return deliveryBalance.riskReserveMedium;
-  return deliveryBalance.riskReserveLow;
-}
-
-interface ContractFinancials {
-  fuelCost: number;
-  driverCost: number;
-  maintenanceCost: number;
-  riskReserve: number;
-  totalExpense: number;
-  estimatedProfit: number;
-  profitMargin: number;
-  travelHours: number;
-}
-
-function estimateContractFinancials(
+function getPreviewProfit(
   contract: Contract,
-  globalEconomy: GlobalEconomy,
-  riskLabel: string,
-  truck?: Truck,
-  driver?: Driver,
-): ContractFinancials {
-  const route = getRoute(contract.originCityId, contract.destinationCityId);
-  const routeDifficulty = route?.difficulty ?? 0.5;
-  const travelHours = estimateContractTravelHours(contract, truck, driver);
-  const salaryPerDay = driver?.salaryPerDay ?? FALLBACK_DRIVER_SALARY_PER_DAY;
-
-  const fuelCost = contract.distanceKm * globalEconomy.fuelPrice * FALLBACK_FUEL_RATE_PER_KM;
-  const driverCost = (salaryPerDay / 24) * travelHours;
-  const maintenanceCost =
-    contract.distanceKm * deliveryBalance.maintenanceCostPerKm * routeDifficulty;
-  const riskReserve = contract.payment * getRiskMultiplier(riskLabel);
-  const totalExpense = fuelCost + driverCost + maintenanceCost + riskReserve;
-  const estimatedProfit = contract.payment - totalExpense;
-  const profitMargin = contract.payment > 0 ? estimatedProfit / contract.payment : 0;
-
-  return {
-    fuelCost,
-    driverCost,
-    maintenanceCost,
-    riskReserve,
-    totalExpense,
-    estimatedProfit,
-    profitMargin,
-    travelHours,
-  };
-}
-
-interface RiskInfo {
-  label: string;
-  color: string;
-  reasons: string[];
-  primaryReason: string;
-}
-
-function calculateBaseRiskLabel(contract: Contract): Pick<RiskInfo, 'label' | 'color'> {
-  const route = getRoute(contract.originCityId, contract.destinationCityId);
-  const product = getProductById(contract.productId);
-  const difficulty = route?.difficulty ?? 0.5;
-  const deadlinePressure = clamp(1 - contract.deadlineHours / 48, 0, 1);
-
-  const riskScore =
-    contract.urgency * 0.35 +
-    deadlinePressure * 0.25 +
-    difficulty * 0.25 +
-    product.perishability * 0.15;
-
-  if (riskScore >= 0.6) {
-    return { label: 'Yüksek risk', color: colors.danger };
-  }
-  if (riskScore >= 0.35) {
-    return { label: 'Orta risk', color: colors.accentAmber };
-  }
-  return { label: 'Düşük risk', color: colors.success };
-}
-
-function getRiskBadgeVariant(label: string): 'danger' | 'warning' | 'success' {
-  if (label === 'Yüksek risk') return 'danger';
-  if (label === 'Orta risk') return 'warning';
-  return 'success';
-}
-
-function buildRiskReasons(
-  contract: Contract,
-  travelHours: number,
-  profitMargin: number,
-): string[] {
-  const route = getRoute(contract.originCityId, contract.destinationCityId);
-  const product = getProductById(contract.productId);
-  const difficulty = route?.difficulty ?? 0.5;
-  const reasons: string[] = [];
-
-  if (travelHours > 0 && contract.deadlineHours <= travelHours * 1.25) {
-    reasons.push('Sıkı teslim süresi');
-  }
-  if (contract.distanceKm >= LONG_ROUTE_KM) {
-    reasons.push('Uzun rota');
-  }
-  if (difficulty >= 0.55) {
-    reasons.push('Zorlu rota');
-  }
-  if (product.perishability >= 0.45) {
-    reasons.push('Hassas yük');
-  }
-  if (profitMargin < 0.15) {
-    reasons.push('Düşük kâr marjı');
-  }
-
-  return reasons;
-}
-
-interface ContractAnalysis {
-  risk: RiskInfo;
-  financials: ContractFinancials;
-  suggestedTruck?: Truck;
-  suggestedDriver?: Driver;
-  route?: Route;
-}
-
-function analyzeContract(
-  contract: Contract,
-  globalEconomy: GlobalEconomy,
-  trucks?: Truck[],
-  drivers?: Driver[],
-): ContractAnalysis {
-  const suggestedTruck = trucks
-    ? selectIdleTruckForContract(trucks, contract, getProductById(contract.productId))
-    : undefined;
-  const suggestedDriver = drivers ? findSuggestedDriver(drivers) : undefined;
-  const route = getRoute(contract.originCityId, contract.destinationCityId);
-  const travelHours = estimateContractTravelHours(contract, suggestedTruck, suggestedDriver);
-  const baseRisk = calculateBaseRiskLabel(contract);
-  const financials = estimateContractFinancials(
-    contract,
-    globalEconomy,
-    baseRisk.label,
-    suggestedTruck,
-    suggestedDriver,
-  );
-  const reasons = buildRiskReasons(contract, travelHours, financials.profitMargin);
-  const primaryReason =
-    reasons[0] ?? (baseRisk.label === 'Düşük risk' ? 'Güvenli rota' : 'Orta baskı');
-
-  return {
-    risk: {
-      label: baseRisk.label,
-      color: baseRisk.color,
-      reasons,
-      primaryReason,
-    },
-    financials,
-    suggestedTruck,
-    suggestedDriver,
-    route,
-  };
-}
-
-function isUrgentContract(contract: Contract): boolean {
-  if (contract.urgency >= URGENT_URGENCY_THRESHOLD) {
-    return true;
-  }
-
-  const travelHours = estimateContractTravelHours(contract);
-  if (travelHours <= 0) {
-    return false;
-  }
-
-  // Yalnızca teslim süresi, tahmini yol süresinden belirgin şekilde kısaysa acil say
-  return contract.deadlineHours < travelHours * URGENT_DEADLINE_SLACK;
-}
-
-function getEstimatedProfit(contract: Contract, globalEconomy: GlobalEconomy): number {
-  return analyzeContract(contract, globalEconomy).financials.estimatedProfit;
+  previewById: Map<string, ContractPreview>,
+): number {
+  return previewById.get(contract.id)?.estimatedNetProfit ?? 0;
 }
 
 function isRouteContractFilter(
   filter: MarketContractFilter | null | undefined,
 ): filter is MarketContractFilter {
   return filter?.source === 'market' || filter?.source === 'map';
+}
+
+function isMarketOpportunityFilter(
+  filter: MarketContractFilter | null | undefined,
+): filter is MarketContractFilter {
+  return filter?.source === 'market';
+}
+
+function getMarketMatchBadgeColors(variant: MarketMatchBadgeVariant): {
+  backgroundColor: string;
+  borderColor: string;
+  textColor: string;
+} {
+  switch (variant) {
+    case 'exact':
+      return {
+        backgroundColor: colors.successSoft,
+        borderColor: colors.success,
+        textColor: colors.success,
+      };
+    case 'strong':
+      return {
+        backgroundColor: colors.accentAmberSoft,
+        borderColor: colors.accentAmber,
+        textColor: colors.accentAmber,
+      };
+    default:
+      return {
+        backgroundColor: 'rgba(59, 130, 246, 0.12)',
+        borderColor: colors.accentBlue,
+        textColor: colors.accentBlue,
+      };
+  }
+}
+
+function compareContractsForDisplay(
+  a: Contract,
+  b: Contract,
+  trucks: Truck[],
+  drivers: Driver[],
+  playerLevel: number,
+  activeFilter: FilterKey,
+  previewById: Map<string, ContractPreview>,
+  marketFilter?: MarketContractFilter | null,
+): number {
+  if (isMarketOpportunityFilter(marketFilter)) {
+    const matchDiff =
+      getContractMarketSortScore(b, marketFilter) - getContractMarketSortScore(a, marketFilter);
+    if (matchDiff !== 0) return matchDiff;
+  }
+
+  const priorityDiff =
+    getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
+    getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
+  if (priorityDiff !== 0) return priorityDiff;
+
+  if (activeFilter === 'shortDistance') {
+    return a.distanceKm - b.distanceKm;
+  }
+
+  if (activeFilter === 'urgent') {
+    return a.deadlineHours - b.deadlineHours || b.payment - a.payment;
+  }
+
+  if (activeFilter === 'lowRisk') {
+    return getPreviewProfit(b, previewById) - getPreviewProfit(a, previewById);
+  }
+
+  if (activeFilter === 'bestPayment' || activeFilter === 'all') {
+    const paymentDiff = b.payment - a.payment;
+    if (paymentDiff !== 0) return paymentDiff;
+    const profitDiff = getPreviewProfit(b, previewById) - getPreviewProfit(a, previewById);
+    if (profitDiff !== 0) return profitDiff;
+    if (isMarketOpportunityFilter(marketFilter)) {
+      return (b.urgency ?? 0) - (a.urgency ?? 0);
+    }
+    return 0;
+  }
+
+  const profitDiff = getPreviewProfit(b, previewById) - getPreviewProfit(a, previewById);
+  if (profitDiff !== 0) return profitDiff;
+  const paymentDiff = b.payment - a.payment;
+  if (paymentDiff !== 0) return paymentDiff;
+  if (isMarketOpportunityFilter(marketFilter)) {
+    return (b.urgency ?? 0) - (a.urgency ?? 0);
+  }
+  return 0;
 }
 
 function getContractSortPriority(
@@ -532,7 +454,7 @@ function getContractSortPriority(
 
   let priority = 0;
 
-  if (isRouteContractFilter(marketFilter)) {
+  if (marketFilter?.source === 'map' && isRouteContractFilter(marketFilter)) {
     const tier = getContractFilterSortTier(contract, marketFilter);
     priority += tier * 20;
   }
@@ -541,8 +463,13 @@ function getContractSortPriority(
     const availability = getContractAvailability(contract, trucks, drivers, safePlayerLevel);
     if (availability.canStart) {
       priority += 0;
-    } else if (availability.reason === 'NO_TRUCK_AT_ORIGIN') {
+    } else if (
+      availability.reason === 'NO_TRUCK_AT_ORIGIN' ||
+      availability.reason === 'NO_TRUCK_IN_ORIGIN_CITY'
+    ) {
       priority += 20;
+    } else if (availability.reason === 'NO_IDLE_TRUCK_IN_ORIGIN_CITY') {
+      priority += 18;
     } else if (
       availability.reason === 'NO_TRUCKS' ||
       availability.reason === 'NO_IDLE_TRUCKS' ||
@@ -557,7 +484,13 @@ function getContractSortPriority(
     } else {
       priority += 50;
     }
-    if (atOrigin && !availability.canStart && availability.reason !== 'NO_TRUCK_AT_ORIGIN') {
+    if (
+      atOrigin &&
+      !availability.canStart &&
+      availability.reason !== 'NO_TRUCK_AT_ORIGIN' &&
+      availability.reason !== 'NO_TRUCK_IN_ORIGIN_CITY' &&
+      availability.reason !== 'NO_IDLE_TRUCK_IN_ORIGIN_CITY'
+    ) {
       priority -= 3;
     }
     return priority;
@@ -575,62 +508,73 @@ function sortContractsForDisplay(
   trucks: Truck[],
   drivers: Driver[],
   playerLevel: number,
-  globalEconomy: GlobalEconomy,
   activeFilter: FilterKey,
+  previewById: Map<string, ContractPreview>,
   marketFilter?: MarketContractFilter | null,
 ): Contract[] {
   const list = [...items];
 
   if (activeFilter === 'shortDistance') {
-    return list.sort((a, b) => {
-      const priorityDiff =
-        getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
-        getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
-      if (priorityDiff !== 0) return priorityDiff;
-      return a.distanceKm - b.distanceKm;
-    });
+    return list.sort((a, b) =>
+      compareContractsForDisplay(
+        a,
+        b,
+        trucks,
+        drivers,
+        playerLevel,
+        activeFilter,
+        previewById,
+        marketFilter,
+      ),
+    );
   }
 
   if (activeFilter === 'urgent') {
     return list
-      .filter(isUrgentContract)
-      .sort((a, b) => {
-        const priorityDiff =
-          getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
-          getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
-        if (priorityDiff !== 0) return priorityDiff;
-        return a.deadlineHours - b.deadlineHours || b.payment - a.payment;
-      });
+      .filter((contract) => previewById.get(contract.id)?.isUrgent)
+      .sort((a, b) =>
+        compareContractsForDisplay(
+          a,
+          b,
+          trucks,
+          drivers,
+          playerLevel,
+          activeFilter,
+          previewById,
+          marketFilter,
+        ),
+      );
   }
 
   if (activeFilter === 'lowRisk') {
     return list
-      .filter((c) => analyzeContract(c, globalEconomy).risk.label === 'Düşük risk')
-      .sort((a, b) => {
-        const priorityDiff =
-          getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
-          getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
-        if (priorityDiff !== 0) return priorityDiff;
-        return getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy);
-      });
+      .filter((contract) => previewById.get(contract.id)?.riskLevel === 'low')
+      .sort((a, b) =>
+        compareContractsForDisplay(
+          a,
+          b,
+          trucks,
+          drivers,
+          playerLevel,
+          activeFilter,
+          previewById,
+          marketFilter,
+        ),
+      );
   }
 
-  return list.sort((a, b) => {
-    const priorityDiff =
-      getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
-      getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
-    if (priorityDiff !== 0) {
-      return priorityDiff;
-    }
-    if (activeFilter === 'bestPayment' || activeFilter === 'all') {
-      return b.payment - a.payment || getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy);
-    }
-    return getEstimatedProfit(b, globalEconomy) - getEstimatedProfit(a, globalEconomy) || b.payment - a.payment;
-  });
-}
-
-function findSuggestedDriver(drivers: Driver[]): Driver | undefined {
-  return (drivers ?? []).find((driver) => driver.status === 'idle');
+  return list.sort((a, b) =>
+    compareContractsForDisplay(
+      a,
+      b,
+      trucks,
+      drivers,
+      playerLevel,
+      activeFilter,
+      previewById,
+      marketFilter,
+    ),
+  );
 }
 
 function getDeliveryStatusVariant(status: Delivery['status']): 'blue' | 'amber' | 'success' | 'danger' {
@@ -709,6 +653,45 @@ function ContractsTabBar({ segments, activeKey, onChange }: ContractsTabBarProps
   );
 }
 
+interface MarketFilterInfoCardProps {
+  routeLine: string;
+  exactCount: number;
+  relatedCount: number;
+  onClear: () => void;
+}
+
+function MarketFilterInfoCard({
+  routeLine,
+  exactCount,
+  relatedCount,
+  onClear,
+}: MarketFilterInfoCardProps) {
+  const detailMessage =
+    exactCount > 0
+      ? 'Bu fırsatla tam eşleşen işler bulundu.'
+      : relatedCount > 0
+        ? 'Tam eşleşme yok, aynı rota/şehir/ürünle ilişkili işler gösteriliyor.'
+        : 'Bu fırsata uygun iş şu anda yok. Yakın işler ve diğer sözleşmeler aşağıda gösteriliyor.';
+
+  return (
+    <View style={styles.marketFilterInfoCard}>
+      <View style={styles.marketFilterInfoHeader}>
+        <Text style={styles.marketFilterInfoTitle}>Piyasa fırsatına göre sıralanıyor</Text>
+        <TouchableOpacity onPress={onClear} activeOpacity={0.85}>
+          <Text style={styles.marketFilterClear}>Filtreyi temizle</Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.marketFilterInfoRoute} numberOfLines={1}>
+        {routeLine}
+      </Text>
+      <Text style={styles.marketFilterInfoMessage}>{detailMessage}</Text>
+      <Text style={styles.marketFilterInfoHint}>
+        Eşleşen ve yakın sözleşmeler üstte gösteriliyor.
+      </Text>
+    </View>
+  );
+}
+
 interface CompactStatRowProps {
   availableCount: number;
   activeCount: number;
@@ -761,45 +744,50 @@ function OriginCitiesBanner({ trucks }: OriginCitiesBannerProps) {
 
 interface ContractCardProps {
   contract: Contract;
+  preview: ContractPreview;
   trucks: Truck[];
-  drivers: Driver[];
   playerLevel: number;
-  globalEconomy: GlobalEconomy;
   isPinnedMarketMatch?: boolean;
+  marketMatchTier?: MarketContractMatchTier | null;
   onPress: () => void;
 }
 
 function ContractCard({
   contract,
+  preview,
   trucks,
-  drivers,
   playerLevel,
-  globalEconomy,
   isPinnedMarketMatch = false,
+  marketMatchTier = null,
   onPress,
 }: ContractCardProps) {
   const safePlayerLevel = Math.max(1, playerLevel ?? 1);
-  const availability = getContractAvailability(contract, trucks, drivers, safePlayerLevel);
+  const { availability } = preview;
   const cargoWeight = availability.requiredCapacity ?? getContractCargoWeight(contract);
-  const analysis = analyzeContract(contract, globalEconomy, trucks, drivers);
-  const { financials, risk } = analysis;
-  const urgent = isUrgentContract(contract);
+  const urgent = preview.isUrgent;
   const hasTruckAtOrigin = hasIdleTruckAtOrigin(trucks, contract.originCityId);
-  const riskSoft = urgent && risk.label === 'Yüksek risk';
-  const riskOutline = getRiskOutlineStyle(risk.label ?? '', riskSoft);
+  const riskSoft = urgent && preview.riskLevel === 'high';
+  const riskOutline = getRiskOutlineStyle(preview.riskLevel, riskSoft);
   const payment = contract.payment ?? 0;
-  const estimatedProfit = financials.estimatedProfit ?? 0;
-  const totalExpense = financials.totalExpense ?? 0;
-  const profitMargin = financials.profitMargin ?? 0;
+  const estimatedProfit = preview.estimatedNetProfit ?? 0;
+  const totalExpense = preview.estimatedTotalCost ?? 0;
+  const profitMargin = preview.estimatedMarginPercent ?? 0;
   const footerBadges = buildContractFooterBadges({
     availability,
     playerLevel: safePlayerLevel,
     hasTruckAtOrigin,
     urgent,
-    riskLabel: risk.label ?? '',
+    riskLabel: preview.riskLabel ?? '',
     riskOutline,
     riskSoft,
   });
+  const matchBadgeVariant =
+    marketMatchTier && marketMatchTier !== 'none'
+      ? getMarketMatchBadgeVariant(marketMatchTier)
+      : null;
+  const matchBadgeColors = matchBadgeVariant
+    ? getMarketMatchBadgeColors(matchBadgeVariant)
+    : null;
 
   const handlePress = () => {
     if (!availability.canStart) {
@@ -868,6 +856,25 @@ function ContractCard({
         </Text>
 
         <View style={styles.cardBadgeRow}>
+          {marketMatchTier && marketMatchTier !== 'none' && matchBadgeColors ? (
+            <View
+              style={[
+                styles.marketMatchBadge,
+                {
+                  backgroundColor: matchBadgeColors.backgroundColor,
+                  borderColor: matchBadgeColors.borderColor,
+                },
+              ]}
+            >
+              <Text
+                style={[styles.marketMatchBadgeText, { color: matchBadgeColors.textColor }]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {MARKET_MATCH_BADGE_LABEL[marketMatchTier]}
+              </Text>
+            </View>
+          ) : null}
           {footerBadges.map((badge) => (
             <View
               key={badge.key}
@@ -933,21 +940,25 @@ function ActiveDeliveryCard({ delivery, trucks, drivers, currentTime }: ActiveDe
           <ProductIcon productId={delivery.productId} size={22} color={COLORS.cyan} />
         </View>
         <View style={styles.cardCenter}>
-          <Text style={styles.cardRoute} numberOfLines={1}>
+          <Text style={styles.cardRoute} numberOfLines={1} ellipsizeMode="tail">
             {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
           </Text>
-          <Text style={styles.cardProduct} numberOfLines={1}>
+          <Text style={styles.cardProduct} numberOfLines={1} ellipsizeMode="tail">
             {getProductName(delivery.productId)}
           </Text>
-          <Text style={styles.cardMetaLine} numberOfLines={1}>
+          <Text style={styles.cardMetaLine} numberOfLines={1} ellipsizeMode="tail">
             {truck?.name ?? 'Kamyon'} · {driver?.name ?? 'Şoför'}
           </Text>
         </View>
         <View style={styles.cardRight}>
-          <Text style={styles.cardPayment}>{formatMoney(delivery.estimatedProfit)}</Text>
+          <Text style={styles.cardPayment} numberOfLines={1} ellipsizeMode="tail">
+            {formatMoney(delivery.estimatedProfit)}
+          </Text>
           <View style={styles.cardMetricTimeRow}>
             <GameIcon name="time" size={11} color={COLORS.muted} />
-            <Text style={styles.cardMetaValue}>{formatTimeLeft(hoursLeft)}</Text>
+            <Text style={styles.cardMetaValue} numberOfLines={1} ellipsizeMode="tail">
+              {formatTimeLeft(hoursLeft)}
+            </Text>
           </View>
         </View>
       </View>
@@ -961,14 +972,16 @@ function ActiveDeliveryCard({ delivery, trucks, drivers, currentTime }: ActiveDe
 
 interface CompletedContractCardProps {
   contract: Contract;
-  globalEconomy: GlobalEconomy;
   netProfit?: number;
+  fallbackPreview?: ContractPreview;
 }
 
-function CompletedContractCard({ contract, globalEconomy, netProfit }: CompletedContractCardProps) {
-  const profit =
-    netProfit ??
-    analyzeContract(contract, globalEconomy).financials.estimatedProfit;
+function CompletedContractCard({
+  contract,
+  netProfit,
+  fallbackPreview,
+}: CompletedContractCardProps) {
+  const profit = netProfit ?? fallbackPreview?.estimatedNetProfit ?? 0;
 
   return (
     <View style={styles.listCard}>
@@ -977,16 +990,22 @@ function CompletedContractCard({ contract, globalEconomy, netProfit }: Completed
           <ProductIcon productId={contract.productId} size={22} color={COLORS.green} />
         </View>
         <View style={styles.cardCenter}>
-          <Text style={styles.cardRoute} numberOfLines={1}>
+          <Text style={styles.cardRoute} numberOfLines={1} ellipsizeMode="tail">
             {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
           </Text>
-          <Text style={styles.cardProduct} numberOfLines={1}>
+          <Text style={styles.cardProduct} numberOfLines={1} ellipsizeMode="tail">
             {getProductName(contract.productId)}
           </Text>
         </View>
         <View style={styles.cardRight}>
-          <Text style={styles.cardPayment}>{formatMoney(contract.payment)}</Text>
-          <Text style={[styles.cardProfit, { color: COLORS.green }]}>
+          <Text style={styles.cardPayment} numberOfLines={1} ellipsizeMode="tail">
+            {formatMoney(contract.payment)}
+          </Text>
+          <Text
+            style={[styles.cardProfit, { color: COLORS.green }]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
             Kâr {formatMoney(profit)}
           </Text>
         </View>
@@ -1058,6 +1077,27 @@ export default function ContractsScreen() {
     };
   }, [availableContracts]);
 
+  const contractPreviewById = useMemo(() => {
+    if (!globalEconomy) {
+      return new Map<string, ContractPreview>();
+    }
+
+    const previews = new Map<string, ContractPreview>();
+    for (const contract of availableContracts) {
+      previews.set(
+        contract.id,
+        buildContractPreview({
+          contract,
+          globalEconomy,
+          trucks,
+          drivers,
+          companyLevel: playerLevel,
+        }),
+      );
+    }
+    return previews;
+  }, [availableContracts, trucks, drivers, globalEconomy, playerLevel]);
+
   const filteredContracts = useMemo(() => {
     if (!globalEconomy) return [];
     return sortContractsForDisplay(
@@ -1065,8 +1105,8 @@ export default function ContractsScreen() {
       trucks,
       drivers,
       playerLevel,
-      globalEconomy,
       LIST_FILTER,
+      contractPreviewById,
       marketContractFilter,
     );
   }, [
@@ -1075,8 +1115,30 @@ export default function ContractsScreen() {
     drivers,
     playerLevel,
     globalEconomy,
+    contractPreviewById,
     marketContractFilter,
   ]);
+
+  const completedPreviewById = useMemo(() => {
+    if (!globalEconomy) {
+      return new Map<string, ContractPreview>();
+    }
+
+    const previews = new Map<string, ContractPreview>();
+    for (const contract of completedContracts) {
+      previews.set(
+        contract.id,
+        buildContractPreview({
+          contract,
+          globalEconomy,
+          trucks,
+          drivers,
+          companyLevel: playerLevel,
+        }),
+      );
+    }
+    return previews;
+  }, [completedContracts, trucks, drivers, globalEconomy, playerLevel]);
 
   const tabSegments = useMemo<TabSegment[]>(
     () => [
@@ -1088,19 +1150,11 @@ export default function ContractsScreen() {
   );
 
   const marketMatchStats = useMemo(() => {
-    if (!isRouteContractFilter(marketContractFilter)) {
-      return { exact: 0, related: 0 };
+    if (!isMarketOpportunityFilter(marketContractFilter)) {
+      return { exactMatchesCount: 0, relatedMatchesCount: 0 };
     }
 
-    let exact = 0;
-    let related = 0;
-    for (const contract of availableContracts) {
-      const tier = getContractFilterSortTier(contract, marketContractFilter);
-      if (tier === -1 || tier === 0) exact += 1;
-      else if (tier < 99) related += 1;
-    }
-
-    return { exact, related };
+    return countMarketContractMatches(availableContracts, marketContractFilter);
   }, [availableContracts, marketContractFilter]);
 
   useEffect(() => {
@@ -1112,8 +1166,7 @@ export default function ContractsScreen() {
     const pinnedContractId = marketContractFilter.contractId ?? null;
 
     for (const contract of availableContracts) {
-      const tier = getContractFilterSortTier(contract, marketContractFilter);
-      if (tier === -1 || tier === 0) {
+      if (isExactMarketContractMatch(contract, marketContractFilter)) {
         if (!firstExactId) {
           firstExactId = contract.id;
         }
@@ -1163,14 +1216,21 @@ export default function ContractsScreen() {
   const handleConfirmAssignment = (truckId: string, driverId: string) => {
     if (!assignmentContract) return;
 
-    const { fuelCost } = analyzeContract(
-      assignmentContract,
+    const truck = (player.trucks ?? []).find((item) => item.id === truckId);
+    const driver = (player.drivers ?? []).find((item) => item.id === driverId);
+    const preview = buildContractPreview({
+      contract: assignmentContract,
       globalEconomy,
-      player.trucks,
-      player.drivers,
-    ).financials;
+      trucks: player.trucks,
+      drivers: player.drivers,
+      companyLevel: playerLevel,
+      truck,
+      driver,
+      route: findRoute(assignmentContract.originCityId, assignmentContract.destinationCityId),
+      product: getProductByIdSafe(assignmentContract.productId) ?? undefined,
+    });
 
-    if (player.money < fuelCost) {
+    if (player.money < preview.estimatedFuelCost) {
       Alert.alert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
       return;
     }
@@ -1270,24 +1330,21 @@ export default function ContractsScreen() {
         >
           {activeSegment === 'available' ? (
             <>
-              {isRouteContractFilter(marketContractFilter) ? (
+              {isMarketOpportunityFilter(marketContractFilter) ? (
+                <MarketFilterInfoCard
+                  routeLine={marketFilterLine}
+                  exactCount={marketMatchStats.exactMatchesCount}
+                  relatedCount={marketMatchStats.relatedMatchesCount}
+                  onClear={handleClearMarketFilter}
+                />
+              ) : isRouteContractFilter(marketContractFilter) ? (
                 <View style={styles.marketFilterCompact}>
                   <Text style={styles.marketFilterLine} numberOfLines={1}>
-                    Piyasa fırsatı · {marketFilterLine}
+                    Harita önerisi · {marketFilterLine}
                   </Text>
                   <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
                     <Text style={styles.marketFilterClear}>Temizle</Text>
                   </TouchableOpacity>
-                </View>
-              ) : null}
-
-              {isRouteContractFilter(marketContractFilter) &&
-              marketMatchStats.exact === 0 &&
-              marketMatchStats.related === 0 ? (
-                <View style={styles.marketNoMatchCompact}>
-                  <Text style={styles.marketNoMatchText}>
-                    Bu fırsata uygun aktif sözleşme şu anda yok.
-                  </Text>
                 </View>
               ) : null}
 
@@ -1298,18 +1355,29 @@ export default function ContractsScreen() {
                   icon="contract"
                 />
               ) : (
-                filteredContracts.map((contract) => (
-                  <ContractCard
-                    key={contract.id}
-                    contract={contract}
-                    trucks={player.trucks ?? []}
-                    drivers={player.drivers ?? []}
-                    playerLevel={player.level ?? player.companyLevel ?? 1}
-                    globalEconomy={globalEconomy}
-                    isPinnedMarketMatch={highlightedContractId === contract.id}
-                    onPress={() => openAssignmentModal(contract)}
-                  />
-                ))
+                filteredContracts.map((contract) => {
+                  const preview = contractPreviewById.get(contract.id);
+                  if (!preview) {
+                    return null;
+                  }
+
+                  return (
+                    <ContractCard
+                      key={contract.id}
+                      contract={contract}
+                      preview={preview}
+                      trucks={player.trucks ?? []}
+                      playerLevel={player.level ?? player.companyLevel ?? 1}
+                      isPinnedMarketMatch={highlightedContractId === contract.id}
+                      marketMatchTier={
+                        isMarketOpportunityFilter(marketContractFilter)
+                          ? getMarketContractMatchTier(contract, marketContractFilter)
+                          : null
+                      }
+                      onPress={() => openAssignmentModal(contract)}
+                    />
+                  );
+                })
               )}
             </>
           ) : null}
@@ -1348,8 +1416,8 @@ export default function ContractsScreen() {
                   <CompletedContractCard
                     key={contract.id}
                     contract={contract}
-                    globalEconomy={globalEconomy}
                     netProfit={linkedDelivery?.estimatedProfit}
+                    fallbackPreview={completedPreviewById.get(contract.id)}
                   />
                 );
               })
@@ -1558,6 +1626,44 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     marginBottom: spacing.sm,
   },
+  marketFilterInfoCard: {
+    backgroundColor: colors.accentAmberSoft,
+    borderWidth: 1,
+    borderColor: colors.accentAmber,
+    borderRadius: 10,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: 4,
+  },
+  marketFilterInfoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  marketFilterInfoTitle: {
+    flex: 1,
+    fontSize: 12,
+    color: COLORS.text,
+    fontWeight: '800',
+  },
+  marketFilterInfoRoute: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  marketFilterInfoMessage: {
+    fontSize: 11,
+    color: colors.accentAmber,
+    fontWeight: '700',
+    lineHeight: 15,
+  },
+  marketFilterInfoHint: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
   marketFilterLine: {
     flex: 1,
     fontSize: 11,
@@ -1569,18 +1675,15 @@ const styles = StyleSheet.create({
     color: colors.accentAmber,
     fontWeight: '800',
   },
-  marketNoMatchCompact: {
-    backgroundColor: colors.cardSoft,
-    borderRadius: 10,
+  marketMatchBadge: {
     borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: spacing.sm,
-    marginBottom: spacing.sm,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
-  marketNoMatchText: {
-    fontSize: 11,
-    color: colors.accentAmber,
-    fontWeight: '700',
+  marketMatchBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
   },
   listCard: {
     backgroundColor: COLORS.card,
@@ -1643,20 +1746,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   contractRoute: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 15,
     fontWeight: '800',
     color: COLORS.text,
     marginBottom: 1,
+    lineHeight: 19,
   },
   contractProduct: {
     fontSize: 13,
     color: COLORS.muted,
     marginBottom: 1,
+    minWidth: 0,
+    lineHeight: 17,
   },
   contractMetaLine: {
     fontSize: 13,
     color: COLORS.textSecondary,
     fontWeight: '600',
+    minWidth: 0,
+    lineHeight: 17,
   },
   contractPayment: {
     fontSize: 22,
@@ -1687,22 +1797,30 @@ const styles = StyleSheet.create({
     paddingTop: 1,
   },
   cardRoute: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.text,
     marginBottom: 2,
+    lineHeight: 18,
   },
   cardProduct: {
     fontSize: 11,
     color: COLORS.muted,
     marginBottom: 2,
+    minWidth: 0,
+    lineHeight: 15,
   },
   cardMetaLine: {
     fontSize: 10,
     color: COLORS.textSecondary,
     fontWeight: '600',
+    minWidth: 0,
+    lineHeight: 14,
   },
   cardRight: {
+    flexShrink: 0,
     alignItems: 'flex-end',
     minWidth: 92,
     maxWidth: 112,

@@ -4,9 +4,10 @@
  * Envanter normalizasyonu, kapasite ve alım/satım hesapları.
  */
 
-import { operatingCostBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { operatingCostBalance, tradingBalance } from '../config/balance';
 import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getProductName } from '../utils/entityLookup';
+import { calculateWarehouseDailyOperatingCostBreakdown } from '../utils/warehouseCalculations';
 import {
   getEffectiveSellPrice,
   getInventoryQuality,
@@ -69,20 +70,9 @@ export function normalizeWarehouseInventory(
 export function normalizeWarehouse(warehouse: Warehouse, currentTime = 0): Warehouse {
   const inventory = normalizeWarehouseInventory(warehouse, currentTime);
   const usedCapacityTon = inventory.reduce((sum, item) => sum + item.quantity, 0);
-  const capacityTons = warehouse.capacityTons ?? warehouse.capacityTon ?? 80;
+  const capacityTons = warehouse.capacityTons ?? warehouse.capacityTon ?? tradingBalance.defaultWarehouseCapacityTons;
   const city = CITIES_BY_ID[warehouse.cityId];
-  const modifier = city?.warehouseCostModifier ?? 1;
-  const tier = warehouse.upgradeTier ?? 1;
-  const typeMultiplier =
-    resolveWarehouseType(warehouse.warehouseType) === 'cold'
-      ? warehouseBalance.coldElectricityMultiplier
-      : 1;
-  const computedDailyCost = Math.round(
-    (capacityTons * warehouseBalance.rentPerTon +
-      capacityTons * warehouseBalance.electricityPerTon * typeMultiplier +
-      warehouseBalance.staffCostPerLevel * tier) *
-      modifier,
-  );
+  const computedDailyCost = calculateWarehouseDailyOperatingCostBreakdown(warehouse, city).total;
   const dailyOperatingCost =
     warehouse.dailyOperatingCost ??
     (computedDailyCost > 0 ? computedDailyCost : operatingCostBalance.fallbackWarehouseDailyCost);
@@ -272,6 +262,6 @@ export function getTotalInventoryTons(warehouses: Warehouse[] | undefined): numb
   return (warehouses ?? []).reduce((sum, warehouse) => sum + getWarehouseUsedCapacityTon(warehouse), 0);
 }
 
-export function getProductDisplayName(productId: ProductId): string {
-  return PRODUCT_BY_ID[productId]?.name ?? productId;
+export function getProductDisplayName(productId: ProductId | string | undefined | null): string {
+  return getProductName(productId);
 }

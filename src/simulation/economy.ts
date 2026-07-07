@@ -14,6 +14,8 @@ import type {
   ProductMarket,
 } from '../types/game';
 import { PRODUCT_IDS } from '../data/products';
+import { economyBalance } from '../config/balance';
+import { clamp, randomBetween } from '../utils/math';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -45,29 +47,126 @@ const STOCK_RATIO_MAX = 5;
 /** Varsayılan fiyat yumuşatma — GlobalEconomy'de override edilebilir */
 const DEFAULT_PRICE_SMOOTHING = 0.2;
 
+export function safeEconomyNumber(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return value;
+}
+
+export function getBaseFuelPrice(): number {
+  const base = economyBalance?.baseFuelPrice;
+  if (typeof base === 'number' && Number.isFinite(base) && base > 0) {
+    return base;
+  }
+  return 1.72;
+}
+
+export function createDefaultGlobalEconomy(): GlobalEconomy {
+  return {
+    fuelPrice: getBaseFuelPrice(),
+    globalDemandMultiplier: economyBalance.globalDemandDefault ?? 1,
+    globalProductionMultiplier: economyBalance.globalProductionDefault ?? 1,
+    eventMultiplier: 1,
+    marketVolatility: economyBalance.marketVolatility ?? 0.08,
+    priceSmoothing: DEFAULT_PRICE_SMOOTHING,
+  };
+}
+
 /** Varsayılan küresel ekonomi — oyun başlangıcı ve testler için */
-export const DEFAULT_GLOBAL_ECONOMY: GlobalEconomy = {
-  fuelPrice: 1.72,
-  globalDemandMultiplier: 1,
-  globalProductionMultiplier: 1,
-  eventMultiplier: 1,
-  marketVolatility: 0.08,
-  priceSmoothing: DEFAULT_PRICE_SMOOTHING,
-};
+export const DEFAULT_GLOBAL_ECONOMY: GlobalEconomy = createDefaultGlobalEconomy();
+
+function globalEconomyNeededFallback(raw: Record<string, unknown>): boolean {
+  if (Object.keys(raw).length === 0) {
+    return true;
+  }
+
+  const requiredKeys = [
+    'fuelPrice',
+    'globalDemandMultiplier',
+    'globalProductionMultiplier',
+    'eventMultiplier',
+    'marketVolatility',
+  ];
+
+  for (const key of requiredKeys) {
+    const value = raw[key];
+    if (value === undefined || value === null) {
+      return true;
+    }
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      return true;
+    }
+  }
+
+  if (
+    raw.priceSmoothing !== undefined &&
+    typeof raw.priceSmoothing === 'number' &&
+    !Number.isFinite(raw.priceSmoothing)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/** Save/load ve runtime için eksik veya bozuk globalEconomy alanlarını tamamlar */
+export function normalizeGlobalEconomy(
+  rawGlobalEconomy: unknown,
+  options?: { logFallback?: boolean },
+): GlobalEconomy {
+  const defaults = createDefaultGlobalEconomy();
+
+  if (
+    rawGlobalEconomy == null ||
+    typeof rawGlobalEconomy !== 'object' ||
+    Array.isArray(rawGlobalEconomy)
+  ) {
+    if (options?.logFallback && __DEV__) {
+      console.log('[saveGame] globalEconomy normalized with fallback values');
+    }
+    return { ...defaults };
+  }
+
+  const raw = rawGlobalEconomy as Record<string, unknown>;
+  const normalized: GlobalEconomy = {
+    fuelPrice: safeEconomyNumber(raw.fuelPrice, defaults.fuelPrice),
+    globalDemandMultiplier: safeEconomyNumber(
+      raw.globalDemandMultiplier,
+      defaults.globalDemandMultiplier,
+    ),
+    globalProductionMultiplier: safeEconomyNumber(
+      raw.globalProductionMultiplier,
+      defaults.globalProductionMultiplier,
+    ),
+    eventMultiplier: safeEconomyNumber(raw.eventMultiplier, defaults.eventMultiplier),
+    marketVolatility: safeEconomyNumber(raw.marketVolatility, defaults.marketVolatility),
+    priceSmoothing: safeEconomyNumber(
+      raw.priceSmoothing,
+      defaults.priceSmoothing ?? DEFAULT_PRICE_SMOOTHING,
+    ),
+  };
+
+  if (options?.logFallback && __DEV__ && globalEconomyNeededFallback(raw)) {
+    console.log('[saveGame] globalEconomy normalized with fallback values');
+  }
+
+  return normalized;
+}
+
+export function getSafeFuelPrice(globalEconomy?: GlobalEconomy | null): number {
+  return safeEconomyNumber(globalEconomy?.fuelPrice, getBaseFuelPrice());
+}
+
+export function getSafeGlobalEconomy(globalEconomy?: GlobalEconomy | null): GlobalEconomy {
+  return normalizeGlobalEconomy(globalEconomy ?? {});
+}
 
 // ---------------------------------------------------------------------------
 // Yardımcı fonksiyonlar
 // ---------------------------------------------------------------------------
 
-/** Değeri [min, max] aralığına sıkıştırır */
-export function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-/** [min, max] aralığında uniform rastgele sayı üretir */
-export function randomBetween(min: number, max: number): number {
-  return min + Math.random() * (max - min);
-}
+export { clamp, randomBetween } from '../utils/math';
 
 /**
  * marketVolatility etrafında günlük rastgele çarpan üretir.
@@ -121,7 +220,10 @@ export function calculatePriceResistance(currentPrice: number, basePrice: number
 
 /** Test ve simülasyon için günlük rastgele çarpan seti üretir */
 export function createEconomyRandomFactors(globalEconomy: GlobalEconomy): EconomyRandomFactors {
-  const { marketVolatility } = globalEconomy;
+  const marketVolatility = safeEconomyNumber(
+    globalEconomy.marketVolatility,
+    economyBalance.marketVolatility ?? 0.08,
+  );
   return {
     production: createRandomFactor(marketVolatility),
     consumption: createRandomFactor(marketVolatility),
@@ -149,13 +251,17 @@ export function calculateProduction(
   globalEconomy: GlobalEconomy,
   randomFactor?: number,
 ): number {
-  const factor = randomFactor ?? createRandomFactor(globalEconomy.marketVolatility);
+  const marketVolatility = safeEconomyNumber(
+    globalEconomy.marketVolatility,
+    economyBalance.marketVolatility ?? 0.08,
+  );
+  const factor = randomFactor ?? createRandomFactor(marketVolatility);
 
   const dailyProduction =
     productMarket.productionPerDay *
     city.productionMultiplier *
-    globalEconomy.globalProductionMultiplier *
-    globalEconomy.eventMultiplier *
+    safeEconomyNumber(globalEconomy.globalProductionMultiplier, 1) *
+    safeEconomyNumber(globalEconomy.eventMultiplier, 1) *
     factor;
 
   return Math.max(0, dailyProduction);
@@ -177,7 +283,11 @@ export function calculateConsumption(
   globalEconomy: GlobalEconomy,
   randomFactor?: number,
 ): number {
-  const factor = randomFactor ?? createRandomFactor(globalEconomy.marketVolatility);
+  const marketVolatility = safeEconomyNumber(
+    globalEconomy.marketVolatility,
+    economyBalance.marketVolatility ?? 0.08,
+  );
+  const factor = randomFactor ?? createRandomFactor(marketVolatility);
   const priceResistance = calculatePriceResistance(
     productMarket.currentPrice,
     productMarket.basePrice,
@@ -186,7 +296,7 @@ export function calculateConsumption(
   const dailyConsumption =
     productMarket.consumptionPerDay *
     city.demandMultiplier *
-    globalEconomy.globalDemandMultiplier *
+    safeEconomyNumber(globalEconomy.globalDemandMultiplier, 1) *
     priceResistance *
     factor;
 
@@ -207,8 +317,15 @@ export function calculateDynamicPrice(
   globalEconomy: GlobalEconomy,
   randomFactor?: number,
 ): number {
-  const factor = randomFactor ?? createRandomFactor(globalEconomy.marketVolatility);
-  const priceSmoothing = globalEconomy.priceSmoothing ?? DEFAULT_PRICE_SMOOTHING;
+  const marketVolatility = safeEconomyNumber(
+    globalEconomy.marketVolatility,
+    economyBalance.marketVolatility ?? 0.08,
+  );
+  const factor = randomFactor ?? createRandomFactor(marketVolatility);
+  const priceSmoothing = safeEconomyNumber(
+    globalEconomy.priceSmoothing,
+    DEFAULT_PRICE_SMOOTHING,
+  );
 
   const stockRatio = calculateStockRatio(productMarket.stock, productMarket.targetStock);
   const scarcityMultiplier = calculateScarcityMultiplier(stockRatio);
@@ -216,7 +333,7 @@ export function calculateDynamicPrice(
   const rawPrice =
     productMarket.basePrice *
     scarcityMultiplier *
-    globalEconomy.globalDemandMultiplier *
+    safeEconomyNumber(globalEconomy.globalDemandMultiplier, 1) *
     factor;
 
   const oldPrice = productMarket.currentPrice;

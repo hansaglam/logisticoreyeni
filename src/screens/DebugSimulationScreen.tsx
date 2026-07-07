@@ -22,7 +22,7 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
 import { CITIES_BY_ID } from '../data/cities';
 import { PRODUCT_BY_ID } from '../data/products';
-import { canTruckCarryContract } from '../simulation/delivery';
+import { canTruckCarryContract, getDeliveryIntegrityStats } from '../simulation/delivery';
 import {
   calculateCompanyScore,
   formatCompanyScore,
@@ -496,6 +496,7 @@ export default function DebugSimulationScreen() {
   const loadGame = useGameStore((state) => state.loadGame);
   const clearSave = useGameStore((state) => state.clearSave);
   const saveStatus = useGameStore((state) => state.saveStatus);
+  const saveError = useGameStore((state) => state.saveError);
   const refreshSaveStatus = useGameStore((state) => state.refreshSaveStatus);
   const startDelivery = useGameStore((state) => state.startDelivery);
   const startDeliveryAutoAssign = useGameStore((state) => state.startDeliveryAutoAssign);
@@ -508,9 +509,14 @@ export default function DebugSimulationScreen() {
   const debugRemoveCash = useGameStore((state) => state.debugRemoveCash);
   const debugSetCash = useGameStore((state) => state.debugSetCash);
   const debugAdvanceOneDay = useGameStore((state) => state.debugAdvanceOneDay);
+  const debugAdvanceOfflineDays = useGameStore((state) => state.debugAdvanceOfflineDays);
   const debugProcessDailyCosts = useGameStore((state) => state.debugProcessDailyCosts);
+  const dailyOperatingCostDebug = useGameStore((state) => state.dailyOperatingCostDebug);
+  const lastDailyOperatingCostTime = useGameStore((state) => state.lastDailyOperatingCostTime);
   const debugExpireLeaseTruck = useGameStore((state) => state.debugExpireLeaseTruck);
   const debugGetEconomyBalanceSummary = useGameStore((state) => state.debugGetEconomyBalanceSummary);
+  const contractGenerationDebug = useGameStore((state) => state.contractGenerationDebug);
+  const deliverySettlementDebug = useGameStore((state) => state.deliverySettlementDebug);
 
   const [lastMessage, setLastMessage] = useState<StatusMessage>({
     type: 'info',
@@ -604,6 +610,16 @@ export default function DebugSimulationScreen() {
         activeDeliveries,
       }),
     [player, cities, products, routes, contracts, activeDeliveries],
+  );
+
+  const deliveryIntegrity = useMemo(
+    () =>
+      getDeliveryIntegrityStats(activeDeliveries, {
+        truckIds: new Set(trucks.map((truck) => truck.id)),
+        driverIds: new Set(drivers.map((driver) => driver.id)),
+        contractIds: new Set(contracts.map((contract) => contract.id)),
+      }),
+    [activeDeliveries, trucks, drivers, contracts],
   );
 
   const setSuccess = (text: string) => setLastMessage({ type: 'success', text });
@@ -847,6 +863,27 @@ export default function DebugSimulationScreen() {
         </Section>
 
         <Section title="Ekonomi Dengesi (V1)">
+          <View style={styles.levelDebugPanel}>
+            <Text style={styles.levelDebugLine}>
+              lastDailyOperatingCostTime: {lastDailyOperatingCostTime ?? 0}h
+            </Text>
+            <Text style={styles.levelDebugLine}>currentTime: {currentTime.toFixed(1)}h</Text>
+            <Text style={styles.levelDebugLine}>
+              hoursUntilNextDailyCost: {(dailyOperatingCostDebug?.hoursUntilNextDailyCost ?? 0).toFixed(1)}h
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              dailyOperatingCost: {formatMoney(dailyOperatingCostDebug?.dailyOperatingCost ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              maxOfflineChargeDays: {dailyOperatingCostDebug?.maxOfflineChargeDays ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              lastCharge:{' '}
+              {dailyOperatingCostDebug?.lastCharge
+                ? `${dailyOperatingCostDebug.lastCharge.days} gün · ${formatMoney(dailyOperatingCostDebug.lastCharge.total)} · ${dailyOperatingCostDebug.lastCharge.reason}`
+                : '—'}
+            </Text>
+          </View>
           <View style={styles.buttonGrid}>
             <DebugButton
               label="+1 Gün"
@@ -856,6 +893,18 @@ export default function DebugSimulationScreen() {
                   setSuccess('1 oyun günü ilerletildi');
                 } catch (error) {
                   setError(error instanceof Error ? error.message : 'Gün ilerletme başarısız');
+                }
+              }}
+              variant="primary"
+            />
+            <DebugButton
+              label="+10 Gün Offline"
+              onPress={() => {
+                try {
+                  debugAdvanceOfflineDays(10);
+                  setSuccess('10 oyun günü offline simülasyonu çalıştırıldı');
+                } catch (error) {
+                  setError(error instanceof Error ? error.message : 'Offline simülasyon başarısız');
                 }
               }}
               variant="primary"
@@ -943,6 +992,51 @@ export default function DebugSimulationScreen() {
             <Text style={styles.levelDebugLine}>
               Next contract refresh: {contractRefreshCountdown}s
             </Text>
+            <Text style={styles.levelDebugLine}>
+              — Üretim zamanlaması —
+            </Text>
+            <Text style={styles.levelDebugLine}>currentTime: {currentTime.toFixed(1)}h</Text>
+            <Text style={styles.levelDebugLine}>
+              availableContracts: {contractGenerationDebug?.availableContracts ?? countAvailableContracts(contracts)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              lastContractGenerationTime: {contractGenerationDebug?.lastContractGenerationTime ?? 0}h
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              hoursSinceLastGeneration: {(contractGenerationDebug?.hoursSinceLastGeneration ?? 0).toFixed(1)}h
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              lastGeneratedContractsCount: {contractGenerationDebug?.lastGeneratedContractsCount ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              expiredContractsRemoved: {contractGenerationDebug?.expiredContractsRemoved ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              nextGenerationInHours (küçük): {(contractGenerationDebug?.nextSmallGenerationInHours ?? 0).toFixed(1)}h
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              nextMarketRefreshInHours: {(contractGenerationDebug?.nextMediumGenerationInHours ?? 0).toFixed(1)}h
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              nextDailyCleanupInHours: {(contractGenerationDebug?.nextDailyCleanupInHours ?? 0).toFixed(1)}h
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              elapsedSmallTicks: {contractGenerationDebug?.elapsedSmallTicks ?? 0} / processed:{' '}
+              {contractGenerationDebug?.processedSmallTicks ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              elapsedMediumTicks: {contractGenerationDebug?.elapsedMediumTicks ?? 0} / processed:{' '}
+              {contractGenerationDebug?.processedMediumTicks ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              elapsedDailyTicks: {contractGenerationDebug?.elapsedDailyTicks ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              generatedContractsCount: {contractGenerationDebug?.generatedContractsCount ?? 0}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              offlineCatchup: {contractGenerationDebug?.offlineCatchup ? 'yes' : 'no'}
+            </Text>
           </View>
           <View style={styles.buttonGrid}>
             <DebugButton
@@ -953,6 +1047,36 @@ export default function DebugSimulationScreen() {
               }}
             />
             <DebugButton label="Sözleşme Üret (Debug)" onPress={handleGenerateContracts} variant="primary" />
+          </View>
+        </Section>
+
+        <Section title="Teslimat Para Mutabakatı (Debug)">
+          <View style={styles.levelDebugPanel}>
+            <Text style={styles.levelDebugLine}>phase: {deliverySettlementDebug?.phase ?? '—'}</Text>
+            <Text style={styles.levelDebugLine}>
+              cashBefore: {formatMoney(deliverySettlementDebug?.cashBefore ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              cashAfter: {formatMoney(deliverySettlementDebug?.cashAfter ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              fuelCost: {formatMoney(deliverySettlementDebug?.fuelCost ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              payment: {formatMoney(deliverySettlementDebug?.contractPayment ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              maintenanceCost: {formatMoney(deliverySettlementDebug?.maintenanceCost ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              penaltyCost: {formatMoney(deliverySettlementDebug?.penaltyCost ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              reportedNetProfit: {formatMoney(deliverySettlementDebug?.reportedNetProfit ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              cashDeltaOnCompletion: {formatMoney(deliverySettlementDebug?.cashDeltaOnCompletion ?? 0)}
+            </Text>
           </View>
         </Section>
 
@@ -1001,6 +1125,34 @@ export default function DebugSimulationScreen() {
           <KpiCard label="Market News Count" value={`${marketNews.length}`} accentColor={COLORS.secondary} />
           <KpiCard label="Event Log Count" value={`${eventLog.length}`} accentColor={COLORS.primary} />
         </View>
+
+        <Section title="Delivery Integrity">
+          <View style={styles.saveStatusCard}>
+            <View style={styles.statGrid}>
+              <StatItem label="Active Deliveries" value={`${deliveryIntegrity.activeCount}`} />
+              <StatItem
+                label="Invalid Progress"
+                value={`${deliveryIntegrity.invalidProgressCount}`}
+                color={deliveryIntegrity.invalidProgressCount > 0 ? COLORS.danger : COLORS.success}
+              />
+              <StatItem
+                label="Missing Truck"
+                value={`${deliveryIntegrity.missingTruckCount}`}
+                color={deliveryIntegrity.missingTruckCount > 0 ? COLORS.danger : COLORS.success}
+              />
+              <StatItem
+                label="Missing Driver"
+                value={`${deliveryIntegrity.missingDriverCount}`}
+                color={deliveryIntegrity.missingDriverCount > 0 ? COLORS.danger : COLORS.success}
+              />
+              <StatItem
+                label="Missing Contract"
+                value={`${deliveryIntegrity.missingContractCount}`}
+                color={deliveryIntegrity.missingContractCount > 0 ? COLORS.danger : COLORS.success}
+              />
+            </View>
+          </View>
+        </Section>
 
         <Section title={`Game Event Log (${recentEvents.length}/${eventLog.length})`}>
           {recentEvents.length === 0 ? (
@@ -1084,8 +1236,13 @@ export default function DebugSimulationScreen() {
                 color={COLORS.success}
               />
               <StatItem
-                label="Penalties"
-                value={formatCompanyScore(companyScoreBreakdown.penaltiesScore)}
+                label="Penalty Effect"
+                value={formatCompanyScore(companyScoreBreakdown.penaltyScore)}
+                color={COLORS.danger}
+              />
+              <StatItem
+                label="Penalty Cost"
+                value={formatCompanyScore(companyScoreBreakdown.penaltyCostScore)}
                 color={COLORS.danger}
               />
               <StatItem
@@ -1126,6 +1283,11 @@ export default function DebugSimulationScreen() {
                 color={saveStatus.hasSave ? COLORS.success : COLORS.textMuted}
               />
               <StatItem
+                label="Valid Save"
+                value={saveStatus.hasValidSave ? 'Yes' : 'No'}
+                color={saveStatus.hasValidSave ? COLORS.success : COLORS.danger}
+              />
+              <StatItem
                 label="Last Save"
                 value={formatSavedAt(saveStatus.lastSavedAt)}
                 color={saveStatus.lastSavedAt ? COLORS.secondary : COLORS.textMuted}
@@ -1144,6 +1306,35 @@ export default function DebugSimulationScreen() {
                 label="Save Version"
                 value={`v${saveStatus.saveVersion}`}
                 color={COLORS.secondary}
+              />
+              <StatItem
+                label="Migrated From"
+                value={
+                  saveStatus.migratedFromVersion != null
+                    ? `v${saveStatus.migratedFromVersion}`
+                    : '—'
+                }
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Loading Save"
+                value={saveStatus.isLoadingSave ? 'Yes' : 'No'}
+                color={saveStatus.isLoadingSave ? COLORS.primary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Backup Invalid"
+                value={saveStatus.backup?.invalid ? 'Yes' : 'No'}
+                color={saveStatus.backup?.invalid ? COLORS.danger : COLORS.textMuted}
+              />
+              <StatItem
+                label="Backup Migrated"
+                value={saveStatus.backup?.migrated ? 'Yes' : 'No'}
+                color={saveStatus.backup?.migrated ? COLORS.secondary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Last Save Error"
+                value={saveStatus.lastSaveError ?? saveError ?? '—'}
+                color={saveStatus.lastSaveError || saveError ? COLORS.danger : COLORS.textMuted}
               />
               <StatItem
                 label="Game Ready"

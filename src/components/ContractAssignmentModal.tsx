@@ -560,6 +560,7 @@ export default function ContractAssignmentModal({
     const showFleetButton =
       availability.reason === 'NO_TRUCKS' ||
       availability.reason === 'NO_IDLE_TRUCKS' ||
+      availability.reason === 'NO_TRUCK_IN_ORIGIN_CITY' ||
       availability.reason === 'CAPACITY_INSUFFICIENT';
 
     const showDriverButton =

@@ -19,8 +19,9 @@ import type {
   Truck,
 } from '../types/game';
 import { truckBalance } from '../config/balance';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getSafeFuelPrice } from './economy';
+import { clamp, randomBetween, randomIntBetween } from '../utils/math';
+import { getCityName, getProductByIdSafe } from '../utils/entityLookup';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -65,15 +66,7 @@ export class DeliveryError extends Error {
 // Temel yardımcılar
 // ---------------------------------------------------------------------------
 
-/** Değeri [min, max] aralığına sıkıştırır */
-export function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-/** [min, max] aralığında uniform rastgele sayı üretir */
-export function randomBetween(min: number, max: number): number {
-  return min + Math.random() * (max - min);
-}
+export { clamp, randomBetween, randomIntBetween } from '../utils/math';
 
 /** Benzersiz teslimat kimliği üretir */
 export function createDeliveryId(contractId: string, startedAt: number, sequence: number): string {
@@ -97,7 +90,7 @@ export function getContractCargoWeight(contract: Contract, product?: Product): n
     return contract.amount;
   }
 
-  const resolved = product ?? PRODUCT_BY_ID[contract.productId];
+  const resolved = product ?? getProductByIdSafe(contract.productId);
   return resolved?.weightPerUnit ?? 0;
 }
 
@@ -180,15 +173,41 @@ export function getIdleTruckOriginCityIds(
   return [...cities];
 }
 
+export function getTrucksAtOrigin(
+  trucks: Truck[] | undefined,
+  originCityId: string | undefined,
+  fallbackHomeCityId?: string,
+): Truck[] {
+  if (!originCityId) {
+    return [];
+  }
+  return (trucks ?? []).filter(
+    (truck) => resolveTruckCityId(truck, fallbackHomeCityId) === originCityId,
+  );
+}
+
+export function getIdleTrucksAtOrigin(
+  trucks: Truck[] | undefined,
+  originCityId: string | undefined,
+  fallbackHomeCityId?: string,
+): Truck[] {
+  return getTrucksAtOrigin(trucks, originCityId, fallbackHomeCityId).filter(isTruckIdle);
+}
+
+export function hasTruckAtOrigin(
+  trucks: Truck[] | undefined,
+  originCityId: string | undefined,
+  fallbackHomeCityId?: string,
+): boolean {
+  return getTrucksAtOrigin(trucks, originCityId, fallbackHomeCityId).length > 0;
+}
+
 export function hasIdleTruckAtOrigin(
   trucks: Truck[] | undefined,
   originCityId: string | undefined,
   fallbackHomeCityId?: string,
 ): boolean {
-  if (!originCityId) return false;
-  return getIdleTrucks(trucks).some(
-    (truck) => resolveTruckCityId(truck, fallbackHomeCityId) === originCityId,
-  );
+  return getIdleTrucksAtOrigin(trucks, originCityId, fallbackHomeCityId).length > 0;
 }
 
 export function isTruckAtContractOrigin(
@@ -230,7 +249,7 @@ export function selectIdleTruckForContract(
   product?: Product,
   currentTime = 0,
 ): Truck | undefined {
-  const resolved = product ?? PRODUCT_BY_ID[contract.productId];
+  const resolved = product ?? getProductByIdSafe(contract.productId);
   if (!resolved) return undefined;
 
   return (trucks ?? [])
@@ -253,8 +272,8 @@ export function getContractAvailability(
   const requiredLevel = contract.requiredLevel ?? 1;
   const truckList = trucks ?? [];
   const driverList = drivers ?? [];
-  const product = PRODUCT_BY_ID[contract.productId];
-  const requiredCapacity = getContractCargoWeight(contract, product);
+  const product = getProductByIdSafe(contract.productId);
+  const requiredCapacity = getContractCargoWeight(contract, product ?? undefined);
   const idleTrucks = getIdleTrucks(truckList);
   const idleDrivers = getIdleDrivers(driverList);
   const maxIdleTruckCapacity =
@@ -288,8 +307,8 @@ export function getContractAvailability(
     return {
       canStart: false,
       reason: 'NO_IDLE_TRUCKS',
-      buttonLabel: 'Kamyon yok',
-      title: 'Kamyon yok',
+      buttonLabel: 'Müsait kamyon yok',
+      title: 'Müsait kamyon yok',
       message:
         'Bu işi almak için şu anda uygun boştaki kamyonun yok. Mevcut teslimatların bitmesini bekleyebilir veya yeni kamyon satın alabilirsin.',
       requiredCapacity,
@@ -325,8 +344,8 @@ export function getContractAvailability(
   if (!originCityId) {
     return {
       canStart: false,
-      reason: 'NO_TRUCK_AT_ORIGIN',
-      buttonLabel: 'Çıkışta Kamyon Yok',
+      reason: 'INVALID_ORIGIN_CITY',
+      buttonLabel: 'Geçersiz çıkış',
       title: 'Geçersiz sözleşme',
       message: 'Bu sözleşmenin çıkış şehri tanımlı değil.',
       maxIdleTruckCapacity,
@@ -334,51 +353,78 @@ export function getContractAvailability(
     };
   }
 
-  if (!hasIdleTruckAtOrigin(truckList, originCityId)) {
-    const fromCityName = CITIES_BY_ID[originCityId]?.name ?? 'bu şehir';
+  const fromCityName = getCityName(originCityId) || 'bu şehir';
+  const trucksAtOrigin = getTrucksAtOrigin(truckList, originCityId);
+  const idleTrucksAtOrigin = getIdleTrucksAtOrigin(truckList, originCityId);
+  const maxIdleTruckCapacityAtOrigin =
+    idleTrucksAtOrigin.length > 0
+      ? Math.max(...idleTrucksAtOrigin.map((truck) => truck.capacity ?? 0))
+      : 0;
+
+  if (trucksAtOrigin.length === 0) {
     return {
       canStart: false,
-      reason: 'NO_TRUCK_AT_ORIGIN',
-      buttonLabel: 'Kamyon yok',
-      title: 'Kamyon yok',
-      message: `Bu iş ${fromCityName} çıkışlı. Bu şehirde boştaki kamyonun yok.`,
-      maxIdleTruckCapacity,
+      reason: 'NO_TRUCK_IN_ORIGIN_CITY',
+      buttonLabel: 'Şehirde kamyon yok',
+      title: 'Şehirde kamyon yok',
+      message:
+        `Bu iş ${fromCityName} çıkışlı. Bu şehirde kamyonun yok. ` +
+        'Bu işi alabilmek için kamyonunu bu şehre taşımalı veya bu şehirden çıkan başka uygun bir iş beklemelisin.',
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
       requiredCapacity,
     };
   }
 
-  const fittingTruck = selectIdleTruckForContract(truckList, contract, product);
+  if (idleTrucksAtOrigin.length === 0) {
+    return {
+      canStart: false,
+      reason: 'NO_IDLE_TRUCK_IN_ORIGIN_CITY',
+      buttonLabel: 'Şehirde müsait kamyon yok',
+      title: 'Şehirde müsait kamyon yok',
+      message:
+        `Bu iş ${fromCityName} çıkışlı. Bu şehirde kamyonun var ancak şu anda müsait değil. ` +
+        'Mevcut teslimatın bitmesini bekleyebilir veya bu şehir için yeni bir kamyon ayırabilirsin.',
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      requiredCapacity,
+    };
+  }
+
+  const fittingTruck = selectIdleTruckForContract(truckList, contract, product ?? undefined);
   if (!fittingTruck) {
     return {
       canStart: false,
       reason: 'CAPACITY_INSUFFICIENT',
-      buttonLabel: 'Daha Büyük Kamyon Gerekli',
+      buttonLabel: 'Kapasite yetersiz',
       title: 'Kapasite yetersiz',
-      message: `Bu iş için ${requiredCapacity.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyon kapasiten ${maxIdleTruckCapacity.toFixed(1)} ton.`,
-      maxIdleTruckCapacity,
+      message:
+        `Bu iş için ${requiredCapacity.toFixed(1)} ton kapasite gerekiyor. ` +
+        `${fromCityName} şehrindeki müsait kamyonların en yüksek kapasitesi ${maxIdleTruckCapacityAtOrigin.toFixed(1)} ton.`,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
       requiredCapacity,
     };
   }
 
-  const capacityFittingTrucks = idleTrucks.filter(
-    (truck) => canTruckCarryContract(truck, contract, product),
+  const capacityFittingTrucksAtOrigin = idleTrucksAtOrigin.filter((truck) =>
+    canTruckCarryContract(truck, contract, product ?? undefined),
   );
-  const healthyTruck = capacityFittingTrucks.find(
+  const healthyTruck = capacityFittingTrucksAtOrigin.find(
     (truck) => (truck.condition ?? 100) >= MIN_TRUCK_CONDITION_FOR_DELIVERY,
   );
 
   if (!healthyTruck) {
     const bestCondition = Math.max(
-      ...capacityFittingTrucks.map((truck) => truck.condition ?? 0),
+      ...capacityFittingTrucksAtOrigin.map((truck) => truck.condition ?? 0),
       0,
     );
     return {
       canStart: false,
       reason: 'TRUCK_CONDITION_TOO_LOW',
-      buttonLabel: 'Tamir Gerekli',
-      title: 'Kamyon kondisyonu düşük',
-      message: `Bu iş için kamyon kondisyonunun en az %${MIN_TRUCK_CONDITION_FOR_DELIVERY} olması gerekir. En iyi boşta kamyon: %${Math.round(bestCondition)}.`,
-      maxIdleTruckCapacity,
+      buttonLabel: 'Kondisyon düşük',
+      title: 'Kondisyon düşük',
+      message:
+        `Bu iş için kamyon kondisyonunun en az %${MIN_TRUCK_CONDITION_FOR_DELIVERY} olması gerekir. ` +
+        `${fromCityName} şehrindeki en iyi müsait kamyon: %${Math.round(bestCondition)}.`,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
       requiredCapacity,
     };
   }
@@ -387,7 +433,7 @@ export function getContractAvailability(
     canStart: true,
     reason: 'OK',
     buttonLabel: 'Ekibi Seç',
-    maxIdleTruckCapacity,
+    maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
     requiredCapacity,
   };
 }
@@ -400,8 +446,15 @@ export function getContractAvailabilityWarningText(
       return null;
     case 'NO_TRUCKS':
     case 'NO_IDLE_TRUCKS':
+      return availability.reason === 'NO_IDLE_TRUCKS' ? 'Müsait kamyon yok' : 'Kamyon yok';
+    case 'INVALID_ORIGIN_CITY':
+      return 'Geçersiz çıkış şehri';
+    case 'NO_TRUCK_IN_ORIGIN_CITY':
+      return 'Şehirde kamyon yok';
+    case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
+      return 'Şehirde müsait kamyon yok';
     case 'NO_TRUCK_AT_ORIGIN':
-      return 'Kamyon yok';
+      return 'Şehirde kamyon yok';
     case 'NO_DRIVERS':
       return 'Şoför yok';
     case 'NO_IDLE_DRIVERS':
@@ -429,6 +482,9 @@ export function availabilityReasonToStartDeliveryErrorCode(
       return 'DRIVER_NOT_FOUND';
     case 'NO_IDLE_DRIVERS':
       return 'DRIVER_BUSY';
+    case 'INVALID_ORIGIN_CITY':
+    case 'NO_TRUCK_IN_ORIGIN_CITY':
+    case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
     case 'NO_TRUCK_AT_ORIGIN':
       return 'NO_TRUCK_AT_ORIGIN';
     case 'CAPACITY_INSUFFICIENT':
@@ -546,7 +602,7 @@ export function calculateFuelCost(
   globalEconomy: GlobalEconomy,
 ): number {
   const fuelUsed = calculateFuelUsed(contract, truck, driver, route, product);
-  return fuelUsed * globalEconomy.fuelPrice;
+  return fuelUsed * getSafeFuelPrice(globalEconomy);
 }
 
 /** Bakım maliyetini hesaplar ($) */
@@ -717,7 +773,82 @@ export function calculateDeliveryProfit(
   maintenanceCost: number,
   penaltyCost: number,
 ): number {
-  return contract.payment - fuelCost - maintenanceCost - penaltyCost;
+  const payment = contract.payment ?? 0;
+  return payment - (fuelCost ?? 0) - (maintenanceCost ?? 0) - (penaltyCost ?? 0);
+}
+
+export interface DeliverySettlementParams {
+  contractPayment: number;
+  fuelCost?: number;
+  maintenanceCost?: number;
+  penaltyCost?: number;
+  /** Yakıt startDelivery'de peşin ödendiyse true — tamamlanınca tekrar düşülmez */
+  fuelAlreadyPaid?: boolean;
+}
+
+export interface DeliverySettlementResult {
+  grossRevenue: number;
+  fuelCost: number;
+  maintenanceCost: number;
+  penaltyCost: number;
+  totalCost: number;
+  netProfit: number;
+  cashDeltaOnCompletion: number;
+}
+
+/** Debug — son teslimat para mutabakatı */
+export interface DeliverySettlementDebugSnapshot {
+  phase: 'start' | 'complete' | 'fail';
+  cashBefore: number;
+  cashAfter: number;
+  fuelCost: number;
+  contractPayment: number;
+  maintenanceCost: number;
+  penaltyCost: number;
+  reportedNetProfit: number;
+  cashDeltaOnCompletion: number;
+}
+
+function safeSettlementAmount(value: number | undefined | null): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Teslimat para mutabakatı — tek kaynak.
+ * fuelAlreadyPaid true ise cashDeltaOnCompletion yakıtı tekrar düşmez.
+ */
+export function calculateDeliverySettlement(
+  params: DeliverySettlementParams,
+): DeliverySettlementResult {
+  const grossRevenue = safeSettlementAmount(params.contractPayment);
+  const fuelCost = safeSettlementAmount(params.fuelCost);
+  const maintenanceCost = safeSettlementAmount(params.maintenanceCost);
+  const penaltyCost = safeSettlementAmount(params.penaltyCost);
+  const fuelAlreadyPaid = params.fuelAlreadyPaid ?? true;
+
+  const totalCost = fuelCost + maintenanceCost + penaltyCost;
+  const netProfit = grossRevenue - totalCost;
+  const cashDeltaOnCompletion = fuelAlreadyPaid
+    ? grossRevenue - maintenanceCost - penaltyCost
+    : grossRevenue - totalCost;
+
+  return {
+    grossRevenue,
+    fuelCost,
+    maintenanceCost,
+    penaltyCost,
+    totalCost,
+    netProfit,
+    cashDeltaOnCompletion,
+  };
+}
+
+/** Başarısız teslimat cezası ($) */
+export function calculateFailurePenalty(contract: Contract | undefined): number {
+  return contract
+    ? (contract.payment ?? 0) * FAILURE_PENALTY_RATIO + FAILURE_BASE_DAMAGE_COST
+    : FAILURE_BASE_DAMAGE_COST;
 }
 
 // ---------------------------------------------------------------------------
@@ -748,7 +879,7 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     product,
     globalEconomy,
     currentTime,
-    sequence = Math.floor(randomBetween(1, 999_999)),
+    sequence = randomIntBetween(1, 999_999),
   } = params;
 
   if (!canTruckCarryContract(truck, contract, product)) {
@@ -869,6 +1000,156 @@ export function applyDeliveryStockChange(
   };
 }
 
+/** Floating-point toleransı — progress bu eşiğin üstündeyse tamamlanmış sayılır */
+export const DELIVERY_COMPLETE_PROGRESS_THRESHOLD = 0.999;
+
+export function normalizeDeliveryProgress(progress: number | undefined | null): number {
+  const n = Number(progress);
+  if (!Number.isFinite(n)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, n));
+}
+
+export function isDeliveryProgressComplete(progress: number | undefined | null): boolean {
+  return normalizeDeliveryProgress(progress) >= DELIVERY_COMPLETE_PROGRESS_THRESHOLD;
+}
+
+export type CompleteDeliveryErrorCode =
+  | 'DELIVERY_NOT_FOUND'
+  | 'DELIVERY_NOT_READY'
+  | 'DELIVERY_ALREADY_COMPLETED'
+  | 'DELIVERY_ALREADY_FAILED'
+  | 'CONTRACT_NOT_FOUND'
+  | 'SIMULATION_ERROR';
+
+export interface CompleteDeliveryResult {
+  success: boolean;
+  errorCode?: CompleteDeliveryErrorCode;
+  message?: string;
+  updatedState?: SimulationGameState;
+}
+
+export interface DeliveryIntegrityStats {
+  activeCount: number;
+  invalidProgressCount: number;
+  missingTruckCount: number;
+  missingDriverCount: number;
+  missingContractCount: number;
+}
+
+export function getDeliveryIntegrityStats(
+  deliveries: Delivery[],
+  options: {
+    truckIds?: Set<string>;
+    driverIds?: Set<string>;
+    contractIds?: Set<string>;
+  } = {},
+): DeliveryIntegrityStats {
+  const active = deliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing');
+  let invalidProgressCount = 0;
+  let missingTruckCount = 0;
+  let missingDriverCount = 0;
+  let missingContractCount = 0;
+
+  for (const delivery of active) {
+    const raw = delivery.progress;
+    const normalized = normalizeDeliveryProgress(raw);
+    if (raw === undefined || !Number.isFinite(Number(raw)) || normalized < 0 || normalized > 1) {
+      invalidProgressCount += 1;
+    }
+    if (options.truckIds && !options.truckIds.has(delivery.truckId)) {
+      missingTruckCount += 1;
+    }
+    if (options.driverIds && !options.driverIds.has(delivery.driverId)) {
+      missingDriverCount += 1;
+    }
+    if (options.contractIds && !options.contractIds.has(delivery.contractId)) {
+      missingContractCount += 1;
+    }
+  }
+
+  return {
+    activeCount: active.length,
+    invalidProgressCount,
+    missingTruckCount,
+    missingDriverCount,
+    missingContractCount,
+  };
+}
+
+/**
+ * Teslimat tamamlamayı güvenli şekilde dener; asla throw etmez.
+ */
+export function safeCompleteDelivery(
+  gameState: SimulationGameState,
+  deliveryId: string,
+): CompleteDeliveryResult {
+  const delivery = gameState.deliveries.find((d) => d.id === deliveryId);
+
+  if (!delivery) {
+    console.warn('[delivery] complete skipped: delivery not found', deliveryId);
+    return {
+      success: false,
+      errorCode: 'DELIVERY_NOT_FOUND',
+      message: `Teslimat bulunamadı: ${deliveryId}`,
+    };
+  }
+
+  if (delivery.status === 'completed') {
+    return {
+      success: false,
+      errorCode: 'DELIVERY_ALREADY_COMPLETED',
+      message: 'Teslimat zaten tamamlandı.',
+    };
+  }
+
+  if (delivery.status === 'failed') {
+    console.warn('[delivery] complete skipped: already failed', deliveryId);
+    return {
+      success: false,
+      errorCode: 'DELIVERY_ALREADY_FAILED',
+      message: 'Teslimat başarısız durumda.',
+    };
+  }
+
+  if (!isDeliveryProgressComplete(delivery.progress)) {
+    console.warn(
+      '[delivery] complete skipped: delivery not ready',
+      deliveryId,
+      delivery.progress,
+    );
+    return {
+      success: false,
+      errorCode: 'DELIVERY_NOT_READY',
+      message: `Teslimat henüz tamamlanmadı: progress=${delivery.progress}`,
+    };
+  }
+
+  const contract = gameState.contracts.find((c) => c.id === delivery.contractId);
+  if (!contract) {
+    console.warn('[delivery] complete skipped: contract not found', delivery.contractId);
+    return {
+      success: false,
+      errorCode: 'CONTRACT_NOT_FOUND',
+      message: `Sözleşme bulunamadı: ${delivery.contractId}`,
+    };
+  }
+
+  try {
+    const updatedState = completeDelivery(gameState, deliveryId);
+    return { success: true, updatedState };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Teslimat simülasyonu başarısız.';
+    console.warn('[delivery] completeDeliverySim error', deliveryId, error);
+    return {
+      success: false,
+      errorCode: 'SIMULATION_ERROR',
+      message,
+    };
+  }
+}
+
 /**
  * Teslimatı tamamlar; yeni GameState döndürür.
  * Geç teslimde ceza uygulanır; kritik gecikmede otomatik fail.
@@ -884,7 +1165,7 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
     return gameState;
   }
 
-  if (delivery.progress < 1) {
+  if (!isDeliveryProgressComplete(delivery.progress)) {
     throw new Error(`Teslimat henüz tamamlanmadı: progress=${delivery.progress}`);
   }
 
@@ -900,21 +1181,15 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
     return failDelivery(gameState, deliveryId, 'too_late');
   }
 
-  const product = PRODUCT_BY_ID[delivery.productId];
-
-  const penaltyCost = calculateLatePenalty(
-    contract,
-    delivery.travelHours,
-    actualTravelHours,
-    product,
-  );
-
-  const netProfit = calculateDeliveryProfit(
-    contract,
-    delivery.fuelCost,
-    delivery.maintenanceCost,
-    penaltyCost,
-  );
+  const product = getProductByIdSafe(delivery.productId);
+  const penaltyCost = product
+    ? calculateLatePenalty(
+        contract,
+        delivery.travelHours,
+        actualTravelHours,
+        product,
+      )
+    : 0;
 
   const updatedDeliveries = updateById(gameState.deliveries, deliveryId, (d) => ({
     ...d,
@@ -945,10 +1220,6 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
 
   return {
     ...gameState,
-    player: {
-      ...gameState.player,
-      money: gameState.player.money + netProfit,
-    },
     deliveries: updatedDeliveries,
     contracts: updatedContracts,
     trucks: updatedTrucks,
@@ -976,10 +1247,6 @@ export function failDelivery(
   }
 
   const contract = gameState.contracts.find((c) => c.id === delivery.contractId);
-
-  const penaltyAmount = contract
-    ? contract.payment * FAILURE_PENALTY_RATIO + FAILURE_BASE_DAMAGE_COST
-    : FAILURE_BASE_DAMAGE_COST;
 
   const updatedDeliveries = updateById(gameState.deliveries, deliveryId, (d) => ({
     ...d,
@@ -1010,10 +1277,6 @@ export function failDelivery(
 
   return {
     ...gameState,
-    player: {
-      ...gameState.player,
-      money: gameState.player.money - penaltyAmount,
-    },
     deliveries: updatedDeliveries,
     contracts: updatedContracts,
     trucks: updatedTrucks,
@@ -1029,7 +1292,7 @@ export function failDelivery(
 import { PRODUCT_BY_ID } from '../data/products';
 import { getRouteBetweenCities } from './contracts';
 import { ROUTES } from '../data/routes';
-import { DEFAULT_GLOBAL_ECONOMY } from './economy';
+import { DEFAULT_GLOBAL_ECONOMY, getSafeFuelPrice } from './economy';
 import {
   completeDelivery,
   createDelivery,

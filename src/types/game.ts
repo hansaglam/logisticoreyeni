@@ -192,8 +192,12 @@ export interface Truck {
   purchasePrice: number;
   /** Sahiplik türü — eski kayıtlarda owned kabul edilir */
   ownershipType?: TruckOwnershipType;
-  /** Günlük kira ($) — kiralık kamyonlarda */
+  /** Günlük kira ($) — kiralık kamyonlarda; yalnızca UI tahmini, cash'ten günlük kesilmez */
   leaseDailyCost?: number;
+  /** Haftalık peşin kira ($) — kiralama anında tahsil edilir */
+  leaseWeeklyCost?: number;
+  /** Kira başlangıç zamanı (oyun saati) */
+  leaseStartedAt?: number;
   /** Kira dönemi */
   leasePeriod?: TruckLeasePeriod;
   /** Kira bitiş zamanı (oyun saati) */
@@ -436,23 +440,49 @@ export interface Warehouse {
   qualityProtection?: number;
 }
 
-/** Finans defteri kategorileri */
+/** Finans defteri kategorileri — yeni kayıtlar standart isimleri kullanır; eski save uyumluluğu için legacy değerler de geçerlidir */
 export type FinanceLedgerCategory =
-  | 'trade_purchase'
+  | 'contract_income'
   | 'trade_sale'
+  | 'bonus'
+  | 'other_income'
+  | 'fuel'
+  | 'maintenance'
+  | 'penalty'
+  | 'trade_purchase'
+  | 'driver_salary'
+  | 'warehouse_operating'
+  | 'truck_lease'
+  | 'daily_operating_cost'
+  | 'truck_purchase'
+  | 'driver_hire'
+  | 'warehouse_open'
+  | 'other_expense'
   | 'delivery_income'
   | 'delivery_expense'
   | 'fleet_purchase'
-  | 'warehouse_open'
   | 'truck_transfer'
-  | 'daily_operating_cost'
-  | 'driver_salary'
-  | 'driver_hire'
   | 'warehouse_rent'
-  | 'truck_lease'
   | 'truck_rental'
   | 'operations'
   | 'other';
+
+/** Günlük işletme gideri özet kaydı için isteğe bağlı kırılım */
+export interface FinanceLedgerBreakdown {
+  driverSalary: number;
+  warehouseOperating: number;
+  generalOperations: number;
+  chargedTruckLease: number;
+}
+
+/** Kümülatif finans toplamları — ledger kırpılsa bile korunur */
+export interface FinanceTotals {
+  totalIncome: number;
+  totalExpense: number;
+  netProfit: number;
+  incomeByCategory: Record<string, number>;
+  expenseByCategory: Record<string, number>;
+}
 
 /** Gelir/gider kaydı — save'e yazılır */
 export interface FinanceLedgerEntry {
@@ -461,7 +491,11 @@ export interface FinanceLedgerEntry {
   type: 'income' | 'expense';
   category: FinanceLedgerCategory;
   amount: number;
+  title?: string;
   description?: string;
+  breakdown?: FinanceLedgerBreakdown;
+  /** Teslimat tamamlama gibi ilişkili kayıtların çift yazılmasını önlemek için */
+  relatedDeliveryId?: string;
 }
 
 /** Ticaret işlemi sonucu */
@@ -683,6 +717,13 @@ export interface CompanyScoreBreakdown {
   reputationScore: number;
   levelScore: number;
   weeklyTradeProfitScore: number;
+  /** totalScore'a eklenen negatif ceza katkısı (ör. -9000) */
+  penaltyScore: number;
+  /** Pozitif ceza büyüklüğü — yalnızca bilgi amaçlı */
+  penaltyCostScore: number;
+  /**
+   * @deprecated Negatif ceza katkısı. `penaltyScore` kullanın.
+   */
   penaltiesScore: number;
   totalScore: number;
   truckValue: number;
@@ -719,6 +760,12 @@ export interface StoreGameState {
   lastEconomyTickTime: number;
   /** Son günlük gider işleminin yapıldığı oyun saati */
   lastDailyOperatingCostTime: number;
+  /** Son küçük sözleşme üretim kontrolü (oyun saati) */
+  lastContractGenerationTime: number;
+  /** Son orta ölçekli piyasa sözleşme yenilemesi (oyun saati) */
+  lastMarketRefreshTime: number;
+  /** Son günlük sözleşme temizliği (oyun saati) */
+  lastDailyCleanupTime: number;
   player: Player;
   cities: City[];
   products: Product[];
@@ -734,8 +781,10 @@ export interface StoreGameState {
   marketNews: MarketNews[];
   /** Oyuncu ve geliştirici olay günlüğü */
   eventLog: GameEvent[];
-  /** Gelir/gider defteri — ticaret ve diğer finans hareketleri */
+  /** Gelir/gider defteri — son finans hareketleri (sınırlı liste) */
   financeLedger: FinanceLedgerEntry[];
+  /** Kümülatif gelir/gider toplamları — ledger kırpılsa bile korunur */
+  financeTotals?: FinanceTotals;
 }
 
 /**
@@ -770,7 +819,8 @@ export type StartDeliveryErrorCode =
   | 'INSUFFICIENT_FUNDS'
   | 'DELIVERY_CREATE_FAILED'
   | 'TRUCK_NOT_AT_ORIGIN'
-  | 'NO_TRUCK_AT_ORIGIN';
+  | 'NO_TRUCK_AT_ORIGIN'
+  | 'PRODUCT_NOT_FOUND';
 
 export type ContractAvailabilityReason =
   | 'LEVEL_INSUFFICIENT'
@@ -778,6 +828,9 @@ export type ContractAvailabilityReason =
   | 'NO_IDLE_TRUCKS'
   | 'NO_DRIVERS'
   | 'NO_IDLE_DRIVERS'
+  | 'INVALID_ORIGIN_CITY'
+  | 'NO_TRUCK_IN_ORIGIN_CITY'
+  | 'NO_IDLE_TRUCK_IN_ORIGIN_CITY'
   | 'NO_TRUCK_AT_ORIGIN'
   | 'CAPACITY_INSUFFICIENT'
   | 'TRUCK_CONDITION_TOO_LOW'

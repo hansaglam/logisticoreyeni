@@ -7,7 +7,7 @@
 
 import { companyScoreBalance, warehouseBalance } from '../config/balance';
 import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getProductByIdSafe } from '../utils/entityLookup';
 import type {
   City,
   CompanyScoreBreakdown,
@@ -26,9 +26,18 @@ export type CompanyScoreGameState = Pick<
   'player' | 'cities' | 'products' | 'financeLedger' | 'currentTime'
 >;
 
-function clampScore(value: number): number {
-  if (!Number.isFinite(value)) return 0;
+export function safeScore(value: unknown): number {
+  if (typeof value !== 'number') {
+    return 0;
+  }
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
   return Math.round(value);
+}
+
+function clampScore(value: unknown): number {
+  return safeScore(value);
 }
 
 export function formatCompanyScore(value: number): string {
@@ -72,7 +81,7 @@ export function calculateInventoryValue(
       const quantity = item.quantity ?? 0;
       if (quantity <= 0) continue;
 
-      const product = PRODUCT_BY_ID[item.productId];
+      const product = getProductByIdSafe(item.productId);
       if (!product) continue;
 
       const unitPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
@@ -119,43 +128,51 @@ export function getCompanyScoreBreakdown(state: CompanyScoreGameState): CompanyS
   const truckValue = calculateTruckValue(trucks);
   const warehouseValue = calculateWarehouseValue(warehouses);
   const inventoryValue = calculateInventoryValue(warehouses, state.cities, state.products);
-  const weeklyTradeProfit = calculateWeeklyTradeProfit(state.financeLedger, state.currentTime);
+  const weeklyTradeProfit = calculateWeeklyTradeProfit(
+    state.financeLedger,
+    state.currentTime ?? 0,
+  );
 
-  const cashScore = cash;
-  const truckValueScore = truckValue * companyScoreBalance.truckValueWeight;
-  const warehouseValueScore = warehouseValue * companyScoreBalance.warehouseValueWeight;
-  const inventoryValueScore = inventoryValue * companyScoreBalance.inventoryValueWeight;
-  const completedContractsScore = completedContracts * companyScoreBalance.completedContractBonus;
-  const reputationScore = reputation * companyScoreBalance.reputationBonusPerPoint;
-  const levelScore = level * companyScoreBalance.levelBonusPerLevel;
-  const weeklyTradeProfitScore = weeklyTradeProfit * companyScoreBalance.weeklyTradeProfitWeight;
+  const cashScore = clampScore(cash);
+  const truckValueScore = clampScore(truckValue * companyScoreBalance.truckValueWeight);
+  const warehouseValueScore = clampScore(warehouseValue * companyScoreBalance.warehouseValueWeight);
+  const inventoryValueScore = clampScore(inventoryValue * companyScoreBalance.inventoryValueWeight);
+  const completedContractsScore = clampScore(
+    completedContracts * companyScoreBalance.completedContractBonus,
+  );
+  const reputationScore = clampScore(reputation * companyScoreBalance.reputationBonusPerPoint);
+  const levelScore = clampScore(level * companyScoreBalance.levelBonusPerLevel);
+  const weeklyTradeProfitScore = clampScore(
+    weeklyTradeProfit * companyScoreBalance.weeklyTradeProfitWeight,
+  );
 
-  const penaltiesScore =
+  const penaltyCostScore = clampScore(
     failedDeliveries * companyScoreBalance.failedDeliveryPenalty +
-    lateDeliveries * companyScoreBalance.lateDeliveryPenalty;
+      lateDeliveries * companyScoreBalance.lateDeliveryPenalty,
+  );
+  const penaltyScore = clampScore(-penaltyCostScore);
+
+  const breakdownContributions = {
+    cashScore,
+    truckValueScore,
+    warehouseValueScore,
+    inventoryValueScore,
+    completedContractsScore,
+    reputationScore,
+    levelScore,
+    weeklyTradeProfitScore,
+    penaltyScore,
+  };
 
   const totalScore = clampScore(
-    cashScore +
-      truckValueScore +
-      warehouseValueScore +
-      inventoryValueScore +
-      completedContractsScore +
-      reputationScore +
-      levelScore +
-      weeklyTradeProfitScore -
-      penaltiesScore,
+    Object.values(breakdownContributions).reduce((sum, value) => sum + safeScore(value), 0),
   );
 
   return {
-    cashScore: clampScore(cashScore),
-    truckValueScore: clampScore(truckValueScore),
-    warehouseValueScore: clampScore(warehouseValueScore),
-    inventoryValueScore: clampScore(inventoryValueScore),
-    completedContractsScore: clampScore(completedContractsScore),
-    reputationScore: clampScore(reputationScore),
-    levelScore: clampScore(levelScore),
-    weeklyTradeProfitScore: clampScore(weeklyTradeProfitScore),
-    penaltiesScore: clampScore(-penaltiesScore),
+    ...breakdownContributions,
+    penaltyCostScore,
+    /** @deprecated Negatif ceza katkısı. `penaltyScore` kullanın. */
+    penaltiesScore: penaltyScore,
     totalScore,
     truckValue: clampScore(truckValue),
     warehouseValue: clampScore(warehouseValue),

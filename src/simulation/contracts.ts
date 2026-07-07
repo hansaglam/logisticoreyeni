@@ -16,7 +16,7 @@ import type {
   ProductMarket,
   Route,
 } from '../types/game';
-import { contractBalance, contractLevelBalance, deliveryBalance, timeBalance } from '../config/balance';
+import { contractBalance, contractExpiryBalance, contractGenerationBalance, contractLevelBalance, deliveryBalance, timeBalance } from '../config/balance';
 import {
   applyCapacityProfileToTonnageRange,
   getMaxAllowedContractRequiredLevel,
@@ -27,6 +27,8 @@ import {
   resolveContractGenerationRange,
 } from '../config/levelConfig';
 import { toProductMarket } from './economy';
+import { clamp, randomBetween, randomIntBetween } from '../utils/math';
+import { getMarketContractMatchScore } from '../utils/marketContractMatch';
 
 // ---------------------------------------------------------------------------
 // Yapılandırma sabitleri
@@ -116,15 +118,7 @@ interface ContractCandidate {
 // Temel yardımcılar
 // ---------------------------------------------------------------------------
 
-/** Değeri [min, max] aralığına sıkıştırır */
-export function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-/** [min, max] aralığında uniform rastgele sayı üretir */
-export function randomBetween(min: number, max: number): number {
-  return min + Math.random() * (max - min);
-}
+export { clamp, randomBetween, randomIntBetween } from '../utils/math';
 
 /** Benzersiz sözleşme kimliği üretir */
 export function createContractId(
@@ -347,6 +341,34 @@ export function calculateDeadlineHours(params: ContractDeadlineParams): number {
   return clamp(rawDeadline, contractBalance.minDeadlineHours, contractBalance.maxDeadlineHours);
 }
 
+/**
+ * Teklifin piyasada kalma süresini hesaplar (oyun saati).
+ * Acil işler daha kısa; uzun rotalar daha uzun süre listede kalır.
+ */
+export function calculateContractExpiresAt(
+  currentTime: number,
+  deadlineHours: number,
+  urgency: number,
+): number {
+  const balance = contractExpiryBalance;
+  let minHours: number;
+  let maxHours: number;
+
+  if (urgency >= 0.65) {
+    minHours = balance.urgentMinHours;
+    maxHours = balance.urgentMaxHours;
+  } else if (deadlineHours >= 18) {
+    minHours = balance.longMinHours;
+    maxHours = balance.longMaxHours;
+  } else {
+    minHours = balance.normalMinHours;
+    maxHours = balance.normalMaxHours;
+  }
+
+  const offerLifetimeHours = randomBetween(minHours, maxHours);
+  return currentTime + offerLifetimeHours;
+}
+
 // ---------------------------------------------------------------------------
 // Sözleşme üretim kararı
 // ---------------------------------------------------------------------------
@@ -434,45 +456,24 @@ export function dedupeAvailableContracts(contracts: Contract[]): Contract[] {
   return Array.from(bestByKey.values());
 }
 
-/**
- * Piyasa fırsatı ile sözleşme eşleşme önceliği (düşük = daha iyi).
- * 0: birebir · 1: aynı ürün · 2: aynı varış · 3: aynı çıkış · 4: ters rota · 99: eşleşme yok
- */
-export function getMarketContractMatchTier(
-  contract: Contract,
-  filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
-): number {
-  const { fromCityId, toCityId, productId } = filter;
-
-  if (
-    contract.originCityId === fromCityId &&
-    contract.destinationCityId === toCityId &&
-    contract.productId === productId
-  ) {
-    return 0;
-  }
-
-  if (contract.productId === productId) {
-    return 1;
-  }
-
-  if (contract.destinationCityId === toCityId) {
-    return 2;
-  }
-
-  if (contract.originCityId === fromCityId) {
-    return 3;
-  }
-
-  if (contract.originCityId === toCityId && contract.destinationCityId === fromCityId) {
-    return 4;
-  }
-
-  return 99;
-}
+export {
+  countExactMarketContractMatches,
+  countMarketContractMatches,
+  countRelatedMarketContractMatches,
+  getContractMarketSortScore,
+  getMarketContractMatchScore,
+  getMarketContractMatchTier,
+  isExactMarketContractMatch,
+  isRelatedMarketContractMatch,
+  MARKET_MATCH_BADGE_LABEL,
+  MARKET_MATCH_SCORE,
+  type MarketContractMatchTier,
+  type MarketMatchBadgeVariant,
+} from '../utils/marketContractMatch';
 
 /**
- * Filtre sıralaması — contractId varsa en üst öncelik (-1), sonra rota eşleşme tier'ı.
+ * Harita önerisi filtresi için sıralama ağırlığı (düşük = daha iyi).
+ * Piyasa fırsatı sıralaması ContractsScreen'de match score ile yapılır.
  */
 export function getContractFilterSortTier(
   contract: Contract,
@@ -481,20 +482,8 @@ export function getContractFilterSortTier(
   if (filter.contractId && contract.id === filter.contractId) {
     return -1;
   }
-  return getMarketContractMatchTier(contract, filter);
-}
-
-export function countExactMarketContractMatches(
-  contracts: Contract[] | undefined,
-  filter: Pick<MarketContractFilter, 'fromCityId' | 'toCityId' | 'productId'>,
-): number {
-  return (contracts ?? []).filter(
-    (contract) =>
-      contract.status === 'available' &&
-      contract.originCityId === filter.fromCityId &&
-      contract.destinationCityId === filter.toCityId &&
-      contract.productId === filter.productId,
-  ).length;
+  const score = getMarketContractMatchScore(contract, filter);
+  return 100 - score;
 }
 
 export function findFirstExactMarketContractMatch(
@@ -625,7 +614,7 @@ export function generateContractForProduct(
     maxTruckCapacity = DEFAULT_MAX_TRUCK_CAPACITY,
     minTonnage,
     maxTonnage,
-    sequence = Math.floor(randomBetween(1, 999_999)),
+    sequence = randomIntBetween(1, 999_999),
   } = params;
 
   const originMarket = toProductMarket(originCity.products[productId]);
@@ -669,7 +658,7 @@ export function generateContractForProduct(
     urgency,
     status: 'available',
     createdAt: currentTime,
-    expiresAt: currentTime + deadlineHours * contractBalance.contractExpiryHours,
+    expiresAt: calculateContractExpiresAt(currentTime, deadlineHours, urgency),
     requiredLevel: getRequiredLevelForTonnage(amount),
   };
 }
@@ -966,28 +955,425 @@ export interface ReplenishContractsResult {
   newContracts: Contract[];
 }
 
+export type ContractGenerationTickKind = 'small' | 'medium' | 'cleanup_boost';
+
+export interface ContractGenerationDebugSnapshot {
+  currentTime: number;
+  availableContracts: number;
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+  hoursSinceLastGeneration: number;
+  hoursSinceLastMarketRefresh: number;
+  lastGeneratedContractsCount: number;
+  expiredContractsRemoved: number;
+  nextSmallGenerationInHours: number;
+  nextMediumGenerationInHours: number;
+  nextDailyCleanupInHours: number;
+  elapsedSmallTicks: number;
+  processedSmallTicks: number;
+  elapsedMediumTicks: number;
+  processedMediumTicks: number;
+  elapsedDailyTicks: number;
+  generatedContractsCount: number;
+  offlineCatchup: boolean;
+}
+
+export interface ProcessContractGenerationScheduleParams extends ReplenishContractsParams {
+  previousTime: number;
+  newTime: number;
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+}
+
+export interface ProcessContractGenerationScheduleResult {
+  contracts: Contract[];
+  newContracts: Contract[];
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+  debug: ContractGenerationDebugSnapshot;
+}
+
+function countNewlyExpiredContracts(before: Contract[], after: Contract[]): number {
+  let count = 0;
+  for (let index = 0; index < after.length; index += 1) {
+    const prev = before[index];
+    const next = after[index];
+    if (prev?.status === 'available' && next?.status === 'expired') {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function resolveContractsToGenerate(params: {
+  tick: ContractGenerationTickKind;
+  availableCount: number;
+}): number {
+  const gen = contractGenerationBalance;
+  const { tick, availableCount } = params;
+  const headroom = Math.max(0, gen.maxAvailableContracts - availableCount);
+
+  if (headroom <= 0) {
+    return 0;
+  }
+
+  let minPerTick = 0;
+  let maxPerTick = 0;
+
+  if (tick === 'small') {
+    minPerTick = gen.minContractsPerSmallTick;
+    maxPerTick = gen.maxContractsPerSmallTick;
+  } else if (tick === 'medium') {
+    minPerTick = gen.minContractsPerMediumTick;
+    maxPerTick = gen.maxContractsPerMediumTick;
+  } else {
+    if (availableCount >= gen.minAvailableContracts) {
+      return 0;
+    }
+    minPerTick = 1;
+    maxPerTick = gen.maxContractsGeneratedAtOnce;
+  }
+
+  let needed = 0;
+
+  if (availableCount < gen.minAvailableContracts) {
+    needed = Math.min(
+      gen.targetAvailableContracts - availableCount,
+      gen.maxContractsGeneratedAtOnce,
+    );
+  } else if (availableCount < gen.targetAvailableContracts) {
+    needed = Math.min(
+      randomIntBetween(minPerTick, maxPerTick),
+      gen.targetAvailableContracts - availableCount,
+    );
+  } else if (tick === 'medium' && availableCount < gen.maxAvailableContracts) {
+    needed = Math.min(
+      randomIntBetween(minPerTick, maxPerTick),
+      gen.maxAvailableContracts - availableCount,
+    );
+  }
+
+  return Math.min(needed, gen.maxContractsGeneratedAtOnce, headroom);
+}
+
+function runContractGenerationTick(
+  params: ReplenishContractsParams & {
+    tick: ContractGenerationTickKind;
+    contracts: Contract[];
+    currentTime: number;
+  },
+): { contracts: Contract[]; newContracts: Contract[]; expiredRemoved: number } {
+  const beforeExpire = params.contracts;
+  const expired = expireOldContracts(beforeExpire, params.currentTime);
+  const expiredRemoved = countNewlyExpiredContracts(beforeExpire, expired);
+  const availableCount = countAvailableContracts(expired);
+  const needed = resolveContractsToGenerate({ tick: params.tick, availableCount });
+
+  if (needed <= 0) {
+    return { contracts: expired, newContracts: [], expiredRemoved };
+  }
+
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const ownedMaxCapacity =
+    params.ownedMaxTruckCapacity ??
+    params.maxTruckCapacity ??
+    getMaxContractTonnageForLevel(playerLevel);
+
+  const newContracts = generateContracts(
+    params.cities,
+    params.routes,
+    params.products,
+    params.globalEconomy,
+    expired,
+    {
+      currentTime: params.currentTime,
+      maxNewContracts: needed,
+      maxTruckCapacity: ownedMaxCapacity,
+      ownedMaxTruckCapacity: ownedMaxCapacity,
+      idleMaxTruckCapacity: params.idleMaxTruckCapacity,
+      playerLevel,
+      idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+    },
+  );
+
+  const merged = mergeContractLists(expired, newContracts);
+
+  return {
+    contracts: balanceAvailableContractLevelMix(merged, playerLevel),
+    newContracts,
+    expiredRemoved,
+  };
+}
+
+function buildContractGenerationDebugSnapshot(params: {
+  currentTime: number;
+  contracts: Contract[];
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+  generatedContractsCount: number;
+  expiredContractsRemoved: number;
+  elapsedSmallTicks: number;
+  processedSmallTicks: number;
+  elapsedMediumTicks: number;
+  processedMediumTicks: number;
+  elapsedDailyTicks: number;
+  offlineCatchup: boolean;
+}): ContractGenerationDebugSnapshot {
+  const gen = contractGenerationBalance;
+  const safeTime = params.currentTime ?? 0;
+  const lastGen = params.lastContractGenerationTime ?? 0;
+  const lastMarket = params.lastMarketRefreshTime ?? 0;
+  const lastCleanup = params.lastDailyCleanupTime ?? 0;
+
+  const hoursSinceGen = Math.max(0, safeTime - lastGen);
+  const hoursSinceMarket = Math.max(0, safeTime - lastMarket);
+
+  const nextSmall = Math.max(0, gen.smallGenerationIntervalHours - hoursSinceGen);
+  const nextMedium = Math.max(0, gen.mediumGenerationIntervalHours - hoursSinceMarket);
+  const nextDaily = Math.max(0, gen.dailyCleanupIntervalHours - (safeTime - lastCleanup));
+
+  return {
+    currentTime: safeTime,
+    availableContracts: countAvailableContracts(params.contracts),
+    lastContractGenerationTime: lastGen,
+    lastMarketRefreshTime: lastMarket,
+    lastDailyCleanupTime: lastCleanup,
+    hoursSinceLastGeneration: hoursSinceGen,
+    hoursSinceLastMarketRefresh: hoursSinceMarket,
+    lastGeneratedContractsCount: params.generatedContractsCount,
+    expiredContractsRemoved: params.expiredContractsRemoved,
+    nextSmallGenerationInHours: nextSmall,
+    nextMediumGenerationInHours: nextMedium,
+    nextDailyCleanupInHours: nextDaily,
+    elapsedSmallTicks: params.elapsedSmallTicks,
+    processedSmallTicks: params.processedSmallTicks,
+    elapsedMediumTicks: params.elapsedMediumTicks,
+    processedMediumTicks: params.processedMediumTicks,
+    elapsedDailyTicks: params.elapsedDailyTicks,
+    generatedContractsCount: params.generatedContractsCount,
+    offlineCatchup: params.offlineCatchup,
+  };
+}
+
+function computeElapsedTicks(
+  lastTime: number,
+  currentTime: number,
+  intervalHours: number,
+): number {
+  if (intervalHours <= 0 || currentTime <= lastTime) {
+    return 0;
+  }
+  return Math.floor((currentTime - lastTime) / intervalHours);
+}
+
+function runBoundedGenerationTicks(
+  params: {
+    baseParams: ReplenishContractsParams;
+    contracts: Contract[];
+    tick: ContractGenerationTickKind;
+    initialLastTime: number;
+    intervalHours: number;
+    elapsedTicks: number;
+    maxProcessedTicks: number;
+  },
+): {
+  contracts: Contract[];
+  newContracts: Contract[];
+  expiredRemoved: number;
+  processedTicks: number;
+  catchup: boolean;
+} {
+  const { elapsedTicks, maxProcessedTicks } = params;
+  if (elapsedTicks <= 0) {
+    return {
+      contracts: params.contracts,
+      newContracts: [],
+      expiredRemoved: 0,
+      processedTicks: 0,
+      catchup: false,
+    };
+  }
+
+  const processedTicks = Math.min(elapsedTicks, maxProcessedTicks);
+  const catchup = elapsedTicks > processedTicks;
+
+  let contracts = params.contracts;
+  const newContracts: Contract[] = [];
+  let expiredRemoved = 0;
+
+  for (let tickIndex = 0; tickIndex < processedTicks; tickIndex += 1) {
+    const tickTime = params.initialLastTime + (tickIndex + 1) * params.intervalHours;
+    const result = runContractGenerationTick({
+      ...params.baseParams,
+      contracts,
+      currentTime: tickTime,
+      tick: params.tick,
+    });
+    contracts = result.contracts;
+    newContracts.push(...result.newContracts);
+    expiredRemoved += result.expiredRemoved;
+  }
+
+  return { contracts, newContracts, expiredRemoved, processedTicks, catchup };
+}
+
+/**
+ * advanceTime sırasında kademeli sözleşme üretim zamanlamasını işler.
+ * Küçük (3s), orta (6s) ve günlük (24s) tick'leri toplu hesapla; while döngüsü yok.
+ */
+export function processContractGenerationSchedule(
+  params: ProcessContractGenerationScheduleParams,
+): ProcessContractGenerationScheduleResult {
+  const gen = contractGenerationBalance;
+  const newTime = params.newTime ?? params.currentTime ?? 0;
+
+  let contracts = params.contracts ?? [];
+  const initialCleanup = params.lastDailyCleanupTime ?? 0;
+  const initialMarket = params.lastMarketRefreshTime ?? 0;
+  const initialGen = params.lastContractGenerationTime ?? params.previousTime ?? 0;
+
+  let lastCleanup = initialCleanup;
+  let lastMarket = initialMarket;
+  let lastGen = initialGen;
+
+  const allNewContracts: Contract[] = [];
+  let totalExpiredRemoved = 0;
+  let offlineCatchup = false;
+
+  const baseParams: ReplenishContractsParams = {
+    cities: params.cities,
+    routes: params.routes,
+    products: params.products,
+    globalEconomy: params.globalEconomy,
+    contracts,
+    currentTime: newTime,
+    maxTruckCapacity: params.maxTruckCapacity,
+    ownedMaxTruckCapacity: params.ownedMaxTruckCapacity,
+    idleMaxTruckCapacity: params.idleMaxTruckCapacity,
+    playerLevel: params.playerLevel,
+    idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+  };
+
+  const elapsedDailyTicks = computeElapsedTicks(
+    initialCleanup,
+    newTime,
+    gen.dailyCleanupIntervalHours,
+  );
+
+  if (elapsedDailyTicks > 0) {
+    offlineCatchup = offlineCatchup || elapsedDailyTicks > gen.maxDailyCleanupTicksProcessedAtOnce;
+    const cleanupTime = initialCleanup + elapsedDailyTicks * gen.dailyCleanupIntervalHours;
+
+    const beforeDaily = contracts;
+    contracts = expireOldContracts(contracts, cleanupTime);
+    totalExpiredRemoved += countNewlyExpiredContracts(beforeDaily, contracts);
+
+    const boost = runContractGenerationTick({
+      ...baseParams,
+      contracts,
+      currentTime: cleanupTime,
+      tick: 'cleanup_boost',
+    });
+    contracts = boost.contracts;
+    allNewContracts.push(...boost.newContracts);
+    totalExpiredRemoved += boost.expiredRemoved;
+
+    lastCleanup = initialCleanup + elapsedDailyTicks * gen.dailyCleanupIntervalHours;
+  }
+
+  const elapsedMediumTicks = computeElapsedTicks(
+    initialMarket,
+    newTime,
+    gen.mediumGenerationIntervalHours,
+  );
+  const mediumResult = runBoundedGenerationTicks({
+    baseParams,
+    contracts,
+    tick: 'medium',
+    initialLastTime: initialMarket,
+    intervalHours: gen.mediumGenerationIntervalHours,
+    elapsedTicks: elapsedMediumTicks,
+    maxProcessedTicks: gen.maxMediumTicksProcessedAtOnce,
+  });
+  contracts = mediumResult.contracts;
+  allNewContracts.push(...mediumResult.newContracts);
+  totalExpiredRemoved += mediumResult.expiredRemoved;
+  offlineCatchup = offlineCatchup || mediumResult.catchup;
+  if (elapsedMediumTicks > 0) {
+    lastMarket = initialMarket + elapsedMediumTicks * gen.mediumGenerationIntervalHours;
+  }
+
+  const elapsedSmallTicks = computeElapsedTicks(
+    initialGen,
+    newTime,
+    gen.smallGenerationIntervalHours,
+  );
+  const smallResult = runBoundedGenerationTicks({
+    baseParams,
+    contracts,
+    tick: 'small',
+    initialLastTime: initialGen,
+    intervalHours: gen.smallGenerationIntervalHours,
+    elapsedTicks: elapsedSmallTicks,
+    maxProcessedTicks: gen.maxSmallTicksProcessedAtOnce,
+  });
+  contracts = smallResult.contracts;
+  allNewContracts.push(...smallResult.newContracts);
+  totalExpiredRemoved += smallResult.expiredRemoved;
+  offlineCatchup = offlineCatchup || smallResult.catchup;
+  if (elapsedSmallTicks > 0) {
+    lastGen = initialGen + elapsedSmallTicks * gen.smallGenerationIntervalHours;
+  }
+
+  const generatedContractsCount = allNewContracts.length;
+
+  const debug = buildContractGenerationDebugSnapshot({
+    currentTime: newTime,
+    contracts,
+    lastContractGenerationTime: lastGen,
+    lastMarketRefreshTime: lastMarket,
+    lastDailyCleanupTime: lastCleanup,
+    generatedContractsCount,
+    expiredContractsRemoved: totalExpiredRemoved,
+    elapsedSmallTicks,
+    processedSmallTicks: smallResult.processedTicks,
+    elapsedMediumTicks,
+    processedMediumTicks: mediumResult.processedTicks,
+    elapsedDailyTicks,
+    offlineCatchup,
+  });
+
+  return {
+    contracts,
+    newContracts: allNewContracts,
+    lastContractGenerationTime: lastGen,
+    lastMarketRefreshTime: lastMarket,
+    lastDailyCleanupTime: lastCleanup,
+    debug,
+  };
+}
+
 /**
  * Süresi dolmuş teklifleri temizler; müsait sözleşme sayısı minimumun altındaysa
  * şehir ekonomisine göre yeni sözleşmeler üretir.
  */
 export function replenishAvailableContracts(params: ReplenishContractsParams): ReplenishContractsResult {
+  const gen = contractGenerationBalance;
   const expired = expireOldContracts(params.contracts, params.currentTime);
   const availableCount = countAvailableContracts(expired);
 
-  if (availableCount >= contractBalance.minAvailableContracts) {
+  if (availableCount >= gen.minAvailableContracts) {
     return { contracts: expired, newContracts: [] };
   }
 
-  const target = Math.floor(
-    randomBetween(
-      contractBalance.targetAvailableContractsMin,
-      contractBalance.targetAvailableContractsMax + 0.999,
-    ),
-  );
   const needed = Math.min(
-    Math.max(0, target - availableCount),
-    contractBalance.maxAvailableContracts - availableCount,
-    contractBalance.maxContractsPerTick,
+    Math.max(0, gen.targetAvailableContracts - availableCount),
+    gen.maxAvailableContracts - availableCount,
+    gen.maxContractsGeneratedAtOnce,
   );
 
   if (needed <= 0) {
@@ -1058,23 +1444,20 @@ export function refreshContractsFromMarket(
 ): ReplenishContractsResult {
   const expired = expireOldContracts(params.contracts, params.currentTime);
   const availableCount = countAvailableContracts(expired);
-  const maxTotal = contractBalance.maxAvailableContracts;
+  const gen = contractGenerationBalance;
+  const maxTotal = gen.maxAvailableContracts;
 
   if (availableCount >= maxTotal) {
     return { contracts: expired, newContracts: [] };
   }
 
   const maxPerRefresh =
-    params.maxContractsPerRefresh ?? contractBalance.contractsPerMarketRefresh;
-  const targetMin = contractBalance.targetAvailableContractsMin;
-  const targetMax = contractBalance.targetAvailableContractsMax;
+    params.maxContractsPerRefresh ?? contractGenerationBalance.manualRefreshMaxContracts;
   const headroom = maxTotal - availableCount;
 
   let needed = 0;
-  if (availableCount < targetMin) {
-    needed = Math.min(maxPerRefresh, targetMin - availableCount, headroom);
-  } else if (availableCount < targetMax) {
-    needed = Math.min(1, headroom);
+  if (availableCount < gen.minAvailableContracts) {
+    needed = Math.min(maxPerRefresh, gen.targetAvailableContracts - availableCount, headroom);
   }
 
   const expiredThisCycle = expired.filter(
@@ -1082,7 +1465,7 @@ export function refreshContractsFromMarket(
       contract.status === 'expired' &&
       params.contracts[index]?.status === 'available',
   ).length;
-  if (expiredThisCycle > 0) {
+  if (expiredThisCycle > 0 && availableCount < gen.targetAvailableContracts) {
     needed = Math.max(
       needed,
       Math.min(expiredThisCycle, maxPerRefresh, headroom),

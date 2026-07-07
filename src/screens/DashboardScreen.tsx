@@ -18,15 +18,14 @@ import {
   SectionTitle,
   StatusBadge,
 } from '../components/ui';
-import { CITIES_BY_ID } from '../data/cities';
-import { PRODUCT_BY_ID } from '../data/products';
 import { deliveryBalance } from '../config/balance';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { getLevelProgress } from '../simulation/leveling';
 import {
   calculateCompanyScore,
   formatCompanyScore,
 } from '../simulation/companyScore';
+import { getSafeFuelPrice } from '../simulation/economy';
+import { getCityByIdSafe, getCityName, getProductName } from '../utils/entityLookup';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   calculateDailyOperatingCostBreakdown,
   getWeeklyLeaseBurden,
@@ -34,6 +33,7 @@ import {
 import {
   getContractAvailability,
 } from '../simulation/delivery';
+import { getLevelProgress } from '../simulation/leveling';
 import {
   calculateTradeProfit,
   getCityProductMarketPrice,
@@ -57,14 +57,6 @@ function formatDuration(hours: number): string {
   const remainingHours = totalHours % 24;
   if (days > 0) return `${days}g ${remainingHours}s`;
   return `${remainingHours}s`;
-}
-
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
-}
-
-function getProductName(productId: string): string {
-  return PRODUCT_BY_ID[productId as keyof typeof PRODUCT_BY_ID]?.name ?? productId;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +251,7 @@ function estimateOpportunityProfit(contract: Contract, fuelPrice: number): numbe
 
 function hasProfitableWarehouseStock(player: Player, currentTime: number): boolean {
   for (const warehouse of player.warehouses ?? []) {
-    const city = CITIES_BY_ID[warehouse.cityId];
+    const city = getCityByIdSafe(warehouse.cityId);
     const normalized = normalizeWarehouse(warehouse, currentTime);
     for (const item of normalized.inventory ?? []) {
       const quantity = item.quantity ?? 0;
@@ -550,15 +542,21 @@ function ExpenseSummaryCard({
         </Text>
       </View>
       <StatLine
-        label="Günlük gider"
+        label="Günlük sabit gider"
         value={formatMoney(safeDaily)}
         valueColor={colors.danger}
       />
+      <Text style={styles.expenseHint}>
+        Günlük sabit gider, cash&apos;ten kesilecek şoför/depo/operasyon tahminidir.
+      </Text>
       <StatLine
-        label="Haftalık kira"
-        value={formatMoney(safeWeekly)}
+        label="Aktif kiralık kamyon"
+        value={`${formatMoney(safeWeekly)} / hafta`}
         valueColor={colors.accentAmber}
       />
+      <Text style={styles.expenseHint}>
+        Kiralık kamyon kirası haftalık peşin ödenir; günlük sabit gidere dahil değildir.
+      </Text>
     </AppCard>
   );
 }
@@ -624,7 +622,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   );
 
   const topOpportunities = useMemo(() => {
-    const fuelPrice = globalEconomy?.fuelPrice ?? 0;
+    const fuelPrice = getSafeFuelPrice(globalEconomy);
     const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
     const fleetTrucks = player?.trucks ?? [];
     const fleetDrivers = player?.drivers ?? [];
@@ -689,7 +687,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   }
 
   const levelProgress = getLevelProgress(player);
-  const fuelPrice = globalEconomy?.fuelPrice ?? 0;
+  const fuelPrice = getSafeFuelPrice(globalEconomy);
   const warehouseFillRatio = getWarehouseFillRatio(player, currentTime);
   const tradeProfitAvailable = hasProfitableWarehouseStock(player, currentTime);
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
@@ -1126,6 +1124,13 @@ const styles = StyleSheet.create({
   summaryTitle: {
     ...typography.cardTitle,
     fontSize: 12,
+  },
+  expenseHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 10,
+    marginBottom: spacing.xs,
+    marginTop: -2,
   },
   statLine: {
     flexDirection: 'row',

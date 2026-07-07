@@ -34,7 +34,12 @@ import {
   resolveDriverRequiredLevel,
   type DriverMarketItem,
 } from '../data/drivers';
-import { CITIES_BY_ID } from '../data/cities';
+import { timeBalance } from '../config/balance';
+import { getCityName } from '../utils/entityLookup';
+import {
+  getTruckWeeklyLeaseCost,
+  isActiveLeasedTruck,
+} from '../simulation/dailyOperatingCosts';
 import { calculateTruckRepairCost, resolveTruckCityId } from '../simulation/delivery';
 import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
 import TruckTransferModal from '../components/TruckTransferModal';
@@ -69,10 +74,6 @@ function formatRemainingHours(currentTime: number, estimatedArrivalTime: number)
   const mins = Math.round((remaining - hrs) * 60);
   if (hrs > 0) return `${hrs}s ${mins}dk`;
   return `${mins}dk`;
-}
-
-function getCityName(cityId: string): string {
-  return CITIES_BY_ID[cityId]?.name ?? cityId;
 }
 
 function findActiveDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery | undefined {
@@ -241,6 +242,18 @@ interface OwnedTruckCardProps {
   onTransfer: (truck: Truck, targetCityId?: string) => void;
 }
 
+function formatLeaseRemainingDays(
+  currentTime: number,
+  leaseExpiresAt?: number | null,
+): string {
+  if (leaseExpiresAt == null) {
+    return '—';
+  }
+  const hoursLeft = Math.max(0, leaseExpiresAt - currentTime);
+  const days = Math.ceil(hoursLeft / timeBalance.hoursPerDay);
+  return `${days} gün`;
+}
+
 function OwnedTruckCard({
   truck,
   playerMoney,
@@ -272,6 +285,9 @@ function OwnedTruckCard({
   const hasIdleDriver = !!selectDriverForTransfer(truck.id, drivers);
   const canTransfer = isIdle && hasIdleDriver;
   const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
+  const isLeased = isActiveLeasedTruck(truck);
+  const weeklyLeaseCost = getTruckWeeklyLeaseCost(truck);
+  const leaseDailyAccrual = truck.leaseDailyCost ?? 0;
 
   return (
     <AppCard style={styles.fleetCard} padded>
@@ -281,7 +297,7 @@ function OwnedTruckCard({
         </View>
 
         <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1}>
+          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
             {truck.name}
           </Text>
         </View>
@@ -291,21 +307,36 @@ function OwnedTruckCard({
         </View>
       </View>
 
-      <Text style={styles.statsRow}>
+      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
         Konum: {truckCityName} · {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
       </Text>
+
+      {isLeased ? (
+        <View style={styles.leaseInfoBlock}>
+          <View style={styles.leaseBadgeRow}>
+            <StatusBadge label="Kiralık" variant="amber" size="sm" />
+            <Text style={styles.leaseInfoText} numberOfLines={1} ellipsizeMode="tail">
+              Haftalık kira: {formatMoney(weeklyLeaseCost)} · Kalan:{' '}
+              {formatLeaseRemainingDays(currentTime, truck.leaseExpiresAt)}
+            </Text>
+          </View>
+          <Text style={styles.leaseInfoSubtext} numberOfLines={1} ellipsizeMode="tail">
+            Günlük karşılık: {formatMoney(leaseDailyAccrual)}
+          </Text>
+        </View>
+      ) : null}
 
       {isOnRoute && delivery ? (
         <View style={styles.inlineRouteBlock}>
           <View style={styles.inlineRouteRow}>
             <GameIcon name="route" size={12} color={colors.accentBlue} />
-            <Text style={styles.routeText} numberOfLines={1}>
+            <Text style={styles.routeText} numberOfLines={1} ellipsizeMode="tail">
               {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
             </Text>
           </View>
           <View style={styles.inlineRouteMetaRow}>
             <GameIcon name="time" size={11} color={colors.textMuted} />
-            <Text style={styles.routeMeta}>
+            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
               {formatRatioPercent(delivery.progress)} · {destinationCityName}'ya gidiyor
             </Text>
           </View>
@@ -317,13 +348,13 @@ function OwnedTruckCard({
         <View style={styles.inlineRouteBlock}>
           <View style={styles.inlineRouteRow}>
             <GameIcon name="route" size={12} color={colors.info} />
-            <Text style={styles.routeText} numberOfLines={1}>
+            <Text style={styles.routeText} numberOfLines={1} ellipsizeMode="tail">
               {getCityName(transfer.fromCityId)} → {getCityName(transfer.toCityId)}
             </Text>
           </View>
           <View style={styles.inlineRouteMetaRow}>
             <GameIcon name="time" size={11} color={colors.textMuted} />
-            <Text style={styles.routeMeta}>
+            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
               Boş transfer · {formatRatioPercent(transfer.progress)} ·{' '}
               {formatRemainingHours(currentTime, transfer.estimatedArrivalAt)} kaldı
             </Text>
@@ -427,7 +458,7 @@ function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: Owne
         </View>
 
         <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1}>
+          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
             {driver.name}
           </Text>
         </View>
@@ -437,7 +468,7 @@ function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: Owne
         </View>
       </View>
 
-      <Text style={styles.statsRow}>
+      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
         Deneyim {experience} · Dikkat {attention} · Maaş {formatMoney(driver.salaryPerDay ?? 0)}/gün
       </Text>
 
@@ -445,19 +476,19 @@ function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: Owne
         <View style={styles.inlineRouteBlock}>
           <View style={styles.inlineRouteRow}>
             <GameIcon name="truck" size={12} color={colors.accentBlue} />
-            <Text style={styles.routeMeta} numberOfLines={1}>
+            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
               {assignedTruck?.name ?? 'Atanmış kamyon'}
             </Text>
           </View>
           <View style={styles.inlineRouteRow}>
             <GameIcon name="route" size={12} color={colors.accentBlue} />
-            <Text style={styles.routeText} numberOfLines={1}>
+            <Text style={styles.routeText} numberOfLines={1} ellipsizeMode="tail">
               {getCityName(activeDelivery.originCityId)} → {getCityName(activeDelivery.destinationCityId)}
             </Text>
           </View>
           <View style={styles.inlineRouteMetaRow}>
             <GameIcon name="time" size={11} color={colors.textMuted} />
-            <Text style={styles.routeMeta}>
+            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
               {formatRatioPercent(activeDelivery.progress)} ·{' '}
               {formatRemainingHours(currentTime, activeDelivery.estimatedArrivalTime)} kaldı
             </Text>
@@ -537,26 +568,28 @@ function ShopTruckCard({
           <GameIcon name="truck" size={18} color={colors.accentBlue} />
         </View>
         <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1}>
+          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
             {template.name}
           </Text>
         </View>
         <View style={styles.cardRight}>
           <View style={styles.priceRow}>
             <GameIcon name="cash" size={12} color={colors.success} />
-            <Text style={styles.priceText}>{formatMoney(template.purchasePrice)}</Text>
+            <Text style={styles.priceText} numberOfLines={1} ellipsizeMode="tail">
+              {formatMoney(template.purchasePrice)}
+            </Text>
           </View>
         </View>
       </View>
 
-      <Text style={styles.statsRow}>
+      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
         {template.capacity} ton · {template.speed} km/h · {template.fuelConsumptionPerKm.toFixed(2)} L/km ·
         Dayanıklılık {template.reliability}
         {requiredLevel > 1 ? ` · Lv.${requiredLevel}` : ''}
       </Text>
 
       {weeklyLeaseCost > 0 ? (
-        <Text style={styles.leaseHint}>
+        <Text style={styles.leaseHint} numberOfLines={1} ellipsizeMode="tail">
           Haftalık kira: {formatMoney(weeklyLeaseCost)} · 7 gün
         </Text>
       ) : null}
@@ -647,19 +680,21 @@ function ShopDriverCard({
           <GameIcon name="driver" size={18} color={colors.accentBlue} />
         </View>
         <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1}>
+          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
             {template.name}
           </Text>
         </View>
         <View style={styles.cardRight}>
           <View style={styles.priceRow}>
             <GameIcon name="cash" size={12} color={colors.accentAmber} />
-            <Text style={styles.priceTextHire}>{formatMoney(template.hiringFee)}</Text>
+            <Text style={styles.priceTextHire} numberOfLines={1} ellipsizeMode="tail">
+              {formatMoney(template.hiringFee)}
+            </Text>
           </View>
         </View>
       </View>
 
-      <Text style={styles.statsRow}>
+      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
         Deneyim {template.experience} · Dikkat {template.attention} · Maaş{' '}
         {formatMoney(template.salaryPerDay)}/gün
       </Text>
@@ -1040,7 +1075,7 @@ const styles = StyleSheet.create({
   },
   cardTopRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: spacing.sm,
   },
   entityIconBox: {
@@ -1064,14 +1099,19 @@ const styles = StyleSheet.create({
     ...typography.cardTitle,
     fontSize: 14,
     fontWeight: '800',
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 18,
   },
   statsRow: {
     ...typography.caption,
     color: colors.textSecondary,
     marginTop: 4,
     lineHeight: 16,
+    minWidth: 0,
   },
   cardRight: {
+    flexShrink: 0,
     alignItems: 'flex-end',
     gap: spacing.xs,
     maxWidth: 96,
@@ -1096,11 +1136,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.textPrimary,
     flex: 1,
+    minWidth: 0,
+    lineHeight: 16,
   },
   routeMeta: {
     ...typography.caption,
     color: colors.textSecondary,
     flex: 1,
+    minWidth: 0,
+    lineHeight: 15,
   },
   conditionRow: {
     marginTop: 6,
@@ -1171,12 +1215,16 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: '800',
     fontSize: 13,
+    flexShrink: 0,
+    lineHeight: 17,
   },
   priceTextHire: {
     ...typography.bodySmall,
     color: colors.accentAmber,
     fontWeight: '800',
     fontSize: 13,
+    flexShrink: 0,
+    lineHeight: 17,
   },
   ownedHint: {
     ...typography.caption,
@@ -1187,6 +1235,30 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.accentAmber,
     marginTop: spacing.xs,
+  },
+  leaseInfoBlock: {
+    marginTop: spacing.xs,
+    gap: 2,
+  },
+  leaseBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  leaseInfoText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    flex: 1,
+    minWidth: 0,
+    lineHeight: 15,
+  },
+  leaseInfoSubtext: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 11,
+    minWidth: 0,
+    lineHeight: 15,
   },
   shopButtonRow: {
     flexDirection: 'row',

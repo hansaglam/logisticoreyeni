@@ -3,7 +3,7 @@
  */
 
 import { warehouseStorageBalance } from '../config/balance';
-import { PRODUCT_BY_ID } from '../data/products';
+import { getProductByIdSafe } from '../utils/entityLookup';
 import type {
   GameEvent,
   Product,
@@ -315,7 +315,7 @@ export function processWarehouseQualityDegradation(
         return item;
       }
 
-      const product = PRODUCT_BY_ID[item.productId];
+      const product = getProductByIdSafe(item.productId);
       if (!product) {
         return item;
       }

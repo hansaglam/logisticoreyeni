@@ -76,6 +76,9 @@ import {
   refreshContractsFromMarket,
   replenishAvailableContracts,
   processContractGenerationSchedule,
+  buildPlayerFleetCityContext,
+  countPlayableContracts,
+  ensurePlayableContractSupply,
   type ContractGenerationDebugSnapshot,
 } from '../simulation/contracts';
 import { ensureStarterContracts } from '../simulation/starterContracts';
@@ -97,6 +100,9 @@ import {
   failDelivery as failDeliverySim,
   formatCapacityExceededMessage,
   getIdleTruckOriginCityIds,
+  getActiveDeliveryDestinationCityIds,
+  getBusyTruckOriginCityIds,
+  getIdleTrucks,
   normalizeTruckCity,
   resolveTruckCityId,
   selectIdleTruckForContract,
@@ -169,6 +175,11 @@ import {
   resolveOperatingCostElapsedDays,
   type DailyOperatingCostReason,
 } from '../simulation/dailyOperatingCosts';
+import {
+  canFireDriver,
+  canSellTruck,
+  calculateDriverSeveranceCost,
+} from '../simulation/fleetManagement';
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
 import {
   canOpenMoreWarehouses,
@@ -386,6 +397,10 @@ function createEmptyContractGenerationDebug(currentTime = 0): ContractGeneration
   return {
     currentTime,
     availableContracts: 0,
+    playableContractsCount: 0,
+    idleTruckOriginCities: [],
+    activeDeliveryDestinationCities: [],
+    lastPlayableContractGeneratedTime: 0,
     lastContractGenerationTime: 0,
     lastMarketRefreshTime: 0,
     lastDailyCleanupTime: 0,
@@ -413,6 +428,20 @@ function buildContractRefreshParams(state: StoreGameState) {
   const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
   const ownedMaxTruckCapacity = getHighestOwnedTruckCapacity(state.player.trucks);
   const idleMaxTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
+  const trucks = state.player.trucks ?? [];
+  const drivers = state.player.drivers ?? [];
+  const homeCityId = state.player.homeCityId;
+  const idleTruckOriginCityIds = getIdleTruckOriginCityIds(trucks, homeCityId);
+  const activeDeliveryDestinationCityIds = getActiveDeliveryDestinationCityIds(
+    state.activeDeliveries,
+  );
+  const busyTruckOriginCityIds = getBusyTruckOriginCityIds(trucks, homeCityId);
+  const fleetCityContext = buildPlayerFleetCityContext({
+    trucks,
+    activeDeliveries: state.activeDeliveries,
+    homeCityId,
+    idleTruckOriginCityIds,
+  });
 
   return {
     cities: citiesToRecord(state.cities),
@@ -425,10 +454,13 @@ function buildContractRefreshParams(state: StoreGameState) {
     maxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
     ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
     idleMaxTruckCapacity,
-    idleTruckOriginCityIds: getIdleTruckOriginCityIds(
-      state.player.trucks,
-      state.player.homeCityId,
-    ),
+    idleTruckOriginCityIds,
+    activeDeliveryDestinationCityIds,
+    busyTruckOriginCityIds,
+    fleetCityContext,
+    trucks,
+    drivers,
+    homeCityId,
   };
 }
 
@@ -839,6 +871,12 @@ export function createInitialGameState(): StoreGameState {
       ownedMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
       idleMaxTruckCapacity: STARTER_TRUCK.capacity ?? 25,
       idleTruckOriginCityIds: ['izmir'],
+      activeDeliveryDestinationCityIds: [],
+      busyTruckOriginCityIds: [],
+      fleetCityContext: buildPlayerFleetCityContext({
+        idleTruckOriginCityIds: ['izmir'],
+        trucks: [structuredClone(STARTER_TRUCK)],
+      }),
     },
   );
   const balancedContracts = balanceAvailableContractLevelMix(rawContracts, 1);
@@ -857,8 +895,24 @@ export function createInitialGameState(): StoreGameState {
     globalEconomy,
     player: starterPlayer,
     currentTime: 0,
-    minCount: 2,
+    minCount: contractGenerationBalance.minAvailableContractsPerIdleTruckCity,
   });
+
+  const ensuredPlayable = ensurePlayableContractSupply({
+    cities: citiesToRecord(cities),
+    routes: ROUTES,
+    products: PRODUCTS,
+    globalEconomy,
+    contracts,
+    currentTime: 0,
+    playerLevel: 1,
+    trucks: starterPlayer.trucks,
+    drivers: starterPlayer.drivers,
+    homeCityId: starterPlayer.homeCityId,
+    idleTruckOriginCityIds: ['izmir'],
+    forceFallback: true,
+    maxNewContracts: contractGenerationBalance.maxPlayableContractsGeneratedAtOnce,
+  }).contracts;
 
   return {
     currentTime: 0,
@@ -869,6 +923,8 @@ export function createInitialGameState(): StoreGameState {
     lastContractGenerationTime: 0,
     lastMarketRefreshTime: 0,
     lastDailyCleanupTime: 0,
+    lastPlayableContractGeneratedTime: 0,
+    lastManualContractRefreshTime: 0,
     player: {
       companyName: 'LogistiCore Lojistik',
       money: STARTING_MONEY,
@@ -903,7 +959,7 @@ export function createInitialGameState(): StoreGameState {
     cities,
     products: structuredClone(PRODUCTS),
     routes: structuredClone(ROUTES),
-    contracts,
+    contracts: ensuredPlayable,
     activeDeliveries: [],
     activeTransfers: [],
     completedTransfers: [],
@@ -1008,6 +1064,7 @@ export interface GameStore extends StoreGameState {
   /** Oyuncu ekranları: süresi dolmuş teklifleri temizler, yeni sözleşme üretmez */
   refreshMarketSnapshot: () => void;
   refreshContractsFromMarket: () => void;
+  forceGeneratePlayableContracts: () => number;
   getContractRefreshRemainingSeconds: () => number;
   /** Debug: manuel sözleşme üretimi */
   generateNewContracts: () => void;
@@ -1023,6 +1080,8 @@ export interface GameStore extends StoreGameState {
   buyTruck: (catalogId: string) => TradeActionResult;
   leaseTruck: (catalogId: string) => TradeActionResult;
   hireDriver: (poolId: string) => TradeActionResult;
+  sellTruck: (truckId: string) => TradeActionResult;
+  fireDriver: (driverId: string) => TradeActionResult;
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => void;
   processExpiredLeases: () => void;
   repairTruck: (truckId: string) => void;
@@ -2000,6 +2059,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         stateBeforeContracts.lastContractGenerationTime ?? state.currentTime,
       lastMarketRefreshTime: stateBeforeContracts.lastMarketRefreshTime ?? 0,
       lastDailyCleanupTime: stateBeforeContracts.lastDailyCleanupTime ?? 0,
+      lastPlayableContractGeneratedTime:
+        stateBeforeContracts.lastPlayableContractGeneratedTime ?? 0,
     });
 
     const contractPatch: Partial<StoreGameState> = {
@@ -2007,6 +2068,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lastContractGenerationTime: scheduleResult.lastContractGenerationTime,
       lastMarketRefreshTime: scheduleResult.lastMarketRefreshTime,
       lastDailyCleanupTime: scheduleResult.lastDailyCleanupTime,
+      lastPlayableContractGeneratedTime: scheduleResult.lastPlayableContractGeneratedTime,
     };
 
     if (
@@ -2345,9 +2407,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
+    const refreshParams = buildContractRefreshParams(state);
+    const playerLevel = refreshParams.playerLevel;
+    const playableCount = countPlayableContracts(
+      state.contracts ?? [],
+      refreshParams.trucks,
+      refreshParams.drivers,
+      playerLevel,
+      state.currentTime,
+    );
+    const idleTruckCount = getIdleTrucks(refreshParams.trucks).length;
     const previousContracts = state.contracts ?? [];
+
+    if (playableCount === 0 && idleTruckCount > 0) {
+      const playableResult = ensurePlayableContractSupply({
+        ...refreshParams,
+        contracts: previousContracts,
+        maxNewContracts: contractGenerationBalance.manualRefreshPlayableContractCount,
+        forceFallback: true,
+        lastPlayableContractGeneratedTime: state.lastPlayableContractGeneratedTime ?? 0,
+      });
+
+      if (playableResult.newContracts.length > 0) {
+        set({
+          contracts: playableResult.contracts,
+          lastPlayableContractGeneratedTime:
+            playableResult.updatedLastPlayableContractGeneratedTime ??
+            state.lastPlayableContractGeneratedTime,
+          lastManualContractRefreshTime: state.currentTime,
+        });
+        get().markSaveDirty();
+        get().autoSave('contracts_generated');
+      } else {
+        get().refreshMarketSnapshot();
+      }
+      lastContractMarketRefreshAt = Date.now();
+      return;
+    }
+
+    const hoursSinceManual =
+      state.currentTime - (state.lastManualContractRefreshTime ?? 0);
+    if (hoursSinceManual < contractGenerationBalance.manualRefreshCooldownHours) {
+      get().refreshMarketSnapshot();
+      lastContractMarketRefreshAt = Date.now();
+      return;
+    }
+
     const { contracts: updatedContracts, newContracts } = refreshContractsFromMarket(
-      buildContractRefreshParams(state),
+      refreshParams,
     );
 
     const contractsChanged =
@@ -2360,10 +2467,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
     lastContractMarketRefreshAt = Date.now();
 
     if (!contractsChanged) {
+      get().refreshMarketSnapshot();
+      set({ lastManualContractRefreshTime: state.currentTime });
       return;
     }
 
-    const patch: Partial<StoreGameState> = { contracts: updatedContracts };
+    const patch: Partial<StoreGameState> = {
+      contracts: updatedContracts,
+      lastManualContractRefreshTime: state.currentTime,
+    };
 
     if (
       newContracts.length > 0 &&
@@ -2389,6 +2501,39 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (newContracts.length > 0) {
       get().autoSave('contracts_generated');
     }
+  },
+
+  forceGeneratePlayableContracts: () => {
+    const state = get();
+    if (!state.player) {
+      return 0;
+    }
+
+    const refreshParams = buildContractRefreshParams(state);
+    if (getIdleTrucks(refreshParams.trucks).length === 0) {
+      return 0;
+    }
+
+    const result = ensurePlayableContractSupply({
+      ...refreshParams,
+      contracts: state.contracts ?? [],
+      maxNewContracts: contractGenerationBalance.maxPlayableContractsGeneratedAtOnce,
+      forceFallback: true,
+      lastPlayableContractGeneratedTime: state.lastPlayableContractGeneratedTime ?? 0,
+    });
+
+    if (result.newContracts.length === 0) {
+      return 0;
+    }
+
+    set({
+      contracts: result.contracts,
+      lastPlayableContractGeneratedTime:
+        result.updatedLastPlayableContractGeneratedTime ?? state.currentTime,
+    });
+    get().markSaveDirty();
+    get().autoSave('contracts_generated');
+    return result.newContracts.length;
   },
 
   getContractRefreshRemainingSeconds: () => {
@@ -2471,10 +2616,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         playerLevel,
         ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
         idleMaxTruckCapacity,
-        idleTruckOriginCityIds: getIdleTruckOriginCityIds(
-          state.player.trucks,
-          state.player.homeCityId,
-        ),
+        ...(() => {
+          const params = buildContractRefreshParams(state);
+          return {
+            idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+            activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+            busyTruckOriginCityIds: params.busyTruckOriginCityIds,
+            fleetCityContext: params.fleetCityContext,
+          };
+        })(),
       },
     );
 
@@ -2759,6 +2909,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.player.trucks,
       state.player.drivers,
       Math.max(1, state.player.level ?? state.player.companyLevel ?? 1),
+      state.currentTime,
     );
 
     if (!availability.canStart) {
@@ -3692,6 +3843,167 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return {
       success: true,
       message: `${template.name} işe alındı.`,
+    };
+  },
+
+  sellTruck: (truckId: string): TradeActionResult => {
+    const state = get();
+    const fleetState = {
+      player: state.player,
+      activeDeliveries: state.activeDeliveries,
+      activeTransfers: state.activeTransfers,
+    };
+    const sellCheck = canSellTruck(truckId, fleetState);
+    if (!sellCheck.canSell) {
+      return {
+        success: false,
+        message: sellCheck.reason ?? 'Kamyon satılamaz.',
+      };
+    }
+
+    const truck = (state.player.trucks ?? []).find((item) => item.id === truckId);
+    if (!truck) {
+      return {
+        success: false,
+        message: 'Kamyon bulunamadı.',
+      };
+    }
+
+    const salePrice = sellCheck.salePrice ?? 0;
+    const condition = Math.round(truck.condition ?? 100);
+    const updatedDrivers = (state.player.drivers ?? []).map((driver) =>
+      driver.assignedTruckId === truckId ? { ...driver, assignedTruckId: null } : driver,
+    );
+    const updatedTrucks = (state.player.trucks ?? []).filter((item) => item.id !== truckId);
+
+    set({
+      player: {
+        ...state.player,
+        money: (state.player.money ?? 0) + salePrice,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+      },
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'income',
+        category: 'truck_sale',
+        amount: salePrice,
+        title: 'Kamyon satışı',
+        description: `${truck.name} satıldı. Kondisyon: %${condition}`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Kamyon satıldı',
+          message: `${truck.name} satıldı. Kasaya ${formatNotificationMoney(salePrice)} eklendi.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    try {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'success',
+        title: 'Kamyon satıldı',
+        message: `${truck.name} satıldı: ${formatNotificationMoney(salePrice)}`,
+        actionLabel: 'Finansı Gör',
+        actionTarget: 'finance',
+        autoDismissMs: 3500,
+      });
+    } catch (error) {
+      console.warn('[gameStore] sellTruck notification failed:', error);
+    }
+
+    get().autoSave('purchase');
+    return {
+      success: true,
+      message: `${truck.name} ${formatNotificationMoney(salePrice)} karşılığında satıldı.`,
+    };
+  },
+
+  fireDriver: (driverId: string): TradeActionResult => {
+    const state = get();
+    const fleetState = {
+      player: state.player,
+      activeDeliveries: state.activeDeliveries,
+      activeTransfers: state.activeTransfers,
+    };
+    const fireCheck = canFireDriver(driverId, fleetState);
+    if (!fireCheck.canFire) {
+      return {
+        success: false,
+        message: fireCheck.reason ?? 'Şoför işten çıkarılamaz.',
+      };
+    }
+
+    const driver = (state.player.drivers ?? []).find((item) => item.id === driverId);
+    if (!driver) {
+      return {
+        success: false,
+        message: 'Şoför bulunamadı.',
+      };
+    }
+
+    const severanceCost = fireCheck.severanceCost ?? calculateDriverSeveranceCost(driver);
+    if ((state.player.money ?? 0) < severanceCost) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUNDS',
+        message: `Şoför çıkış maliyeti için ${formatNotificationMoney(severanceCost)} gerekli.`,
+      };
+    }
+
+    const updatedDrivers = (state.player.drivers ?? []).filter((item) => item.id !== driverId);
+
+    set({
+      player: {
+        ...state.player,
+        money: (state.player.money ?? 0) - severanceCost,
+        drivers: updatedDrivers,
+      },
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'driver_severance',
+        amount: severanceCost,
+        title: 'Şoför çıkış maliyeti',
+        description: `${driver.name} işten çıkarıldı.`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Şoför işten çıkarıldı',
+          message: `${driver.name} için ${formatNotificationMoney(severanceCost)} çıkış maliyeti ödendi.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    try {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'info',
+        title: 'Şoför işten çıkarıldı',
+        message: `${driver.name} için ${formatNotificationMoney(severanceCost)} çıkış maliyeti ödendi.`,
+        actionLabel: 'Finansı Gör',
+        actionTarget: 'finance',
+        autoDismissMs: 3500,
+      });
+    } catch (error) {
+      console.warn('[gameStore] fireDriver notification failed:', error);
+    }
+
+    get().autoSave('purchase');
+    return {
+      success: true,
+      message: `${driver.name} işten çıkarıldı.`,
     };
   },
 

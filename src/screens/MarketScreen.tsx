@@ -5,8 +5,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAppDialog } from '../components/AppDialogProvider';
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
@@ -639,6 +640,7 @@ interface MarketScreenProps {
 }
 
 export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
+  const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
@@ -795,7 +797,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     if (!selectedCity) return;
 
     if (selectedCityWarehouses.length === 0) {
-      Alert.alert(
+      showAlert(
         'Depo gerekli',
         'Bu şehirden ürün almak için önce burada depo açmalısın.',
       );
@@ -817,7 +819,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     });
 
     if (!result.success) {
-      Alert.alert('Satın alma başarısız', result.message ?? 'İşlem tamamlanamadı.');
+      showAlert('Satın alma başarısız', result.message ?? 'İşlem tamamlanamadı.');
       return;
     }
 

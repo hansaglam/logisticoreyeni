@@ -1,3 +1,10 @@
+export { default as AppDialog } from './AppDialog';
+export type {
+  AppDialogDetailRow,
+  AppDialogDetailTone,
+  AppDialogProps,
+  AppDialogVariant,
+} from './AppDialog';
 export { default as ActionButton } from './ActionButton';
 export { default as AppCard } from './AppCard';
 export { default as AppScreen } from './AppScreen';

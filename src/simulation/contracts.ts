@@ -8,15 +8,19 @@
 import type {
   City,
   Contract,
+  Delivery,
+  Driver,
   GlobalEconomy,
   MarketContractFilter,
   MarketOpportunity,
+  Player,
   Product,
   ProductId,
   ProductMarket,
   Route,
+  Truck,
 } from '../types/game';
-import { contractBalance, contractExpiryBalance, contractGenerationBalance, contractLevelBalance, deliveryBalance, timeBalance } from '../config/balance';
+import { contractBalance, contractExpiryBalance, contractGenerationBalance, contractLevelBalance } from '../config/balance';
 import {
   applyCapacityProfileToTonnageRange,
   getMaxAllowedContractRequiredLevel,
@@ -27,8 +31,21 @@ import {
   resolveContractGenerationRange,
 } from '../config/levelConfig';
 import { toProductMarket } from './economy';
+import { generatePlayableContractsForOriginCity } from './starterContracts';
+import {
+  getActiveDeliveryDestinationCityIds,
+  getBusyTruckOriginCityIds,
+  getContractAvailability,
+  getIdleTruckOriginCityIds,
+  getMaxIdleTruckCapacityAtOrigin,
+} from './delivery';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
 import { getMarketContractMatchScore } from '../utils/marketContractMatch';
+import {
+  calculateBalancedContractPayment,
+  estimateContractTripCostBreakdown,
+  type ContractPaymentInput,
+} from './contractEconomics';
 
 // ---------------------------------------------------------------------------
 // Yapılandırma sabitleri
@@ -62,6 +79,8 @@ export interface ContractPaymentParams {
   route: Route;
   urgency: number;
   globalEconomy: GlobalEconomy;
+  requiredLevel?: number;
+  isMarketOpportunity?: boolean;
 }
 
 export interface ContractDeadlineParams {
@@ -95,6 +114,15 @@ export interface GenerateContractForProductParams {
   maxTonnage?: number;
   /** Testlerde deterministik ID için sıra numarası */
   sequence?: number;
+  /** Piyasa fırsatı rotası — marj bonusu uygulanır */
+  isMarketOpportunity?: boolean;
+}
+
+export interface PlayerFleetCityContext {
+  idleTruckOriginCityIds: string[];
+  activeDeliveryDestinationCityIds: string[];
+  busyTruckOriginCityIds: string[];
+  marketOpportunityOriginCityIds: string[];
 }
 
 export interface GenerateContractsOptions {
@@ -106,6 +134,12 @@ export interface GenerateContractsOptions {
   currentTime: number;
   /** Boşta kamyonların bulunduğu şehirler — bu çıkışlardan iş üretimine öncelik */
   idleTruckOriginCityIds?: string[];
+  /** Aktif teslimat varış şehirleri */
+  activeDeliveryDestinationCityIds?: string[];
+  /** Meşgul kamyonların bulunduğu şehirler */
+  busyTruckOriginCityIds?: string[];
+  /** Birleşik filo şehir bağlamı — verilirse diğer şehir listeleri yerine kullanılır */
+  fleetCityContext?: PlayerFleetCityContext;
 }
 
 /** Dahili: aday sözleşme skoru — en kârlı rotalar önce seçilir */
@@ -232,87 +266,25 @@ export function calculateUrgency(destinationProductMarket: ProductMarket): numbe
 }
 
 /**
- * Sözleşme ödemesini hesaplar ($).
- *
- * Maliyet tabanlı fiyatlandırma: yakıt, bakım, şoför zamanı, operasyon ve risk
- * payları üzerine hedef net kâr marjı eklenir.
+ * Sözleşme tahmini işletme maliyeti ($) — ödeme hesabında kullanılır.
  */
 export function estimateContractOperatingCosts(params: ContractPaymentParams): number {
-  const { amount, originMarket, destinationMarket, route, urgency, globalEconomy } = params;
-  const referencePrice = (originMarket.basePrice + destinationMarket.basePrice) / 2;
-  const distanceKm = route.distanceKm;
-
-  const fuelCost =
-    distanceKm *
-    contractBalance.estimateFuelPerKm *
-    globalEconomy.fuelPrice *
-    (1 + amount / 30);
-
-  const maintenanceCost =
-    distanceKm * contractBalance.estimateMaintenancePerKm * (1 + route.difficulty * 0.3);
-
-  const travelHours = distanceKm / contractBalance.averageSpeedKmh;
-  const driverHourlyCost =
-    deliveryBalance.fallbackDriverSalaryPerDay / timeBalance.hoursPerDay;
-  const driverTimeCost = travelHours * driverHourlyCost * deliveryBalance.driverCostMultiplier;
-
-  const operationsCost = distanceKm * contractBalance.operationsCostPerKm;
-
-  const cargoValueRisk = amount * referencePrice * contractBalance.cargoValueRiskRate;
-  const urgencyRisk = amount * referencePrice * urgency * 0.02;
-  const difficultyRisk = amount * referencePrice * route.difficulty * 0.025;
-
-  return (
-    fuelCost +
-    maintenanceCost +
-    driverTimeCost +
-    operationsCost +
-    cargoValueRisk +
-    urgencyRisk +
-    difficultyRisk
-  );
-}
-
-function resolveTargetProfitMargin(params: ContractPaymentParams): number {
-  const { amount, route, urgency } = params;
-  const difficulty = route.difficulty;
-  const isLarge = amount >= contractBalance.largeContractTonnage;
-  const isRisky = urgency >= 0.65 || difficulty >= 0.7;
-  const isEasy = urgency < 0.35 && difficulty < 0.4 && route.distanceKm < 400;
-
-  let minMargin: number;
-  let maxMargin: number;
-
-  if (isLarge) {
-    minMargin = contractBalance.profitMarginLargeMin;
-    maxMargin = contractBalance.profitMarginLargeMax;
-  } else if (isRisky) {
-    minMargin = contractBalance.profitMarginRiskyMin;
-    maxMargin = contractBalance.profitMarginRiskyMax;
-  } else if (isEasy) {
-    minMargin = contractBalance.profitMarginEasyMin;
-    maxMargin = contractBalance.profitMarginEasyMax;
-  } else {
-    minMargin = contractBalance.profitMarginMediumMin;
-    maxMargin = contractBalance.profitMarginMediumMax;
-  }
-
-  const blend = clamp(urgency * 0.4 + difficulty * 0.35 + (amount / 40) * 0.25, 0, 1);
-  return minMargin + (maxMargin - minMargin) * blend;
+  return estimateContractTripCostBreakdown(params).baseTripCost;
 }
 
 export function calculateContractPayment(params: ContractPaymentParams): number {
-  const { amount, originMarket, destinationMarket } = params;
-
-  const referencePrice = (originMarket.basePrice + destinationMarket.basePrice) / 2;
-  const operatingCosts = estimateContractOperatingCosts(params);
-  const targetMargin = resolveTargetProfitMargin(params);
-  const rawPayment = operatingCosts * (1 + targetMargin);
-
-  const floor = amount * referencePrice * contractBalance.minContractPayment;
-  const ceiling = amount * referencePrice * contractBalance.maxContractPaymentMultiplier;
-
-  return clamp(Math.round(rawPayment), floor, ceiling);
+  const paymentInput: ContractPaymentInput = {
+    amount: params.amount,
+    product: params.product,
+    originMarket: params.originMarket,
+    destinationMarket: params.destinationMarket,
+    route: params.route,
+    urgency: params.urgency,
+    globalEconomy: params.globalEconomy,
+    requiredLevel: params.requiredLevel,
+    isMarketOpportunity: params.isMarketOpportunity,
+  };
+  return calculateBalancedContractPayment(paymentInput);
 }
 
 /**
@@ -596,6 +568,128 @@ export function calculateContractScore(
   return payment * 0.4 + urgency * 100 * 0.25 + amount * 0.15 + priceDiffRatio * 100 * 0.2;
 }
 
+export function buildPlayerFleetCityContext(params: {
+  trucks?: Truck[];
+  activeDeliveries?: Delivery[];
+  marketOpportunityOriginCityIds?: string[];
+  homeCityId?: string;
+  idleTruckOriginCityIds?: string[];
+}): PlayerFleetCityContext {
+  return {
+    idleTruckOriginCityIds:
+      params.idleTruckOriginCityIds ??
+      getIdleTruckOriginCityIds(params.trucks, params.homeCityId),
+    activeDeliveryDestinationCityIds: getActiveDeliveryDestinationCityIds(params.activeDeliveries),
+    busyTruckOriginCityIds: getBusyTruckOriginCityIds(params.trucks, params.homeCityId),
+    marketOpportunityOriginCityIds: params.marketOpportunityOriginCityIds ?? [],
+  };
+}
+
+function resolveFleetCityContext(
+  options: GenerateContractsOptions,
+  marketOpportunityOriginCityIds: string[],
+): PlayerFleetCityContext {
+  if (options.fleetCityContext) {
+    return options.fleetCityContext;
+  }
+
+  return {
+    idleTruckOriginCityIds: options.idleTruckOriginCityIds ?? [],
+    activeDeliveryDestinationCityIds: options.activeDeliveryDestinationCityIds ?? [],
+    busyTruckOriginCityIds: options.busyTruckOriginCityIds ?? [],
+    marketOpportunityOriginCityIds: marketOpportunityOriginCityIds,
+  };
+}
+
+function getOriginCityWeightBonus(
+  originCityId: string,
+  fleetContext: PlayerFleetCityContext,
+): number {
+  const weights = contractGenerationBalance.originCityWeights;
+  let bonus = weights.otherCity as number;
+
+  if (fleetContext.marketOpportunityOriginCityIds.includes(originCityId)) {
+    bonus = Math.max(bonus, weights.marketOpportunityCity as number);
+  }
+  if (fleetContext.busyTruckOriginCityIds.includes(originCityId)) {
+    bonus = Math.max(bonus, weights.busyTruckCity as number);
+  }
+  if (fleetContext.activeDeliveryDestinationCityIds.includes(originCityId)) {
+    bonus = Math.max(bonus, weights.activeDeliveryDestinationCity as number);
+  }
+  if (fleetContext.idleTruckOriginCityIds.includes(originCityId)) {
+    bonus = Math.max(bonus, weights.idleTruckCity as number);
+  }
+
+  return bonus;
+}
+
+export function isPlayableContract(
+  contract: Contract,
+  trucks: Truck[] | undefined,
+  drivers: Driver[] | undefined,
+  playerLevel: number,
+  currentTime: number,
+): boolean {
+  if (contract.status !== 'available') {
+    return false;
+  }
+  if (currentTime >= (contract.expiresAt ?? 0)) {
+    return false;
+  }
+  return getContractAvailability(
+    contract,
+    trucks,
+    drivers,
+    playerLevel,
+    currentTime,
+  ).canStart;
+}
+
+export function countPlayableContracts(
+  contracts: Contract[] | undefined,
+  trucks: Truck[] | undefined,
+  drivers: Driver[] | undefined,
+  playerLevel: number,
+  currentTime: number,
+): number {
+  return (contracts ?? []).filter((contract) =>
+    isPlayableContract(contract, trucks, drivers, playerLevel, currentTime),
+  ).length;
+}
+
+export function countPlayableContractsFromOrigin(
+  contracts: Contract[] | undefined,
+  originCityId: string,
+  trucks: Truck[] | undefined,
+  drivers: Driver[] | undefined,
+  playerLevel: number,
+  currentTime: number,
+): number {
+  return (contracts ?? []).filter(
+    (contract) =>
+      contract.originCityId === originCityId &&
+      isPlayableContract(contract, trucks, drivers, playerLevel, currentTime),
+  ).length;
+}
+
+export function countContractsByOriginCity(
+  contracts: Contract[] | undefined,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const contract of contracts ?? []) {
+    if (contract.status !== 'available') {
+      continue;
+    }
+    const originId = contract.originCityId;
+    if (!originId) {
+      continue;
+    }
+    counts[originId] = (counts[originId] ?? 0) + 1;
+  }
+  return counts;
+}
+
 /**
  * Tek bir ürün için sözleşme nesnesi oluşturur.
  * Ön koşullar sağlanmazsa null döner.
@@ -615,6 +709,7 @@ export function generateContractForProduct(
     minTonnage,
     maxTonnage,
     sequence = randomIntBetween(1, 999_999),
+    isMarketOpportunity = false,
   } = params;
 
   const originMarket = toProductMarket(originCity.products[productId]);
@@ -632,6 +727,7 @@ export function generateContractForProduct(
   }
 
   const urgency = calculateUrgency(destinationMarket);
+  const requiredLevel = getRequiredLevelForTonnage(amount);
 
   const payment = calculateContractPayment({
     amount,
@@ -641,6 +737,8 @@ export function generateContractForProduct(
     route,
     urgency,
     globalEconomy,
+    requiredLevel,
+    isMarketOpportunity,
   });
 
   const deadlineHours = calculateDeadlineHours({ route, product, urgency });
@@ -659,7 +757,7 @@ export function generateContractForProduct(
     status: 'available',
     createdAt: currentTime,
     expiresAt: calculateContractExpiresAt(currentTime, deadlineHours, urgency),
-    requiredLevel: getRequiredLevelForTonnage(amount),
+    requiredLevel,
   };
 }
 
@@ -691,11 +789,16 @@ export function generateContracts(
   const { currentTime } = options;
 
   const cityList = Object.values(cities);
+  const marketOpportunities = findMarketOpportunities(cityList, routes, products, 12);
   const priorityOpportunityKeys = new Set(
-    findMarketOpportunities(cityList, routes, products, 12).map(
+    marketOpportunities.map(
       (opportunity) => `${opportunity.fromCityId}-${opportunity.toCityId}-${opportunity.productId}`,
     ),
   );
+  const marketOpportunityOriginCityIds = [
+    ...new Set(marketOpportunities.map((opportunity) => opportunity.fromCityId)),
+  ];
+  const fleetContext = resolveFleetCityContext(options, marketOpportunityOriginCityIds);
   const candidates: ContractCandidate[] = [];
   let sequenceCounter = existingContracts.length;
   const existingDedupeKeys = new Set(
@@ -703,8 +806,6 @@ export function generateContracts(
       .filter((contract) => contract.status === 'available')
       .map((contract) => getContractDedupeKey(contract)),
   );
-
-  const idleOriginCitySet = new Set(options.idleTruckOriginCityIds ?? []);
 
   for (const originCity of cityList) {
     for (const destinationCity of cityList) {
@@ -767,6 +868,8 @@ export function generateContracts(
 
         sequenceCounter += 1;
 
+        const routeKey = `${originCity.id}-${destinationCity.id}-${product.id}`;
+        const isMarketOpportunity = priorityOpportunityKeys.has(routeKey);
         const contract = generateContractForProduct({
           originCity,
           destinationCity,
@@ -779,6 +882,7 @@ export function generateContracts(
           minTonnage: tonnageBounds.minTonnage,
           maxTonnage: tonnageBounds.maxTonnage,
           sequence: sequenceCounter,
+          isMarketOpportunity,
         });
 
         if (!contract) {
@@ -809,9 +913,10 @@ export function generateContracts(
         }
 
         const priceDiffRatio = calculatePriceDiffRatio(originMarket, destinationMarket);
-        const routeKey = `${originCity.id}-${destinationCity.id}-${product.id}`;
-        const marketPriorityBonus = priorityOpportunityKeys.has(routeKey) ? 60 : 0;
-        const idleOriginBonus = idleOriginCitySet.has(originCity.id) ? 25 : 0;
+        const routeMarketBonus = isMarketOpportunity
+          ? contractGenerationBalance.originCityWeights.marketOpportunityCity
+          : 0;
+        const originWeightBonus = getOriginCityWeightBonus(originCity.id, fleetContext);
         const score =
           calculateContractScore(
             finalContract.payment,
@@ -819,8 +924,8 @@ export function generateContracts(
             finalContract.amount,
             priceDiffRatio,
           ) +
-          marketPriorityBonus +
-          idleOriginBonus;
+          originWeightBonus +
+          routeMarketBonus;
 
         candidates.push({ score, contract: finalContract });
       }
@@ -936,6 +1041,204 @@ export function mergeContractLists(existing: Contract[], incoming: Contract[]): 
   return [...nonAvailable, ...dedupedAvailable];
 }
 
+function buildPlayableGenerationBaseParams(
+  params: EnsurePlayableContractsParams,
+  contracts: Contract[],
+): {
+  contracts: Contract[];
+  cities: Record<string, City>;
+  routes: Route[];
+  products: Product[];
+  globalEconomy: GlobalEconomy;
+  currentTime: number;
+  player: Pick<Player, 'level' | 'companyLevel' | 'trucks' | 'drivers' | 'homeCityId'>;
+} {
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  return {
+    contracts,
+    cities: params.cities,
+    routes: params.routes,
+    products: params.products,
+    globalEconomy: params.globalEconomy,
+    currentTime: params.currentTime,
+    player: {
+      level: playerLevel,
+      companyLevel: playerLevel,
+      trucks: params.trucks ?? [],
+      drivers: params.drivers ?? [],
+      homeCityId: params.homeCityId ?? 'izmir',
+    },
+  };
+}
+
+/**
+ * Boşta kamyon şehirlerinden alınabilir sözleşme sayısını garanti eder.
+ */
+export function ensurePlayableContractSupply(
+  params: EnsurePlayableContractsParams,
+): EnsurePlayableContractsResult {
+  const gen = contractGenerationBalance;
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const trucks = params.trucks ?? [];
+  const drivers = params.drivers ?? [];
+  const idleOriginCityIds = params.idleTruckOriginCityIds ?? [];
+  const currentTime = params.currentTime ?? 0;
+
+  let contracts = expireOldContracts(params.contracts ?? [], currentTime);
+  const availableCount = countAvailableContracts(contracts);
+  const headroom = Math.max(0, gen.maxAvailableContracts - availableCount);
+
+  if (headroom <= 0 || idleOriginCityIds.length === 0) {
+    return {
+      contracts,
+      newContracts: [],
+      playableContractsCount: countPlayableContracts(contracts, trucks, drivers, playerLevel, currentTime),
+      generatedPlayableCount: 0,
+    };
+  }
+
+  let playableCount = countPlayableContracts(contracts, trucks, drivers, playerLevel, currentTime);
+  const lastGeneratedAt = params.lastPlayableContractGeneratedTime ?? 0;
+  const hoursSinceLastPlayable = Math.max(0, currentTime - lastGeneratedAt);
+  const needsPerCity = idleOriginCityIds.some(
+    (originCityId) =>
+      countPlayableContractsFromOrigin(
+        contracts,
+        originCityId,
+        trucks,
+        drivers,
+        playerLevel,
+        currentTime,
+      ) < gen.minAvailableContractsPerIdleTruckCity,
+  );
+  const belowTotalMinimum = playableCount < gen.minTotalPlayableContracts;
+  const longWaitFallback =
+    params.forceFallback ||
+    (playableCount === 0 &&
+      hoursSinceLastPlayable >= gen.playableContractFallbackHours);
+
+  if (!needsPerCity && !belowTotalMinimum && !longWaitFallback) {
+    return {
+      contracts,
+      newContracts: [],
+      playableContractsCount: playableCount,
+      generatedPlayableCount: 0,
+    };
+  }
+
+  const maxGenerate = Math.min(
+    params.maxNewContracts ?? gen.maxPlayableContractsGeneratedAtOnce,
+    headroom,
+    gen.maxContractsGeneratedAtOnce,
+  );
+
+  const generated: Contract[] = [];
+  const batchBase = buildPlayableGenerationBaseParams(params, contracts);
+
+  for (const originCityId of idleOriginCityIds) {
+    if (generated.length >= maxGenerate) {
+      break;
+    }
+
+    const cityCapacity = getMaxIdleTruckCapacityAtOrigin(trucks, originCityId, params.homeCityId);
+    if (cityCapacity <= 0) {
+      continue;
+    }
+
+    const cityPlayable = countPlayableContractsFromOrigin(
+      contracts,
+      originCityId,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+    );
+    const cityNeeded = Math.max(0, gen.minAvailableContractsPerIdleTruckCity - cityPlayable);
+    if (cityNeeded <= 0) {
+      continue;
+    }
+
+    const toCreate = Math.min(cityNeeded, maxGenerate - generated.length);
+    const created = generatePlayableContractsForOriginCity({
+      ...batchBase,
+      originCityId,
+      truckCapacity: cityCapacity,
+      count: toCreate,
+    });
+
+    for (const contract of created) {
+      const key = getContractDedupeKey(contract);
+      const alreadyExists = [...contracts, ...generated].some(
+        (item) => item.status === 'available' && getContractDedupeKey(item) === key,
+      );
+      if (!alreadyExists) {
+        generated.push(contract);
+      }
+    }
+  }
+
+  let merged = mergeContractLists(contracts, generated);
+  playableCount = countPlayableContracts(merged, trucks, drivers, playerLevel, currentTime);
+
+  let originIndex = 0;
+  while (
+    playableCount < gen.minTotalPlayableContracts &&
+    generated.length < maxGenerate &&
+    idleOriginCityIds.length > 0
+  ) {
+    const originCityId = idleOriginCityIds[originIndex % idleOriginCityIds.length];
+    originIndex += 1;
+    const cityCapacity = getMaxIdleTruckCapacityAtOrigin(trucks, originCityId, params.homeCityId);
+    if (cityCapacity <= 0) {
+      if (originIndex > idleOriginCityIds.length * 2) {
+        break;
+      }
+      continue;
+    }
+
+    const loopBase = buildPlayableGenerationBaseParams(params, merged);
+    const created = generatePlayableContractsForOriginCity({
+      ...loopBase,
+      originCityId,
+      truckCapacity: cityCapacity,
+      count: 1,
+    });
+
+    let added = false;
+    for (const contract of created) {
+      if (generated.length >= maxGenerate) {
+        break;
+      }
+      const key = getContractDedupeKey(contract);
+      const alreadyExists = merged.some(
+        (item) => item.status === 'available' && getContractDedupeKey(item) === key,
+      );
+      if (!alreadyExists) {
+        generated.push(contract);
+        merged = mergeContractLists(merged, [contract]);
+        added = true;
+      }
+    }
+
+    playableCount = countPlayableContracts(merged, trucks, drivers, playerLevel, currentTime);
+    if (!added && originIndex > idleOriginCityIds.length * 3) {
+      break;
+    }
+  }
+
+  const balanced = balanceAvailableContractLevelMix(merged, playerLevel);
+  const finalPlayable = countPlayableContracts(balanced, trucks, drivers, playerLevel, currentTime);
+
+  return {
+    contracts: balanced,
+    newContracts: generated,
+    playableContractsCount: finalPlayable,
+    generatedPlayableCount: generated.length,
+    updatedLastPlayableContractGeneratedTime:
+      generated.length > 0 ? currentTime : params.lastPlayableContractGeneratedTime,
+  };
+}
+
 export interface ReplenishContractsParams {
   cities: Record<string, City>;
   routes: Route[];
@@ -948,6 +1251,24 @@ export interface ReplenishContractsParams {
   idleMaxTruckCapacity?: number;
   playerLevel?: number;
   idleTruckOriginCityIds?: string[];
+  activeDeliveryDestinationCityIds?: string[];
+  busyTruckOriginCityIds?: string[];
+  fleetCityContext?: PlayerFleetCityContext;
+  trucks?: Truck[];
+  drivers?: Driver[];
+  homeCityId?: string;
+}
+
+export interface EnsurePlayableContractsParams extends ReplenishContractsParams {
+  maxNewContracts?: number;
+  forceFallback?: boolean;
+  lastPlayableContractGeneratedTime?: number;
+}
+
+export interface EnsurePlayableContractsResult extends ReplenishContractsResult {
+  playableContractsCount: number;
+  generatedPlayableCount: number;
+  updatedLastPlayableContractGeneratedTime?: number;
 }
 
 export interface ReplenishContractsResult {
@@ -960,6 +1281,10 @@ export type ContractGenerationTickKind = 'small' | 'medium' | 'cleanup_boost';
 export interface ContractGenerationDebugSnapshot {
   currentTime: number;
   availableContracts: number;
+  playableContractsCount: number;
+  idleTruckOriginCities: string[];
+  activeDeliveryDestinationCities: string[];
+  lastPlayableContractGeneratedTime: number;
   lastContractGenerationTime: number;
   lastMarketRefreshTime: number;
   lastDailyCleanupTime: number;
@@ -985,6 +1310,7 @@ export interface ProcessContractGenerationScheduleParams extends ReplenishContra
   lastContractGenerationTime: number;
   lastMarketRefreshTime: number;
   lastDailyCleanupTime: number;
+  lastPlayableContractGeneratedTime?: number;
 }
 
 export interface ProcessContractGenerationScheduleResult {
@@ -993,6 +1319,7 @@ export interface ProcessContractGenerationScheduleResult {
   lastContractGenerationTime: number;
   lastMarketRefreshTime: number;
   lastDailyCleanupTime: number;
+  lastPlayableContractGeneratedTime: number;
   debug: ContractGenerationDebugSnapshot;
 }
 
@@ -1096,6 +1423,9 @@ function runContractGenerationTick(
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
       idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+      activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+      busyTruckOriginCityIds: params.busyTruckOriginCityIds,
+      fleetCityContext: params.fleetCityContext,
     },
   );
 
@@ -1111,6 +1441,12 @@ function runContractGenerationTick(
 function buildContractGenerationDebugSnapshot(params: {
   currentTime: number;
   contracts: Contract[];
+  trucks?: Truck[];
+  drivers?: Driver[];
+  playerLevel?: number;
+  idleTruckOriginCityIds?: string[];
+  activeDeliveryDestinationCityIds?: string[];
+  lastPlayableContractGeneratedTime?: number;
   lastContractGenerationTime: number;
   lastMarketRefreshTime: number;
   lastDailyCleanupTime: number;
@@ -1128,6 +1464,7 @@ function buildContractGenerationDebugSnapshot(params: {
   const lastGen = params.lastContractGenerationTime ?? 0;
   const lastMarket = params.lastMarketRefreshTime ?? 0;
   const lastCleanup = params.lastDailyCleanupTime ?? 0;
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
 
   const hoursSinceGen = Math.max(0, safeTime - lastGen);
   const hoursSinceMarket = Math.max(0, safeTime - lastMarket);
@@ -1139,6 +1476,16 @@ function buildContractGenerationDebugSnapshot(params: {
   return {
     currentTime: safeTime,
     availableContracts: countAvailableContracts(params.contracts),
+    playableContractsCount: countPlayableContracts(
+      params.contracts,
+      params.trucks,
+      params.drivers,
+      playerLevel,
+      safeTime,
+    ),
+    idleTruckOriginCities: params.idleTruckOriginCityIds ?? [],
+    activeDeliveryDestinationCities: params.activeDeliveryDestinationCityIds ?? [],
+    lastPlayableContractGeneratedTime: params.lastPlayableContractGeneratedTime ?? 0,
     lastContractGenerationTime: lastGen,
     lastMarketRefreshTime: lastMarket,
     lastDailyCleanupTime: lastCleanup,
@@ -1331,13 +1678,34 @@ export function processContractGenerationSchedule(
 
   const generatedContractsCount = allNewContracts.length;
 
+  let lastPlayableGenerated = params.lastPlayableContractGeneratedTime ?? 0;
+  const playableResult = ensurePlayableContractSupply({
+    ...baseParams,
+    contracts,
+    currentTime: newTime,
+    lastPlayableContractGeneratedTime: lastPlayableGenerated,
+    maxNewContracts: gen.maxPlayableContractsGeneratedAtOnce,
+  });
+  if (playableResult.newContracts.length > 0) {
+    contracts = playableResult.contracts;
+    allNewContracts.push(...playableResult.newContracts);
+    lastPlayableGenerated =
+      playableResult.updatedLastPlayableContractGeneratedTime ?? lastPlayableGenerated;
+  }
+
   const debug = buildContractGenerationDebugSnapshot({
     currentTime: newTime,
     contracts,
+    trucks: params.trucks,
+    drivers: params.drivers,
+    playerLevel: params.playerLevel,
+    idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+    activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+    lastPlayableContractGeneratedTime: lastPlayableGenerated,
     lastContractGenerationTime: lastGen,
     lastMarketRefreshTime: lastMarket,
     lastDailyCleanupTime: lastCleanup,
-    generatedContractsCount,
+    generatedContractsCount: allNewContracts.length,
     expiredContractsRemoved: totalExpiredRemoved,
     elapsedSmallTicks,
     processedSmallTicks: smallResult.processedTicks,
@@ -1353,6 +1721,7 @@ export function processContractGenerationSchedule(
     lastContractGenerationTime: lastGen,
     lastMarketRefreshTime: lastMarket,
     lastDailyCleanupTime: lastCleanup,
+    lastPlayableContractGeneratedTime: lastPlayableGenerated,
     debug,
   };
 }
@@ -1400,6 +1769,9 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
       idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+      activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+      busyTruckOriginCityIds: params.busyTruckOriginCityIds,
+      fleetCityContext: params.fleetCityContext,
     },
   );
 
@@ -1496,6 +1868,9 @@ export function refreshContractsFromMarket(
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
       idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+      activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+      busyTruckOriginCityIds: params.busyTruckOriginCityIds,
+      fleetCityContext: params.fleetCityContext,
     },
   );
 

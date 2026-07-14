@@ -11,7 +11,7 @@ export const colors = {
   textPrimary: '#F8FAFC',
   textSecondary: '#CBD5E1',
   textMuted: '#94A3B8',
-  textDisabled: '#64748B',
+  textDisabled: '#94A3B8',
 
   accentBlue: '#3B82F6',
   accentBlueSoft: 'rgba(59, 130, 246, 0.16)',

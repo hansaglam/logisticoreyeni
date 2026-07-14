@@ -453,7 +453,9 @@ export type FinanceLedgerCategory =
   | 'truck_lease'
   | 'daily_operating_cost'
   | 'truck_purchase'
+  | 'truck_sale'
   | 'driver_hire'
+  | 'driver_severance'
   | 'warehouse_open'
   | 'other_expense'
   | 'delivery_income'
@@ -794,6 +796,10 @@ export interface StoreGameState {
   lastMarketRefreshTime: number;
   /** Son günlük sözleşme temizliği (oyun saati) */
   lastDailyCleanupTime: number;
+  /** Son zorunlu alınabilir sözleşme üretimi (oyun saati) */
+  lastPlayableContractGeneratedTime: number;
+  /** Son manuel sözleşme yenilemesi (oyun saati) */
+  lastManualContractRefreshTime: number;
   player: Player;
   cities: City[];
   products: Product[];
@@ -862,9 +868,21 @@ export type ContractAvailabilityReason =
   | 'NO_TRUCK_IN_ORIGIN_CITY'
   | 'NO_IDLE_TRUCK_IN_ORIGIN_CITY'
   | 'NO_TRUCK_AT_ORIGIN'
+  | 'NO_TRUCK_WITH_CAPACITY'
   | 'CAPACITY_INSUFFICIENT'
   | 'TRUCK_CONDITION_TOO_LOW'
   | 'OK';
+
+export interface ContractAvailabilityDebug {
+  fromCityId: string;
+  requiredCargoWeight: number;
+  trucksAtOriginCount: number;
+  idleTrucksAtOriginCount: number;
+  bestIdleTruckCapacity: number;
+  ownedTrucksAtOriginCount: number;
+  leasedTrucksAtOriginCount: number;
+  reason: ContractAvailabilityReason;
+}
 
 export interface ContractAvailability {
   canStart: boolean;
@@ -876,6 +894,7 @@ export interface ContractAvailability {
   requiredCapacity?: number;
   requiredLevel?: number;
   playerLevel?: number;
+  debug?: ContractAvailabilityDebug;
 }
 
 export interface StartDeliveryResult {

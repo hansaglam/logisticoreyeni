@@ -5,7 +5,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+import { useAppDialog } from '../components/AppDialogProvider';
 
 import {
   AppCard,
@@ -205,6 +207,7 @@ function ModuleChevron() {
 }
 
 export default function MoreScreen() {
+  const { alert: showAlert } = useAppDialog();
   const [route, setRoute] = useState<MoreRoute>('menu');
   const player = useGameStore((state) => state.player);
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
@@ -223,7 +226,7 @@ export default function MoreScreen() {
 
   const handleModulePress = (item: ModuleItem) => {
     if (item.placeholder) {
-      Alert.alert('Yakında', PLACEHOLDER_ALERT_MESSAGE);
+      showAlert('Yakında', PLACEHOLDER_ALERT_MESSAGE);
       return;
     }
     setRoute(item.key as MoreRoute);
@@ -362,7 +365,7 @@ export default function MoreScreen() {
             onPress={() => {
               useGameStore.getState().resetSpotlightTutorials();
               useSpotlightTutorialStore.getState().resetActive();
-              Alert.alert('Tutorial sıfırlandı', 'Tüm spotlight tutorial ilerlemesi temizlendi.');
+              showAlert('Tutorial sıfırlandı', 'Tüm spotlight tutorial ilerlemesi temizlendi.');
             }}
           >
             <Text style={styles.tutorialResetAll}>Tüm tutorial kaydını sıfırla</Text>

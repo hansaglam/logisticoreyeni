@@ -8,7 +8,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -17,6 +16,7 @@ import {
   View,
 } from 'react-native';
 
+import { useAppDialog } from '../components/AppDialogProvider';
 import { useGameStore, getRecentGameEvents } from '../store/gameStore';
 import InternalTestInfoPanel from '../components/InternalTestInfoPanel';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -35,8 +35,12 @@ import {
   countAvailableContracts,
   countContractsAboveLevel,
   countContractsAtOrBelowLevel,
+  countContractsByOriginCity,
+  countPlayableContracts,
   getContractLevelMixStats,
 } from '../simulation/contracts';
+import { getIdleTruckOriginCityIds, getActiveDeliveryDestinationCityIds } from '../simulation/delivery';
+import { buildContractPreview } from '../simulation/contractPreview';
 import { getLevelProgress } from '../simulation/leveling';
 import { contractBalance } from '../config/balance';
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
@@ -454,11 +458,13 @@ function DebugButton({ label, onPress, variant = 'secondary', disabled = false }
 // ---------------------------------------------------------------------------
 
 export default function DebugSimulationScreen() {
+  const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const routes = useGameStore((state) => state.routes) ?? [];
   const contracts = useGameStore((state) => state.contracts) ?? [];
+  const globalEconomy = useGameStore((state) => state.globalEconomy);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const marketNews = useGameStore((state) => state.marketNews) ?? [];
   const eventLog = useGameStore((state) => state.eventLog) ?? [];
@@ -475,6 +481,12 @@ export default function DebugSimulationScreen() {
   const runEconomyTick = useGameStore((state) => state.runEconomyTick);
   const generateNewContracts = useGameStore((state) => state.generateNewContracts);
   const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
+  const forceGeneratePlayableContracts = useGameStore(
+    (state) => state.forceGeneratePlayableContracts,
+  );
+  const lastPlayableContractGeneratedTime = useGameStore(
+    (state) => state.lastPlayableContractGeneratedTime,
+  );
   const getContractRefreshRemainingSeconds = useGameStore(
     (state) => state.getContractRefreshRemainingSeconds,
   );
@@ -571,6 +583,59 @@ export default function DebugSimulationScreen() {
   );
   const totalInventoryTons = useMemo(() => getTotalInventoryTons(warehouses), [warehouses]);
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+
+  const contractEconomyDebug = useMemo(() => {
+    if (availableContracts.length === 0) {
+      return null;
+    }
+
+    let paymentSum = 0;
+    let costSum = 0;
+    let profitSum = 0;
+    let marginSum = 0;
+    const level1Payments: number[] = [];
+    const level1Margins: number[] = [];
+
+    for (const contract of availableContracts) {
+      const preview = buildContractPreview({
+        contract,
+        globalEconomy,
+        trucks,
+        drivers,
+        companyLevel: playerLevel,
+      });
+      const payment = contract.payment ?? 0;
+      const cost = preview.estimatedTripCost ?? 0;
+      const profit = preview.estimatedOperationalProfit ?? 0;
+      const margin = preview.estimatedMarginPercent ?? 0;
+
+      paymentSum += payment;
+      costSum += cost;
+      profitSum += profit;
+      marginSum += margin;
+
+      if ((contract.requiredLevel ?? 1) <= 1) {
+        level1Payments.push(payment);
+        level1Margins.push(margin);
+      }
+    }
+
+    const count = availableContracts.length;
+    return {
+      sampleCount: count,
+      averageContractPayment: Math.round(paymentSum / count),
+      averageEstimatedCost: Math.round(costSum / count),
+      averageEstimatedNetProfit: Math.round(profitSum / count),
+      averageMarginPercent: Math.round((marginSum / count) * 1000) / 10,
+      level1ContractPaymentMin: level1Payments.length > 0 ? Math.min(...level1Payments) : 0,
+      level1ContractPaymentMax: level1Payments.length > 0 ? Math.max(...level1Payments) : 0,
+      level1MarginMin:
+        level1Margins.length > 0 ? Math.round(Math.min(...level1Margins) * 1000) / 10 : 0,
+      level1MarginMax:
+        level1Margins.length > 0 ? Math.round(Math.max(...level1Margins) * 1000) / 10 : 0,
+    };
+  }, [availableContracts, globalEconomy, trucks, drivers, playerLevel]);
+
   const maxUnlockedTonnage = getMaxContractTonnageForLevel(playerLevel);
   const highestOwnedTruckCapacity = getHighestOwnedTruckCapacity(trucks);
   const contractsAtLevel = useMemo(
@@ -584,6 +649,29 @@ export default function DebugSimulationScreen() {
   const contractLevelMix = useMemo(
     () => getContractLevelMixStats(contracts, playerLevel),
     [contracts, playerLevel],
+  );
+  const idleTruckCities = useMemo(
+    () => getIdleTruckOriginCityIds(trucks, player?.homeCityId),
+    [trucks, player?.homeCityId],
+  );
+  const activeDeliveryDestinationCities = useMemo(
+    () => getActiveDeliveryDestinationCityIds(activeDeliveries),
+    [activeDeliveries],
+  );
+  const playableContractsCount = useMemo(
+    () =>
+      countPlayableContracts(
+        contracts,
+        trucks,
+        player?.drivers ?? [],
+        playerLevel,
+        currentTime,
+      ),
+    [contracts, trucks, player?.drivers, playerLevel, currentTime],
+  );
+  const contractsByOriginCity = useMemo(
+    () => countContractsByOriginCity(contracts),
+    [contracts],
   );
   const [contractRefreshCountdown, setContractRefreshCountdown] = useState(
     contractBalance.contractRefreshIntervalMs / 1000,
@@ -758,7 +846,7 @@ export default function DebugSimulationScreen() {
   };
 
   const handleResetTestSave = () => {
-    Alert.alert(
+    showAlert(
       'Test kaydı sıfırlansın mı?',
       'Bu işlem mevcut oyun kaydını siler ve yeni oyun başlatır.',
       [
@@ -1087,8 +1175,61 @@ export default function DebugSimulationScreen() {
             <Text style={styles.levelDebugLine}>
               offlineCatchup: {contractGenerationDebug?.offlineCatchup ? 'yes' : 'no'}
             </Text>
+            <Text style={styles.levelDebugLine}>— Oyuncu odaklı üretim —</Text>
+            <Text style={styles.levelDebugLine}>
+              idleTruckCities: {idleTruckCities.join(', ') || '—'}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              activeDeliveryDestinationCities:{' '}
+              {activeDeliveryDestinationCities.join(', ') || '—'}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              playableContractsCount: {playableContractsCount}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              contractsByOriginCity:{' '}
+              {Object.entries(contractsByOriginCity)
+                .map(([cityId, count]) => `${cityId}:${count}`)
+                .join(', ') || '—'}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              lastPlayableContractGeneratedTime:{' '}
+              {lastPlayableContractGeneratedTime ?? contractGenerationDebug?.lastPlayableContractGeneratedTime ?? 0}
+              h
+            </Text>
+            <Text style={styles.levelDebugLine}>— Ekonomi dengesi —</Text>
+            <Text style={styles.levelDebugLine}>
+              averageContractPayment: {formatMoney(contractEconomyDebug?.averageContractPayment ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              averageEstimatedCost: {formatMoney(contractEconomyDebug?.averageEstimatedCost ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              averageEstimatedNetProfit:{' '}
+              {formatMoney(contractEconomyDebug?.averageEstimatedNetProfit ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              averageMarginPercent: {contractEconomyDebug?.averageMarginPercent ?? 0}%
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              level1ContractPaymentRange:{' '}
+              {formatMoney(contractEconomyDebug?.level1ContractPaymentMin ?? 0)} –{' '}
+              {formatMoney(contractEconomyDebug?.level1ContractPaymentMax ?? 0)}
+            </Text>
+            <Text style={styles.levelDebugLine}>
+              level1MarginRange: {contractEconomyDebug?.level1MarginMin ?? 0}% –{' '}
+              {contractEconomyDebug?.level1MarginMax ?? 0}%
+            </Text>
           </View>
           <View style={styles.buttonGrid}>
+            <DebugButton
+              label="Uygun İş Üret"
+              onPress={() => {
+                const created = forceGeneratePlayableContracts();
+                setInfo(created > 0 ? `${created} alınabilir iş üretildi` : 'Üretilemedi');
+              }}
+              variant="primary"
+            />
             <DebugButton
               label="Refresh Contracts"
               onPress={() => {

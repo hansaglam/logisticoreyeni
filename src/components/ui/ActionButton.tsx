@@ -20,10 +20,13 @@ interface ActionButtonProps {
   compact?: boolean;
 }
 
-const variantStyles: Record<
-  ActionButtonVariant,
-  { backgroundColor: string; borderColor: string; textColor: string }
-> = {
+type ButtonPalette = {
+  backgroundColor: string;
+  borderColor: string;
+  textColor: string;
+};
+
+const variantStyles: Record<ActionButtonVariant, ButtonPalette> = {
   primary: {
     backgroundColor: colors.accentBlue,
     borderColor: colors.accentBlue,
@@ -41,6 +44,25 @@ const variantStyles: Record<
   },
 };
 
+/** Opacity yerine kontrastlı renk — disabled yazı/ikon okunabilir kalsın */
+const disabledVariantStyles: Record<ActionButtonVariant, ButtonPalette> = {
+  primary: {
+    backgroundColor: '#1A2F4D',
+    borderColor: 'rgba(147, 197, 253, 0.38)',
+    textColor: '#B8D4F0',
+  },
+  secondary: {
+    backgroundColor: '#0F172A',
+    borderColor: 'rgba(148, 163, 184, 0.42)',
+    textColor: '#CBD5E1',
+  },
+  danger: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderColor: 'rgba(252, 165, 165, 0.4)',
+    textColor: '#FCA5A5',
+  },
+};
+
 export default function ActionButton({
   label,
   onPress,
@@ -52,9 +74,7 @@ export default function ActionButton({
   iconSize = 16,
   compact = false,
 }: ActionButtonProps) {
-  const palette = variantStyles[variant];
-  const textColor = disabled ? colors.textDisabled : palette.textColor;
-  const disabledOpacity = compact ? 0.38 : 0.45;
+  const palette = disabled ? disabledVariantStyles[variant] : variantStyles[variant];
 
   return (
     <TouchableOpacity
@@ -69,13 +89,12 @@ export default function ActionButton({
         {
           backgroundColor: palette.backgroundColor,
           borderColor: palette.borderColor,
-          opacity: disabled ? disabledOpacity : 1,
         },
         style,
       ]}
     >
-      {icon ? <GameIcon name={icon} size={iconSize} color={textColor} /> : null}
-      <Text style={[styles.label, compact && styles.labelCompact, { color: textColor }]}>
+      {icon ? <GameIcon name={icon} size={iconSize} color={palette.textColor} /> : null}
+      <Text style={[styles.label, compact && styles.labelCompact, { color: palette.textColor }]}>
         {label}
       </Text>
     </TouchableOpacity>

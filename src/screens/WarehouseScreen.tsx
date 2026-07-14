@@ -6,12 +6,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+
+import { useAppDialog } from '../components/AppDialogProvider';
 
 import TradeProductModal from '../components/TradeProductModal';
 import {
@@ -650,6 +651,7 @@ function StrategyTipsCard({ onShowMore }: { onShowMore: () => void }) {
 }
 
 export default function WarehouseScreen() {
+  const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
@@ -711,7 +713,7 @@ export default function WarehouseScreen() {
   const handleUpgradeWarehouse = (warehouse: WarehouseLike) => {
     const result = upgradeWarehouse(warehouse.id);
     if (!result.success) {
-      Alert.alert('Depo yükseltilemedi', result.message ?? 'İşlem tamamlanamadı.');
+      showAlert('Depo yükseltilemedi', result.message ?? 'İşlem tamamlanamadı.');
       return;
     }
     setStatusMessage(result.message ?? 'Depo yükseltildi');
@@ -720,7 +722,7 @@ export default function WarehouseScreen() {
   const handleOpenWarehouse = (cityId: string, warehouseType: WarehouseType = 'standard') => {
     const result = openWarehouse(cityId, warehouseType);
     if (!result.success) {
-      Alert.alert('Depo açılamadı', result.message ?? 'İşlem tamamlanamadı.');
+      showAlert('Depo açılamadı', result.message ?? 'İşlem tamamlanamadı.');
       return;
     }
     setStatusMessage(result.message ?? 'Depo açıldı');
@@ -757,7 +759,7 @@ export default function WarehouseScreen() {
     });
 
     if (!result.success) {
-      Alert.alert('Satış başarısız', result.message ?? 'İşlem tamamlanamadı.');
+      showAlert('Satış başarısız', result.message ?? 'İşlem tamamlanamadı.');
       return;
     }
 

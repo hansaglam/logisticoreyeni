@@ -8,6 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, AppState, StatusBar, StyleSheet, Text, View } from 'react-native';
 
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
+import { AppDialogProvider } from './src/components/AppDialogProvider';
 import BottomTabBar, { type TabDefinition, type TabKey } from './src/components/BottomTabBar';
 import GameToast from './src/components/GameToast';
 import TutorialOverlay from './src/components/tutorial/TutorialOverlay';
@@ -126,7 +127,9 @@ export default function App() {
 
   return (
     <AppSafeAreaProvider>
-      {isGameReady ? <AppShell /> : <GameLoadingScreen />}
+      <AppDialogProvider>
+        {isGameReady ? <AppShell /> : <GameLoadingScreen />}
+      </AppDialogProvider>
     </AppSafeAreaProvider>
   );
 }

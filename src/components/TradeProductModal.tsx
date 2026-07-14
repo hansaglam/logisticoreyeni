@@ -6,7 +6,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -16,6 +15,8 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+
+import { useAppDialog } from './AppDialogProvider';
 
 import { tradingBalance } from '../config/balance';
 import { getBottomInset } from '../constants/layout';
@@ -119,6 +120,7 @@ export default function TradeProductModal({
   onClose,
   onOpenWarehouses,
 }: TradeProductModalProps) {
+  const { showDialog } = useAppDialog();
   const insets = useAppSafeAreaInsets();
   const bottomInset = getBottomInset(insets);
   const { height: windowHeight } = useWindowDimensions();
@@ -208,17 +210,15 @@ export default function TradeProductModal({
         selectedWarehouse.suitability === 'risky' ||
         selectedWarehouse.suitability === 'usable'
       ) {
-        Alert.alert(
-          'Depo uygun değil',
-          getRiskConfirmationMessage(product, selectedWarehouse.warehouseType),
-          [
-            { text: 'Vazgeç', style: 'cancel' },
-            {
-              text: 'Yine de Satın Al',
-              onPress: () => onConfirm(quantity, selectedWarehouseId),
-            },
-          ],
-        );
+        // Native Alert yerine AppDialog — riskli depo onayı
+        showDialog({
+          title: 'Depo uygun değil',
+          message: getRiskConfirmationMessage(product, selectedWarehouse.warehouseType),
+          variant: 'warning',
+          cancelLabel: 'Vazgeç',
+          confirmLabel: 'Yine de Satın Al',
+          onConfirm: () => onConfirm(quantity, selectedWarehouseId),
+        });
         return;
       }
 

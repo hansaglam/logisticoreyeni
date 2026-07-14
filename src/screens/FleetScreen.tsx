@@ -7,6 +7,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAppDialog } from '../components/AppDialogProvider';
+
 import {
   ActionButton,
   AppCard,
@@ -42,6 +44,14 @@ import {
 } from '../simulation/dailyOperatingCosts';
 import { calculateTruckRepairCost, resolveTruckCityId } from '../simulation/delivery';
 import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
+import {
+  calculateDriverSeveranceCost,
+  calculateTruckResaleValue,
+  canFireDriver,
+  canSellTruck,
+  type DriverFireCheck,
+  type TruckSellCheck,
+} from '../simulation/fleetManagement';
 import TruckTransferModal from '../components/TruckTransferModal';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatDisplayPercent, formatIdleTruckReadyHint, formatMoney, formatRatioPercent, spacing, typography } from '../theme';
@@ -238,8 +248,11 @@ interface OwnedTruckCardProps {
   drivers: Driver[];
   homeCityId?: string;
   currentTime: number;
+  sellCheck: TruckSellCheck;
   onRepair: (truck: Truck) => void;
   onTransfer: (truck: Truck, targetCityId?: string) => void;
+  onSell: (truck: Truck) => void;
+  onShowSellBlocked: (reason: string) => void;
 }
 
 function formatLeaseRemainingDays(
@@ -262,8 +275,11 @@ function OwnedTruckCard({
   drivers,
   homeCityId,
   currentTime,
+  sellCheck,
   onRepair,
   onTransfer,
+  onSell,
+  onShowSellBlocked,
 }: OwnedTruckCardProps) {
   const truckCondition = truck.condition ?? 100;
   const conditionColor = getConditionColor(truckCondition);
@@ -288,6 +304,17 @@ function OwnedTruckCard({
   const isLeased = isActiveLeasedTruck(truck);
   const weeklyLeaseCost = getTruckWeeklyLeaseCost(truck);
   const leaseDailyAccrual = truck.leaseDailyCost ?? 0;
+  const resaleValue = isLeased ? 0 : calculateTruckResaleValue(truck);
+  const showSellInfo = !isLeased && resaleValue > 0;
+  const showSellButton = !isLeased && (sellCheck.canSell || sellCheck.reason);
+
+  const handleSellPress = () => {
+    if (!sellCheck.canSell) {
+      onShowSellBlocked(sellCheck.reason ?? 'Kamyon satılamaz.');
+      return;
+    }
+    onSell(truck);
+  };
 
   return (
     <AppCard style={styles.fleetCard} padded>
@@ -375,6 +402,14 @@ function OwnedTruckCard({
         <ProgressBar progress={truckCondition / 100} color={conditionColor} height={3} />
       </View>
 
+      {isLeased ? (
+        <Text style={styles.footerMuted}>Kiralık kamyon satılamaz</Text>
+      ) : showSellInfo ? (
+        <Text style={styles.resaleHint} numberOfLines={1}>
+          Satış değeri: {formatMoney(resaleValue)}
+        </Text>
+      ) : null}
+
       <View style={styles.cardFooter}>
         {showRepairButton ? (
           <ActionButton
@@ -392,7 +427,21 @@ function OwnedTruckCard({
         ) : isTransferring ? (
           <Text style={styles.footerMuted}>Boş transfer sürüyor</Text>
         ) : truck.status === 'maintenance' ? (
-          <Text style={styles.footerMuted}>Tamir tamamlanmadan işe çıkamaz</Text>
+          <>
+            <Text style={styles.footerMuted}>Tamir tamamlanmadan işe çıkamaz</Text>
+            {showSellButton ? (
+              <ActionButton
+                label={sellCheck.canSell ? 'Sat' : 'Satılamaz'}
+                onPress={handleSellPress}
+                disabled={!sellCheck.canSell}
+                variant="secondary"
+                icon="cash"
+                iconSize={13}
+                compact
+                style={[styles.compactAction, styles.sellActionButton]}
+              />
+            ) : null}
+          </>
         ) : isIdle ? (
           <View style={styles.transferActionsRow}>
             <ActionButton
@@ -417,6 +466,18 @@ function OwnedTruckCard({
                 style={styles.compactAction}
               />
             ) : null}
+            {showSellButton ? (
+              <ActionButton
+                label={sellCheck.canSell ? 'Sat' : 'Satılamaz'}
+                onPress={handleSellPress}
+                disabled={!sellCheck.canSell}
+                variant="secondary"
+                icon="cash"
+                iconSize={13}
+                compact
+                style={[styles.compactAction, styles.sellActionButton]}
+              />
+            ) : null}
           </View>
         ) : null}
         {isIdle && !hasIdleDriver ? (
@@ -436,9 +497,22 @@ interface OwnedDriverCardProps {
   trucks: Truck[];
   activeDeliveries: Delivery[];
   currentTime: number;
+  playerMoney: number;
+  fireCheck: DriverFireCheck;
+  onFire: (driver: Driver) => void;
+  onShowFireBlocked: (reason: string) => void;
 }
 
-function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: OwnedDriverCardProps) {
+function OwnedDriverCard({
+  driver,
+  trucks,
+  activeDeliveries,
+  currentTime,
+  playerMoney,
+  fireCheck,
+  onFire,
+  onShowFireBlocked,
+}: OwnedDriverCardProps) {
   const statusBadge = getDriverStatusBadge(driver.status);
   const trait = getDriverTrait(driver);
   const activeDelivery = findActiveDeliveryForDriver(driver.id, activeDeliveries);
@@ -449,6 +523,20 @@ function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: Owne
   const experience = Math.round(driver.experience ?? 0);
   const isDriving = driver.status === 'driving';
   const isIdle = driver.status === 'idle';
+  const severanceCost = fireCheck.severanceCost ?? calculateDriverSeveranceCost(driver);
+  const canAffordSeverance = playerMoney >= severanceCost;
+
+  const handleFirePress = () => {
+    if (!fireCheck.canFire) {
+      onShowFireBlocked(fireCheck.reason ?? 'Şoför işten çıkarılamaz.');
+      return;
+    }
+    if (!canAffordSeverance) {
+      onShowFireBlocked(`Çıkış maliyeti için ${formatMoney(severanceCost)} gerekli.`);
+      return;
+    }
+    onFire(driver);
+  };
 
   return (
     <AppCard style={styles.fleetCard} padded>
@@ -501,11 +589,36 @@ function OwnedDriverCard({ driver, trucks, activeDeliveries, currentTime }: Owne
         <StatusBadge label={trait.label} variant={trait.variant} size="sm" />
       </View>
 
-      {isIdle ? (
-        <Text style={styles.footerMuted}>Yeni teslimat için hazır</Text>
-      ) : driver.status === 'resting' ? (
-        <Text style={styles.footerMuted}>Dinleniyor</Text>
-      ) : null}
+      <Text style={styles.severanceHint} numberOfLines={1}>
+        Çıkış maliyeti: {formatMoney(severanceCost)}
+      </Text>
+
+      <View style={styles.cardFooter}>
+        {isIdle ? (
+          <Text style={styles.footerMuted}>Yeni teslimat için hazır</Text>
+        ) : driver.status === 'resting' ? (
+          <Text style={styles.footerMuted}>Dinleniyor</Text>
+        ) : isDriving ? (
+          <Text style={styles.footerMuted}>Aktif teslimatta</Text>
+        ) : null}
+
+        <ActionButton
+          label={
+            !fireCheck.canFire
+              ? 'Çıkarılamaz'
+              : !canAffordSeverance
+                ? 'Nakit yetersiz'
+                : 'İşten Çıkar'
+          }
+          onPress={handleFirePress}
+          disabled={!fireCheck.canFire || !canAffordSeverance}
+          variant="danger"
+          icon="driver"
+          iconSize={13}
+          compact
+          style={styles.compactAction}
+        />
+      </View>
     </AppCard>
   );
 }
@@ -723,6 +836,7 @@ function ShopDriverCard({
 }
 
 export default function FleetScreen() {
+  const { showDialog, alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
@@ -730,6 +844,8 @@ export default function FleetScreen() {
   const buyTruck = useGameStore((state) => state.buyTruck);
   const leaseTruck = useGameStore((state) => state.leaseTruck);
   const hireDriver = useGameStore((state) => state.hireDriver);
+  const sellTruck = useGameStore((state) => state.sellTruck);
+  const fireDriver = useGameStore((state) => state.fireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
@@ -787,6 +903,19 @@ export default function FleetScreen() {
   const showFleetTip =
     activeTab === 'trucks' && fleetSummary.idleTrucks === 0 && fleetSummary.onRouteTrucks > 0;
 
+  const fleetManagementState = useMemo(
+    () => ({
+      player: {
+        trucks,
+        drivers,
+        money: playerMoney,
+      },
+      activeDeliveries,
+      activeTransfers,
+    }),
+    [trucks, drivers, playerMoney, activeDeliveries, activeTransfers],
+  );
+
   const handleRepair = (truck: Truck) => {
     if (typeof repairTruck !== 'function') {
       setStatusMessage({ type: 'error', text: 'Tamir henüz kullanılamıyor' });
@@ -837,6 +966,90 @@ export default function FleetScreen() {
       return;
     }
     setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işe alındı' });
+  };
+
+  const handleSellTruck = (truck: Truck) => {
+    const sellCheck = canSellTruck(truck.id, fleetManagementState);
+    if (!sellCheck.canSell) {
+      showAlert('Kamyon satılamaz', sellCheck.reason ?? 'Bu kamyon şu anda satılamaz.');
+      return;
+    }
+
+    const salePrice = sellCheck.salePrice ?? 0;
+    const condition = Math.round(truck.condition ?? 100);
+
+    // Native Alert yerine AppDialog — kamyon satış onayı
+    showDialog({
+      title: 'Kamyonu sat',
+      message: `${truck.name} satılacak.`,
+      variant: 'danger',
+      details: [
+        { label: 'Kondisyon', value: `%${condition}` },
+        { label: 'Satış fiyatı', value: formatMoney(salePrice), tone: 'success' },
+      ],
+      footerNote: 'Bu işlem geri alınamaz.',
+      cancelLabel: 'Vazgeç',
+      confirmLabel: 'Sat',
+      destructive: true,
+      onConfirm: () => {
+        if (typeof sellTruck !== 'function') {
+          setStatusMessage({ type: 'error', text: 'Satış henüz kullanılamıyor' });
+          return;
+        }
+        const result = sellTruck(truck.id);
+        if (!result.success) {
+          setStatusMessage({ type: 'error', text: result.message ?? 'Satış başarısız' });
+          return;
+        }
+        setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon satıldı' });
+      },
+    });
+  };
+
+  const handleShowSellBlocked = (reason: string) => {
+    showAlert('Kamyon satılamaz', reason);
+  };
+
+  const handleFireDriver = (driver: Driver) => {
+    const fireCheck = canFireDriver(driver.id, fleetManagementState);
+    if (!fireCheck.canFire) {
+      showAlert('Şoför işten çıkarılamaz', fireCheck.reason ?? 'Bu şoför şu anda çıkarılamaz.');
+      return;
+    }
+
+    const severanceCost = fireCheck.severanceCost ?? calculateDriverSeveranceCost(driver);
+    const dailySalary = driver.salaryPerDay ?? driver.dailySalary ?? 0;
+
+    // Native Alert yerine AppDialog — şoför çıkış onayı
+    showDialog({
+      title: 'Şoförü işten çıkar',
+      message: `${driver.name} işten çıkarılacak.`,
+      variant: 'danger',
+      details: [
+        { label: 'Günlük maaş', value: formatMoney(dailySalary), tone: 'warning' },
+        { label: 'Çıkış maliyeti', value: formatMoney(severanceCost), tone: 'danger' },
+      ],
+      footerNote: 'Bu işlem geri alınamaz.',
+      cancelLabel: 'Vazgeç',
+      confirmLabel: 'İşten Çıkar',
+      destructive: true,
+      onConfirm: () => {
+        if (typeof fireDriver !== 'function') {
+          setStatusMessage({ type: 'error', text: 'İşten çıkarma henüz kullanılamıyor' });
+          return;
+        }
+        const result = fireDriver(driver.id);
+        if (!result.success) {
+          setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
+          return;
+        }
+        setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işten çıkarıldı' });
+      },
+    });
+  };
+
+  const handleShowFireBlocked = (reason: string) => {
+    showAlert('Şoför işten çıkarılamaz', reason);
   };
 
   const handleOpenTransfer = (truck: Truck, targetCityId?: string) => {
@@ -928,8 +1141,11 @@ export default function FleetScreen() {
                   drivers={drivers}
                   homeCityId={player.homeCityId}
                   currentTime={currentTime}
+                  sellCheck={canSellTruck(truck.id, fleetManagementState)}
                   onRepair={handleRepair}
                   onTransfer={handleOpenTransfer}
+                  onSell={handleSellTruck}
+                  onShowSellBlocked={handleShowSellBlocked}
                 />
               ))}
               {showFleetTip ? (
@@ -969,6 +1185,10 @@ export default function FleetScreen() {
                 trucks={trucks}
                 activeDeliveries={activeDeliveries}
                 currentTime={currentTime}
+                playerMoney={playerMoney}
+                fireCheck={canFireDriver(driver.id, fleetManagementState)}
+                onFire={handleFireDriver}
+                onShowFireBlocked={handleShowFireBlocked}
               />
             ))
           )}
@@ -1071,7 +1291,7 @@ const styles = StyleSheet.create({
     marginBottom: 11,
   },
   lockedCard: {
-    opacity: 0.72,
+    borderColor: 'rgba(148, 163, 184, 0.28)',
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -1178,6 +1398,22 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontWeight: '500',
     marginTop: 2,
+  },
+  resaleHint: {
+    ...typography.caption,
+    color: colors.accentAmber,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  severanceHint: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  sellActionButton: {
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderColor: 'rgba(245, 158, 11, 0.65)',
   },
   idleLocationHint: {
     ...typography.caption,

@@ -6,7 +6,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -16,7 +15,9 @@ import {
   type ScrollView as ScrollViewType,
 } from 'react-native';
 
+import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
+import ContractDetailModal from '../components/contracts/ContractDetailModal';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   AppScreen,
@@ -29,41 +30,32 @@ import {
 import { getRoute as findRoute } from '../data/routes';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getCityName, getProductByIdSafe, getProductName } from '../utils/entityLookup';
-import { dedupeAvailableContracts, getContractFilterSortTier } from '../simulation/contracts';
+import { dedupeAvailableContracts, countPlayableContracts } from '../simulation/contracts';
 import {
   buildContractPreview,
   type ContractPreview,
-  type ContractRiskLevel,
 } from '../simulation/contractPreview';
 import {
   countMarketContractMatches,
-  getContractMarketSortScore,
-  getMarketContractMatchTier,
-  getMarketMatchBadgeVariant,
   isExactMarketContractMatch,
-  MARKET_MATCH_BADGE_LABEL,
-  type MarketContractMatchTier,
-  type MarketMatchBadgeVariant,
 } from '../utils/marketContractMatch';
+import { getContractCargoWeight, getIdleTruckOriginCityIds } from '../simulation/delivery';
 import {
-  getContractAvailability,
-  getContractCargoWeight,
-  getIdleTruckOriginCityIds,
-  hasIdleTruckAtOrigin,
-} from '../simulation/delivery';
+  buildContractCardBadges,
+  getContractCardVisualTier,
+  type ContractCardBadge,
+} from '../utils/contractBadges';
+import {
+  compareContractsBySmartScore,
+  getActiveDeliveryDestinationCityIds,
+  isMarketOpportunityFilter,
+  isRouteContractFilter,
+} from '../utils/contractSorting';
 import { useGameStore } from '../store/gameStore';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
-import type {
-  Contract,
-  ContractAvailability,
-  Delivery,
-  Driver,
-  MarketContractFilter,
-  ProductId,
-  Truck,
-} from '../types/game';
+import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
 
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const MARKET_HIGHLIGHT_TIMEOUT_MS = 8000;
@@ -115,273 +107,11 @@ function formatTimeLeft(hours: number): string {
   return `${m}dk`;
 }
 
-interface ContractCardBadge {
-  key: string;
-  label: string;
-  icon?: React.ComponentProps<typeof GameIcon>['name'];
-  iconColor?: string;
-  textColor: string;
-  backgroundColor: string;
-  borderColor: string;
-  soft?: boolean;
-  muted?: boolean;
-  compact?: boolean;
-  warning?: boolean;
-}
-
-const TRUCK_UNAVAILABLE_BADGE = {
-  label: 'Kamyon yok',
-  textColor: '#F59E0B',
-  backgroundColor: 'rgba(245, 158, 11, 0.12)',
-  borderColor: 'rgba(245, 158, 11, 0.65)',
-} as const;
-
-const NO_TRUCK_IN_ORIGIN_BADGE = {
-  label: 'Şehirde kamyon yok',
-  textColor: '#F59E0B',
-  backgroundColor: 'rgba(245, 158, 11, 0.14)',
-  borderColor: 'rgba(245, 158, 11, 0.7)',
-} as const;
-
-const NO_IDLE_TRUCK_IN_ORIGIN_BADGE = {
-  label: 'Şehirde müsait kamyon yok',
-  textColor: '#FBBF24',
-  backgroundColor: 'rgba(245, 158, 11, 0.10)',
-  borderColor: 'rgba(245, 158, 11, 0.5)',
-} as const;
-
-function createTruckUnavailableBadge(): ContractCardBadge {
-  return {
-    key: 'availability',
-    label: TRUCK_UNAVAILABLE_BADGE.label,
-    textColor: TRUCK_UNAVAILABLE_BADGE.textColor,
-    backgroundColor: TRUCK_UNAVAILABLE_BADGE.backgroundColor,
-    borderColor: TRUCK_UNAVAILABLE_BADGE.borderColor,
-    warning: true,
-  };
-}
-
-function createOriginTruckBadge(kind: 'missing' | 'busy'): ContractCardBadge {
-  const style = kind === 'missing' ? NO_TRUCK_IN_ORIGIN_BADGE : NO_IDLE_TRUCK_IN_ORIGIN_BADGE;
-  return {
-    key: 'availability',
-    label: style.label,
-    textColor: style.textColor,
-    backgroundColor: style.backgroundColor,
-    borderColor: style.borderColor,
-    warning: true,
-  };
-}
-
-function getAvailabilityBadge(
-  availability: ContractAvailability,
-  playerLevel: number,
-  hasTruckAtOrigin: boolean,
-): ContractCardBadge | null {
-  if (availability.canStart) {
-    if (hasTruckAtOrigin) {
-      return {
-        key: 'availability',
-        label: 'Kamyon hazır',
-        icon: 'truck',
-        iconColor: COLORS.green,
-        textColor: COLORS.green,
-        backgroundColor: COLORS.card,
-        borderColor: colors.success,
-      };
-    }
-    return null;
-  }
-
-  switch (availability.reason) {
-    case 'LEVEL_INSUFFICIENT': {
-      const requiredLevel = availability.requiredLevel ?? 1;
-      const safePlayerLevel = Math.max(1, playerLevel ?? 1);
-      const label =
-        requiredLevel === safePlayerLevel + 1
-          ? `Level ${requiredLevel} gerekli`
-          : 'Seviye yetersiz';
-      return {
-        key: 'availability',
-        label,
-        textColor: colors.accentAmber,
-        backgroundColor: colors.accentAmberSoft,
-        borderColor: colors.accentAmber,
-      };
-    }
-    case 'NO_TRUCK_AT_ORIGIN':
-    case 'NO_TRUCK_IN_ORIGIN_CITY':
-      return createOriginTruckBadge('missing');
-    case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
-      return createOriginTruckBadge('busy');
-    case 'NO_TRUCKS':
-      return createTruckUnavailableBadge();
-    case 'NO_IDLE_TRUCKS':
-      return {
-        key: 'availability',
-        label: 'Müsait kamyon yok',
-        textColor: '#FBBF24',
-        backgroundColor: 'rgba(245, 158, 11, 0.10)',
-        borderColor: 'rgba(245, 158, 11, 0.5)',
-        warning: true,
-      };
-    case 'NO_DRIVERS':
-    case 'NO_IDLE_DRIVERS':
-      return {
-        key: 'availability',
-        label: 'Şoför yok',
-        textColor: COLORS.muted,
-        backgroundColor: colors.cardSoft,
-        borderColor: COLORS.border,
-      };
-    case 'CAPACITY_INSUFFICIENT':
-      return {
-        key: 'availability',
-        label: 'Kapasite yetersiz',
-        textColor: COLORS.muted,
-        backgroundColor: colors.cardSoft,
-        borderColor: COLORS.border,
-      };
-    case 'TRUCK_CONDITION_TOO_LOW':
-      return {
-        key: 'availability',
-        label: 'Kondisyon düşük',
-        textColor: COLORS.muted,
-        backgroundColor: colors.cardSoft,
-        borderColor: COLORS.border,
-      };
-    default:
-      return null;
-  }
-}
-
-function buildContractFooterBadges(params: {
-  availability: ContractAvailability;
-  playerLevel: number;
-  hasTruckAtOrigin: boolean;
-  urgent: boolean;
-  riskLabel: string;
-  riskOutline: ReturnType<typeof getRiskOutlineStyle>;
-  riskSoft: boolean;
-}): ContractCardBadge[] {
-  const {
-    availability,
-    playerLevel,
-    hasTruckAtOrigin,
-    urgent,
-    riskLabel,
-    riskOutline,
-    riskSoft,
-  } = params;
-  const badges: ContractCardBadge[] = [];
-
-  if (!availability.canStart) {
-    const availabilityBadge = getAvailabilityBadge(availability, playerLevel, hasTruckAtOrigin);
-    if (availabilityBadge) {
-      badges.push(availabilityBadge);
-    }
-  }
-
-  if (urgent) {
-    badges.push({
-      key: 'urgent',
-      label: 'Acil',
-      icon: 'urgent',
-      iconColor: COLORS.red,
-      textColor: COLORS.red,
-      backgroundColor: COLORS.card,
-      borderColor: COLORS.red,
-    });
-  }
-
-  badges.push({
-    key: 'risk',
-    label: formatRiskDisplayLabel(riskLabel ?? ''),
-    textColor: riskOutline.color,
-    backgroundColor: riskOutline.backgroundColor,
-    borderColor: riskOutline.borderColor,
-    soft: riskSoft,
-  });
-
-  return badges.slice(0, 3);
-}
-
-function formatRiskDisplayLabel(label: string): string {
-  if (label === 'Yüksek risk') return 'Yüksek Risk';
-  if (label === 'Orta risk') return 'Orta Risk';
-  if (label === 'Düşük risk') return 'Düşük Risk';
-  return label || 'Düşük Risk';
-}
-
-function getRiskOutlineStyle(
-  riskLevel: ContractRiskLevel,
-  soft = false,
-): { backgroundColor: string; borderColor: string; color: string } {
-  if (riskLevel === 'high') {
-    return {
-      backgroundColor: COLORS.card,
-      borderColor: soft ? 'rgba(248, 113, 113, 0.45)' : COLORS.red,
-      color: soft ? 'rgba(248, 113, 113, 0.85)' : COLORS.red,
-    };
-  }
-  if (riskLevel === 'medium') {
-    return {
-      backgroundColor: COLORS.card,
-      borderColor: colors.accentAmber,
-      color: colors.accentAmber,
-    };
-  }
-  return {
-    backgroundColor: COLORS.card,
-    borderColor: colors.success,
-    color: colors.success,
-  };
-}
-
 function getPreviewProfit(
   contract: Contract,
   previewById: Map<string, ContractPreview>,
 ): number {
   return previewById.get(contract.id)?.estimatedOperationalProfit ?? 0;
-}
-
-function isRouteContractFilter(
-  filter: MarketContractFilter | null | undefined,
-): filter is MarketContractFilter {
-  return filter?.source === 'market' || filter?.source === 'map';
-}
-
-function isMarketOpportunityFilter(
-  filter: MarketContractFilter | null | undefined,
-): filter is MarketContractFilter {
-  return filter?.source === 'market';
-}
-
-function getMarketMatchBadgeColors(variant: MarketMatchBadgeVariant): {
-  backgroundColor: string;
-  borderColor: string;
-  textColor: string;
-} {
-  switch (variant) {
-    case 'exact':
-      return {
-        backgroundColor: colors.successSoft,
-        borderColor: colors.success,
-        textColor: colors.success,
-      };
-    case 'strong':
-      return {
-        backgroundColor: colors.accentAmberSoft,
-        borderColor: colors.accentAmber,
-        textColor: colors.accentAmber,
-      };
-    default:
-      return {
-        backgroundColor: 'rgba(59, 130, 246, 0.12)',
-        borderColor: colors.accentBlue,
-        textColor: colors.accentBlue,
-      };
-  }
 }
 
 function compareContractsForDisplay(
@@ -393,17 +123,19 @@ function compareContractsForDisplay(
   activeFilter: FilterKey,
   previewById: Map<string, ContractPreview>,
   marketFilter?: MarketContractFilter | null,
+  activeDeliveries: Delivery[] = [],
 ): number {
-  if (isMarketOpportunityFilter(marketFilter)) {
-    const matchDiff =
-      getContractMarketSortScore(b, marketFilter) - getContractMarketSortScore(a, marketFilter);
-    if (matchDiff !== 0) return matchDiff;
+  const smartDiff = compareContractsBySmartScore(a, b, {
+    trucks,
+    drivers,
+    playerLevel,
+    activeDeliveries,
+    previewById,
+    marketFilter,
+  });
+  if (smartDiff !== 0) {
+    return smartDiff;
   }
-
-  const priorityDiff =
-    getContractSortPriority(a, trucks, drivers, playerLevel, marketFilter) -
-    getContractSortPriority(b, trucks, drivers, playerLevel, marketFilter);
-  if (priorityDiff !== 0) return priorityDiff;
 
   if (activeFilter === 'shortDistance') {
     return a.distanceKm - b.distanceKm;
@@ -438,73 +170,6 @@ function compareContractsForDisplay(
   return 0;
 }
 
-function getContractSortPriority(
-  contract: Contract,
-  trucks: Truck[],
-  drivers: Driver[],
-  playerLevel: number,
-  marketFilter?: MarketContractFilter | null,
-): number {
-  if (marketFilter?.contractId && contract.id === marketFilter.contractId) {
-    return -1000;
-  }
-
-  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
-  const requiredLevel = contract.requiredLevel ?? 1;
-  const levelGap = requiredLevel - safePlayerLevel;
-  const atOrigin = hasIdleTruckAtOrigin(trucks, contract.originCityId);
-
-  let priority = 0;
-
-  if (marketFilter?.source === 'map' && isRouteContractFilter(marketFilter)) {
-    const tier = getContractFilterSortTier(contract, marketFilter);
-    priority += tier * 20;
-  }
-
-  if (levelGap <= 0) {
-    const availability = getContractAvailability(contract, trucks, drivers, safePlayerLevel);
-    if (availability.canStart) {
-      priority += 0;
-    } else if (
-      availability.reason === 'NO_TRUCK_AT_ORIGIN' ||
-      availability.reason === 'NO_TRUCK_IN_ORIGIN_CITY'
-    ) {
-      priority += 20;
-    } else if (availability.reason === 'NO_IDLE_TRUCK_IN_ORIGIN_CITY') {
-      priority += 18;
-    } else if (
-      availability.reason === 'NO_TRUCKS' ||
-      availability.reason === 'NO_IDLE_TRUCKS' ||
-      availability.reason === 'NO_DRIVERS' ||
-      availability.reason === 'NO_IDLE_DRIVERS'
-    ) {
-      priority += 35;
-    } else if (availability.reason === 'CAPACITY_INSUFFICIENT') {
-      priority += 40;
-    } else if (availability.reason === 'TRUCK_CONDITION_TOO_LOW') {
-      priority += 45;
-    } else {
-      priority += 50;
-    }
-    if (
-      atOrigin &&
-      !availability.canStart &&
-      availability.reason !== 'NO_TRUCK_AT_ORIGIN' &&
-      availability.reason !== 'NO_TRUCK_IN_ORIGIN_CITY' &&
-      availability.reason !== 'NO_IDLE_TRUCK_IN_ORIGIN_CITY'
-    ) {
-      priority -= 3;
-    }
-    return priority;
-  }
-
-  if (levelGap === 1) {
-    return priority + (atOrigin ? 55 : 65);
-  }
-
-  return priority + (atOrigin ? 100 : 110) + levelGap * 5;
-}
-
 function sortContractsForDisplay(
   items: Contract[],
   trucks: Truck[],
@@ -513,6 +178,7 @@ function sortContractsForDisplay(
   activeFilter: FilterKey,
   previewById: Map<string, ContractPreview>,
   marketFilter?: MarketContractFilter | null,
+  activeDeliveries: Delivery[] = [],
 ): Contract[] {
   const list = [...items];
 
@@ -527,6 +193,7 @@ function sortContractsForDisplay(
         activeFilter,
         previewById,
         marketFilter,
+        activeDeliveries,
       ),
     );
   }
@@ -544,6 +211,7 @@ function sortContractsForDisplay(
           activeFilter,
           previewById,
           marketFilter,
+          activeDeliveries,
         ),
       );
   }
@@ -561,6 +229,7 @@ function sortContractsForDisplay(
           activeFilter,
           previewById,
           marketFilter,
+          activeDeliveries,
         ),
       );
   }
@@ -575,6 +244,7 @@ function sortContractsForDisplay(
       activeFilter,
       previewById,
       marketFilter,
+      activeDeliveries,
     ),
   );
 }
@@ -694,51 +364,66 @@ function MarketFilterInfoCard({
   );
 }
 
-interface CompactStatRowProps {
+interface ContractsSummaryStripProps {
   availableCount: number;
   activeCount: number;
   bestPayment: number;
+  playableCount: number;
+  trucks: Truck[];
 }
 
-function CompactStatRow({ availableCount, activeCount, bestPayment }: CompactStatRowProps) {
+function ContractsSummaryStrip({
+  availableCount,
+  activeCount,
+  bestPayment,
+  playableCount,
+  trucks,
+}: ContractsSummaryStripProps) {
+  const idleCount = (trucks ?? []).filter((truck) => truck.status === 'idle').length;
+  const originCityIds = getIdleTruckOriginCityIds(trucks);
+  const cityLabels = originCityIds.map((cityId) => getCityName(cityId)).join(', ');
+
+  const originLine =
+    idleCount === 0
+      ? 'Boşta kamyon yok — teslimat bitince yeni iş al.'
+      : `Uygun çıkış: ${cityLabels || '—'} · Alınabilir iş: ${playableCount}`;
+
   return (
-    <View style={styles.compactStatRow}>
+    <View style={styles.summaryStrip}>
       <Text style={styles.compactStatText}>
-        Müsait{' '}
         <Text style={styles.statValueInfo}>{availableCount}</Text>
-        {' · '}Aktif{' '}
+        {' müsait · '}
         <Text style={styles.statValueAmber}>{activeCount}</Text>
-        {' · '}En yüksek{' '}
+        {' aktif · En yüksek '}
         <Text style={styles.statValueSuccess}>{formatMoney(bestPayment)}</Text>
+      </Text>
+      <Text style={styles.summarySubline} numberOfLines={2}>
+        {originLine}
       </Text>
     </View>
   );
 }
 
-interface OriginCitiesBannerProps {
-  trucks: Truck[];
+interface NextRouteHintCardProps {
+  deliveries: Delivery[];
 }
 
-function OriginCitiesBanner({ trucks }: OriginCitiesBannerProps) {
-  const idleCount = (trucks ?? []).filter((truck) => truck.status === 'idle').length;
-  const originCityIds = getIdleTruckOriginCityIds(trucks);
-
-  if (idleCount === 0) {
-    return (
-      <View style={styles.originBanner}>
-        <Text style={styles.originBannerText}>
-          Boşta kamyon yok. Yeni iş almak için teslimatın bitmesini bekle.
-        </Text>
-      </View>
-    );
+function NextRouteHintCard({ deliveries }: NextRouteHintCardProps) {
+  const destinationIds = [...getActiveDeliveryDestinationCityIds(deliveries)];
+  if (destinationIds.length === 0) {
+    return null;
   }
 
-  const cityLabels = originCityIds.map((cityId) => getCityName(cityId)).join(', ');
+  const message =
+    destinationIds.length === 1
+      ? `Kamyonun ${getCityName(destinationIds[0])}'ya gidiyor. ${getCityName(destinationIds[0])} çıkışlı işler öne çıkarılıyor.`
+      : 'Kamyonlarının varış şehirlerinden çıkan işler öne çıkarılıyor.';
 
   return (
-    <View style={styles.originBanner}>
-      <Text style={styles.originBannerText} numberOfLines={2}>
-        Uygun çıkış şehirleri: {cityLabels || getCityName('izmir')}
+    <View style={styles.nextRouteHint}>
+      <Text style={styles.nextRouteHintTitle}>Sıradaki rota önerileri</Text>
+      <Text style={styles.nextRouteHintText} numberOfLines={2}>
+        {message}
       </Text>
     </View>
   );
@@ -747,69 +432,54 @@ function OriginCitiesBanner({ trucks }: OriginCitiesBannerProps) {
 interface ContractCardProps {
   contract: Contract;
   preview: ContractPreview;
-  trucks: Truck[];
   playerLevel: number;
   isPinnedMarketMatch?: boolean;
-  marketMatchTier?: MarketContractMatchTier | null;
   onPress: () => void;
 }
 
 function ContractCard({
   contract,
   preview,
-  trucks,
   playerLevel,
   isPinnedMarketMatch = false,
-  marketMatchTier = null,
   onPress,
 }: ContractCardProps) {
   const safePlayerLevel = Math.max(1, playerLevel ?? 1);
   const { availability } = preview;
   const cargoWeight = availability.requiredCapacity ?? getContractCargoWeight(contract);
-  const urgent = preview.isUrgent;
-  const hasTruckAtOrigin = hasIdleTruckAtOrigin(trucks, contract.originCityId);
-  const riskSoft = urgent && preview.riskLevel === 'high';
-  const riskOutline = getRiskOutlineStyle(preview.riskLevel, riskSoft);
-  const payment = contract.payment ?? 0;
-  const estimatedProfit = preview.estimatedOperationalProfit ?? 0;
-  const totalExpense = preview.estimatedTripCost ?? 0;
-  const profitMargin = preview.estimatedMarginPercent ?? 0;
-  const footerBadges = buildContractFooterBadges({
+  const visualTier = getContractCardVisualTier(
+    availability,
+    safePlayerLevel,
+    contract.requiredLevel ?? 1,
+  );
+  const isMuted = visualTier !== 'available';
+  const footerBadges = buildContractCardBadges({
     availability,
     playerLevel: safePlayerLevel,
-    hasTruckAtOrigin,
-    urgent,
+    urgent: preview.isUrgent,
+    riskLevel: preview.riskLevel,
     riskLabel: preview.riskLabel ?? '',
-    riskOutline,
-    riskSoft,
   });
-  const matchBadgeVariant =
-    marketMatchTier && marketMatchTier !== 'none'
-      ? getMarketMatchBadgeVariant(marketMatchTier)
-      : null;
-  const matchBadgeColors = matchBadgeVariant
-    ? getMarketMatchBadgeColors(matchBadgeVariant)
-    : null;
-
-  const handlePress = () => {
-    if (!availability.canStart) {
-      Alert.alert(
-        availability.title ?? availability.buttonLabel,
-        availability.message ?? 'Bu iş şu anda başlatılamıyor.',
-      );
-      return;
-    }
-    onPress();
-  };
+  const payment = contract.payment ?? 0;
+  const estimatedProfit = preview.estimatedOperationalProfit ?? 0;
+  const profitColor =
+    estimatedProfit >= 0
+      ? isMuted
+        ? 'rgba(74, 222, 128, 0.55)'
+        : COLORS.green
+      : isMuted
+        ? 'rgba(248, 113, 113, 0.55)'
+        : COLORS.red;
 
   return (
     <TouchableOpacity
       activeOpacity={0.88}
-      onPress={handlePress}
+      onPress={onPress}
       style={[
         styles.listCard,
         isPinnedMarketMatch && styles.listCardHighlight,
-        !availability.canStart && styles.listCardDimmed,
+        visualTier === 'blocked' && styles.listCardBlocked,
+        visualTier === 'locked' && styles.listCardLocked,
       ]}
     >
       {isPinnedMarketMatch ? (
@@ -819,31 +489,48 @@ function ContractCard({
       ) : null}
 
       <View style={styles.cardHeader}>
-        <View style={styles.contractIconBox}>
-          <ProductIcon productId={contract.productId} size={20} color={COLORS.cyan} />
+        <View style={[styles.contractIconBox, isMuted && styles.contractIconBoxMuted]}>
+          <ProductIcon
+            productId={contract.productId}
+            size={20}
+            color={isMuted ? 'rgba(56, 189, 248, 0.45)' : COLORS.cyan}
+          />
         </View>
 
         <View style={styles.leftInfo}>
-          <Text style={styles.contractRoute} numberOfLines={1} ellipsizeMode="tail">
+          <Text
+            style={[styles.contractRoute, isMuted && styles.contractTextMuted]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
             {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
           </Text>
-          <Text style={styles.contractProduct} numberOfLines={1} ellipsizeMode="tail">
+          <Text
+            style={[styles.contractProduct, isMuted && styles.contractSubtextMuted]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
             {getProductName(contract.productId)}
           </Text>
-          <Text style={styles.contractMetaLine} numberOfLines={1} ellipsizeMode="tail">
-            Yük {formatTonsCompact(cargoWeight)} · Kalan {formatTimeLeft(contract.deadlineHours)}
+          <Text
+            style={[styles.contractMetaLine, isMuted && styles.contractSubtextMuted]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {formatTonsCompact(cargoWeight)} · {formatTimeLeft(contract.deadlineHours)}
           </Text>
         </View>
 
         <View style={styles.rightPrice}>
-          <Text style={styles.contractPayment} numberOfLines={1} ellipsizeMode="tail">
+          <Text
+            style={[styles.contractPayment, isMuted && styles.contractPaymentMuted]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
             {formatMoney(payment)}
           </Text>
           <Text
-            style={[
-              styles.contractProfit,
-              { color: estimatedProfit >= 0 ? COLORS.green : COLORS.red },
-            ]}
+            style={[styles.contractProfit, { color: profitColor }]}
             numberOfLines={1}
             ellipsizeMode="tail"
           >
@@ -852,73 +539,36 @@ function ContractCard({
         </View>
       </View>
 
-      <View style={styles.cardFooter}>
-        <Text style={styles.cardFinanceLine} numberOfLines={1} ellipsizeMode="tail">
-          İş gideri {formatMoney(totalExpense)} · Marj {formatPercent(profitMargin)}
-        </Text>
-
-        <View style={styles.cardBadgeRow}>
-          {marketMatchTier && marketMatchTier !== 'none' && matchBadgeColors ? (
-            <View
-              style={[
-                styles.marketMatchBadge,
-                {
-                  backgroundColor: matchBadgeColors.backgroundColor,
-                  borderColor: matchBadgeColors.borderColor,
-                },
-              ]}
-            >
-              <Text
-                style={[styles.marketMatchBadgeText, { color: matchBadgeColors.textColor }]}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {MARKET_MATCH_BADGE_LABEL[marketMatchTier]}
-              </Text>
-            </View>
-          ) : null}
-          {footerBadges.map((badge) => (
-            <View
-              key={badge.key}
-              style={[
-                styles.miniBadge,
-                badge.soft && styles.miniBadgeSoft,
-                badge.compact && styles.miniBadgeCompact,
-                badge.warning && styles.miniBadgeWarning,
-                {
-                  backgroundColor: badge.backgroundColor,
-                  borderColor: badge.borderColor,
-                },
-              ]}
-            >
-              {badge.icon ? (
-                <GameIcon name={badge.icon} size={10} color={badge.iconColor ?? badge.textColor} />
-              ) : null}
-              <Text
+      {footerBadges.length > 0 ? (
+        <View style={styles.cardFooter}>
+          <View style={styles.cardBadgeRow}>
+            {footerBadges.map((badge: ContractCardBadge) => (
+              <View
+                key={badge.key}
                 style={[
-                  styles.miniBadgeText,
-                  badge.soft && styles.miniBadgeTextSoft,
-                  badge.muted && styles.miniBadgeTextMuted,
-                  badge.compact && styles.miniBadgeTextCompact,
-                  badge.warning && styles.miniBadgeTextWarning,
-                  { color: badge.textColor },
+                  styles.miniBadge,
+                  badge.soft && styles.miniBadgeSoft,
+                  {
+                    backgroundColor: badge.backgroundColor,
+                    borderColor: badge.borderColor,
+                  },
                 ]}
-                numberOfLines={1}
-                ellipsizeMode="tail"
               >
-                {badge.label}
-              </Text>
-            </View>
-          ))}
-          {availability.canStart ? (
-            <View style={[styles.actionPill, styles.actionPillReady]}>
-              <Text style={[styles.actionPillText, styles.actionPillTextReady]} numberOfLines={1}>
-                Ekibi Seç
-              </Text>
-            </View>
-          ) : null}
+                {visualTier === 'locked' && badge.key === 'availability' ? (
+                  <GameIcon name="lock" size={10} color={badge.textColor} />
+                ) : null}
+                <Text
+                  style={[styles.miniBadgeText, { color: badge.textColor }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {badge.label}
+                </Text>
+              </View>
+            ))}
+          </View>
         </View>
-      </View>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -1023,6 +673,7 @@ function CompletedContractCard({
 }
 
 export default function ContractsScreen() {
+  const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
@@ -1035,7 +686,7 @@ export default function ContractsScreen() {
   const highlightedContractId = useGameStore((state) => state.highlightedContractId);
   const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
   const setHighlightedContractId = useGameStore((state) => state.setHighlightedContractId);
-  const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
+  const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
   const notifyContractsScreenOpened = useGameStore((state) => state.notifyContractsScreenOpened);
   const notifyContractAssignmentOpened = useGameStore((state) => state.notifyContractAssignmentOpened);
   const { tabBarHeight, scrollBottomPadding } = useTabBarLayout();
@@ -1046,6 +697,8 @@ export default function ContractsScreen() {
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
+  const [detailContract, setDetailContract] = useState<Contract | null>(null);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
 
   useEffect(() => {
     notifyContractsScreenOpened();
@@ -1100,11 +753,24 @@ export default function ContractsScreen() {
           trucks,
           drivers,
           companyLevel: playerLevel,
+          currentTime,
         }),
       );
     }
     return previews;
-  }, [availableContracts, trucks, drivers, globalEconomy, playerLevel]);
+  }, [availableContracts, trucks, drivers, globalEconomy, playerLevel, currentTime]);
+
+  const playableContractCount = useMemo(
+    () =>
+      countPlayableContracts(
+        availableContracts,
+        trucks,
+        drivers,
+        playerLevel,
+        currentTime,
+      ),
+    [availableContracts, trucks, drivers, playerLevel, currentTime],
+  );
 
   const filteredContracts = useMemo(() => {
     if (!globalEconomy) return [];
@@ -1116,6 +782,7 @@ export default function ContractsScreen() {
       LIST_FILTER,
       contractPreviewById,
       marketContractFilter,
+      runningDeliveries,
     );
   }, [
     availableContracts,
@@ -1125,6 +792,7 @@ export default function ContractsScreen() {
     globalEconomy,
     contractPreviewById,
     marketContractFilter,
+    runningDeliveries,
   ]);
 
   const firstTutorialContractId = useMemo(() => {
@@ -1175,6 +843,7 @@ export default function ContractsScreen() {
           trucks,
           drivers,
           companyLevel: playerLevel,
+          currentTime,
         }),
       );
     }
@@ -1250,6 +919,29 @@ export default function ContractsScreen() {
     notifyContractAssignmentOpened();
   };
 
+  const openDetailModal = (contract: Contract) => {
+    setDetailContract(contract);
+    setDetailModalVisible(true);
+  };
+
+  const closeDetailModal = () => {
+    setDetailModalVisible(false);
+    setDetailContract(null);
+  };
+
+  const handleDetailSelectTeam = () => {
+    if (!detailContract) {
+      return;
+    }
+    const preview = contractPreviewById.get(detailContract.id);
+    if (!preview?.availability.canStart) {
+      return;
+    }
+    const contract = detailContract;
+    closeDetailModal();
+    openAssignmentModal(contract);
+  };
+
   const closeAssignmentModal = () => {
     setAssignmentModalVisible(false);
     setAssignmentContract(null);
@@ -1266,6 +958,7 @@ export default function ContractsScreen() {
       trucks: player.trucks,
       drivers: player.drivers,
       companyLevel: playerLevel,
+      currentTime,
       truck,
       driver,
       route: findRoute(assignmentContract.originCityId, assignmentContract.destinationCityId),
@@ -1273,13 +966,13 @@ export default function ContractsScreen() {
     });
 
     if (player.money < preview.estimatedFuelCost) {
-      Alert.alert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
+      showAlert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
       return;
     }
 
     const result = startDelivery(assignmentContract.id, truckId, driverId);
     if (!result.success) {
-      Alert.alert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
+      showAlert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
       return;
     }
 
@@ -1299,7 +992,7 @@ export default function ContractsScreen() {
   };
 
   const handleRefresh = () => {
-    refreshMarketSnapshot();
+    refreshContractsFromMarket();
     setStatusMessage({ type: 'success', text: 'Piyasa güncellendi' });
   };
 
@@ -1347,13 +1040,13 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        <CompactStatRow
+        <ContractsSummaryStrip
           availableCount={availableContracts.length}
           activeCount={runningDeliveries.length}
           bestPayment={topSummary.bestPayment}
+          playableCount={playableContractCount}
+          trucks={trucks}
         />
-
-        <OriginCitiesBanner trucks={trucks} />
 
         <ContractsTabBar
           segments={tabSegments}
@@ -1372,6 +1065,8 @@ export default function ContractsScreen() {
         >
           {activeSegment === 'available' ? (
             <>
+              <NextRouteHintCard deliveries={runningDeliveries} />
+
               {isMarketOpportunityFilter(marketContractFilter) ? (
                 <MarketFilterInfoCard
                   routeLine={marketFilterLine}
@@ -1417,15 +1112,9 @@ export default function ContractsScreen() {
                     <ContractCard
                       contract={contract}
                       preview={preview}
-                      trucks={player.trucks ?? []}
                       playerLevel={player.level ?? player.companyLevel ?? 1}
                       isPinnedMarketMatch={highlightedContractId === contract.id}
-                      marketMatchTier={
-                        isMarketOpportunityFilter(marketContractFilter)
-                          ? getMarketContractMatchTier(contract, marketContractFilter)
-                          : null
-                      }
-                      onPress={() => openAssignmentModal(contract)}
+                      onPress={() => openDetailModal(contract)}
                     />
                   );
 
@@ -1491,6 +1180,14 @@ export default function ContractsScreen() {
           ) : null}
         </ScrollView>
       </SafeAreaView>
+
+      <ContractDetailModal
+        visible={detailModalVisible}
+        contract={detailContract}
+        preview={detailContract ? contractPreviewById.get(detailContract.id) ?? null : null}
+        onClose={closeDetailModal}
+        onSelectTeam={handleDetailSelectTeam}
+      />
 
       <ContractAssignmentModal
         visible={assignmentModalVisible}
@@ -1581,6 +1278,43 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     justifyContent: 'center',
   },
+  summaryStrip: {
+    marginBottom: spacing.sm,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+    backgroundColor: colors.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 3,
+  },
+  summarySubline: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  nextRouteHint: {
+    marginBottom: spacing.sm,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.25)',
+  },
+  nextRouteHintTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.cyan,
+    marginBottom: 2,
+  },
+  nextRouteHintText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+    lineHeight: 15,
+  },
   originBanner: {
     marginBottom: spacing.sm,
     paddingVertical: 6,
@@ -1598,6 +1332,29 @@ const styles = StyleSheet.create({
   },
   listCardDimmed: {
     opacity: 0.72,
+  },
+  listCardBlocked: {
+    backgroundColor: '#0D1524',
+    borderColor: 'rgba(148, 163, 184, 0.12)',
+    opacity: 0.88,
+  },
+  listCardLocked: {
+    backgroundColor: '#0A101C',
+    borderColor: 'rgba(100, 116, 139, 0.12)',
+    opacity: 0.72,
+  },
+  contractIconBoxMuted: {
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    borderColor: 'rgba(148, 163, 184, 0.12)',
+  },
+  contractTextMuted: {
+    color: 'rgba(226, 232, 240, 0.72)',
+  },
+  contractSubtextMuted: {
+    color: 'rgba(148, 163, 184, 0.75)',
+  },
+  contractPaymentMuted: {
+    color: 'rgba(74, 222, 128, 0.55)',
   },
   originReadyBadge: {
     borderColor: 'rgba(74, 222, 128, 0.45)',
@@ -1931,11 +1688,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
-    maxWidth: 150,
+    maxWidth: 160,
     flexShrink: 1,
   },
   miniBadgeCompact: {

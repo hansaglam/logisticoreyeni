@@ -8,6 +8,7 @@
 import type {
   Contract,
   ContractAvailability,
+  ContractAvailabilityDebug,
   ContractAvailabilityReason,
   Delivery,
   DeliveryFailureReason,
@@ -18,10 +19,17 @@ import type {
   Route,
   Truck,
 } from '../types/game';
-import { truckBalance } from '../config/balance';
+import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
 import { getSafeFuelPrice } from './economy';
+import { getCargoWeightCostMultiplier } from './contractEconomics';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
 import { getCityName, getProductByIdSafe } from '../utils/entityLookup';
+import {
+  buildContractAvailabilityCopy,
+  type ContractAvailabilityMessageContext,
+} from '../utils/contractAvailabilityDisplay';
+
+const isDevBuild = typeof __DEV__ !== 'undefined' && __DEV__;
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -126,13 +134,20 @@ export function isTruckLeaseActive(truck: Truck, currentTime: number): boolean {
   return truck.leaseExpiresAt > currentTime;
 }
 
+/** Kamyon fiziksel olarak boşta mı (kiralık/sahip ayrımı yok)? */
 export function isTruckIdle(truck: Truck): boolean {
-  return truck.status === 'idle' && !truck.leaseExpired;
+  return truck.status === 'idle';
 }
 
-/** Kamyon görev atanabilir mi? */
+/** Kamyon görev atanabilir mi? (kira süresi dolmuş kamyonlar hariç) */
 export function isTruckAvailableForAssignment(truck: Truck, currentTime: number): boolean {
-  return isTruckIdle(truck) && isTruckLeaseActive(truck, currentTime);
+  if (truck.status !== 'idle') {
+    return false;
+  }
+  if (truck.leaseExpired) {
+    return false;
+  }
+  return isTruckLeaseActive(truck, currentTime);
 }
 
 /** Kamyon boş transferde mi? */
@@ -210,6 +225,45 @@ export function hasIdleTruckAtOrigin(
   return getIdleTrucksAtOrigin(trucks, originCityId, fallbackHomeCityId).length > 0;
 }
 
+export function getMaxIdleTruckCapacityAtOrigin(
+  trucks: Truck[] | undefined,
+  originCityId: string | undefined,
+  fallbackHomeCityId?: string,
+): number {
+  const idleAtOrigin = getIdleTrucksAtOrigin(trucks, originCityId, fallbackHomeCityId);
+  if (idleAtOrigin.length === 0) {
+    return 0;
+  }
+  return Math.max(...idleAtOrigin.map((truck) => truck.capacity ?? 0));
+}
+
+export function getBusyTruckOriginCityIds(
+  trucks: Truck[] | undefined,
+  fallbackHomeCityId?: string,
+): string[] {
+  const cities = new Set<string>();
+  for (const truck of trucks ?? []) {
+    if (!isTruckIdle(truck)) {
+      cities.add(resolveTruckCityId(truck, fallbackHomeCityId));
+    }
+  }
+  return [...cities];
+}
+
+export function getActiveDeliveryDestinationCityIds(
+  deliveries: Delivery[] | undefined,
+): string[] {
+  const ids = new Set<string>();
+  for (const delivery of deliveries ?? []) {
+    if (delivery.status === 'on_route' || delivery.status === 'preparing') {
+      if (delivery.destinationCityId) {
+        ids.add(delivery.destinationCityId);
+      }
+    }
+  }
+  return [...ids];
+}
+
 export function isTruckAtContractOrigin(
   truck: Truck,
   contract: Pick<Contract, 'originCityId'>,
@@ -262,11 +316,61 @@ export function selectIdleTruckForContract(
     .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0))[0];
 }
 
+function buildUnavailableContractAvailability(
+  reason: ContractAvailabilityReason,
+  context: ContractAvailabilityMessageContext & {
+    requiredCapacity: number;
+    maxIdleTruckCapacity?: number;
+    requiredLevel?: number;
+    playerLevel?: number;
+    debug?: ContractAvailabilityDebug;
+  },
+): ContractAvailability {
+  const copy = buildContractAvailabilityCopy(reason, context);
+  return {
+    canStart: false,
+    reason,
+    buttonLabel: copy.buttonLabel,
+    title: copy.title,
+    message: copy.message,
+    requiredCapacity: context.requiredCapacity,
+    maxIdleTruckCapacity: context.maxIdleTruckCapacity,
+    requiredLevel: context.requiredLevel,
+    playerLevel: context.playerLevel,
+    ...((isDevBuild && context.debug) ? { debug: context.debug } : {}),
+  };
+}
+
+function buildContractAvailabilityDebug(
+  originCityId: string,
+  requiredCapacity: number,
+  trucksAtOrigin: Truck[],
+  idleTrucksAtOrigin: Truck[],
+  bestIdleTruckCapacity: number,
+  reason: ContractAvailabilityReason,
+): ContractAvailabilityDebug {
+  return {
+    fromCityId: originCityId,
+    requiredCargoWeight: requiredCapacity,
+    trucksAtOriginCount: trucksAtOrigin.length,
+    idleTrucksAtOriginCount: idleTrucksAtOrigin.length,
+    bestIdleTruckCapacity,
+    ownedTrucksAtOriginCount: trucksAtOrigin.filter(
+      (truck) => (truck.ownershipType ?? 'owned') === 'owned',
+    ).length,
+    leasedTrucksAtOriginCount: trucksAtOrigin.filter(
+      (truck) => (truck.ownershipType ?? 'owned') === 'leased',
+    ).length,
+    reason,
+  };
+}
+
 export function getContractAvailability(
   contract: Contract,
   trucks: Truck[] | undefined,
   drivers: Driver[] | undefined,
   playerLevel: number = 1,
+  currentTime = 0,
 ): ContractAvailability {
   const safePlayerLevel = Math.max(1, playerLevel);
   const requiredLevel = contract.requiredLevel ?? 1;
@@ -274,86 +378,41 @@ export function getContractAvailability(
   const driverList = drivers ?? [];
   const product = getProductByIdSafe(contract.productId);
   const requiredCapacity = getContractCargoWeight(contract, product ?? undefined);
-  const idleTrucks = getIdleTrucks(truckList);
   const idleDrivers = getIdleDrivers(driverList);
-  const maxIdleTruckCapacity =
-    idleTrucks.length > 0 ? Math.max(...idleTrucks.map((truck) => truck.capacity ?? 0)) : 0;
+  const baseContext: ContractAvailabilityMessageContext = {
+    cargoWeight: requiredCapacity,
+    requiredLevel,
+    playerLevel: safePlayerLevel,
+  };
 
   if (requiredLevel > safePlayerLevel) {
-    return {
-      canStart: false,
-      reason: 'LEVEL_INSUFFICIENT',
-      buttonLabel: `Level ${requiredLevel} Gerekli`,
-      title: 'Seviye yetersiz',
-      message: `Bu sözleşme için şirket seviyen Level ${requiredLevel} olmalı.`,
-      requiredLevel,
-      playerLevel: safePlayerLevel,
+    return buildUnavailableContractAvailability('LEVEL_INSUFFICIENT', {
+      ...baseContext,
       requiredCapacity,
-    };
-  }
-
-  if (truckList.length === 0) {
-    return {
-      canStart: false,
-      reason: 'NO_TRUCKS',
-      buttonLabel: 'Kamyon yok',
-      title: 'Kamyon yok',
-      message: 'Bu işi almak için önce bir kamyon satın almalısın.',
-      requiredCapacity,
-    };
-  }
-
-  if (idleTrucks.length === 0) {
-    return {
-      canStart: false,
-      reason: 'NO_IDLE_TRUCKS',
-      buttonLabel: 'Müsait kamyon yok',
-      title: 'Müsait kamyon yok',
-      message:
-        'Bu işi almak için şu anda uygun boştaki kamyonun yok. Mevcut teslimatların bitmesini bekleyebilir veya yeni kamyon satın alabilirsin.',
-      requiredCapacity,
-    };
-  }
-
-  if (driverList.length === 0) {
-    return {
-      canStart: false,
-      reason: 'NO_DRIVERS',
-      buttonLabel: 'Şoför Yok',
-      title: 'Şoför yok',
-      message: 'Bu işi almak için önce bir şoför işe almalısın.',
-      maxIdleTruckCapacity,
-      requiredCapacity,
-    };
-  }
-
-  if (idleDrivers.length === 0) {
-    return {
-      canStart: false,
-      reason: 'NO_IDLE_DRIVERS',
-      buttonLabel: 'Müsait Şoför Yok',
-      title: 'Müsait şoför yok',
-      message:
-        'Tüm şoförlerin şu anda görevde. Yeni bir şoför işe alabilir veya mevcut teslimatın bitmesini bekleyebilirsin.',
-      maxIdleTruckCapacity,
-      requiredCapacity,
-    };
+    });
   }
 
   const originCityId = contract.originCityId;
   if (!originCityId) {
-    return {
-      canStart: false,
-      reason: 'INVALID_ORIGIN_CITY',
-      buttonLabel: 'Geçersiz çıkış',
-      title: 'Geçersiz sözleşme',
-      message: 'Bu sözleşmenin çıkış şehri tanımlı değil.',
-      maxIdleTruckCapacity,
+    return buildUnavailableContractAvailability('INVALID_ORIGIN_CITY', {
+      ...baseContext,
       requiredCapacity,
-    };
+    });
+  }
+
+  if (truckList.length === 0) {
+    return buildUnavailableContractAvailability('NO_TRUCKS', {
+      ...baseContext,
+      requiredCapacity,
+    });
   }
 
   const fromCityName = getCityName(originCityId) || 'bu şehir';
+  const originContext: ContractAvailabilityMessageContext = {
+    ...baseContext,
+    fromCityName,
+  };
+
   const trucksAtOrigin = getTrucksAtOrigin(truckList, originCityId);
   const idleTrucksAtOrigin = getIdleTrucksAtOrigin(truckList, originCityId);
   const maxIdleTruckCapacityAtOrigin =
@@ -361,72 +420,91 @@ export function getContractAvailability(
       ? Math.max(...idleTrucksAtOrigin.map((truck) => truck.capacity ?? 0))
       : 0;
 
-  if (trucksAtOrigin.length === 0) {
-    return {
-      canStart: false,
-      reason: 'NO_TRUCK_IN_ORIGIN_CITY',
-      buttonLabel: 'Şehirde kamyon yok',
-      title: 'Şehirde kamyon yok',
-      message:
-        `Bu iş ${fromCityName} çıkışlı. Bu şehirde kamyonun yok. ` +
-        'Bu işi alabilmek için kamyonunu bu şehre taşımalı veya bu şehirden çıkan başka uygun bir iş beklemelisin.',
-      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+  const buildOriginDebug = (reason: ContractAvailabilityReason) =>
+    buildContractAvailabilityDebug(
+      originCityId,
       requiredCapacity,
-    };
+      trucksAtOrigin,
+      idleTrucksAtOrigin,
+      maxIdleTruckCapacityAtOrigin,
+      reason,
+    );
+
+  if (trucksAtOrigin.length === 0) {
+    return buildUnavailableContractAvailability('NO_TRUCK_IN_ORIGIN_CITY', {
+      ...originContext,
+      requiredCapacity,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('NO_TRUCK_IN_ORIGIN_CITY'),
+    });
   }
 
   if (idleTrucksAtOrigin.length === 0) {
-    return {
-      canStart: false,
-      reason: 'NO_IDLE_TRUCK_IN_ORIGIN_CITY',
-      buttonLabel: 'Şehirde müsait kamyon yok',
-      title: 'Şehirde müsait kamyon yok',
-      message:
-        `Bu iş ${fromCityName} çıkışlı. Bu şehirde kamyonun var ancak şu anda müsait değil. ` +
-        'Mevcut teslimatın bitmesini bekleyebilir veya bu şehir için yeni bir kamyon ayırabilirsin.',
-      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+    return buildUnavailableContractAvailability('NO_IDLE_TRUCK_IN_ORIGIN_CITY', {
+      ...originContext,
       requiredCapacity,
-    };
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('NO_IDLE_TRUCK_IN_ORIGIN_CITY'),
+    });
   }
 
-  const fittingTruck = selectIdleTruckForContract(truckList, contract, product ?? undefined);
-  if (!fittingTruck) {
-    return {
-      canStart: false,
-      reason: 'CAPACITY_INSUFFICIENT',
-      buttonLabel: 'Kapasite yetersiz',
-      title: 'Kapasite yetersiz',
-      message:
-        `Bu iş için ${requiredCapacity.toFixed(1)} ton kapasite gerekiyor. ` +
-        `${fromCityName} şehrindeki müsait kamyonların en yüksek kapasitesi ${maxIdleTruckCapacityAtOrigin.toFixed(1)} ton.`,
-      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
-      requiredCapacity,
-    };
-  }
-
-  const capacityFittingTrucksAtOrigin = idleTrucksAtOrigin.filter((truck) =>
+  const trucksWithCapacityAtOrigin = idleTrucksAtOrigin.filter((truck) =>
     canTruckCarryContract(truck, contract, product ?? undefined),
   );
-  const healthyTruck = capacityFittingTrucksAtOrigin.find(
+
+  if (trucksWithCapacityAtOrigin.length === 0) {
+    return buildUnavailableContractAvailability('NO_TRUCK_WITH_CAPACITY', {
+      ...originContext,
+      requiredCapacity,
+      bestAvailableTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('NO_TRUCK_WITH_CAPACITY'),
+    });
+  }
+
+  const healthyTrucksAtOrigin = trucksWithCapacityAtOrigin.filter(
     (truck) => (truck.condition ?? 100) >= MIN_TRUCK_CONDITION_FOR_DELIVERY,
   );
 
-  if (!healthyTruck) {
-    const bestCondition = Math.max(
-      ...capacityFittingTrucksAtOrigin.map((truck) => truck.condition ?? 0),
-      0,
-    );
-    return {
-      canStart: false,
-      reason: 'TRUCK_CONDITION_TOO_LOW',
-      buttonLabel: 'Kondisyon düşük',
-      title: 'Kondisyon düşük',
-      message:
-        `Bu iş için kamyon kondisyonunun en az %${MIN_TRUCK_CONDITION_FOR_DELIVERY} olması gerekir. ` +
-        `${fromCityName} şehrindeki en iyi müsait kamyon: %${Math.round(bestCondition)}.`,
-      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+  if (healthyTrucksAtOrigin.length === 0) {
+    return buildUnavailableContractAvailability('TRUCK_CONDITION_TOO_LOW', {
+      ...originContext,
       requiredCapacity,
-    };
+      bestAvailableTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('TRUCK_CONDITION_TOO_LOW'),
+    });
+  }
+
+  const assignableTrucksAtOrigin = healthyTrucksAtOrigin.filter((truck) =>
+    isTruckAvailableForAssignment(truck, currentTime),
+  );
+
+  if (assignableTrucksAtOrigin.length === 0) {
+    return buildUnavailableContractAvailability('NO_IDLE_TRUCKS', {
+      ...originContext,
+      requiredCapacity,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('NO_IDLE_TRUCKS'),
+    });
+  }
+
+  if (driverList.length === 0) {
+    return buildUnavailableContractAvailability('NO_DRIVERS', {
+      ...originContext,
+      requiredCapacity,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('NO_DRIVERS'),
+    });
+  }
+
+  if (idleDrivers.length === 0) {
+    return buildUnavailableContractAvailability('NO_IDLE_DRIVERS', {
+      ...originContext,
+      requiredCapacity,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('NO_IDLE_DRIVERS'),
+    });
   }
 
   return {
@@ -435,6 +513,11 @@ export function getContractAvailability(
     buttonLabel: 'Ekibi Seç',
     maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
     requiredCapacity,
+    ...(isDevBuild
+      ? {
+          debug: buildOriginDebug('OK'),
+        }
+      : {}),
   };
 }
 
@@ -452,13 +535,14 @@ export function getContractAvailabilityWarningText(
     case 'NO_TRUCK_IN_ORIGIN_CITY':
       return 'Şehirde kamyon yok';
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
-      return 'Şehirde müsait kamyon yok';
+      return 'Kamyon meşgul';
     case 'NO_TRUCK_AT_ORIGIN':
       return 'Şehirde kamyon yok';
     case 'NO_DRIVERS':
       return 'Şoför yok';
     case 'NO_IDLE_DRIVERS':
       return 'Müsait şoför yok';
+    case 'NO_TRUCK_WITH_CAPACITY':
     case 'CAPACITY_INSUFFICIENT':
       return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
     case 'TRUCK_CONDITION_TOO_LOW':
@@ -487,6 +571,7 @@ export function availabilityReasonToStartDeliveryErrorCode(
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
     case 'NO_TRUCK_AT_ORIGIN':
       return 'NO_TRUCK_AT_ORIGIN';
+    case 'NO_TRUCK_WITH_CAPACITY':
     case 'CAPACITY_INSUFFICIENT':
       return 'CAPACITY_INSUFFICIENT';
     case 'TRUCK_CONDITION_TOO_LOW':
@@ -602,12 +687,43 @@ export function calculateFuelCost(
   globalEconomy: GlobalEconomy,
 ): number {
   const fuelUsed = calculateFuelUsed(contract, truck, driver, route, product);
-  return fuelUsed * getSafeFuelPrice(globalEconomy);
+  return Math.round(fuelUsed * getSafeFuelPrice(globalEconomy) * deliveryCostBalance.fuelCostMultiplier);
 }
 
 /** Bakım maliyetini hesaplar ($) */
-export function calculateMaintenanceCost(truck: Truck, route: Route): number {
-  return truck.maintenanceCost * route.distanceKm;
+export function calculateMaintenanceCost(
+  truck: Truck,
+  route: Route,
+  contract?: Contract,
+  product?: Product,
+): number {
+  const distanceKm = Math.max(0, route.distanceKm ?? 0);
+  if (distanceKm <= 0) {
+    return 0;
+  }
+
+  const cargoWeight =
+    contract != null
+      ? getContractCargoWeight(contract, product ?? undefined)
+      : 0;
+  const weightMultiplier = getCargoWeightCostMultiplier(cargoWeight);
+  const routeDifficulty = clamp(route.difficulty ?? 0.5, 0, 1);
+  const routeFactor = 1 + routeDifficulty * 0.4;
+  const conditionFactor =
+    1 + Math.max(0, (100 - (truck.condition ?? 100)) / 100) * 0.15;
+  const maintenancePerKm = Math.max(
+    (truck.maintenanceCost ?? 0) * deliveryCostBalance.maintenanceCostMultiplier,
+    deliveryBalance.maintenanceCostPerKm * deliveryCostBalance.maintenanceCostMultiplier,
+  );
+
+  return Math.round(
+    distanceKm *
+      maintenancePerKm *
+      weightMultiplier *
+      routeFactor *
+      conditionFactor *
+      deliveryCostBalance.routeDifficultyCostMultiplier,
+  );
 }
 
 // ---------------------------------------------------------------------------

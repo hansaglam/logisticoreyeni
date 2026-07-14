@@ -112,6 +112,7 @@ function buildGuaranteedStarterContract(
     route,
     urgency,
     globalEconomy,
+    requiredLevel: 1,
   });
 
   return {
@@ -182,6 +183,30 @@ function createStarterContractBatch(
   }
 
   return created;
+}
+
+/**
+ * Belirli bir çıkış şehrinden alınabilir sözleşmeler üretir (tonaj filo kapasitesine uygun).
+ */
+export function generatePlayableContractsForOriginCity(
+  params: EnsureStarterContractsParams & {
+    originCityId: string;
+    truckCapacity: number;
+    count: number;
+  },
+): Contract[] {
+  const safeCount = Math.max(0, Math.min(params.count, 3));
+  if (safeCount <= 0 || params.truckCapacity <= 0) {
+    return [];
+  }
+
+  return createStarterContractBatch(
+    params,
+    params.originCityId,
+    params.truckCapacity,
+    params.contracts.length,
+    safeCount,
+  );
 }
 
 /**

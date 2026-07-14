@@ -31,7 +31,10 @@ export default function IconButton({
       activeOpacity={0.8}
       style={[
         styles.button,
-        { backgroundColor, opacity: disabled ? 0.45 : 1 },
+        {
+          backgroundColor: disabled ? colors.surface2 : backgroundColor,
+          borderColor: disabled ? colors.borderStrong : colors.border,
+        },
         style,
       ]}
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}

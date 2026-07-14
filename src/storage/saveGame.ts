@@ -96,6 +96,8 @@ export interface SaveGamePayload {
   lastContractGenerationTime?: number;
   lastMarketRefreshTime?: number;
   lastDailyCleanupTime?: number;
+  lastPlayableContractGeneratedTime?: number;
+  lastManualContractRefreshTime?: number;
   tutorial?: TutorialState;
   missions?: MissionsState;
   spotlightTutorial?: SpotlightTutorialPersistence;
@@ -272,6 +274,8 @@ export function createDefaultSaveFallbacks(
     ),
     lastMarketRefreshTime: safeNumber(payload.lastMarketRefreshTime, 0),
     lastDailyCleanupTime: safeNumber(payload.lastDailyCleanupTime, 0),
+    lastPlayableContractGeneratedTime: safeNumber(payload.lastPlayableContractGeneratedTime, 0),
+    lastManualContractRefreshTime: safeNumber(payload.lastManualContractRefreshTime, 0),
     tutorial: normalizeTutorialState(
       isRecord(payload.tutorial) ? (payload.tutorial as Partial<TutorialState>) : undefined,
     ),
@@ -368,6 +372,8 @@ export function normalizeSavePayload(
     lastContractGenerationTime: withFallbacks.lastContractGenerationTime as number,
     lastMarketRefreshTime: withFallbacks.lastMarketRefreshTime as number,
     lastDailyCleanupTime: withFallbacks.lastDailyCleanupTime as number,
+    lastPlayableContractGeneratedTime: withFallbacks.lastPlayableContractGeneratedTime as number,
+    lastManualContractRefreshTime: withFallbacks.lastManualContractRefreshTime as number,
     tutorial: withFallbacks.tutorial as TutorialState,
     missions: withFallbacks.missions as MissionsState,
     spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
@@ -705,6 +711,8 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastContractGenerationTime: state.lastContractGenerationTime,
     lastMarketRefreshTime: state.lastMarketRefreshTime,
     lastDailyCleanupTime: state.lastDailyCleanupTime,
+    lastPlayableContractGeneratedTime: state.lastPlayableContractGeneratedTime,
+    lastManualContractRefreshTime: state.lastManualContractRefreshTime,
     tutorial: structuredClone(state.tutorial),
     missions: structuredClone(state.missions),
     spotlightTutorial: structuredClone(state.spotlightTutorial),
@@ -730,6 +738,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     lastContractGenerationTime: payload.lastContractGenerationTime ?? safeCurrentTime,
     lastMarketRefreshTime: payload.lastMarketRefreshTime ?? 0,
     lastDailyCleanupTime: payload.lastDailyCleanupTime ?? 0,
+    lastPlayableContractGeneratedTime: payload.lastPlayableContractGeneratedTime ?? 0,
+    lastManualContractRefreshTime: payload.lastManualContractRefreshTime ?? 0,
     player,
     cities: payload.cities,
     products: payload.products,

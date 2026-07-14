@@ -3,7 +3,7 @@
  * State değiştirmez; teslimat oluşturmaz.
  */
 
-import { deliveryBalance } from '../config/balance';
+import { deliveryBalance, deliveryCostBalance } from '../config/balance';
 import { getRoute as findRoute } from '../data/routes';
 import { getProductByIdSafe } from '../utils/entityLookup';
 import { clamp } from '../utils/math';
@@ -18,11 +18,15 @@ import type {
 } from '../types/game';
 import { getSafeGlobalEconomy } from './economy';
 import {
+  estimateContractTripCostBreakdown,
+} from './contractEconomics';
+import {
   calculateDeliveryProfit,
   calculateFuelCost,
   calculateMaintenanceCost,
   calculateTravelHours,
   getContractAvailability,
+  getContractCargoWeight,
   getIdleDrivers,
   selectIdleTruckForContract,
 } from './delivery';
@@ -79,6 +83,7 @@ export interface BuildContractPreviewInput {
   trucks?: Truck[];
   drivers?: Driver[];
   companyLevel?: number;
+  currentTime?: number;
   truck?: Truck;
   driver?: Driver;
 }
@@ -104,6 +109,7 @@ function selectPreviewTruckAndDriver(
   product: Product | undefined,
   explicitTruck?: Truck,
   explicitDriver?: Driver,
+  currentTime = 0,
 ): { truck?: Truck; driver?: Driver } {
   if (explicitTruck && explicitDriver) {
     return { truck: explicitTruck, driver: explicitDriver };
@@ -111,7 +117,9 @@ function selectPreviewTruckAndDriver(
 
   const truck =
     explicitTruck ??
-    (trucks.length > 0 ? selectIdleTruckForContract(trucks, contract, product) : undefined);
+    (trucks.length > 0
+      ? selectIdleTruckForContract(trucks, contract, product, currentTime)
+      : undefined);
   const driver = explicitDriver ?? getIdleDrivers(drivers)[0];
 
   return { truck, driver };
@@ -171,15 +179,51 @@ function estimateFuelCostFallback(
   contract: Contract,
   globalEconomy?: GlobalEconomy,
 ): number {
-  const distanceKm = contract.distanceKm ?? 0;
-  const fuelPrice = getSafeGlobalEconomy(globalEconomy).fuelPrice;
-  return distanceKm * fuelPrice * deliveryBalance.fuelCostEstimateMultiplier;
+  const route = findRoute(contract.originCityId, contract.destinationCityId);
+  if (!route) {
+    const distanceKm = contract.distanceKm ?? 0;
+    const fuelPrice = getSafeGlobalEconomy(globalEconomy).fuelPrice;
+    return Math.round(
+      distanceKm *
+        fuelPrice *
+        deliveryBalance.fuelCostEstimateMultiplier *
+        deliveryCostBalance.fuelCostMultiplier,
+    );
+  }
+
+  const breakdown = estimateContractTripCostBreakdown({
+    amount: contract.cargoWeight ?? contract.amount ?? 0,
+    route,
+    urgency: contract.urgency ?? 0,
+    globalEconomy: getSafeGlobalEconomy(globalEconomy),
+  });
+  return breakdown.fuelCost;
 }
 
-function estimateMaintenanceCostFallback(contract: Contract, route?: Route): number {
-  const distanceKm = contract.distanceKm ?? 0;
-  const routeDifficulty = route?.difficulty ?? 0.5;
-  return distanceKm * deliveryBalance.maintenanceCostPerKm * routeDifficulty;
+function estimateMaintenanceCostFallback(
+  contract: Contract,
+  route?: Route,
+  globalEconomy?: GlobalEconomy,
+): number {
+  const resolvedRoute = route ?? findRoute(contract.originCityId, contract.destinationCityId);
+  if (!resolvedRoute) {
+    const distanceKm = contract.distanceKm ?? 0;
+    const routeDifficulty = 0.5;
+    return Math.round(
+      distanceKm *
+        deliveryBalance.maintenanceCostPerKm *
+        routeDifficulty *
+        deliveryCostBalance.maintenanceCostMultiplier,
+    );
+  }
+
+  const breakdown = estimateContractTripCostBreakdown({
+    amount: contract.cargoWeight ?? contract.amount ?? 0,
+    route: resolvedRoute,
+    urgency: contract.urgency ?? 0,
+    globalEconomy: getSafeGlobalEconomy(globalEconomy),
+  });
+  return breakdown.maintenanceCost + breakdown.routeDifficultyCost + breakdown.cargoHandlingCost;
 }
 
 export function buildContractPreview(input: BuildContractPreviewInput): ContractPreview {
@@ -187,12 +231,19 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
   const trucks = input.trucks ?? [];
   const drivers = input.drivers ?? [];
   const companyLevel = Math.max(1, input.companyLevel ?? 1);
+  const currentTime = Math.max(0, input.currentTime ?? 0);
   const route = resolveRoute(contract, input.route);
   const product = resolveProduct(contract, input.product);
   const payment = contract.payment ?? 0;
   const safeEconomy = getSafeGlobalEconomy(input.globalEconomy);
 
-  const availability = getContractAvailability(contract, trucks, drivers, companyLevel);
+  const availability = getContractAvailability(
+    contract,
+    trucks,
+    drivers,
+    companyLevel,
+    currentTime,
+  );
   const { truck, driver } = selectPreviewTruckAndDriver(
     contract,
     trucks,
@@ -200,6 +251,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     product,
     input.truck,
     input.driver,
+    currentTime,
   );
 
   let estimatedTravelHours = 0;
@@ -209,14 +261,22 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
   if (truck && driver && route && product) {
     estimatedTravelHours = calculateTravelHours(contract, truck, driver, route, product);
     estimatedFuelCost = calculateFuelCost(contract, truck, driver, route, product, safeEconomy);
-    estimatedMaintenanceCost = calculateMaintenanceCost(truck, route);
+    estimatedMaintenanceCost = calculateMaintenanceCost(truck, route, contract, product);
   } else {
     estimatedTravelHours = estimateTravelHoursFallback(contract);
     estimatedFuelCost = estimateFuelCostFallback(contract, safeEconomy);
-    estimatedMaintenanceCost = estimateMaintenanceCostFallback(contract, route);
+    estimatedMaintenanceCost = estimateMaintenanceCostFallback(contract, route, safeEconomy);
   }
 
-  const estimatedTripCost = estimatedFuelCost + estimatedMaintenanceCost;
+  const estimatedTripCost =
+    estimatedFuelCost +
+    estimatedMaintenanceCost +
+    (truck && route && product
+      ? Math.round(
+          (contract.cargoWeight ?? contract.amount ?? 0) *
+            deliveryCostBalance.cargoHandlingCostPerTon,
+        )
+      : 0);
   const estimatedOperationalProfit = calculateDeliveryProfit(
     contract,
     estimatedFuelCost,

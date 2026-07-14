@@ -117,7 +117,7 @@ export const contractBalance = {
   /** Sözleşme maliyet tahmininde varsayılan yakıt tüketimi (L/km) */
   estimateFuelPerKm: 0.32,
   /** Sözleşme maliyet tahmininde varsayılan bakım ($/km) */
-  estimateMaintenancePerKm: 0.18,
+  estimateMaintenancePerKm: 0.4,
   /** Operasyon payı: distanceKm × oran */
   operationsCostPerKm: 0.12,
   /** Ürün değeri risk payı: amount × referencePrice × oran */
@@ -130,12 +130,76 @@ export const contractBalance = {
   profitMarginMediumMax: 0.5,
   /** Riskli/acil iş hedef net kâr marjı */
   profitMarginRiskyMin: 0.45,
-  profitMarginRiskyMax: 0.7,
+  profitMarginRiskyMax: 0.65,
   /** Büyük seviye işi hedef net kâr marjı */
   profitMarginLargeMin: 0.5,
-  profitMarginLargeMax: 0.75,
+  profitMarginLargeMax: 0.7,
   /** Büyük iş tonaj eşiği */
   largeContractTonnage: 22,
+} as const;
+
+/** Teslimat maliyet çarpanları — yakıt, bakım, elleçleme */
+export const deliveryCostBalance = {
+  fuelCostMultiplier: 1.25,
+  maintenanceCostMultiplier: 1.35,
+  cargoHandlingCostPerTon: 18,
+  routeDifficultyCostPerKm: 0.07,
+  routeDifficultyCostMultiplier: 1.15,
+  riskReserveLow: 0.04,
+  riskReserveMedium: 0.08,
+  riskReserveHigh: 0.14,
+  urgentMarginBonusMin: 0.1,
+  urgentMarginBonusMax: 0.25,
+  marketOpportunityMarginBonusMin: 0.15,
+  marketOpportunityMarginBonusMax: 0.35,
+} as const;
+
+/** Seviye bazlı ödeme tavanları ve minimum net kâr tabanları */
+export const contractPaymentBalance = {
+  minProfitMargin: 0.18,
+  maxProfitMargin: 0.72,
+  absolutePaymentMax: 65_000,
+  highPaymentThreshold: 20_000,
+  highPaymentMinRequiredLevel: 3,
+  highPaymentMinTonnage: 40,
+  highLevelCapScalePerLevel: 0.12,
+  levelCaps: {
+    1: {
+      paymentMin: 2_000,
+      paymentMax: 8_000,
+      urgentPaymentMax: 12_000,
+      minNetProfit: 700,
+      maxTypicalNetProfit: 3_000,
+    },
+    2: {
+      paymentMin: 3_000,
+      paymentMax: 12_000,
+      urgentPaymentMax: 16_000,
+      minNetProfit: 900,
+      maxTypicalNetProfit: 4_500,
+    },
+    3: {
+      paymentMin: 5_000,
+      paymentMax: 18_000,
+      urgentPaymentMax: 24_000,
+      minNetProfit: 1_200,
+      maxTypicalNetProfit: 6_500,
+    },
+    4: {
+      paymentMin: 8_000,
+      paymentMax: 28_000,
+      urgentPaymentMax: 35_000,
+      minNetProfit: 1_500,
+      maxTypicalNetProfit: 9_000,
+    },
+    5: {
+      paymentMin: 12_000,
+      paymentMax: 40_000,
+      urgentPaymentMax: 50_000,
+      minNetProfit: 2_000,
+      maxTypicalNetProfit: 12_000,
+    },
+  },
 } as const;
 
 /** Kademeli sözleşme üretim zamanlaması */
@@ -170,6 +234,28 @@ export const contractGenerationBalance = {
 
   /** Manuel piyasa yenilemede eklenebilecek maksimum (düşük stokta) */
   manualRefreshMaxContracts: 3,
+
+  /** Çıkış şehri seçim ağırlıkları — skor bonusu olarak uygulanır */
+  originCityWeights: {
+    idleTruckCity: 45,
+    activeDeliveryDestinationCity: 30,
+    busyTruckCity: 15,
+    marketOpportunityCity: 20,
+    otherCity: 5,
+  },
+
+  /** Boşta kamyon bulunan her şehirden minimum alınabilir iş sayısı */
+  minAvailableContractsPerIdleTruckCity: 2,
+  /** Toplam minimum alınabilir (playable) sözleşme sayısı */
+  minTotalPlayableContracts: 4,
+  /** Uzun bekleme sonrası zorunlu playable üretim eşiği (oyun saati) */
+  playableContractFallbackHours: 6,
+  /** Tek seferde üretilebilecek maksimum playable sözleşme */
+  maxPlayableContractsGeneratedAtOnce: 2,
+  /** Manuel yenileme cooldown (oyun saati) — playable varken */
+  manualRefreshCooldownHours: 3,
+  /** Playable yokken manuel yenilemede üretilecek iş sayısı üst sınırı */
+  manualRefreshPlayableContractCount: 2,
 } as const;
 
 /** Sözleşme teklif süresi (oyun saati) — iş tipine göre */
@@ -186,11 +272,11 @@ export const deliveryBalance = {
   /** Sözleşme/tahmin ekranlarında varsayılan ortalama hız (km/saat) */
   defaultAverageSpeed: 60,
   /** UI yakıt tahmini: distanceKm × fuelPrice × oran */
-  fuelCostEstimateMultiplier: 0.35,
+  fuelCostEstimateMultiplier: 0.42,
   /** Şoför maliyeti hesabında günlük maaş çarpanı (saatlik = maaş/24) */
   driverCostMultiplier: 1,
   /** UI bakım tahmini: distanceKm × oran × routeDifficulty */
-  maintenanceCostPerKm: 0.08,
+  maintenanceCostPerKm: 0.35,
   /** Düşük risk rezervi: payment × oran */
   riskReserveLow: 0.02,
   /** Orta risk rezervi: payment × oran */
@@ -199,6 +285,13 @@ export const deliveryBalance = {
   riskReserveHigh: 0.1,
   /** Şoför yoksa kullanılan günlük maaş fallback ($) */
   fallbackDriverSalaryPerDay: 240,
+} as const;
+
+export const fleetManagementBalance = {
+  truckBaseResaleRate: 0.7,
+  minTruckResaleRate: 0.2,
+  maxTruckResaleRate: 0.75,
+  driverSeveranceDays: 2,
 } as const;
 
 export const truckBalance = {
@@ -341,7 +434,10 @@ export const balanceConfig = {
   contractGeneration: contractGenerationBalance,
   contractExpiry: contractExpiryBalance,
   contractLevel: contractLevelBalance,
+  contractPayment: contractPaymentBalance,
   delivery: deliveryBalance,
+  deliveryCost: deliveryCostBalance,
+  fleetManagement: fleetManagementBalance,
   truck: truckBalance,
   warehouse: warehouseBalance,
   finance: financeBalance,
@@ -356,6 +452,7 @@ export type ContractBalance = typeof contractBalance;
 export type ContractGenerationBalance = typeof contractGenerationBalance;
 export type ContractExpiryBalance = typeof contractExpiryBalance;
 export type DeliveryBalance = typeof deliveryBalance;
+export type FleetManagementBalance = typeof fleetManagementBalance;
 export type TruckBalance = typeof truckBalance;
 export type WarehouseBalance = typeof warehouseBalance;
 export type FinanceBalance = typeof financeBalance;

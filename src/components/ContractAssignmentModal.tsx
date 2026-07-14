@@ -4,7 +4,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -12,6 +11,8 @@ import {
   Text,
   View,
 } from 'react-native';
+
+import { useAppDialog } from './AppDialogProvider';
 
 import { getBottomInset } from '../constants/layout';
 import { getCityName, getProductName } from '../utils/entityLookup';
@@ -289,6 +290,7 @@ interface TruckCardProps {
 }
 
 function TruckCard({ option, selected, onSelect }: TruckCardProps) {
+  const { alert: showAlert } = useAppDialog();
   const { truck } = option;
   const condition = Math.round(truck.condition ?? 100);
   const badge = getTruckBadge(option);
@@ -299,7 +301,7 @@ function TruckCard({ option, selected, onSelect }: TruckCardProps) {
       onSelect();
       return;
     }
-    Alert.alert('Kamyon seçilemiyor', option.label);
+    showAlert('Kamyon seçilemiyor', option.label);
   };
 
   return (
@@ -369,6 +371,7 @@ interface DriverCardProps {
 }
 
 function DriverCard({ option, selected, onSelect }: DriverCardProps) {
+  const { alert: showAlert } = useAppDialog();
   const { driver } = option;
   const badge = getDriverBadge(option);
   const trait = getDriverTrait(driver);
@@ -379,7 +382,7 @@ function DriverCard({ option, selected, onSelect }: DriverCardProps) {
       onSelect();
       return;
     }
-    Alert.alert('Şoför seçilemiyor', option.label);
+    showAlert('Şoför seçilemiyor', option.label);
   };
 
   return (
@@ -437,9 +440,11 @@ export default function ContractAssignmentModal({
   onConfirm,
   onGoToFleet,
 }: ContractAssignmentModalProps) {
+  const { alert: showAlert } = useAppDialog();
   const insets = useAppSafeAreaInsets();
   const bottomInset = getBottomInset(insets);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const currentTime = useGameStore((state) => state.currentTime);
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
 
@@ -455,8 +460,8 @@ export default function ContractAssignmentModal({
     if (!contract) {
       return null;
     }
-    return getContractAvailability(contract, safeTrucks, safeDrivers, playerLevel);
-  }, [contract, safeTrucks, safeDrivers, playerLevel]);
+    return getContractAvailability(contract, safeTrucks, safeDrivers, playerLevel, currentTime);
+  }, [contract, safeTrucks, safeDrivers, playerLevel, currentTime]);
 
   const truckOptions = useMemo(
     () =>
@@ -556,6 +561,7 @@ export default function ContractAssignmentModal({
       availability.reason === 'NO_TRUCKS' ||
       availability.reason === 'NO_IDLE_TRUCKS' ||
       availability.reason === 'NO_TRUCK_IN_ORIGIN_CITY' ||
+      availability.reason === 'NO_TRUCK_WITH_CAPACITY' ||
       availability.reason === 'CAPACITY_INSUFFICIENT';
 
     const showDriverButton =
@@ -707,7 +713,7 @@ export default function ContractAssignmentModal({
               <>
                 <View style={styles.summaryFinanceItem}>
                   <Pressable
-                    onPress={() => Alert.alert('İş kârı', CONTRACT_OPERATIONAL_PROFIT_INFO)}
+                    onPress={() => showAlert('İş kârı', CONTRACT_OPERATIONAL_PROFIT_INFO)}
                     hitSlop={8}
                   >
                     <Text style={styles.summaryFinanceLabel}>İş kârı ⓘ</Text>

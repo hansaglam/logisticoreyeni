@@ -274,7 +274,10 @@ function hasCapacityBlockedContracts(
     if (getContractRequiredLevel(contract) > playerLevel) return false;
 
     const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
-    return availability.reason === 'CAPACITY_INSUFFICIENT';
+    return (
+      availability.reason === 'NO_TRUCK_WITH_CAPACITY' ||
+      availability.reason === 'CAPACITY_INSUFFICIENT'
+    );
   });
 }
 

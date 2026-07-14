@@ -28,7 +28,7 @@ import {
   formatCompanyScore,
 } from '../simulation/companyScore';
 import { getSafeFuelPrice } from '../simulation/economy';
-import { getCityByIdSafe, getCityName, getProductName } from '../utils/entityLookup';
+import { getCityName, getProductName } from '../utils/entityLookup';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   calculateDailyOperatingCostBreakdown,
@@ -39,14 +39,12 @@ import {
 } from '../simulation/delivery';
 import { getLevelProgress } from '../simulation/leveling';
 import {
-  calculateTradeProfit,
-  getCityProductMarketPrice,
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
 } from '../simulation/trading';
 import { getRecentGameEvents, useGameStore } from '../store/gameStore';
 import { colors, formatGameTimeCompact, formatMoney, formatRatioPercent, formatUnitPrice, radius, spacing, typography } from '../theme';
-import type { Contract, Delivery, Driver, GameEvent, MarketNews, Player, Truck, TruckTransfer } from '../types/game';
+import type { Contract, Delivery, GameEvent, MarketNews, Player, TruckTransfer } from '../types/game';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
@@ -61,146 +59,6 @@ function formatDuration(hours: number): string {
   const remainingHours = totalHours % 24;
   if (days > 0) return `${days}g ${remainingHours}s`;
   return `${remainingHours}s`;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-type NextActionTarget = TabKey | 'warehouse';
-
-interface NextAction {
-  title: string;
-  subtitle: string;
-  buttonLabel: string;
-  target: NextActionTarget;
-}
-
-function countStartableContracts(
-  contracts: Contract[],
-  trucks: Truck[],
-  drivers: Driver[],
-  playerLevel: number,
-): number {
-  return contracts.filter(
-    (contract) => getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
-  ).length;
-}
-
-function hasIdleTrucksWaitingForOriginContracts(
-  availableContracts: Contract[],
-  idleTrucks: number,
-  trucks: Truck[],
-  drivers: Driver[],
-  playerLevel: number,
-): boolean {
-  if (idleTrucks <= 0 || availableContracts.length === 0) return false;
-  const startableCount = countStartableContracts(
-    availableContracts,
-    trucks,
-    drivers,
-    playerLevel,
-  );
-  return startableCount === 0;
-}
-
-function resolveNextAction(
-  cash: number,
-  truckCount: number,
-  idleTrucks: number,
-  idleDrivers: number,
-  runningDeliveries: Delivery[],
-  availableContracts: Contract[],
-  trucks: Truck[],
-  drivers: Driver[],
-  playerLevel: number,
-  hasTradeProfit: boolean,
-): NextAction {
-  if (truckCount === 0) {
-    return {
-      title: 'Filonu büyüt',
-      subtitle: 'İlk kamyonunu alarak taşımacılığa başlayabilirsin.',
-      buttonLabel: 'Filo Mağazası',
-      target: 'fleet',
-    };
-  }
-  if (runningDeliveries.length > 0) {
-    return {
-      title: 'Teslimat yolda',
-      subtitle: 'Yoldaki teslimatlarını takip et.',
-      buttonLabel: 'Haritayı Aç',
-      target: 'map',
-    };
-  }
-  if (idleTrucks > 0 && idleDrivers > 0) {
-    const startableCount = countStartableContracts(
-      availableContracts,
-      trucks,
-      drivers,
-      playerLevel,
-    );
-    if (startableCount > 0) {
-      return {
-        title: 'Yeni sözleşme hazır',
-        subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
-        buttonLabel: 'Sözleşmeleri Gör',
-        target: 'contracts',
-      };
-    }
-    if (hasIdleTrucksWaitingForOriginContracts(
-      availableContracts,
-      idleTrucks,
-      trucks,
-      drivers,
-      playerLevel,
-    )) {
-      return {
-        title: 'Kamyon konumu bekliyor',
-        subtitle:
-          'Boştaki kamyonlarının bulunduğu şehirlerde yeni fırsat oluşmasını bekleyebilirsin.',
-        buttonLabel: 'İşleri Kontrol Et',
-        target: 'contracts',
-      };
-    }
-  }
-  if (cash < LOW_CASH_THRESHOLD) {
-    return {
-      title: 'Nakit dikkat',
-      subtitle: 'Sabit giderler nakit rezervini zorluyor. Kârlı sözleşmelere odaklan.',
-      buttonLabel: 'En iyi fırsatlara bak',
-      target: 'contracts',
-    };
-  }
-  if (hasTradeProfit) {
-    return {
-      title: 'Ticaret fırsatı',
-      subtitle: 'Depodaki bazı ürünler kârla satılabilir.',
-      buttonLabel: 'Depoları Aç',
-      target: 'warehouse',
-    };
-  }
-  if (availableContracts.length > 0) {
-    const startableCount = countStartableContracts(
-      availableContracts,
-      trucks,
-      drivers,
-      playerLevel,
-    );
-    if (startableCount > 0) {
-      return {
-        title: 'Yeni sözleşme hazır',
-        subtitle: 'Boştaki ekibinle yeni bir teslimat başlatabilirsin.',
-        buttonLabel: 'Sözleşmeleri Gör',
-        target: 'contracts',
-      };
-    }
-  }
-  return {
-    title: 'Yeni iş bekleniyor',
-    subtitle: 'Piyasa yeni fırsatlar oluşturdukça işler burada görünecek.',
-    buttonLabel: 'İşleri Kontrol Et',
-    target: 'contracts',
-  };
 }
 
 function getDeliveryStatusVariant(status: Delivery['status']): 'blue' | 'amber' | 'success' | 'danger' {
@@ -251,26 +109,6 @@ function estimateOpportunityProfit(contract: Contract, fuelPrice: number): numbe
     deliveryBalance.driverCostMultiplier;
   const maintenanceCost = contract.distanceKm * deliveryBalance.maintenanceCostPerKm * 0.5;
   return contract.payment - fuelCost - driverCost - maintenanceCost;
-}
-
-function hasProfitableWarehouseStock(player: Player, currentTime: number): boolean {
-  for (const warehouse of player.warehouses ?? []) {
-    const city = getCityByIdSafe(warehouse.cityId);
-    const normalized = normalizeWarehouse(warehouse, currentTime);
-    for (const item of normalized.inventory ?? []) {
-      const quantity = item.quantity ?? 0;
-      if (quantity <= 0) continue;
-      const currentPrice = city ? getCityProductMarketPrice(city, item.productId) : 0;
-      const profit = calculateTradeProfit(
-        currentPrice,
-        item.averageBuyPrice ?? 0,
-        quantity,
-        item.quality ?? 100,
-      );
-      if (profit > 0) return true;
-    }
-  }
-  return false;
 }
 
 function getWarehouseFillRatio(player: Player, currentTime: number): number {
@@ -508,22 +346,6 @@ function TutorialStepCard({
   );
 }
 
-function NextActionCard({
-  action,
-  onPress,
-}: {
-  action: NextAction;
-  onPress: () => void;
-}) {
-  return (
-    <AppCard variant="highlighted" style={styles.nextActionCard} padded>
-      <Text style={styles.nextActionTitle}>{action.title}</Text>
-      <Text style={styles.nextActionSubtitle}>{action.subtitle}</Text>
-      <ActionButton label={action.buttonLabel} onPress={onPress} variant="primary" />
-    </AppCard>
-  );
-}
-
 function CompactSummaryCard({
   title,
   icon,
@@ -621,7 +443,7 @@ function DevelopmentItemRow({ item }: { item: DevelopmentItem }) {
 // Main screen
 // ---------------------------------------------------------------------------
 
-export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
+export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
@@ -708,10 +530,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     };
   }, [player]);
 
-  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
-  const trucks = player?.trucks ?? [];
-  const drivers = player?.drivers ?? [];
-
   const recentDevelopments = useMemo(
     () => buildRecentDevelopments(marketNews, eventLog, 2),
     [marketNews, eventLog],
@@ -729,7 +547,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const levelProgress = getLevelProgress(player);
   const fuelPrice = getSafeFuelPrice(globalEconomy);
   const warehouseFillRatio = getWarehouseFillRatio(player, currentTime);
-  const tradeProfitAvailable = hasProfitableWarehouseStock(player, currentTime);
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
 
   const companyScore = useMemo(
@@ -744,21 +561,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     [player, cities, products, financeLedger, currentTime],
   );
 
-  const nextAction = resolveNextAction(
-    player.money,
-    fleetSnapshot.totalTrucks,
-    fleetSnapshot.idleTrucks,
-    fleetSnapshot.idleDrivers,
-    runningDeliveries,
-    availableContracts,
-    trucks,
-    drivers,
-    playerLevel,
-    tradeProfitAvailable,
-  );
-
-  const showCashWarning =
-    player.money < LOW_CASH_THRESHOLD && nextAction.target !== 'contracts';
+  const showCashWarning = player.money < LOW_CASH_THRESHOLD;
 
   const handleNavigate = (tab: TabKey) => {
     try {
@@ -766,18 +569,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     } catch {
       // Dashboard navigasyon hatası uygulamayı düşürmemeli.
     }
-  };
-
-  const handleNextAction = () => {
-    if (nextAction.target === 'warehouse') {
-      try {
-        onOpenWarehouse?.();
-      } catch {
-        // Depo yönlendirme hatası uygulamayı düşürmemeli.
-      }
-      return;
-    }
-    handleNavigate(nextAction.target);
   };
 
   const isSpotlightActive = useSpotlightTutorialStore((state) => state.isActive);
@@ -817,9 +608,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
           ctaLabel={tutorialStep.ctaLabel}
           onPress={handleTutorialPress}
         />
-      ) : (
-        <NextActionCard action={nextAction} onPress={handleNextAction} />
-      )}
+      ) : null}
 
       <StarterMissionsCard />
 
@@ -877,11 +666,21 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
                 value={`${fleetSnapshot.idleTrucks}`}
                 valueColor={colors.success}
               />
-              <StatLine
-                label="Aktif teslimat"
-                value={`${runningDeliveries.length}`}
-                valueColor={colors.accentBlue}
-              />
+              {runningDeliveries.length > 0 ? (
+                <TutorialTarget id="dashboard-active-delivery">
+                  <StatLine
+                    label="Aktif teslimat"
+                    value={`${runningDeliveries.length}`}
+                    valueColor={colors.accentBlue}
+                  />
+                </TutorialTarget>
+              ) : (
+                <StatLine
+                  label="Aktif teslimat"
+                  value={`${runningDeliveries.length}`}
+                  valueColor={colors.accentBlue}
+                />
+              )}
               <StatLine
                 label="Müsait sözleşme"
                 value={`${availableContracts.length}`}
@@ -904,12 +703,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       {deliveryPreview.length > 0 ? (
         <>
           <SectionTitle title="Aktif Teslimatlar" />
-          {deliveryPreview.map((delivery, index) => {
+          {deliveryPreview.map((delivery) => {
             const truck = player.trucks?.find((t) => t.id === delivery.truckId);
             const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
             const statusVariant = getDeliveryStatusVariant(delivery.status);
 
-            const card = (
+            return (
               <AppCard key={delivery.id} style={styles.listCard} padded>
                 <View style={styles.listCardHeader}>
                   <View style={styles.listCardTitleRow}>
@@ -935,16 +734,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
                   </Text>
                 </View>
               </AppCard>
-            );
-
-            if (index !== 0) {
-              return card;
-            }
-
-            return (
-              <TutorialTarget key={delivery.id} id="dashboard-active-delivery">
-                {card}
-              </TutorialTarget>
             );
           })}
           {extraDeliveryCount > 0 ? (

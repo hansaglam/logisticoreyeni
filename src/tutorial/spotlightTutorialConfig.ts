@@ -90,7 +90,7 @@ export const SPOTLIGHT_TUTORIALS: Record<
         id: 'view_active_delivery',
         targetId: 'dashboard-active-delivery',
         title: 'Aktif teslimat',
-        description: 'Teslimat ilerlemesini buradan takip et.',
+        description: 'Operasyon Özeti bölümünden aktif teslimat sayını takip edebilirsin.',
         interactionMode: 'next',
         requiredTab: 'dashboard',
         primaryButtonLabel: 'Sonraki',

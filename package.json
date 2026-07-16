@@ -13,8 +13,14 @@
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-google-signin/google-signin": "^16.1.2",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.35",
+    "expo-apple-authentication": "~8.0.8",
+    "expo-constants": "~18.0.13",
+    "expo-crypto": "~15.0.9",
+    "expo-notifications": "~0.32.17",
+    "firebase": "10.12.5",
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5.6.0",
@@ -22,7 +28,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
-    "@types/react": "~19.1.0"
+    "@types/react": "~19.1.0",
+    "typescript": "^5.7.3"
   }
 }

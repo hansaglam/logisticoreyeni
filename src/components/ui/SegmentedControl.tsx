@@ -17,6 +17,7 @@ interface SegmentedControlProps<T extends string> {
   activeKey: T;
   onChange: (key: T) => void;
   accentColor?: string;
+  compact?: boolean;
 }
 
 export default function SegmentedControl<T extends string>({
@@ -24,9 +25,10 @@ export default function SegmentedControl<T extends string>({
   activeKey,
   onChange,
   accentColor = colors.accentBlue,
+  compact = false,
 }: SegmentedControlProps<T>) {
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, compact && styles.containerCompact]}>
       {options.map((option) => {
         const isActive = option.key === activeKey;
         return (
@@ -34,6 +36,7 @@ export default function SegmentedControl<T extends string>({
             key={option.key}
             style={[
               styles.segment,
+              compact && styles.segmentCompact,
               isActive && {
                 backgroundColor: `${accentColor}22`,
                 borderColor: accentColor,
@@ -84,6 +87,10 @@ const styles = StyleSheet.create({
     padding: spacing.xs,
     gap: spacing.xs,
   },
+  containerCompact: {
+    padding: 3,
+    gap: 3,
+  },
   segment: {
     flex: 1,
     minHeight: 38,
@@ -94,6 +101,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.xs,
     gap: 2,
+  },
+  segmentCompact: {
+    minHeight: 32,
+    paddingHorizontal: 6,
   },
   labelRow: {
     flexDirection: 'row',

@@ -16,6 +16,7 @@ import type {
 import { PRODUCT_IDS } from '../data/products';
 import { economyBalance } from '../config/balance';
 import { clamp, randomBetween } from '../utils/math';
+import { appendProductPriceHistory } from '../utils/priceHistoryCore';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -388,6 +389,7 @@ export function updateCityProductEconomy(
     ...productMarket,
     stock: newStock,
     currentPrice: newPrice,
+    priceHistory: appendProductPriceHistory(productMarket.priceHistory, newPrice),
   };
 
   return {

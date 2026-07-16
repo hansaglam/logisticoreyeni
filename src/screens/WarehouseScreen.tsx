@@ -26,7 +26,6 @@ import {
   ProgressBar,
   ScreenHeader,
   SectionTitle,
-  SmallStatPill,
   StatusBadge,
 } from '../components/ui';
 import type { StatusBadgeVariant } from '../components/ui';
@@ -77,8 +76,8 @@ const CAPACITY_OK_THRESHOLD = 0.7;
 const CAPACITY_WARN_THRESHOLD = 0.9;
 
 const STORAGE_STRATEGY_TIPS: string[] = [
-  'Fazla stok olan şehirlerde ürün ucuzlar. Depoda bekletip fiyat yükselince satabilirsin.',
-  'Kıtlık yaşayan şehirler yüksek fiyatlı teslimatlar için iyi hedef olabilir.',
+  'Stok fazla olan şehirlerde ürün ucuzlar. Depoda bekletip fiyat yükselince satabilirsin.',
+  'Stok az olan şehirler yüksek fiyatlı teslimatlar için iyi hedef olabilir.',
   'Depo büyütmek esneklik sağlar ama günlük sabit giderleri artırır.',
 ];
 
@@ -186,7 +185,7 @@ function getWarehouseSuggestion(city: City): string {
   if (surpluses > shortages + 1) return 'Üretim fazlası';
   if (shortages > 0 && surpluses > 0) return 'Stratejik rota';
   if (calculatePriceVolatility(city) > HIGH_VOLATILITY_THRESHOLD) return 'Yüksek ticaret potansiyeli';
-  return 'Dengeli piyasa';
+  return 'Normal piyasa';
 }
 
 function getCityOpportunityScore(city: City): number {
@@ -280,89 +279,78 @@ function getWarehouseStatusBadge(
   return { label: 'Aktif', variant: 'success' };
 }
 
-interface WarehouseMetricStripProps {
+interface WarehouseMetricsGridProps {
+  inventoryValue: number;
   totalCapacity: number;
   usedCapacity: number;
-  freeCapacity: number;
   dailyCost: number;
   productCount: number;
-  inventoryValue: number;
 }
 
-function WarehouseMetricStrip({
+interface WarehouseMetricCardProps {
+  label: string;
+  value: string;
+  subtitle?: string;
+  valueColor: string;
+}
+
+function WarehouseMetricCard({ label, value, subtitle, valueColor }: WarehouseMetricCardProps) {
+  return (
+    <View style={styles.metricCard}>
+      <Text style={styles.metricLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={[styles.metricValue, { color: valueColor }]} numberOfLines={1} ellipsizeMode="tail">
+        {value}
+      </Text>
+      {subtitle ? (
+        <Text style={styles.metricSubtitle} numberOfLines={1} ellipsizeMode="tail">
+          {subtitle}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function WarehouseMetricsGrid({
+  inventoryValue,
   totalCapacity,
   usedCapacity,
-  freeCapacity,
   dailyCost,
   productCount,
-  inventoryValue,
-}: WarehouseMetricStripProps) {
+}: WarehouseMetricsGridProps) {
+  const utilization = totalCapacity > 0 ? usedCapacity / totalCapacity : 0;
+
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.metricStrip}
-    >
-      <View style={styles.metricPillWrap}>
-        <SmallStatPill
-          label="Kapasite"
-          value={formatTons(totalCapacity)}
-          icon="warehouse"
-          accentColor={colors.info}
-          layout="chip"
-          dense
+    <View style={styles.metricsGrid}>
+      <View style={styles.metricsRow}>
+        <WarehouseMetricCard
+          label="Toplam Değer"
+          value={formatMoney(inventoryValue)}
+          valueColor={colors.success}
+        />
+        <WarehouseMetricCard
+          label="Depo Doluluk"
+          value={formatPercent(utilization)}
+          subtitle={`${usedCapacity.toFixed(1)} / ${totalCapacity.toFixed(1)} t`}
+          valueColor={colors.accentBlue}
         />
       </View>
-      <View style={styles.metricPillWrap}>
-        <SmallStatPill
-          label="Kullanılan"
-          value={formatTons(usedCapacity)}
-          icon="inventory"
-          accentColor={colors.accentBlue}
-          layout="chip"
-          dense
-        />
-      </View>
-      <View style={styles.metricPillWrap}>
-        <SmallStatPill
-          label="Boş alan"
-          value={formatTons(freeCapacity)}
-          icon="package"
-          accentColor={colors.success}
-          layout="chip"
-          dense
-        />
-      </View>
-      <View style={styles.metricPillWrap}>
-        <SmallStatPill
-          label="Gider"
+      <View style={styles.metricsRow}>
+        <WarehouseMetricCard
+          label="Günlük Gider"
           value={formatMoney(dailyCost)}
-          icon="expense"
-          accentColor={colors.danger}
-          layout="chip"
+          subtitle="İşletme maliyeti"
+          valueColor={colors.accentAmber}
         />
-      </View>
-      <View style={styles.metricPillWrap}>
-        <SmallStatPill
+        <WarehouseMetricCard
           label="Çeşit"
           value={String(productCount)}
-          icon="product"
-          accentColor={colors.accentAmber}
-          layout="chip"
-          dense
+          subtitle="ürün türü"
+          valueColor={colors.textPrimary}
         />
       </View>
-      <View style={styles.metricPillWrap}>
-        <SmallStatPill
-          label="Değer"
-          value={formatMoney(inventoryValue)}
-          icon="cash"
-          accentColor={colors.success}
-          layout="chip"
-          dense
-        />
-      </View>
-    </ScrollView>
+    </View>
   );
 }
 
@@ -560,10 +548,9 @@ function WarehouseCard({
         </View>
       ) : (
         <View style={styles.emptyStockBlock}>
-          <GameIcon name="inventory" size={20} color={colors.textMuted} />
-          <Text style={styles.emptyStockTitle}>Bu depoda ürün yok</Text>
+          <Text style={styles.emptyStockTitle}>Depoda ürün yok</Text>
           <Text style={styles.emptyStockHint} numberOfLines={2}>
-            Piyasa ekranından bu şehirde ürün satın alabilirsin.
+            Piyasa ekranından ürün satın alarak stok oluşturmaya başlayabilirsin.
           </Text>
         </View>
       )}
@@ -676,10 +663,6 @@ export default function WarehouseScreen() {
 
   const totalCapacity = useMemo(() => calculateTotalWarehouseCapacity(warehouses), [warehouses]);
   const usedCapacity = useMemo(() => calculateTotalUsedCapacity(warehouses), [warehouses]);
-  const freeCapacity = useMemo(
-    () => Math.max(0, totalCapacity - usedCapacity),
-    [totalCapacity, usedCapacity],
-  );
   const dailyCost = useMemo(() => calculateTotalDailyWarehouseCost(warehouses), [warehouses]);
   const portfolioMetrics = useMemo(
     () => calculatePortfolioMetrics(warehouses, cities, products),
@@ -824,13 +807,12 @@ export default function WarehouseScreen() {
         </View>
       ) : null}
 
-      <WarehouseMetricStrip
+      <WarehouseMetricsGrid
+        inventoryValue={portfolioMetrics.inventoryValue}
         totalCapacity={totalCapacity}
         usedCapacity={usedCapacity}
-        freeCapacity={freeCapacity}
         dailyCost={dailyCost}
         productCount={portfolioMetrics.productCount}
-        inventoryValue={portfolioMetrics.inventoryValue}
       />
 
       <Text style={styles.limitHint}>
@@ -1052,14 +1034,43 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  metricStrip: {
-    gap: spacing.md,
-    paddingRight: spacing.lg,
-    paddingBottom: spacing.sm,
-    marginBottom: spacing.xs,
+  metricsGrid: {
+    gap: 10,
+    marginBottom: spacing.sm,
   },
-  metricPillWrap: {
-    minWidth: 88,
+  metricsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  metricCard: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 84,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.16)',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    justifyContent: 'center',
+  },
+  metricLabel: {
+    ...typography.caption,
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  metricValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    lineHeight: 24,
+  },
+  metricSubtitle: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 3,
   },
 
   limitHint: {
@@ -1218,24 +1229,24 @@ const styles = StyleSheet.create({
   },
 
   emptyStockBlock: {
-    alignItems: 'center',
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
     backgroundColor: colors.cardSoft,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     marginBottom: spacing.sm,
-    gap: 6,
+    gap: 4,
   },
   emptyStockTitle: {
     ...typography.bodySmall,
     fontWeight: '700',
+    color: colors.textSecondary,
   },
   emptyStockHint: {
     ...typography.caption,
-    textAlign: 'center',
     lineHeight: 15,
+    color: colors.textMuted,
   },
 
   warehouseFooter: {

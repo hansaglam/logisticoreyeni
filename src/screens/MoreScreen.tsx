@@ -31,6 +31,7 @@ import DebugSimulationScreen from './DebugSimulationScreen';
 import FinanceScreen from './FinanceScreen';
 import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
+import AccountSection from '../components/AccountSection';
 
 type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions';
 
@@ -314,6 +315,8 @@ export default function MoreScreen() {
           {/* TODO: Add premium shop and diamond spending system later. */}
         </>
       ) : null}
+
+      <AccountSection />
 
       <SectionTitle title="Yönetim Modülleri" compact />
 

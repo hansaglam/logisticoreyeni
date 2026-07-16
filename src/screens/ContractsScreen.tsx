@@ -6,7 +6,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,10 +13,11 @@ import {
   View,
   type ScrollView as ScrollViewType,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
-import ContractDetailModal from '../components/contracts/ContractDetailModal';
+import ContractQuickActionSheet from '../components/contracts/ContractQuickActionSheet';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   AppScreen,
@@ -697,8 +697,8 @@ export default function ContractsScreen() {
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
-  const [detailContract, setDetailContract] = useState<Contract | null>(null);
-  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [quickSheetContract, setQuickSheetContract] = useState<Contract | null>(null);
+  const [quickSheetVisible, setQuickSheetVisible] = useState(false);
 
   useEffect(() => {
     notifyContractsScreenOpened();
@@ -919,32 +919,61 @@ export default function ContractsScreen() {
     notifyContractAssignmentOpened();
   };
 
-  const openDetailModal = (contract: Contract) => {
-    setDetailContract(contract);
-    setDetailModalVisible(true);
+  const openQuickSheet = (contract: Contract) => {
+    setQuickSheetContract(contract);
+    setQuickSheetVisible(true);
+    notifyContractAssignmentOpened();
   };
 
-  const closeDetailModal = () => {
-    setDetailModalVisible(false);
-    setDetailContract(null);
-  };
-
-  const handleDetailSelectTeam = () => {
-    if (!detailContract) {
-      return;
-    }
-    const preview = contractPreviewById.get(detailContract.id);
-    if (!preview?.availability.canStart) {
-      return;
-    }
-    const contract = detailContract;
-    closeDetailModal();
-    openAssignmentModal(contract);
+  const closeQuickSheet = () => {
+    setQuickSheetVisible(false);
+    setQuickSheetContract(null);
   };
 
   const closeAssignmentModal = () => {
     setAssignmentModalVisible(false);
     setAssignmentContract(null);
+  };
+
+  const handleQuickStartDelivery = (truckId: string, driverId: string) => {
+    if (!quickSheetContract) return;
+
+    const truck = (player.trucks ?? []).find((item) => item.id === truckId);
+    const driver = (player.drivers ?? []).find((item) => item.id === driverId);
+    const preview = buildContractPreview({
+      contract: quickSheetContract,
+      globalEconomy,
+      trucks: player.trucks,
+      drivers: player.drivers,
+      companyLevel: playerLevel,
+      currentTime,
+      truck,
+      driver,
+      route: findRoute(quickSheetContract.originCityId, quickSheetContract.destinationCityId),
+      product: getProductByIdSafe(quickSheetContract.productId) ?? undefined,
+    });
+
+    if (player.money < preview.estimatedFuelCost) {
+      showAlert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
+      return;
+    }
+
+    const result = startDelivery(quickSheetContract.id, truckId, driverId);
+    if (!result.success) {
+      showAlert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
+      return;
+    }
+
+    closeQuickSheet();
+    setStatusMessage({ type: 'success', text: 'Teslimat başlatıldı' });
+    setActiveSegment('active');
+  };
+
+  const handleOpenAdvancedAssignment = () => {
+    if (!quickSheetContract) return;
+    const contract = quickSheetContract;
+    closeQuickSheet();
+    openAssignmentModal(contract);
   };
 
   const handleConfirmAssignment = (truckId: string, driverId: string) => {
@@ -983,6 +1012,11 @@ export default function ContractsScreen() {
 
   const handleGoToFleet = (subTab?: 'trucks' | 'drivers' | 'shop') => {
     closeAssignmentModal();
+    requestNavigationToFleet(subTab ?? 'shop');
+  };
+
+  const handleGoToFleetFromQuick = (subTab?: 'trucks' | 'drivers' | 'shop') => {
+    closeQuickSheet();
     requestNavigationToFleet(subTab ?? 'shop');
   };
 
@@ -1114,7 +1148,7 @@ export default function ContractsScreen() {
                       preview={preview}
                       playerLevel={player.level ?? player.companyLevel ?? 1}
                       isPinnedMarketMatch={highlightedContractId === contract.id}
-                      onPress={() => openDetailModal(contract)}
+                      onPress={() => openQuickSheet(contract)}
                     />
                   );
 
@@ -1126,7 +1160,7 @@ export default function ContractsScreen() {
                     <TutorialTarget
                       key={contract.id}
                       id="contract-first-card"
-                      onTutorialPress={() => openAssignmentModal(contract)}
+                      onTutorialPress={() => openQuickSheet(contract)}
                       scrollIntoView={scrollTutorialContractIntoView}
                     >
                       {card}
@@ -1181,12 +1215,20 @@ export default function ContractsScreen() {
         </ScrollView>
       </SafeAreaView>
 
-      <ContractDetailModal
-        visible={detailModalVisible}
-        contract={detailContract}
-        preview={detailContract ? contractPreviewById.get(detailContract.id) ?? null : null}
-        onClose={closeDetailModal}
-        onSelectTeam={handleDetailSelectTeam}
+      <ContractQuickActionSheet
+        visible={quickSheetVisible}
+        contract={quickSheetContract}
+        preview={
+          quickSheetContract ? contractPreviewById.get(quickSheetContract.id) ?? null : null
+        }
+        trucks={player.trucks ?? []}
+        drivers={player.drivers ?? []}
+        playerLevel={player.level ?? player.companyLevel ?? 1}
+        playerMoney={player.money ?? 0}
+        onClose={closeQuickSheet}
+        onStartDelivery={handleQuickStartDelivery}
+        onOpenAdvancedAssignment={handleOpenAdvancedAssignment}
+        onGoToFleet={handleGoToFleetFromQuick}
       />
 
       <ContractAssignmentModal

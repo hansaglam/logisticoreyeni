@@ -31,7 +31,6 @@ import {
   resolveContractGenerationRange,
 } from '../config/levelConfig';
 import { toProductMarket } from './economy';
-import { generatePlayableContractsForOriginCity } from './starterContracts';
 import {
   getActiveDeliveryDestinationCityIds,
   getBusyTruckOriginCityIds,
@@ -152,7 +151,21 @@ interface ContractCandidate {
 // Temel yardımcılar
 // ---------------------------------------------------------------------------
 
-export { clamp, randomBetween, randomIntBetween } from '../utils/math';
+type PlayableContractGeneratorParams = import('./starterContracts').EnsureStarterContractsParams & {
+  originCityId: string;
+  truckCapacity: number;
+  count: number;
+};
+
+/** starterContracts ↔ contracts döngüsünü kırar */
+function generatePlayableContractsForOriginCityLazy(
+  params: PlayableContractGeneratorParams,
+): Contract[] {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { generatePlayableContractsForOriginCity } =
+    require('./starterContracts') as typeof import('./starterContracts');
+  return generatePlayableContractsForOriginCity(params);
+}
 
 /** Benzersiz sözleşme kimliği üretir */
 export function createContractId(
@@ -1159,7 +1172,7 @@ export function ensurePlayableContractSupply(
     }
 
     const toCreate = Math.min(cityNeeded, maxGenerate - generated.length);
-    const created = generatePlayableContractsForOriginCity({
+    const created = generatePlayableContractsForOriginCityLazy({
       ...batchBase,
       originCityId,
       truckCapacity: cityCapacity,
@@ -1197,7 +1210,7 @@ export function ensurePlayableContractSupply(
     }
 
     const loopBase = buildPlayableGenerationBaseParams(params, merged);
-    const created = generatePlayableContractsForOriginCity({
+    const created = generatePlayableContractsForOriginCityLazy({
       ...loopBase,
       originCityId,
       truckCapacity: cityCapacity,

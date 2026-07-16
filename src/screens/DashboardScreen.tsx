@@ -5,7 +5,7 @@
  */
 
 import React, { useMemo } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import type { TabKey } from '../components/BottomTabBar';
 import StarterMissionsCard from '../components/StarterMissionsCard';
@@ -21,7 +21,6 @@ import {
   SectionTitle,
   StatusBadge,
 } from '../components/ui';
-import { deliveryBalance } from '../config/balance';
 import { getTutorialStep } from '../config/tutorial';
 import {
   calculateCompanyScore,
@@ -34,15 +33,17 @@ import {
   calculateDailyOperatingCostBreakdown,
   getWeeklyLeaseBurden,
 } from '../simulation/dailyOperatingCosts';
-import {
-  getContractAvailability,
-} from '../simulation/delivery';
 import { getLevelProgress } from '../simulation/leveling';
 import {
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
 } from '../simulation/trading';
 import { getRecentGameEvents, useGameStore } from '../store/gameStore';
+import {
+  buildDashboardOpportunities,
+  type DashboardOpportunityBadge,
+  type DashboardOpportunityItem,
+} from '../utils/dashboardOpportunities';
 import { colors, formatGameTimeCompact, formatMoney, formatRatioPercent, formatUnitPrice, radius, spacing, typography } from '../theme';
 import type { Contract, Delivery, GameEvent, MarketNews, Player, TruckTransfer } from '../types/game';
 
@@ -85,30 +86,6 @@ function getDeliveryStatusLabel(status: Delivery['status']): string {
     default:
       return 'Başarısız';
   }
-}
-
-function getContractRiskVariant(contract: Contract): 'success' | 'warning' | 'danger' | 'muted' {
-  if (contract.urgency >= 0.75) return 'danger';
-  if (contract.urgency >= 0.45 || contract.deadlineHours <= 12) return 'warning';
-  return 'success';
-}
-
-function getContractRiskLabel(contract: Contract): string {
-  if (contract.urgency >= 0.75) return 'Acil';
-  if (contract.urgency >= 0.45) return 'Orta risk';
-  return 'Düşük risk';
-}
-
-/** Dashboard sıralaması için hafif UI tahmini — store/simulation değiştirmez */
-function estimateOpportunityProfit(contract: Contract, fuelPrice: number): number {
-  const travelHours = contract.distanceKm / deliveryBalance.defaultAverageSpeed;
-  const fuelCost = contract.distanceKm * fuelPrice * deliveryBalance.fuelCostEstimateMultiplier;
-  const driverCost =
-    (travelHours / 24) *
-    deliveryBalance.fallbackDriverSalaryPerDay *
-    deliveryBalance.driverCostMultiplier;
-  const maintenanceCost = contract.distanceKm * deliveryBalance.maintenanceCostPerKm * 0.5;
-  return contract.payment - fuelCost - driverCost - maintenanceCost;
 }
 
 function getWarehouseFillRatio(player: Player, currentTime: number): number {
@@ -439,6 +416,86 @@ function DevelopmentItemRow({ item }: { item: DevelopmentItem }) {
   );
 }
 
+function formatOpportunityCargo(contract: Contract): string {
+  const weight = contract.cargoWeight ?? contract.amount ?? 0;
+  return `${weight.toFixed(1)} t`;
+}
+
+function OpportunityBadge({ badge }: { badge: DashboardOpportunityBadge }) {
+  return (
+    <View
+      style={[
+        styles.opportunityBadge,
+        {
+          backgroundColor: badge.backgroundColor,
+          borderColor: badge.borderColor,
+        },
+      ]}
+    >
+      <Text style={[styles.opportunityBadgeText, { color: badge.textColor }]} numberOfLines={1}>
+        {badge.label}
+      </Text>
+    </View>
+  );
+}
+
+function OpportunityCard({
+  item,
+  onPress,
+}: {
+  item: DashboardOpportunityItem;
+  onPress: () => void;
+}) {
+  const { contract, badges, estimatedProfit } = item;
+  const profitColor = estimatedProfit >= 0 ? colors.success : colors.danger;
+
+  return (
+    <TouchableOpacity activeOpacity={0.88} onPress={onPress}>
+      <AppCard style={styles.opportunityCard} padded={false}>
+        <View style={styles.opportunityCardInner}>
+          <View style={styles.opportunityMainRow}>
+            <View style={styles.opportunityLeft}>
+              <Text style={styles.opportunityRoute} numberOfLines={1}>
+                {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
+              </Text>
+              <Text style={styles.opportunityMeta} numberOfLines={1}>
+                {getProductName(contract.productId)} · {formatOpportunityCargo(contract)} ·{' '}
+                {formatDuration(contract.deadlineHours)}
+              </Text>
+            </View>
+            <View style={styles.opportunityRight}>
+              <Text style={styles.opportunityPayment} numberOfLines={1}>
+                {formatMoney(contract.payment)}
+              </Text>
+              <Text style={[styles.opportunityProfit, { color: profitColor }]} numberOfLines={1}>
+                İş kârı {formatMoney(estimatedProfit)}
+              </Text>
+            </View>
+          </View>
+          {badges.length > 0 ? (
+            <View style={styles.opportunityBadgeRow}>
+              {badges.map((badge) => (
+                <OpportunityBadge key={badge.key} badge={badge} />
+              ))}
+            </View>
+          ) : null}
+        </View>
+      </AppCard>
+    </TouchableOpacity>
+  );
+}
+
+function OpportunitiesEmptyState() {
+  return (
+    <View style={styles.opportunityEmptyWrap}>
+      <Text style={styles.opportunityEmptyTitle}>Şu anda uygun fırsat yok.</Text>
+      <Text style={styles.opportunityEmptyMessage}>
+        Kamyona uygun işler oluştuğunda burada görünecek.
+      </Text>
+    </View>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
@@ -446,6 +503,8 @@ function DevelopmentItemRow({ item }: { item: DevelopmentItem }) {
 export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
+  const routes = useGameStore((state) => state.routes) ?? [];
+  const products = useGameStore((state) => state.products) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const marketNews = useGameStore((state) => state.marketNews) ?? [];
@@ -453,14 +512,16 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const cities = useGameStore((state) => state.cities) ?? [];
-  const products = useGameStore((state) => state.products) ?? [];
   const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
+  const financeTotals = useGameStore((state) => state.financeTotals);
+  const missions = useGameStore((state) => state.missions);
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
   const tutorial = useGameStore((state) => state.tutorial);
   const notifyActiveDeliverySeen = useGameStore((state) => state.notifyActiveDeliverySeen);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
+  const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
   const { scrollBottomPadding } = useTabBarLayout();
 
   const availableContracts = useMemo(
@@ -473,9 +534,33 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
     [activeDeliveries],
   );
 
+  const truckCount = player?.trucks?.length ?? 0;
+  const warehouseInventoryCount = useMemo(
+    () =>
+      (player?.warehouses ?? []).reduce(
+        (sum, warehouse) => sum + (warehouse.inventory?.length ?? 0),
+        0,
+      ),
+    [player?.warehouses],
+  );
+
   React.useEffect(() => {
     syncMissionProgress();
-  }, [syncMissionProgress, player?.completedContracts, financeLedger.length, activeDeliveries.length]);
+  }, [
+    syncMissionProgress,
+    player?.completedContracts,
+    financeLedger.length,
+    activeDeliveries.length,
+    truckCount,
+    warehouseInventoryCount,
+    financeTotals?.incomeByCategory?.trade_sale,
+    financeTotals?.expenseByCategory?.trade_purchase,
+    financeTotals?.incomeByCategory?.contract_income,
+    missions?.flags?.marketOpened,
+    missions?.flags?.tradePurchased,
+    cities.length,
+    currentTime,
+  ]);
 
   React.useEffect(() => {
     if (runningDeliveries.length > 0) {
@@ -484,23 +569,32 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
   }, [runningDeliveries.length, notifyActiveDeliverySeen]);
 
   const topOpportunities = useMemo(() => {
-    const fuelPrice = getSafeFuelPrice(globalEconomy);
-    const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
-    const fleetTrucks = player?.trucks ?? [];
-    const fleetDrivers = player?.drivers ?? [];
-    return [...availableContracts]
-      .filter(
-        (contract) =>
-          getContractAvailability(contract, fleetTrucks, fleetDrivers, level).canStart,
-      )
-      .sort((a, b) => {
-        const profitA = estimateOpportunityProfit(a, fuelPrice);
-        const profitB = estimateOpportunityProfit(b, fuelPrice);
-        if (profitB !== profitA) return profitB - profitA;
-        return b.payment - a.payment;
-      })
-      .slice(0, 2);
-  }, [availableContracts, globalEconomy?.fuelPrice, player]);
+    if (!player) {
+      return [];
+    }
+    return buildDashboardOpportunities({
+      contracts,
+      trucks: player.trucks ?? [],
+      drivers: player.drivers ?? [],
+      playerLevel: Math.max(1, player.level ?? player.companyLevel ?? 1),
+      currentTime,
+      globalEconomy,
+      activeDeliveries,
+      cities,
+      routes,
+      products,
+      limit: 3,
+    });
+  }, [
+    contracts,
+    player,
+    currentTime,
+    globalEconomy,
+    activeDeliveries,
+    cities,
+    routes,
+    products,
+  ]);
 
   const deliveryPreview = useMemo(() => runningDeliveries.slice(0, 2), [runningDeliveries]);
   const extraDeliveryCount = Math.max(0, runningDeliveries.length - deliveryPreview.length);
@@ -773,42 +867,25 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
         </>
       ) : null}
 
+      <SectionTitle title="En İyi Fırsatlar" style={styles.sectionSpaced} />
       {topOpportunities.length > 0 ? (
-        <>
-          <SectionTitle title="En İyi Fırsatlar" style={styles.sectionSpaced} />
-          {topOpportunities.map((contract) => (
-            <AppCard key={contract.id} style={styles.opportunityCard} padded={false}>
-              <View style={styles.opportunityCardInner}>
-                <View style={styles.opportunityTopRow}>
-                  <View style={styles.listCardTitleRow}>
-                    <GameIcon name="contract" size={14} color={colors.accentAmber} />
-                    <Text style={styles.opportunityRoute} numberOfLines={1}>
-                      {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
-                    </Text>
-                  </View>
-                  <StatusBadge
-                    label={getContractRiskLabel(contract)}
-                    variant={getContractRiskVariant(contract)}
-                    size="sm"
-                  />
-                </View>
-                <View style={styles.opportunityBottomRow}>
-                  <Text style={styles.opportunityMeta} numberOfLines={1}>
-                    {getProductName(contract.productId)} · {formatDuration(contract.deadlineHours)}
-                  </Text>
-                  <Text style={styles.opportunityPayment}>{formatMoney(contract.payment)}</Text>
-                </View>
-              </View>
-            </AppCard>
-          ))}
-          <ActionButton
-            label="Tüm Sözleşmeleri Gör"
-            onPress={() => handleNavigate('contracts')}
-            variant="secondary"
-            style={styles.sectionAction}
+        topOpportunities.map((item) => (
+          <OpportunityCard
+            key={item.contract.id}
+            item={item}
+            onPress={() => openContractsForMapContract(item.contract)}
           />
-        </>
-      ) : null}
+        ))
+      ) : (
+        <OpportunitiesEmptyState />
+      )}
+      <ActionButton
+        label="Tüm Sözleşmeleri Gör"
+        onPress={() => handleNavigate('contracts')}
+        variant="secondary"
+        compact
+        style={styles.sectionAction}
+      />
 
       {recentDevelopments.length > 0 ? (
         <>
@@ -1100,37 +1177,80 @@ const styles = StyleSheet.create({
 
   opportunityCard: {
     marginBottom: spacing.sm,
+    backgroundColor: colors.card,
+    borderColor: 'rgba(148, 163, 184, 0.14)',
   },
   opportunityCardInner: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  opportunityTopRow: {
+  opportunityMainRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    marginBottom: spacing.xs,
+  },
+  opportunityLeft: {
+    flex: 1,
+    minWidth: 0,
+  },
+  opportunityRight: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    maxWidth: '42%',
   },
   opportunityRoute: {
     ...typography.cardTitle,
     fontSize: 13,
-    flex: 1,
-  },
-  opportunityBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    marginBottom: 2,
   },
   opportunityMeta: {
     ...typography.caption,
-    flex: 1,
+    color: colors.textSecondary,
   },
   opportunityPayment: {
     ...typography.bodySmall,
     fontWeight: '800',
-    color: colors.accentAmber,
+    color: colors.success,
+    textAlign: 'right',
+  },
+  opportunityProfit: {
+    ...typography.caption,
+    fontWeight: '700',
+    marginTop: 2,
+    textAlign: 'right',
+  },
+  opportunityBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    overflow: 'hidden',
+  },
+  opportunityBadge: {
+    borderWidth: 1,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    maxWidth: '50%',
+  },
+  opportunityBadgeText: {
+    ...typography.caption,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  opportunityEmptyWrap: {
+    marginBottom: spacing.xs,
+    gap: 2,
+  },
+  opportunityEmptyTitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  opportunityEmptyMessage: {
+    ...typography.caption,
+    color: colors.textMuted,
+    lineHeight: 16,
   },
 
   developmentItem: {

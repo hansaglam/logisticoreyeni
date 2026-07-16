@@ -6,6 +6,7 @@ import type {
   SpotlightTutorialId,
   SpotlightTutorialStep,
   TutorialLayoutRect,
+  TutorialTargetId,
 } from '../tutorial/types';
 import {
   areTutorialRectsAlmostEqual,
@@ -14,7 +15,7 @@ import {
 } from '../tutorial/types';
 import {
   invokeTutorialTargetPress,
-  measureTutorialTarget,
+  measureTutorialTargetChain,
   subscribeTutorialTargets,
 } from '../tutorial/tutorialTargetRegistry';
 import { useGameStore } from './gameStore';
@@ -29,6 +30,7 @@ interface SpotlightTutorialStore {
   tutorialId: SpotlightTutorialId | null;
   currentStepIndex: number;
   targetRect: TutorialLayoutRect | null;
+  resolvedTargetId: TutorialTargetId | null;
   targetFallbackActive: boolean;
   isTargetRectLocked: boolean;
   measureStepKey: string | null;
@@ -52,6 +54,10 @@ interface SpotlightTutorialStore {
   getCurrentStep: () => SpotlightTutorialStep | null;
 }
 
+const fallbackWarnKeys = new Set<string>();
+let pendingAdvanceInflight = false;
+let refreshInflight = false;
+
 function persistTutorialCompletion(tutorialId: SpotlightTutorialId, skipped: boolean): void {
   const gameStore = useGameStore.getState();
   if (skipped) {
@@ -73,12 +79,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getStepTargetCandidates(step: SpotlightTutorialStep): TutorialTargetId[] {
+  const fallbacks = step.fallbackTargetIds ?? [];
+  return [step.targetId, ...fallbacks.filter((id) => id !== step.targetId)];
+}
+
+function warnFallbackOnce(stepId: string, requestedId: TutorialTargetId, usedId: TutorialTargetId): void {
+  if (!__DEV__) {
+    return;
+  }
+  const key = `${stepId}:${requestedId}:${usedId}`;
+  if (fallbackWarnKeys.has(key)) {
+    return;
+  }
+  fallbackWarnKeys.add(key);
+  console.log('[tutorial] using fallback target', {
+    stepId,
+    requested: requestedId,
+    used: usedId,
+  });
+}
+
 function clearMeasurementState(): Pick<
   SpotlightTutorialStore,
-  'targetRect' | 'targetFallbackActive' | 'isTargetRectLocked' | 'measureStepKey'
+  | 'targetRect'
+  | 'resolvedTargetId'
+  | 'targetFallbackActive'
+  | 'isTargetRectLocked'
+  | 'measureStepKey'
 > {
   return {
     targetRect: null,
+    resolvedTargetId: null,
     targetFallbackActive: false,
     isTargetRectLocked: false,
     measureStepKey: null,
@@ -89,10 +121,12 @@ function applyTargetRect(
   state: SpotlightTutorialStore,
   stepKey: string,
   rect: TutorialLayoutRect,
+  resolvedTargetId: TutorialTargetId,
 ): Partial<SpotlightTutorialStore> {
   if (
     state.isTargetRectLocked &&
     state.measureStepKey === stepKey &&
+    state.resolvedTargetId === resolvedTargetId &&
     areTutorialRectsAlmostEqual(state.targetRect, rect)
   ) {
     return {};
@@ -100,19 +134,25 @@ function applyTargetRect(
 
   return {
     targetRect: rect,
+    resolvedTargetId,
     targetFallbackActive: false,
     isTargetRectLocked: true,
     measureStepKey: stepKey,
   };
 }
 
-async function measureTargetWithRetries(
-  targetId: SpotlightTutorialStep['targetId'],
-): Promise<TutorialLayoutRect | null> {
+async function measureStepTargetWithRetries(
+  step: SpotlightTutorialStep,
+): Promise<{ targetId: TutorialTargetId; rect: TutorialLayoutRect } | null> {
+  const candidates = getStepTargetCandidates(step);
+
   for (let attempt = 0; attempt < MEASURE_MAX_ATTEMPTS; attempt += 1) {
-    const rect = await measureTutorialTarget(targetId);
-    if (isValidTutorialRect(rect)) {
-      return rect;
+    const measured = await measureTutorialTargetChain(candidates);
+    if (measured) {
+      if (measured.targetId !== step.targetId) {
+        warnFallbackOnce(step.id, step.targetId, measured.targetId);
+      }
+      return measured;
     }
     if (attempt < MEASURE_MAX_ATTEMPTS - 1) {
       await sleep(MEASURE_RETRY_DELAY_MS);
@@ -126,6 +166,7 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
   tutorialId: null,
   currentStepIndex: 0,
   targetRect: null,
+  resolvedTargetId: null,
   targetFallbackActive: false,
   isTargetRectLocked: false,
   measureStepKey: null,
@@ -168,6 +209,10 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
   },
 
   refreshTargetRect: async (options?: { force?: boolean }) => {
+    if (refreshInflight) {
+      return;
+    }
+
     const state = get();
     const step = state.getCurrentStep();
     if (!step || state.targetFallbackActive) {
@@ -192,17 +237,28 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
       return;
     }
 
-    const rect = await measureTutorialTarget(step.targetId);
-    if (!isValidTutorialRect(rect)) {
-      if (!state.isTargetRectLocked) {
-        set({ targetRect: null });
+    refreshInflight = true;
+    try {
+      const measured = await measureStepTargetWithRetries(step);
+      if (!measured) {
+        if (!get().isTargetRectLocked) {
+          set({
+            targetRect: null,
+            resolvedTargetId: null,
+            targetFallbackActive: true,
+            isTargetRectLocked: true,
+            measureStepKey: stepKey,
+          });
+        }
+        return;
       }
-      return;
-    }
 
-    const patch = applyTargetRect(state, stepKey, rect);
-    if (Object.keys(patch).length > 0) {
-      set(patch);
+      const patch = applyTargetRect(get(), stepKey, measured.rect, measured.targetId);
+      if (Object.keys(patch).length > 0) {
+        set(patch);
+      }
+    } finally {
+      refreshInflight = false;
     }
   },
 
@@ -214,6 +270,7 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
     ) {
       return;
     }
+    fallbackWarnKeys.clear();
     set({
       isActive: true,
       tutorialId,
@@ -286,6 +343,10 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
   },
 
   tryCompletePendingAdvance: async () => {
+    if (pendingAdvanceInflight) {
+      return;
+    }
+
     const {
       isActive,
       tutorialId,
@@ -311,46 +372,45 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
       return;
     }
 
-    if (tutorialId === 'first_contract' && activeTab === 'contracts') {
-      useGameStore.getState().ensureStarterContractsForTutorial();
-    }
+    pendingAdvanceInflight = true;
+    try {
+      if (tutorialId === 'first_contract' && activeTab === 'contracts') {
+        useGameStore.getState().ensureStarterContractsForTutorial();
+      }
 
-    const stepKey = buildTutorialMeasureStepKey(
-      tutorialId,
-      pendingAdvanceToStepIndex,
-      nextStepConfig.targetId,
-    );
-    const rect = await measureTargetWithRetries(nextStepConfig.targetId);
-    if (rect && stepKey) {
+      const stepKey = buildTutorialMeasureStepKey(
+        tutorialId,
+        pendingAdvanceToStepIndex,
+        nextStepConfig.targetId,
+      );
+      const measured = await measureStepTargetWithRetries(nextStepConfig);
+      if (measured && stepKey) {
+        set({
+          currentStepIndex: pendingAdvanceToStepIndex,
+          pendingAdvanceToStepIndex: null,
+          pendingAdvanceTab: null,
+          ...applyTargetRect(get(), stepKey, measured.rect, measured.targetId),
+        });
+        return;
+      }
+
+      if (__DEV__ && tutorialId === 'first_contract') {
+        console.warn('[tutorial] No starter contract found for first_contract tutorial');
+      }
+
       set({
         currentStepIndex: pendingAdvanceToStepIndex,
         pendingAdvanceToStepIndex: null,
         pendingAdvanceTab: null,
-        ...applyTargetRect(get(), stepKey, rect),
+        targetRect: null,
+        resolvedTargetId: null,
+        targetFallbackActive: true,
+        isTargetRectLocked: true,
+        measureStepKey: stepKey,
       });
-      return;
+    } finally {
+      pendingAdvanceInflight = false;
     }
-
-    if (__DEV__ && tutorialId === 'first_contract') {
-      console.warn('[tutorial] No starter contract found for first_contract tutorial');
-    }
-
-    if (__DEV__) {
-      console.warn('[tutorial] using fallback target', {
-        stepId: nextStepConfig.id,
-        targetId: nextStepConfig.targetId,
-      });
-    }
-
-    set({
-      currentStepIndex: pendingAdvanceToStepIndex,
-      pendingAdvanceToStepIndex: null,
-      pendingAdvanceTab: null,
-      targetRect: null,
-      targetFallbackActive: true,
-      isTargetRectLocked: true,
-      measureStepKey: stepKey,
-    });
   },
 
   handleTargetPress: async () => {
@@ -359,13 +419,15 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
       return;
     }
 
+    const pressTargetId = get().resolvedTargetId ?? step.targetId;
+
     switch (step.interactionMode) {
       case 'navigate': {
         if (!step.navigateTab) {
           return;
         }
         get().tabNavigator?.(step.navigateTab);
-        await invokeTutorialTargetPress(step.targetId);
+        await invokeTutorialTargetPress(pressTargetId);
         set({
           pendingAdvanceToStepIndex: get().currentStepIndex + 1,
           pendingAdvanceTab: step.navigateTab,
@@ -374,18 +436,18 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
         return;
       }
       case 'tap_target': {
-        await invokeTutorialTargetPress(step.targetId);
+        await invokeTutorialTargetPress(pressTargetId);
         get().nextStep();
         return;
       }
       case 'complete_action': {
-        await invokeTutorialTargetPress(step.targetId);
+        await invokeTutorialTargetPress(pressTargetId);
         get().finishTutorial();
         return;
       }
       case 'next':
       default:
-        await invokeTutorialTargetPress(step.targetId);
+        await invokeTutorialTargetPress(pressTargetId);
     }
   },
 
@@ -395,6 +457,8 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
       return;
     }
 
+    const pressTargetId = get().resolvedTargetId ?? step.targetId;
+
     switch (step.interactionMode) {
       case 'navigate': {
         if (!step.navigateTab) {
@@ -409,12 +473,12 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
         return;
       }
       case 'tap_target': {
-        await invokeTutorialTargetPress(step.targetId);
+        await invokeTutorialTargetPress(pressTargetId);
         get().nextStep();
         return;
       }
       case 'complete_action': {
-        await invokeTutorialTargetPress(step.targetId);
+        await invokeTutorialTargetPress(pressTargetId);
         get().finishTutorial();
         return;
       }

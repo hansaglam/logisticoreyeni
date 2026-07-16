@@ -1,10 +1,8 @@
 /**
- * LogistiCore - Yerel oyun kaydı (AsyncStorage)
+ * LogistiCore - Yerel oyun kaydı (AsyncStorage) + Firestore cloud sync köprüsü
  *
- * Internal test build: yalnızca localSaveProvider aktif.
- * Backend entegrasyonu için bkz. src/config/backendRoadmap.ts
- *
- * TODO: Add firebaseSaveProvider for cloud save sync.
+ * Local save ana kaynaktır. Cloud sync: src/storage/cloudSaveSync.ts
+ * Backend servisleri: src/services/firebase.ts, authService.ts, cloudSaveService.ts
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -21,6 +19,8 @@ import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals } from '../utils/financeLedger';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
 import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
+import { normalizeCitiesPriceHistory, seedProductPriceHistory } from '../utils/productPriceHistory';
+import { normalizeMarketAlerts } from '../utils/marketAlerts';
 import type {
   City,
   Contract,
@@ -31,6 +31,7 @@ import type {
   GlobalEconomy,
   MarketNews,
   MissionsState,
+  MarketPriceAlert,
   Player,
   Product,
   Route,
@@ -101,6 +102,7 @@ export interface SaveGamePayload {
   tutorial?: TutorialState;
   missions?: MissionsState;
   spotlightTutorial?: SpotlightTutorialPersistence;
+  marketAlerts?: MarketPriceAlert[];
 }
 
 export interface SaveBackupStatus {
@@ -145,6 +147,9 @@ function cloneDefaultCities(): City[] {
         {
           ...productState,
           currentPrice: productState.currentPrice ?? productState.basePrice,
+          priceHistory: seedProductPriceHistory(
+            productState.currentPrice ?? productState.basePrice,
+          ),
         },
       ]),
     ) as City['products'],
@@ -287,6 +292,9 @@ export function createDefaultSaveFallbacks(
         ? (payload.spotlightTutorial as Partial<SpotlightTutorialPersistence>)
         : undefined,
     ),
+    marketAlerts: normalizeMarketAlerts(
+      isArray(payload.marketAlerts) ? (payload.marketAlerts as MarketPriceAlert[]) : undefined,
+    ),
     meta: {
       savedAt: safeNumber(metaRecord.savedAt, Date.now()),
       currentTime: safeNumber(metaRecord.currentTime, currentTime),
@@ -327,9 +335,11 @@ export function normalizeSavePayload(
   const currentTime = withFallbacks.currentTime as number;
   const meta = withFallbacks.meta as SaveGameMeta;
 
+  const normalizedCities = normalizeCitiesPriceHistory(withFallbacks.cities as City[]);
+
   const companyScore = calculateCompanyScore({
     player,
-    cities: withFallbacks.cities as City[],
+    cities: normalizedCities,
     products: withFallbacks.products as Product[],
     financeLedger: (withFallbacks.financeLedger as FinanceLedgerEntry[]) ?? [],
     currentTime,
@@ -350,7 +360,7 @@ export function normalizeSavePayload(
     },
     currentTime,
     player,
-    cities: withFallbacks.cities as City[],
+    cities: normalizedCities,
     products: withFallbacks.products as Product[],
     routes: withFallbacks.routes as Route[],
     contracts: withFallbacks.contracts as Contract[],
@@ -377,6 +387,7 @@ export function normalizeSavePayload(
     tutorial: withFallbacks.tutorial as TutorialState,
     missions: withFallbacks.missions as MissionsState,
     spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
+    marketAlerts: normalizeMarketAlerts(withFallbacks.marketAlerts as MarketPriceAlert[] | undefined),
   };
 }
 
@@ -540,6 +551,11 @@ async function clearMainSaveSlot(): Promise<void> {
     console.warn('[saveGame] clearMainSaveSlot failed:', error);
     throw error;
   }
+}
+
+/** Hesap silme — ana kayıt + yedek anahtarlarını temizler. */
+export async function clearLocalSave(): Promise<void> {
+  await clearAllDebugSaves({ includeBackups: true });
 }
 
 /** Debug/test — ana kayıt ve isteğe bağlı yedek anahtarlarını temizler. */
@@ -716,6 +732,7 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     tutorial: structuredClone(state.tutorial),
     missions: structuredClone(state.missions),
     spotlightTutorial: structuredClone(state.spotlightTutorial),
+    marketAlerts: structuredClone(state.marketAlerts ?? []),
   };
 }
 
@@ -756,6 +773,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     tutorial: normalizeTutorialState(payload.tutorial),
     missions: normalizeMissionsState(payload.missions),
     spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
+    marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
   };
 }
 

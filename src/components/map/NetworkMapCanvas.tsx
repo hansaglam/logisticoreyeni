@@ -83,7 +83,7 @@ interface OpportunityMarkerModel {
   label: string;
 }
 
-type CityStatusLabel = 'Depo' | 'Açık' | 'Fazla' | 'Normal';
+type CityStatusLabel = 'Depo' | 'Açık' | 'Stok Fazla' | 'Normal';
 
 const ROUTE_STYLES: Record<
   RouteVisualKind,
@@ -123,14 +123,14 @@ function getCityStatusLabel(city: City, hasDepot: boolean): CityStatusLabel {
   }
 
   if (shortageCount > 0) return 'Açık';
-  if (surplusCount > 0) return 'Fazla';
+  if (surplusCount > 0) return 'Stok Fazla';
   return 'Normal';
 }
 
 function getCityBorderColor(status: CityStatusLabel): string {
   if (status === 'Depo') return '#38BDF8';
   if (status === 'Açık') return '#EF4444';
-  if (status === 'Fazla') return '#22C55E';
+  if (status === 'Stok Fazla') return '#22C55E';
   return '#334155';
 }
 

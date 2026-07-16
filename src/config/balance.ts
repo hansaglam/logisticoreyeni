@@ -363,6 +363,19 @@ export const tradingBalance = {
   defaultWarehouseCapacityTons: 80,
 } as const;
 
+export const marketAlertBalance = {
+  /** Aynı anda aktif alarm üst sınırı */
+  maxActiveAlerts: 10,
+  /** Varsayılan hatırlatma bildirimi gecikmesi (dakika) */
+  defaultReminderDelayMinutes: 45,
+  /** Minimum hatırlatma gecikmesi (dakika) */
+  minReminderDelayMinutes: 30,
+  /** Maksimum hatırlatma gecikmesi (dakika) */
+  maxReminderDelayMinutes: 60,
+  /** Alarm süresi — oyun saati (30 gün) */
+  defaultExpiryGameHours: 30 * 24,
+} as const;
+
 export const financeBalance = {
   /** Kritik nakit eşiği ($) */
   lowCashThreshold: 5000,
@@ -442,6 +455,7 @@ export const balanceConfig = {
   warehouse: warehouseBalance,
   finance: financeBalance,
   trading: tradingBalance,
+  marketAlert: marketAlertBalance,
   level: levelBalance,
 } as const;
 
@@ -457,5 +471,6 @@ export type TruckBalance = typeof truckBalance;
 export type WarehouseBalance = typeof warehouseBalance;
 export type FinanceBalance = typeof financeBalance;
 export type TradingBalance = typeof tradingBalance;
+export type MarketAlertBalance = typeof marketAlertBalance;
 export type LevelBalance = typeof levelBalance;
 export type BalanceConfig = typeof balanceConfig;

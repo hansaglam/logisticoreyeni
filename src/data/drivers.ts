@@ -9,8 +9,8 @@ import { operatingCostBalance } from '../config/balance';
 import type { Driver, DriverTier } from '../types/game';
 
 /** İşe alınabilir şoför şablonu — id, atama ve durum hariç */
-export type DriverTemplate = Omit<Driver, 'assignedTruckId' | 'status' | 'poolId'> & {
-  /** İşe alım ücreti ($) */
+export type DriverTemplate = Omit<Driver, 'assignedTruckId' | 'status' | 'poolId' | 'hireCost'> & {
+  /** İşe alım ücreti ($) — işe alınca Driver.hireCost olur */
   hiringFee: number;
 };
 
@@ -43,6 +43,7 @@ export const STARTER_DRIVER: Driver = {
   speed: 10,
   morale: 80,
   salaryPerDay: 120,
+  hireCost: 0,
   assignedTruckId: 'truck-starter-1',
   status: 'idle',
 };
@@ -202,7 +203,9 @@ export function normalizeDriver(driver: Driver): Driver {
     dailySalary,
     salaryPerDay: dailySalary,
     salaryPeriod: driver.salaryPeriod ?? 'daily',
-    hireCost: driver.hireCost,
+    hireCost: typeof driver.hireCost === 'number' && Number.isFinite(driver.hireCost)
+      ? driver.hireCost
+      : 0,
   };
 }
 

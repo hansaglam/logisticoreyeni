@@ -20,8 +20,12 @@ import type {
   GameNotificationActionTarget,
   FinanceLedgerEntry,
   MarketContractFilter,
+  MarketFocusRequest,
+  MarketAlertActionResult,
   MarketNews,
   MarketOpportunity,
+  MarketPriceAlert,
+  MarketPriceAlertCondition,
   ProductId,
   SimulationGameState,
   SpotlightTutorialId,
@@ -154,7 +158,24 @@ import {
   calculateWarehouseDailyOperatingCostBreakdown,
   estimateWarehouseUpgradeCost,
 } from '../utils/warehouseCalculations';
-import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import {
+  cancelMarketAlertNotification,
+  getDefaultAlertExpiryTime,
+  requestNotificationPermissions,
+  scheduleMarketAlertNotification,
+  sendLocalMarketAlertNotification,
+} from '../services/notifications';
+import {
+  buildTriggeredAlertMessage,
+  cleanExpiredMarketAlerts,
+  countActiveMarketAlerts,
+  createMarketAlertId,
+  evaluateMarketAlertCondition,
+  getCityProductMarketState,
+  isDuplicateMarketAlert,
+  normalizeMarketAlerts,
+} from '../utils/marketAlerts';
 import { createDefaultMissionsState } from '../config/missions';
 import { getMissionById } from '../config/missions';
 import { createDefaultTutorialState } from '../config/tutorial';
@@ -213,6 +234,11 @@ import {
   saveGameState,
   type SaveBackupStatus,
 } from '../storage/saveGame';
+import {
+  mapAutoSaveReasonToCloudSync,
+  syncLocalSaveToCloud,
+} from '../storage/cloudSaveSync';
+import { deleteAccountAndCloudData as runAccountDeletion } from '../utils/accountDeletion';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -628,6 +654,7 @@ function createFreshGameStorePatch(): Partial<GameStore> {
     pendingFleetSubTab: null,
     marketContractFilter: null,
     highlightedContractId: null,
+    pendingMarketFocus: null,
     contractGenerationDebug: createEmptyContractGenerationDebug(0),
     deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
     dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
@@ -989,6 +1016,7 @@ export function createInitialGameState(): StoreGameState {
     tutorial: createDefaultTutorialState(),
     missions: createDefaultMissionsState(),
     spotlightTutorial: createDefaultSpotlightTutorialState(),
+    marketAlerts: [],
   };
 }
 
@@ -1004,6 +1032,7 @@ export interface GameStore extends StoreGameState {
   pendingFleetSubTab: FleetSubTab | null;
   marketContractFilter: MarketContractFilter | null;
   highlightedContractId: string | null;
+  pendingMarketFocus: MarketFocusRequest | null;
   /** Sözleşme üretim zamanlaması — save'e yazılmaz, debug için */
   contractGenerationDebug: ContractGenerationDebugSnapshot;
   /** Son teslimat para mutabakatı — save'e yazılmaz, debug için */
@@ -1029,6 +1058,7 @@ export interface GameStore extends StoreGameState {
   saveGame: () => Promise<void>;
   loadGame: (preloaded?: Awaited<ReturnType<typeof loadGameStateWithMeta>>) => Promise<boolean>;
   clearSave: () => Promise<void>;
+  deleteAccountAndCloudData: () => Promise<{ ok: boolean; error?: string; errorCode?: string }>;
   /** Debug/test — AsyncStorage kaydını siler ve tamamen yeni oyun başlatır */
   resetGameForTesting: () => Promise<void>;
   getDebugSaveInfo: () => {
@@ -1118,6 +1148,22 @@ export interface GameStore extends StoreGameState {
   notifyActiveDeliverySeen: () => void;
   notifyFirstDeliveryCompleted: () => void;
   notifyMarketScreenOpened: () => void;
+  createMarketPriceAlert: (input: {
+    cityId: string;
+    productId: ProductId;
+    condition: MarketPriceAlertCondition;
+    targetPrice: number;
+  }) => Promise<MarketAlertActionResult>;
+  deleteMarketPriceAlert: (alertId: string) => Promise<MarketAlertActionResult>;
+  toggleMarketPriceAlert: (alertId: string, isActive: boolean) => Promise<MarketAlertActionResult>;
+  checkMarketPriceAlerts: (options?: {
+    sendInApp?: boolean;
+    sendLocal?: boolean;
+  }) => MarketPriceAlert[];
+  markMarketAlertTriggered: (alertId: string) => void;
+  openMarketFromAlert: (focus: MarketFocusRequest) => void;
+  clearPendingMarketFocus: () => void;
+  clearAllMarketAlerts: () => Promise<void>;
   syncMissionProgress: () => void;
   getMissionProgressValue: (missionId: string) => MissionProgressResult;
   claimMissionReward: (missionId: string) => { success: boolean; message?: string };
@@ -1147,6 +1193,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   pendingFleetSubTab: null,
   marketContractFilter: null,
   highlightedContractId: null,
+  pendingMarketFocus: null,
   contractGenerationDebug: createEmptyContractGenerationDebug(),
   deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
   dailyOperatingCostDebug: {
@@ -1199,6 +1246,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         break;
       case 'finance':
         set({ navigationRequest: { tab: 'more' }, pendingMoreSubRoute: 'finance' });
+        break;
+      case 'market':
+        set({ navigationRequest: { tab: 'market' } });
         break;
       default:
         break;
@@ -1468,6 +1518,253 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().markSaveDirty();
   },
 
+  createMarketPriceAlert: async (input) => {
+    const state = get();
+    const city = getCityByIdSafe(input.cityId);
+    if (!city) {
+      return { success: false, errorCode: 'CITY_NOT_FOUND', message: 'Şehir bulunamadı.' };
+    }
+
+    const product = getProductByIdSafe(input.productId);
+    if (!product) {
+      return { success: false, errorCode: 'PRODUCT_NOT_FOUND', message: 'Ürün bulunamadı.' };
+    }
+
+    if (!Number.isFinite(input.targetPrice) || input.targetPrice <= 0) {
+      return { success: false, errorCode: 'INVALID_TARGET', message: 'Geçerli bir hedef fiyat gir.' };
+    }
+
+    const alerts = normalizeMarketAlerts(state.marketAlerts);
+    if (
+      isDuplicateMarketAlert(alerts, {
+        cityId: input.cityId,
+        productId: input.productId,
+        condition: input.condition,
+        targetPrice: input.targetPrice,
+      })
+    ) {
+      return {
+        success: false,
+        errorCode: 'DUPLICATE_ALERT',
+        message: 'Bu alarm zaten kurulu.',
+      };
+    }
+
+    if (countActiveMarketAlerts(alerts) >= marketAlertBalance.maxActiveAlerts) {
+      return {
+        success: false,
+        errorCode: 'MAX_ALERTS_REACHED',
+        message: `En fazla ${marketAlertBalance.maxActiveAlerts} aktif alarm kurabilirsin.`,
+      };
+    }
+
+    const market = getCityProductMarketState(city, input.productId);
+    const currentPrice = market?.currentPrice ?? 0;
+    const alert: MarketPriceAlert = {
+      id: createMarketAlertId(`${input.cityId}-${input.productId}`),
+      cityId: input.cityId,
+      productId: input.productId,
+      condition: input.condition,
+      targetPrice: input.targetPrice,
+      isActive: true,
+      createdAt: state.currentTime,
+      expiresAt: getDefaultAlertExpiryTime(state.currentTime),
+    };
+
+    const permission = await requestNotificationPermissions();
+    let notificationId: string | undefined;
+    if (permission.granted) {
+      notificationId =
+        (await scheduleMarketAlertNotification(alert, currentPrice)) ?? undefined;
+    }
+
+    set({ marketAlerts: [...alerts, { ...alert, notificationId }] });
+    get().markSaveDirty();
+
+    return {
+      success: true,
+      alertId: alert.id,
+      message: permission.granted
+        ? 'Alarm kuruldu. Hedefe ulaşınca bildirim alırsın.'
+        : 'Alarm kuruldu. Bildirim izni kapalı. Alarm oyun içindeyken çalışacak.',
+    };
+  },
+
+  deleteMarketPriceAlert: async (alertId) => {
+    const state = get();
+    const alert = (state.marketAlerts ?? []).find((item) => item.id === alertId);
+    if (!alert) {
+      return { success: false, errorCode: 'ALERT_NOT_FOUND', message: 'Alarm bulunamadı.' };
+    }
+
+    await cancelMarketAlertNotification(alert.notificationId);
+    set({ marketAlerts: (state.marketAlerts ?? []).filter((item) => item.id !== alertId) });
+    get().markSaveDirty();
+    return { success: true, message: 'Alarm silindi.' };
+  },
+
+  toggleMarketPriceAlert: async (alertId, isActive) => {
+    const state = get();
+    const alerts = normalizeMarketAlerts(state.marketAlerts);
+    const alert = alerts.find((item) => item.id === alertId);
+    if (!alert) {
+      return { success: false, errorCode: 'ALERT_NOT_FOUND', message: 'Alarm bulunamadı.' };
+    }
+
+    if (isActive && countActiveMarketAlerts(alerts) >= marketAlertBalance.maxActiveAlerts) {
+      return {
+        success: false,
+        errorCode: 'MAX_ALERTS_REACHED',
+        message: `En fazla ${marketAlertBalance.maxActiveAlerts} aktif alarm kurabilirsin.`,
+      };
+    }
+
+    let notificationId = alert.notificationId;
+    if (isActive) {
+      const city = getCityByIdSafe(alert.cityId);
+      const market = city ? getCityProductMarketState(city, alert.productId) : null;
+      await cancelMarketAlertNotification(alert.notificationId);
+      const permission = await requestNotificationPermissions();
+      if (permission.granted) {
+        notificationId =
+          (await scheduleMarketAlertNotification(
+            { ...alert, isActive: true, triggeredAt: undefined },
+            market?.currentPrice ?? 0,
+          )) ?? undefined;
+      } else {
+        notificationId = undefined;
+      }
+    } else {
+      await cancelMarketAlertNotification(alert.notificationId);
+      notificationId = undefined;
+    }
+
+    set({
+      marketAlerts: alerts.map((item) =>
+        item.id === alertId
+          ? {
+              ...item,
+              isActive,
+              triggeredAt: isActive ? undefined : item.triggeredAt,
+              notificationId,
+            }
+          : item,
+      ),
+    });
+    get().markSaveDirty();
+    return { success: true };
+  },
+
+  checkMarketPriceAlerts: (options = {}) => {
+    const { sendInApp = true, sendLocal = true } = options;
+    const state = get();
+    const now = state.currentTime;
+    const cleanedAlerts = cleanExpiredMarketAlerts(normalizeMarketAlerts(state.marketAlerts), now);
+    const triggeredAlerts: MarketPriceAlert[] = [];
+
+    const updatedAlerts = cleanedAlerts.map((alert) => {
+      if (!alert.isActive || alert.triggeredAt) {
+        return alert;
+      }
+
+      const city = getCityByIdSafe(alert.cityId);
+      if (!city) return alert;
+
+      const market = getCityProductMarketState(city, alert.productId);
+      if (!market) return alert;
+
+      if (!evaluateMarketAlertCondition(alert, market.currentPrice, market.basePrice)) {
+        return alert;
+      }
+
+      triggeredAlerts.push(alert);
+      return {
+        ...alert,
+        isActive: false,
+        triggeredAt: now,
+      };
+    });
+
+    set({ marketAlerts: updatedAlerts });
+    if (triggeredAlerts.length > 0) {
+      get().markSaveDirty();
+    }
+
+    for (const alert of triggeredAlerts) {
+      const cityName = getCityName(alert.cityId);
+      const productName = getProductName(alert.productId);
+      const city = getCityByIdSafe(alert.cityId);
+      const market = city ? getCityProductMarketState(city, alert.productId) : null;
+      const currentPrice = market?.currentPrice ?? alert.targetPrice ?? 0;
+      const message = buildTriggeredAlertMessage(alert, cityName, productName, currentPrice);
+
+      void cancelMarketAlertNotification(alert.notificationId);
+
+      if (sendInApp) {
+        get().addNotification({
+          time: now,
+          type: 'info',
+          title: 'Fiyat alarmı',
+          message,
+          actionLabel: 'Piyasaya Git',
+          actionTarget: 'market',
+          marketFocus: { cityId: alert.cityId, productId: alert.productId },
+        });
+      }
+
+      get().addGameEvent({
+        time: now,
+        type: 'market',
+        title: 'Fiyat alarmı',
+        message,
+        importance: 'medium',
+      });
+
+      if (sendLocal) {
+        void sendLocalMarketAlertNotification(alert, message);
+      }
+    }
+
+    return triggeredAlerts;
+  },
+
+  markMarketAlertTriggered: (alertId) => {
+    const state = get();
+    const alerts = normalizeMarketAlerts(state.marketAlerts);
+    const alert = alerts.find((item) => item.id === alertId);
+    if (!alert) return;
+
+    void cancelMarketAlertNotification(alert.notificationId);
+    set({
+      marketAlerts: alerts.map((item) =>
+        item.id === alertId
+          ? { ...item, isActive: false, triggeredAt: state.currentTime }
+          : item,
+      ),
+    });
+    get().markSaveDirty();
+  },
+
+  openMarketFromAlert: (focus) => {
+    set({
+      navigationRequest: { tab: 'market' },
+      pendingMarketFocus: focus,
+    });
+  },
+
+  clearPendingMarketFocus: () => {
+    set({ pendingMarketFocus: null });
+  },
+
+  clearAllMarketAlerts: async () => {
+    const state = get();
+    for (const alert of state.marketAlerts ?? []) {
+      await cancelMarketAlertNotification(alert.notificationId);
+    }
+    set({ marketAlerts: [] });
+    get().markSaveDirty();
+  },
+
   syncMissionProgress: () => {
     const state = get();
     const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
@@ -1508,7 +1805,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ? patchFinanceLedger(state, {
             time: state.currentTime,
             type: 'income',
-            category: 'bonus',
+            category: 'mission_reward',
             amount: moneyReward,
             title: 'Görev Ödülü',
             description: mission.title,
@@ -1564,6 +1861,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     get().markSaveDirty();
+    void get()
+      .saveGame()
+      .then(() => {
+        void syncLocalSaveToCloud('mission_claim', { force: true, state: get() });
+      });
     return { success: true };
   },
 
@@ -1678,6 +1980,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         set({ isGameReady: true });
         patchSaveStatus(set, { isLoadingSave: false });
         get().refreshContractsFromMarket();
+        get().checkMarketPriceAlerts({ sendLocal: false });
       }
     })();
 
@@ -1694,6 +1997,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       pendingFleetSubTab: null,
       marketContractFilter: null,
       highlightedContractId: null,
+      pendingMarketFocus: null,
     });
     resetAutoSaveTracking(0);
     get().autoSave('reset');
@@ -1717,6 +2021,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (__DEV__ && ENABLE_SAVE_LOGS) {
         console.log('[gameStore] Game saved at game time', state.currentTime);
       }
+
+      void syncLocalSaveToCloud(mapAutoSaveReasonToCloudSync(lastSaveReason), { state });
     } catch (error) {
       console.warn('[gameStore] saveGame failed:', error);
     }
@@ -1762,6 +2068,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         pendingFleetSubTab: null,
         marketContractFilter: null,
         highlightedContractId: null,
+        pendingMarketFocus: null,
       });
       resetAutoSaveTracking(saved.currentTime);
       hasHydratedGame = true;
@@ -1789,6 +2096,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           migratedFromVersion: loadResult.migratedFromVersion,
         });
       }
+      get().checkMarketPriceAlerts({ sendLocal: false });
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Kayıt yüklenemedi.';
@@ -1815,6 +2123,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
     resetAutoSaveTracking(0);
     await get().saveGame();
     await get().refreshSaveStatus();
+  },
+
+  deleteAccountAndCloudData: async () => {
+    const result = await runAccountDeletion({
+      clearLocalSave: async () => {
+        await clearAllDebugSaves({ includeBackups: true });
+        resetTransientGameUiState();
+        set(createFreshGameStorePatch());
+        resetAutoSaveTracking(0);
+        hasHydratedGame = true;
+        saveDirty = false;
+        await saveGameState(get());
+        lastAutoSaveAt = Date.now();
+        lastSavedGameTime = 0;
+        patchSaveStatus(set, {
+          hasSave: true,
+          hasValidSave: true,
+          lastSavedAt: lastAutoSaveAt,
+          isDirty: false,
+          isSaving: false,
+          lastSaveError: null,
+          migratedFromVersion: null,
+          backup: { invalid: false, migrated: false },
+        });
+        get().refreshContractsFromMarket();
+        get().ensureStarterContractsForTutorial();
+      },
+    });
+
+    return result;
   },
 
   resetGameForTesting: async () => {
@@ -2388,6 +2726,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     get().markSaveDirty();
     get().autoSave('economy_tick');
+    get().checkMarketPriceAlerts();
   },
 
   refreshMarketSnapshot: () => {

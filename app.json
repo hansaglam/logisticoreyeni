@@ -11,6 +11,9 @@
     },
     "ios": {
       "bundleIdentifier": "com.anonymous.logisticore"
-    }
+    },
+    "plugins": [
+      "expo-notifications"
+    ]
   }
 }

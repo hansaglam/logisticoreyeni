@@ -1,7 +1,7 @@
 /**
  * LogistiCore - Ürün alım/satım modalı
  *
- * Bottom sheet tarzı popup — depo / piyasa ekranından kopmadan işlem.
+ * Bottom sheet — ProductMarketDetailModal ile aynı premium dark tasarım dili.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -28,20 +28,20 @@ import {
 } from '../simulation/trading';
 import {
   getRiskConfirmationMessage,
-  getWarehouseTypeLabel,
   productNeedsColdStorage,
 } from '../simulation/warehouseStorage';
 import type { StorageSuitability } from '../simulation/warehouseStorage';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney } from '../theme/format';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
-import { IconButton, ProductIcon } from './ui';
+import { ActionButton, IconButton, ProductIcon } from './ui';
 import type { City, Product, WarehouseType } from '../types/game';
 
 const OVERLAY_OPACITY = 0.52;
-const SHEET_RADIUS = 22;
-const SELL_SHEET_HEIGHT_RATIO = 0.68;
-const BUY_SHEET_HEIGHT_RATIO = 0.78;
+const SHEET_RADIUS = 24;
+const FOOTER_SUMMARY_HEIGHT = 72;
+const FOOTER_BUTTON_HEIGHT = 52;
+const FOOTER_EXTRA_PADDING = 16;
 
 export type TradeProductModalMode = 'buy' | 'sell';
 
@@ -76,9 +76,9 @@ export interface TradeProductModalProps {
   onOpenWarehouses?: () => void;
 }
 
-function formatTons(value: number): string {
+function formatQty(value: number): string {
   const safe = Number.isFinite(value) ? value : 0;
-  return `${safe.toFixed(1)} ton`;
+  return `${safe.toFixed(1)} t`;
 }
 
 function getSuitabilityColor(suitability: StorageSuitability): string {
@@ -93,12 +93,87 @@ function getSuitabilityColor(suitability: StorageSuitability): string {
   }
 }
 
-function getWarehouseWarningText(warning: string | undefined, suitability: StorageSuitability): string | null {
+function getWarehouseWarningText(
+  warning: string | undefined,
+  suitability: StorageSuitability,
+): string | null {
   if (!warning) return null;
   if (suitability === 'risky' || suitability === 'usable') {
     return 'Bu ürün normal depoda değer kaybedebilir.';
   }
   return warning;
+}
+
+interface InfoCellProps {
+  label: string;
+  value: string;
+}
+
+function InfoCell({ label, value }: InfoCellProps) {
+  return (
+    <View style={styles.infoCell}>
+      <Text style={styles.infoLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={styles.infoValue} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+interface WarehousePickerCardProps {
+  warehouse: TradeWarehouseOption;
+  selected: boolean;
+  onSelect?: () => void;
+}
+
+function WarehousePickerCard({ warehouse, selected, onSelect }: WarehousePickerCardProps) {
+  const badgeColor = getSuitabilityColor(warehouse.suitability);
+  const warningText = getWarehouseWarningText(warehouse.warning, warehouse.suitability);
+  const isRisky = warehouse.suitability === 'risky' || warehouse.suitability === 'usable';
+
+  const content = (
+    <View style={[styles.warehouseCard, selected && styles.warehouseCardSelected]}>
+      <View style={styles.warehouseTopRow}>
+        <Text style={styles.warehouseName} numberOfLines={1}>
+          {warehouse.name}
+        </Text>
+        {isRisky ? (
+          <View style={[styles.riskBadge, { borderColor: badgeColor }]}>
+            <Text style={[styles.riskBadgeText, { color: badgeColor }]}>Riskli</Text>
+          </View>
+        ) : (
+          <View style={[styles.riskBadge, { borderColor: colors.success }]}>
+            <Text style={[styles.riskBadgeText, { color: colors.success }]}>Uygun</Text>
+          </View>
+        )}
+      </View>
+      <Text style={styles.warehouseMeta} numberOfLines={1}>
+        Boş: {formatQty(warehouse.freeCapacity)}
+      </Text>
+      {warningText ? (
+        <Text style={styles.warehouseWarning} numberOfLines={2}>
+          {warningText}
+        </Text>
+      ) : null}
+    </View>
+  );
+
+  if (onSelect) {
+    return (
+      <TouchableOpacity
+        onPress={onSelect}
+        disabled={warehouse.disabled}
+        activeOpacity={0.85}
+        style={warehouse.disabled ? styles.warehouseDisabled : undefined}
+      >
+        {content}
+      </TouchableOpacity>
+    );
+  }
+
+  return content;
 }
 
 export default function TradeProductModal({
@@ -114,7 +189,6 @@ export default function TradeProductModal({
   inventoryQuantity = 0,
   averageBuyPrice = 0,
   inventoryQuality = 100,
-  effectiveSellPrice,
   playerCash = 0,
   onConfirm,
   onClose,
@@ -148,18 +222,25 @@ export default function TradeProductModal({
 
   const presets = useMemo(() => getTradeQuantityPresets(maxQuantity), [maxQuantity]);
 
+  const footerHeight =
+    FOOTER_SUMMARY_HEIGHT + FOOTER_BUTTON_HEIGHT + FOOTER_EXTRA_PADDING + bottomInset;
+
   useEffect(() => {
     if (!visible) return;
     const defaultQty = Math.min(
       mode === 'buy' ? tradingBalance.defaultTradeQuantity : inventoryQuantity,
       maxQuantity,
     );
-    setQuantity(Math.max(tradingBalance.minTradeQuantity, defaultQty || tradingBalance.minTradeQuantity));
+    setQuantity(
+      Math.max(tradingBalance.minTradeQuantity, defaultQty || tradingBalance.minTradeQuantity),
+    );
   }, [visible, mode, maxQuantity, inventoryQuantity, product?.id]);
 
   useEffect(() => {
     if (!visible || mode !== 'buy') return;
-    const recommended = selectableWarehouses.find((warehouse) => warehouse.suitability === 'recommended');
+    const recommended = selectableWarehouses.find(
+      (warehouse) => warehouse.suitability === 'recommended',
+    );
     const fallback = selectableWarehouses[0];
     setSelectedWarehouseId(recommended?.id ?? fallback?.id ?? null);
   }, [visible, mode, selectableWarehouses, product?.id]);
@@ -168,13 +249,11 @@ export default function TradeProductModal({
     return null;
   }
 
-  const sellUnitPrice = effectiveSellPrice ?? currentPrice * (inventoryQuality / 100);
   const safePrice = Number.isFinite(currentPrice) ? currentPrice : 0;
   const safeAvailableStock = Number.isFinite(availableStock) ? availableStock : 0;
   const safeFreeCapacity = Number.isFinite(selectedFreeCapacity) ? selectedFreeCapacity : 0;
   const safeInventoryQty = Number.isFinite(inventoryQuantity) ? inventoryQuantity : 0;
   const safeAvgBuy = Number.isFinite(averageBuyPrice) ? averageBuyPrice : 0;
-  const safeQuality = Number.isFinite(inventoryQuality) ? inventoryQuality : 100;
   const totalBuyCost = calculateTradeBuyCost(safePrice, quantity);
   const totalSellRevenue = calculateTradeSellRevenue(currentPrice, quantity, inventoryQuality);
   const estimatedProfit = calculateTradeProfit(
@@ -184,24 +263,58 @@ export default function TradeProductModal({
     inventoryQuality,
   );
   const remainingCash = playerCash - totalBuyCost;
+  const remainingCapacity = Math.max(0, safeFreeCapacity - quantity);
+
   const canConfirm =
     quantity >= tradingBalance.minTradeQuantity &&
     quantity <= maxQuantity &&
     (mode === 'sell' || (remainingCash >= 0 && selectedWarehouseId != null));
 
-  const title = mode === 'buy' ? `${product.name} Satın Al` : `${product.name} Sat`;
-  const sheetMaxHeight =
-    windowHeight * (mode === 'buy' ? BUY_SHEET_HEIGHT_RATIO : SELL_SHEET_HEIGHT_RATIO);
+  const confirmButton = (() => {
+    const minQty = tradingBalance.minTradeQuantity;
 
-  const adjustQuantity = (delta: number) => {
-    setQuantity((current) => {
-      const next = current + delta;
-      return Math.max(tradingBalance.minTradeQuantity, Math.min(maxQuantity, next));
-    });
-  };
+    if (mode === 'sell') {
+      if (safeInventoryQty < minQty) {
+        return { label: 'Satılacak stok yok', disabled: true };
+      }
+      if (quantity < minQty || quantity > maxQuantity) {
+        return { label: 'Miktar seç', disabled: true };
+      }
+      return { label: 'Sat', disabled: false };
+    }
+
+    if (cityWarehouses.length === 0) {
+      return { label: 'Depo gerekli', disabled: true };
+    }
+    if (safeAvailableStock < minQty && safeFreeCapacity < minQty) {
+      return { label: 'Stok yetersiz', disabled: true };
+    }
+    if (safeFreeCapacity < minQty) {
+      return { label: 'Depo dolu', disabled: true };
+    }
+    if (safeAvailableStock < minQty) {
+      return { label: 'Stok yetersiz', disabled: true };
+    }
+    if (!selectedWarehouseId) {
+      return { label: 'Depo seç', disabled: true };
+    }
+    if (quantity > safeFreeCapacity) {
+      return { label: 'Depo alanı yetersiz', disabled: true };
+    }
+    if (remainingCash < 0) {
+      return { label: 'Nakit yetersiz', disabled: true };
+    }
+    if (quantity < minQty || quantity > maxQuantity) {
+      return { label: 'Miktar seç', disabled: true };
+    }
+    return { label: 'Satın Al', disabled: false };
+  })();
+
+  const title = mode === 'buy' ? `${product.name} Satın Al` : `${product.name} Sat`;
+  const sheetMaxHeight = Math.min(windowHeight * 0.85, 680);
 
   const handleConfirmPress = () => {
-    if (!canConfirm) return;
+    if (!canConfirm || confirmButton.disabled) return;
 
     if (mode === 'buy') {
       if (!selectedWarehouse || !selectedWarehouseId) return;
@@ -210,7 +323,6 @@ export default function TradeProductModal({
         selectedWarehouse.suitability === 'risky' ||
         selectedWarehouse.suitability === 'usable'
       ) {
-        // Native Alert yerine AppDialog — riskli depo onayı
         showDialog({
           title: 'Depo uygun değil',
           message: getRiskConfirmationMessage(product, selectedWarehouse.warehouseType),
@@ -233,89 +345,51 @@ export default function TradeProductModal({
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
+      animationType="fade"
       onRequestClose={onClose}
       statusBarTranslucent
     >
       <View style={styles.overlay}>
-        <Pressable style={styles.overlayPressable} onPress={onClose} accessibilityRole="button" />
+        <Pressable style={styles.backdrop} onPress={onClose} />
 
-        <View
-          style={[
-            styles.sheet,
-            { maxHeight: sheetMaxHeight, paddingBottom: bottomInset + spacing.lg },
-          ]}
-        >
-          <View style={styles.handleWrap}>
-            <View style={styles.handle} />
-          </View>
+        <View style={[styles.sheet, { maxHeight: sheetMaxHeight }]}>
+          <View style={styles.sheetHandle} />
 
-          <View style={styles.header}>
-            <View style={styles.headerSide}>
-              <IconButton
-                icon="close"
-                onPress={onClose}
-                size={18}
-                color={colors.textMuted}
-                backgroundColor="transparent"
-                style={styles.closeButton}
-              />
+          <View style={styles.headerRow}>
+            <View style={styles.headerMain}>
+              <View style={styles.titleRow}>
+                <ProductIcon productId={product.id} size={18} color={colors.info} />
+                <Text style={styles.title} numberOfLines={1}>
+                  {title}
+                </Text>
+              </View>
+              <Text style={styles.subtitle} numberOfLines={1}>
+                {city.name} · {formatMoney(safePrice)} / ton
+              </Text>
             </View>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {title}
-            </Text>
-            <View style={[styles.headerSide, styles.headerSideRight]}>
-              <ProductIcon productId={product.id} size={20} color={colors.info} />
-            </View>
+            <IconButton icon="close" onPress={onClose} size={18} color={colors.textMuted} />
           </View>
 
           <ScrollView
-            style={styles.sheetScroll}
-            contentContainerStyle={styles.scrollContent}
+            style={styles.scroll}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: footerHeight }]}
             showsVerticalScrollIndicator={false}
             bounces={false}
+            keyboardShouldPersistTaps="handled"
           >
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryGrid}>
-                <View style={styles.summaryItem}>
-                  <Text style={styles.summaryLabel}>Şehir</Text>
-                  <Text style={styles.summaryValue} numberOfLines={1}>
-                    {city.name}
-                  </Text>
-                </View>
-                <View style={styles.summaryItem}>
-                  <Text style={styles.summaryLabel}>Güncel fiyat</Text>
-                  <Text style={styles.summaryValue}>{formatMoney(safePrice)} / ton</Text>
-                </View>
+            <View style={styles.infoCard}>
+              <View style={styles.infoGrid}>
+                <InfoCell label="Şehir" value={city.name} />
+                <InfoCell label="Fiyat" value={`${formatMoney(safePrice)} / ton`} />
                 {mode === 'buy' ? (
                   <>
-                    <View style={styles.summaryItem}>
-                      <Text style={styles.summaryLabel}>Şehir stoğu</Text>
-                      <Text style={styles.summaryValue}>{formatTons(safeAvailableStock)}</Text>
-                    </View>
-                    <View style={styles.summaryItem}>
-                      <Text style={styles.summaryLabel}>Depo boş alan</Text>
-                      <Text style={styles.summaryValue}>{formatTons(safeFreeCapacity)}</Text>
-                    </View>
+                    <InfoCell label="Şehir stoğu" value={formatQty(safeAvailableStock)} />
+                    <InfoCell label="Boş alan" value={formatQty(safeFreeCapacity)} />
                   </>
                 ) : (
                   <>
-                    <View style={styles.summaryItem}>
-                      <Text style={styles.summaryLabel}>Depodaki miktar</Text>
-                      <Text style={styles.summaryValue}>{formatTons(safeInventoryQty)}</Text>
-                    </View>
-                    <View style={styles.summaryItem}>
-                      <Text style={styles.summaryLabel}>Alış ort.</Text>
-                      <Text style={styles.summaryValue}>{formatMoney(safeAvgBuy)} / ton</Text>
-                    </View>
-                    <View style={styles.summaryItem}>
-                      <Text style={styles.summaryLabel}>Ürün kalitesi</Text>
-                      <Text style={styles.summaryValue}>{Math.round(safeQuality)}%</Text>
-                    </View>
-                    <View style={styles.summaryItem}>
-                      <Text style={styles.summaryLabel}>Satış fiyatı</Text>
-                      <Text style={styles.summaryValue}>{formatMoney(sellUnitPrice)} / ton</Text>
-                    </View>
+                    <InfoCell label="Depodaki miktar" value={formatQty(safeInventoryQty)} />
+                    <InfoCell label="Ortalama alış" value={`${formatMoney(safeAvgBuy)} / ton`} />
                   </>
                 )}
               </View>
@@ -323,10 +397,12 @@ export default function TradeProductModal({
 
             {mode === 'buy' && showColdWarehouseSuggestion && productNeedsColdStorage(product) ? (
               <View style={styles.suggestionCard}>
-                <Text style={styles.suggestionTitle}>Soğuk depo önerilir</Text>
-                <Text style={styles.suggestionText} numberOfLines={2}>
-                  {product.name} soğuk depoda daha iyi korunur. Normal depoda kalite zamanla düşebilir.
-                </Text>
+                <View style={styles.suggestionMain}>
+                  <Text style={styles.suggestionTitle}>Soğuk depo önerilir</Text>
+                  <Text style={styles.suggestionText} numberOfLines={2}>
+                    {product.name} normal depoda zamanla değer kaybedebilir.
+                  </Text>
+                </View>
                 {onOpenWarehouses ? (
                   <TouchableOpacity
                     style={styles.suggestionButton}
@@ -335,176 +411,61 @@ export default function TradeProductModal({
                   >
                     <Text style={styles.suggestionButtonText}>Soğuk Depo Aç</Text>
                   </TouchableOpacity>
-                ) : null}
+                ) : (
+                  <View style={styles.suggestionBadge}>
+                    <Text style={styles.suggestionBadgeText}>Gerekli</Text>
+                  </View>
+                )}
               </View>
             ) : null}
 
             {mode === 'buy' ? (
-              <>
-                <Text style={styles.sectionTitle}>
-                  {cityWarehouses.length === 1 ? 'Seçili Depo' : 'Depo Seç'}
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>
+                  {cityWarehouses.length === 1 ? 'Seçili depo' : 'Depo seç'}
                 </Text>
                 {cityWarehouses.length === 0 ? (
-                  <Text style={styles.emptyWarehouseText}>
-                    Bu şehirde depo yok. Önce depo açmalısın.
-                  </Text>
+                  <Text style={styles.emptyText}>Bu şehirde depo yok. Önce depo açmalısın.</Text>
                 ) : cityWarehouses.length === 1 ? (
-                  (() => {
-                    const warehouse = cityWarehouses[0];
-                    const badgeColor = getSuitabilityColor(warehouse.suitability);
-                    const warningText = getWarehouseWarningText(warehouse.warning, warehouse.suitability);
-                    return (
-                      <View style={styles.singleWarehouseCard}>
-                        <View style={styles.warehouseCardHeader}>
-                          <Text style={styles.warehouseName}>{warehouse.name}</Text>
-                          <View style={[styles.suitabilityBadge, { borderColor: badgeColor }]}>
-                            <Text style={[styles.suitabilityBadgeText, { color: badgeColor }]}>
-                              {warehouse.suitabilityLabel}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.warehouseMeta}>
-                          {getWarehouseTypeLabel(warehouse.warehouseType)} · Boş:{' '}
-                          {formatTons(warehouse.freeCapacity)}
-                        </Text>
-                        {warningText ? (
-                          <Text style={styles.warehouseWarning}>{warningText}</Text>
-                        ) : null}
-                      </View>
-                    );
-                  })()
+                  <WarehousePickerCard warehouse={cityWarehouses[0]} selected />
                 ) : (
-                  cityWarehouses.map((warehouse) => {
-                    const active = warehouse.id === selectedWarehouseId;
-                    const badgeColor = getSuitabilityColor(warehouse.suitability);
-                    const warningText = getWarehouseWarningText(warehouse.warning, warehouse.suitability);
-                    return (
-                      <TouchableOpacity
-                        key={warehouse.id}
-                        style={[
-                          styles.warehouseCard,
-                          active && styles.warehouseCardActive,
-                          warehouse.disabled && styles.warehouseCardDisabled,
-                        ]}
-                        onPress={() => !warehouse.disabled && setSelectedWarehouseId(warehouse.id)}
-                        disabled={warehouse.disabled}
-                        activeOpacity={0.85}
-                      >
-                        <View style={styles.warehouseCardHeader}>
-                          <Text style={styles.warehouseName}>{warehouse.name}</Text>
-                          <View style={[styles.suitabilityBadge, { borderColor: badgeColor }]}>
-                            <Text style={[styles.suitabilityBadgeText, { color: badgeColor }]}>
-                              {warehouse.suitabilityLabel}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.warehouseMeta}>
-                          {getWarehouseTypeLabel(warehouse.warehouseType)} · Boş:{' '}
-                          {formatTons(warehouse.freeCapacity)}
-                        </Text>
-                        {warningText ? (
-                          <Text style={styles.warehouseWarning}>{warningText}</Text>
-                        ) : null}
-                      </TouchableOpacity>
-                    );
-                  })
+                  cityWarehouses.map((warehouse) => (
+                    <WarehousePickerCard
+                      key={warehouse.id}
+                      warehouse={warehouse}
+                      selected={warehouse.id === selectedWarehouseId}
+                      onSelect={() => setSelectedWarehouseId(warehouse.id)}
+                    />
+                  ))
                 )}
-              </>
+              </View>
             ) : null}
 
-            <Text style={styles.sectionTitle}>Miktar seç</Text>
-            <View style={styles.presetRow}>
-              {presets.map((preset) => {
-                const active = quantity === preset;
-                const label = preset === maxQuantity ? 'Max' : `${preset}t`;
-                return (
-                  <TouchableOpacity
-                    key={`${preset}-${maxQuantity}`}
-                    style={[styles.presetChip, active && styles.presetChipActive]}
-                    onPress={() => setQuantity(preset)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[styles.presetChipText, active && styles.presetChipTextActive]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <View style={styles.stepperRow}>
-              <TouchableOpacity
-                style={styles.stepperButton}
-                onPress={() => adjustQuantity(-5)}
-                activeOpacity={0.85}
+            <View style={styles.section}>
+              <Text style={styles.sectionLabel}>Miktar seç</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.presetRow}
               >
-                <Text style={styles.stepperButtonText}>-5t</Text>
-              </TouchableOpacity>
-              <Text style={styles.quantityValue}>{formatTons(quantity)}</Text>
-              <TouchableOpacity
-                style={styles.stepperButton}
-                onPress={() => adjustQuantity(5)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.stepperButtonText}>+5t</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.totalsCard}>
-              {mode === 'buy' ? (
-                <>
-                  <Text style={styles.totalLine}>
-                    Toplam maliyet: <Text style={styles.totalValue}>{formatMoney(totalBuyCost)}</Text>
-                  </Text>
-                  <Text style={styles.totalLine}>
-                    Depoda kullanılacak alan:{' '}
-                    <Text style={styles.totalValue}>{formatTons(quantity)}</Text>
-                  </Text>
-                  <Text style={styles.totalLine}>
-                    Kalan nakit:{' '}
-                    <Text
-                      style={[
-                        styles.totalValue,
-                        remainingCash < 0 ? styles.totalValueDanger : null,
-                      ]}
+                {presets.map((preset) => {
+                  const active = quantity === preset;
+                  const label = preset === maxQuantity ? 'Max' : `${preset} t`;
+                  return (
+                    <TouchableOpacity
+                      key={`${preset}-${maxQuantity}`}
+                      style={[styles.presetChip, active && styles.presetChipActive]}
+                      onPress={() => setQuantity(preset)}
+                      activeOpacity={0.85}
                     >
-                      {formatMoney(remainingCash)}
-                    </Text>
-                  </Text>
-                  {remainingCash < 0 ? (
-                    <Text style={styles.cashWarning}>Nakit yetersiz</Text>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <Text style={styles.totalLine}>
-                    Piyasa fiyatı: <Text style={styles.totalValue}>{formatMoney(safePrice)} / ton</Text>
-                  </Text>
-                  <Text style={styles.totalLine}>
-                    Tahmini gelir: <Text style={styles.totalValue}>{formatMoney(totalSellRevenue)}</Text>
-                  </Text>
-                  <Text style={styles.totalLine}>
-                    Tahmini kâr/zarar:{' '}
-                    <Text
-                      style={[
-                        styles.totalValue,
-                        estimatedProfit >= 0 ? styles.totalValueSuccess : styles.totalValueDanger,
-                      ]}
-                    >
-                      {formatMoney(estimatedProfit)}
-                    </Text>
-                  </Text>
-                </>
-              )}
+                      <Text style={[styles.presetChipText, active && styles.presetChipTextActive]}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             </View>
-
-            {mode === 'sell' && maxQuantity >= tradingBalance.minTradeQuantity ? (
-              estimatedProfit < 0 ? (
-                <Text style={styles.profitHintLoss}>Bu satış zarar ettirebilir.</Text>
-              ) : (
-                <Text style={styles.profitHintGain}>Bu satış kârlı görünüyor.</Text>
-              )
-            ) : null}
 
             {maxQuantity < tradingBalance.minTradeQuantity ? (
               <Text style={styles.softWarning}>
@@ -516,16 +477,53 @@ export default function TradeProductModal({
           </ScrollView>
 
           <View style={[styles.footer, { paddingBottom: bottomInset + spacing.sm }]}>
-            <TouchableOpacity
-              style={[styles.confirmButton, !canConfirm && styles.confirmButtonDisabled]}
+            <View style={styles.summaryBox}>
+              {mode === 'buy' ? (
+                <>
+                  <Text style={styles.summaryLine} numberOfLines={1}>
+                    Miktar: <Text style={styles.summaryValue}>{formatQty(quantity)}</Text>
+                  </Text>
+                  <Text style={styles.summaryLine} numberOfLines={1}>
+                    Toplam maliyet:{' '}
+                    <Text style={styles.summaryValue}>{formatMoney(totalBuyCost)}</Text>
+                  </Text>
+                  <Text style={styles.summaryLine} numberOfLines={1}>
+                    Depoda kalacak boş alan:{' '}
+                    <Text style={styles.summaryValue}>{formatQty(remainingCapacity)}</Text>
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.summaryLine} numberOfLines={1}>
+                    Miktar: <Text style={styles.summaryValue}>{formatQty(quantity)}</Text>
+                  </Text>
+                  <Text style={styles.summaryLine} numberOfLines={1}>
+                    Toplam gelir:{' '}
+                    <Text style={styles.summaryValue}>{formatMoney(totalSellRevenue)}</Text>
+                  </Text>
+                  <Text style={styles.summaryLine} numberOfLines={1}>
+                    Kâr/Zarar:{' '}
+                    <Text
+                      style={[
+                        styles.summaryValue,
+                        estimatedProfit >= 0 ? styles.profitPositive : styles.profitNegative,
+                      ]}
+                    >
+                      {formatMoney(estimatedProfit)}
+                    </Text>
+                  </Text>
+                </>
+              )}
+            </View>
+
+            <ActionButton
+              label={confirmButton.label}
               onPress={handleConfirmPress}
-              disabled={!canConfirm}
-              activeOpacity={0.85}
-            >
-              <Text style={[styles.confirmButtonText, !canConfirm && styles.confirmButtonTextDisabled]}>
-                {mode === 'buy' ? 'Satın Al' : 'Sat'}
-              </Text>
-            </TouchableOpacity>
+              variant="primary"
+              disabled={confirmButton.disabled || !canConfirm}
+              fullWidth
+              style={styles.confirmButton}
+            />
           </View>
         </View>
       </View>
@@ -537,9 +535,9 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: `rgba(0, 0, 0, ${OVERLAY_OPACITY})`,
+    backgroundColor: `rgba(2, 8, 23, ${OVERLAY_OPACITY})`,
   },
-  overlayPressable: {
+  backdrop: {
     ...StyleSheet.absoluteFillObject,
   },
   sheet: {
@@ -547,313 +545,249 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: SHEET_RADIUS,
     borderTopRightRadius: SHEET_RADIUS,
     borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: colors.borderStrong,
-    overflow: 'hidden',
-  },
-  handleWrap: {
-    alignItems: 'center',
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
-    paddingBottom: spacing.xs,
   },
-  handle: {
-    width: 40,
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42,
     height: 4,
     borderRadius: 2,
     backgroundColor: colors.borderStrong,
+    marginBottom: spacing.sm,
   },
-  header: {
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  headerMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    gap: spacing.xs,
   },
-  headerSide: {
-    width: 40,
-    alignItems: 'flex-start',
-  },
-  headerSideRight: {
-    alignItems: 'flex-end',
-  },
-  closeButton: {
-    width: 32,
-    height: 32,
-    borderWidth: 0,
-  },
-  headerTitle: {
+  title: {
     ...typography.cardTitle,
-    fontSize: 15,
+    fontSize: 17,
+    fontWeight: '800',
+    color: colors.textPrimary,
     flex: 1,
-    textAlign: 'center',
   },
-  sheetScroll: {
+  subtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  scroll: {
     flexGrow: 0,
-    flexShrink: 1,
   },
   scrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
     paddingBottom: spacing.sm,
   },
-  summaryCard: {
+  infoCard: {
     backgroundColor: colors.cardSoft,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.sm,
-    marginBottom: spacing.md,
+    padding: 12,
+    marginBottom: spacing.sm,
   },
-  summaryGrid: {
+  infoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
-  summaryItem: {
+  infoCell: {
     width: '47%',
     minWidth: 0,
   },
-  summaryLabel: {
+  infoLabel: {
     ...typography.caption,
-    fontSize: 10,
     color: colors.textMuted,
+    fontWeight: '600',
     marginBottom: 2,
   },
-  summaryValue: {
+  infoValue: {
     ...typography.bodySmall,
-    fontSize: 12,
     fontWeight: '700',
     color: colors.textPrimary,
   },
   suggestionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     backgroundColor: 'rgba(245, 158, 11, 0.06)',
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.28)',
-    padding: spacing.sm,
-    marginBottom: spacing.md,
-    gap: 6,
+    borderColor: 'rgba(245, 158, 11, 0.22)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: spacing.sm,
+  },
+  suggestionMain: {
+    flex: 1,
+    minWidth: 0,
   },
   suggestionTitle: {
+    ...typography.caption,
     color: colors.accentAmber,
-    fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
+    marginBottom: 2,
   },
   suggestionText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    lineHeight: 15,
+    ...typography.caption,
+    color: colors.textMuted,
+    lineHeight: 16,
   },
   suggestionButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.card,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 10,
+    backgroundColor: colors.card,
+    paddingHorizontal: 8,
     paddingVertical: 6,
   },
   suggestionButtonText: {
+    ...typography.caption,
     color: colors.textPrimary,
-    fontSize: 11,
     fontWeight: '700',
   },
-  sectionTitle: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '800',
-    marginBottom: spacing.sm,
-  },
-  emptyWarehouseText: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginBottom: spacing.md,
-  },
-  singleWarehouseCard: {
-    backgroundColor: colors.cardSoft,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.accentBlue,
-    padding: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  warehouseCard: {
-    backgroundColor: colors.cardSoft,
-    borderRadius: 10,
+  suggestionBadge: {
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.sm,
+    backgroundColor: colors.cardSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  suggestionBadgeText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  section: {
     marginBottom: spacing.sm,
   },
-  warehouseCardActive: {
-    borderColor: colors.accentBlue,
-    backgroundColor: colors.accentBlueSoft,
+  sectionLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '800',
+    marginBottom: spacing.xs,
   },
-  warehouseCardDisabled: {
+  emptyText: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  warehouseCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardSoft,
+    padding: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  warehouseCardSelected: {
+    borderColor: colors.accentBlue,
+    backgroundColor: `${colors.accentBlue}12`,
+  },
+  warehouseDisabled: {
     opacity: 0.45,
   },
-  warehouseCardHeader: {
+  warehouseTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginBottom: 3,
+    gap: spacing.xs,
+    marginBottom: 2,
   },
   warehouseName: {
+    ...typography.bodySmall,
+    fontWeight: '800',
     color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
     flex: 1,
   },
-  suitabilityBadge: {
+  riskBadge: {
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
-  suitabilityBadgeText: {
+  riskBadgeText: {
     fontSize: 9,
     fontWeight: '700',
   },
   warehouseMeta: {
+    ...typography.caption,
     color: colors.textMuted,
-    fontSize: 11,
   },
   warehouseWarning: {
+    ...typography.caption,
     color: colors.accentAmber,
-    fontSize: 11,
     marginTop: 4,
-    lineHeight: 14,
+    lineHeight: 15,
   },
   presetRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
+    gap: spacing.xs,
+    paddingRight: spacing.xs,
   },
   presetChip: {
     borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     backgroundColor: colors.cardSoft,
   },
   presetChipActive: {
-    borderColor: colors.accentAmber,
-    backgroundColor: colors.accentAmberSoft,
+    borderColor: colors.accentBlue,
+    backgroundColor: `${colors.accentBlue}18`,
   },
   presetChipText: {
+    ...typography.caption,
     color: colors.textMuted,
-    fontSize: 11,
     fontWeight: '700',
   },
   presetChipTextActive: {
-    color: colors.accentAmber,
-  },
-  stepperRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.md,
-  },
-  stepperButton: {
-    backgroundColor: colors.cardSoft,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minWidth: 52,
-    alignItems: 'center',
-  },
-  stepperButtonText: {
-    color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  quantityValue: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: '800',
-    minWidth: 88,
-    textAlign: 'center',
-  },
-  totalsCard: {
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md,
-    gap: 5,
-  },
-  totalLine: {
-    color: colors.textSecondary,
-    fontSize: 12,
-  },
-  totalValue: {
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  totalValueDanger: {
-    color: colors.danger,
-  },
-  totalValueSuccess: {
-    color: colors.success,
-  },
-  cashWarning: {
-    color: colors.danger,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  profitHintLoss: {
-    color: colors.danger,
-    fontSize: 11,
-    marginTop: spacing.sm,
-    fontWeight: '600',
-    opacity: 0.85,
-  },
-  profitHintGain: {
-    color: colors.success,
-    fontSize: 11,
-    marginTop: spacing.sm,
-    fontWeight: '600',
+    color: colors.accentBlue,
   },
   softWarning: {
+    ...typography.caption,
     color: colors.accentAmber,
-    fontSize: 11,
-    marginTop: spacing.sm,
     fontWeight: '600',
+    marginTop: spacing.xs,
   },
   footer: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
     backgroundColor: colors.card,
   },
-  confirmButton: {
-    backgroundColor: colors.accentAmber,
-    borderRadius: 14,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
+  summaryBox: {
+    gap: 2,
   },
-  confirmButtonDisabled: {
-    backgroundColor: colors.cardSoft,
-    borderWidth: 1,
-    borderColor: colors.border,
+  summaryLine: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '600',
   },
-  confirmButtonText: {
+  summaryValue: {
     color: colors.textPrimary,
-    fontSize: 14,
     fontWeight: '800',
   },
-  confirmButtonTextDisabled: {
-    color: colors.textMuted,
+  profitPositive: {
+    color: colors.success,
+  },
+  profitNegative: {
+    color: colors.danger,
+  },
+  confirmButton: {
+    minHeight: FOOTER_BUTTON_HEIGHT,
   },
 });

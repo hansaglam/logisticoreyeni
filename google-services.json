@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "363783837598",
+    "project_id": "logisticore-53ab4",
+    "storage_bucket": "logisticore-53ab4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:363783837598:android:685a1b005d7f4491a6288f",
+        "android_client_info": {
+          "package_name": "com.anonymous.logisticore"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "363783837598-ur6u4u0llur6a4336rlg5nl5v12avias.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.anonymous.logisticore",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "363783837598-h3ihj18c3g0c6hsmj2qoh8d2hg0i3e9i.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCCWDdBsbK5B0ObQa5fTlFG6pQBIPtFZSQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "363783837598-h3ihj18c3g0c6hsmj2qoh8d2hg0i3e9i.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

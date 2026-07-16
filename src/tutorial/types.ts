@@ -20,7 +20,9 @@ export type TutorialTargetId =
   | 'assignment-driver-card'
   | 'assignment-start-button'
   | 'dashboard-active-delivery'
-  | 'market-first-opportunity';
+  | 'market-first-opportunity'
+  | 'market-first-product'
+  | 'market-products-section';
 
 export type SpotlightLayer = 'root' | 'modal';
 
@@ -64,6 +66,8 @@ export type TutorialPointerOffset = {
 export interface SpotlightTutorialStep {
   id: string;
   targetId: TutorialTargetId;
+  /** Primary target bulunamazsa sırayla denenecek hedefler */
+  fallbackTargetIds?: TutorialTargetId[];
   title: string;
   description: string;
   interactionMode: TutorialInteractionMode;

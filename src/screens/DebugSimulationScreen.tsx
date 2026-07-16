@@ -8,13 +8,13 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import { useGameStore, getRecentGameEvents } from '../store/gameStore';
@@ -28,6 +28,8 @@ import {
   formatCompanyScore,
   getCompanyScoreBreakdown,
 } from '../simulation/companyScore';
+import { BACKEND_ENABLED, CLOUD_SAVE_AUTO_RESTORE_ENABLED, CLOUD_SAVE_WRITE_ENABLED } from '../config/backendRoadmap';
+import { getCloudSaveStatus } from '../storage/cloudSaveSync';
 import { getTotalInventoryTons, summarizeFinanceLedger } from '../simulation/trading';
 import { leaderboardConfig } from '../config/leaderboard';
 import { getHighestOwnedTruckCapacity } from '../simulation/delivery';
@@ -43,6 +45,7 @@ import { getIdleTruckOriginCityIds, getActiveDeliveryDestinationCityIds } from '
 import { buildContractPreview } from '../simulation/contractPreview';
 import { getLevelProgress } from '../simulation/leveling';
 import { contractBalance } from '../config/balance';
+import { sendTestMarketNotification } from '../services/notifications';
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
 import type {
   City,
@@ -501,6 +504,9 @@ export default function DebugSimulationScreen() {
   const clearSave = useGameStore((state) => state.clearSave);
   const resetGameForTesting = useGameStore((state) => state.resetGameForTesting);
   const getDebugSaveInfo = useGameStore((state) => state.getDebugSaveInfo);
+  const marketAlerts = useGameStore((state) => state.marketAlerts) ?? [];
+  const checkMarketPriceAlerts = useGameStore((state) => state.checkMarketPriceAlerts);
+  const clearAllMarketAlerts = useGameStore((state) => state.clearAllMarketAlerts);
   const saveStatus = useGameStore((state) => state.saveStatus);
   const saveError = useGameStore((state) => state.saveError);
   const refreshSaveStatus = useGameStore((state) => state.refreshSaveStatus);
@@ -528,6 +534,7 @@ export default function DebugSimulationScreen() {
     type: 'info',
     text: 'Debug panel ready.',
   });
+  const [cloudSaveInfo, setCloudSaveInfo] = useState(getCloudSaveStatus);
 
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
@@ -541,6 +548,7 @@ export default function DebugSimulationScreen() {
 
   useEffect(() => {
     void refreshSaveStatus();
+    setCloudSaveInfo(getCloudSaveStatus());
   }, [refreshSaveStatus]);
 
   useEffect(() => {
@@ -769,6 +777,34 @@ export default function DebugSimulationScreen() {
     }
   };
 
+  const activeMarketAlertCount = useMemo(
+    () => marketAlerts.filter((alert) => alert.isActive && !alert.triggeredAt).length,
+    [marketAlerts],
+  );
+  const triggeredMarketAlertCount = useMemo(
+    () => marketAlerts.filter((alert) => alert.triggeredAt).length,
+    [marketAlerts],
+  );
+
+  const handleCheckMarketAlerts = () => {
+    const triggered = checkMarketPriceAlerts({ sendInApp: true, sendLocal: true });
+    setSuccess(`Alarm kontrolü tamamlandı. Tetiklenen: ${triggered.length}`);
+  };
+
+  const handleClearMarketAlerts = () => {
+    void clearAllMarketAlerts().then(() => {
+      setSuccess('Tüm piyasa alarmları temizlendi');
+    });
+  };
+
+  const handleTestMarketNotification = () => {
+    void sendTestMarketNotification()
+      .then(() => setSuccess('Test piyasa bildirimi planlandı'))
+      .catch((error: unknown) => {
+        setError(error instanceof Error ? error.message : 'Test bildirimi başarısız');
+      });
+  };
+
   const handleStartTestDelivery = (contract: Contract) => {
     const result = startDeliveryAutoAssign(contract.id);
     if (!result.success) {
@@ -815,6 +851,7 @@ export default function DebugSimulationScreen() {
     try {
       await saveGame();
       await refreshSaveStatus();
+      setCloudSaveInfo(getCloudSaveStatus());
       setSuccess('Manual save completed (debug only)');
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Save failed');
@@ -987,6 +1024,18 @@ export default function DebugSimulationScreen() {
             <DebugButton label="Reset Game" onPress={handleResetGame} variant="danger" />
             <DebugButton label="+50 XP" onPress={() => { addCompanyXp(50, 'debug'); setInfo('+50 XP eklendi'); }} />
             <DebugButton label="+250 XP" onPress={() => { addCompanyXp(250, 'debug'); setInfo('+250 XP eklendi'); }} variant="primary" />
+          </View>
+        </Section>
+
+        <Section title="Piyasa Alarmları (Debug)">
+          <View style={styles.levelDebugPanel}>
+            <Text style={styles.levelDebugLine}>active alerts: {activeMarketAlertCount}</Text>
+            <Text style={styles.levelDebugLine}>triggered alerts: {triggeredMarketAlertCount}</Text>
+          </View>
+          <View style={styles.buttonGrid}>
+            <DebugButton label="Force Check Alerts" onPress={handleCheckMarketAlerts} variant="primary" />
+            <DebugButton label="Clear All Alerts" onPress={handleClearMarketAlerts} variant="danger" />
+            <DebugButton label="Test Local Notification" onPress={handleTestMarketNotification} />
           </View>
         </Section>
 
@@ -1465,6 +1514,53 @@ export default function DebugSimulationScreen() {
         </Section>
 
         {/* TODO: Hide Save Status debug panel in production builds. */}
+        <Section title="Bulut Kaydı">
+          <View style={styles.saveStatusCard}>
+            <View style={styles.statGrid}>
+              <StatItem
+                label="Bulut Kaydı"
+                value={cloudSaveInfo.statusLabel}
+                color={
+                  cloudSaveInfo.status === 'success'
+                    ? COLORS.success
+                    : cloudSaveInfo.status === 'failed'
+                      ? COLORS.danger
+                      : cloudSaveInfo.status === 'syncing' || cloudSaveInfo.status === 'pending'
+                        ? COLORS.primary
+                        : COLORS.textMuted
+                }
+              />
+              <StatItem
+                label="Firebase"
+                value={cloudSaveInfo.firebaseEnabled ? 'Aktif' : 'Kapalı'}
+                color={cloudSaveInfo.firebaseEnabled ? COLORS.success : COLORS.textMuted}
+              />
+              <StatItem
+                label="User ID"
+                value={
+                  cloudSaveInfo.uid
+                    ? `${cloudSaveInfo.uid.slice(0, 8)}…`
+                    : '—'
+                }
+                color={cloudSaveInfo.uid ? COLORS.secondary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Son Sync"
+                value={formatSavedAt(cloudSaveInfo.lastSyncAt)}
+                color={cloudSaveInfo.lastSyncAt ? COLORS.secondary : COLORS.textMuted}
+              />
+              <StatItem
+                label="Cloud Error"
+                value={cloudSaveInfo.lastError ?? '—'}
+                color={cloudSaveInfo.lastError ? COLORS.danger : COLORS.textMuted}
+              />
+            </View>
+            <Text style={styles.debugNoteText}>
+              Cloud restore bu fazda kapalı. Local save ana kaynaktır.
+            </Text>
+          </View>
+        </Section>
+
         <Section title="Save Status">
           <View style={styles.saveStatusCard}>
             <DebugButton

@@ -1,6 +1,15 @@
-import { createDefaultMissionsState, getMissionById } from '../config/missions';
+import {
+  createDefaultMissionsState,
+  ensureActiveMissionIds,
+  getMissionById,
+  STARTER_MISSION_IDS,
+} from '../config/missions';
 import { createDefaultTutorialState } from '../config/tutorial';
 import { getNextTutorialStepId } from '../config/tutorial';
+import {
+  calculateCompanyScore,
+  calculateInventoryValue,
+} from '../simulation/companyScore';
 import type {
   FinanceLedgerEntry,
   MissionsState,
@@ -14,6 +23,20 @@ export interface MissionProgressResult {
   target: number;
   isComplete: boolean;
 }
+
+export type MissionDisplayStatus = 'ready' | 'in_progress' | 'claimed';
+
+export type MissionProgressState = Pick<
+  StoreGameState,
+  | 'player'
+  | 'financeTotals'
+  | 'financeLedger'
+  | 'activeDeliveries'
+  | 'missions'
+  | 'cities'
+  | 'products'
+  | 'currentTime'
+>;
 
 function safeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -63,10 +86,11 @@ export function normalizeMissionsState(raw?: Partial<MissionsState> | null): Mis
   }
 
   const flags = raw.flags ?? defaults.flags;
-  const activeMissionIds =
+  const activeMissionIds = ensureActiveMissionIds(
     safeStringArray(raw.activeMissionIds).length > 0
       ? migrateMissionIdList(safeStringArray(raw.activeMissionIds))
-      : defaults.activeMissionIds;
+      : defaults.activeMissionIds,
+  );
 
   return {
     activeMissionIds,
@@ -106,6 +130,58 @@ function getContractIncomeTotal(
     .reduce((sum, entry) => sum + (entry.amount ?? 0), 0);
 }
 
+function getTotalTradeProfit(
+  financeTotals: StoreGameState['financeTotals'],
+  financeLedger: FinanceLedgerEntry[] | undefined,
+): number {
+  const sales = financeTotals?.incomeByCategory?.trade_sale ?? 0;
+  const purchases = financeTotals?.expenseByCategory?.trade_purchase ?? 0;
+
+  if (sales > 0 || purchases > 0) {
+    return Math.max(0, sales - purchases);
+  }
+
+  let ledgerSales = 0;
+  let ledgerPurchases = 0;
+  for (const entry of financeLedger ?? []) {
+    if (entry.category === 'trade_sale' && entry.type === 'income') {
+      ledgerSales += entry.amount ?? 0;
+    }
+    if (entry.category === 'trade_purchase' && entry.type === 'expense') {
+      ledgerPurchases += entry.amount ?? 0;
+    }
+  }
+
+  return Math.max(0, ledgerSales - ledgerPurchases);
+}
+
+function getWarehouseInventoryMarketValue(state: MissionProgressState): number {
+  return calculateInventoryValue(
+    state.player?.warehouses,
+    state.cities,
+    state.products,
+  );
+}
+
+function getOperationCityCount(state: MissionProgressState): number {
+  const cityIds = new Set<string>();
+
+  for (const truck of state.player?.trucks ?? []) {
+    const cityId = truck.currentCityId ?? truck.homeCityId;
+    if (cityId) {
+      cityIds.add(cityId);
+    }
+  }
+
+  for (const warehouse of state.player?.warehouses ?? []) {
+    if (warehouse.cityId) {
+      cityIds.add(warehouse.cityId);
+    }
+  }
+
+  return cityIds.size;
+}
+
 function countStartedDeliveries(
   state: Pick<StoreGameState, 'player' | 'activeDeliveries' | 'missions'>,
 ): number {
@@ -118,7 +194,7 @@ function countStartedDeliveries(
 
 export function getMissionProgress(
   missionId: string,
-  state: Pick<StoreGameState, 'player' | 'financeTotals' | 'financeLedger' | 'activeDeliveries' | 'missions'>,
+  state: MissionProgressState,
 ): MissionProgressResult {
   const mission = getMissionById(missionId);
   const target = mission?.targetValue ?? 1;
@@ -131,7 +207,9 @@ export function getMissionProgress(
       current = countStartedDeliveries(state);
       break;
     case 'first_delivery':
-      current = state.player.completedContracts ?? 0;
+    case 'complete_5_deliveries':
+    case 'complete_10_deliveries':
+      current = state.player?.completedContracts ?? 0;
       break;
     case 'first_profit':
       current = getContractIncomeTotal(state.financeTotals, state.financeLedger);
@@ -146,6 +224,27 @@ export function getMissionProgress(
           ? 1
           : 0;
       break;
+    case 'reach_company_score_150k':
+      current = calculateCompanyScore({
+        player: state.player,
+        cities: state.cities,
+        products: state.products,
+        financeLedger: state.financeLedger,
+        currentTime: state.currentTime,
+      });
+      break;
+    case 'own_2_trucks':
+      current = (state.player?.trucks ?? []).filter((truck) => !truck.leaseExpired).length;
+      break;
+    case 'reach_warehouse_value_25000':
+      current = getWarehouseInventoryMarketValue(state);
+      break;
+    case 'earn_10000_trade_profit':
+      current = getTotalTradeProfit(state.financeTotals, state.financeLedger);
+      break;
+    case 'operate_in_3_cities':
+      current = getOperationCityCount(state);
+      break;
     default:
       current = 0;
   }
@@ -156,6 +255,74 @@ export function getMissionProgress(
     target,
     isComplete: safeCurrent >= target,
   };
+}
+
+export function getMissionDisplayStatus(
+  missionId: string,
+  missions: MissionsState,
+  progress: MissionProgressResult,
+): MissionDisplayStatus {
+  if (missions.claimedMissionRewardIds.includes(missionId)) {
+    return 'claimed';
+  }
+  if (progress.isComplete) {
+    return 'ready';
+  }
+  return 'in_progress';
+}
+
+function getMissionSortPriority(
+  missionId: string,
+  missions: MissionsState,
+  progress: MissionProgressResult,
+): number {
+  const status = getMissionDisplayStatus(missionId, missions, progress);
+  if (status === 'ready') return 0;
+  if (status === 'in_progress') return 1;
+  return 2;
+}
+
+export function sortMissionIdsForDisplay(
+  missionIds: string[],
+  missions: MissionsState,
+  getProgress: (missionId: string) => MissionProgressResult,
+): string[] {
+  return [...missionIds].sort((a, b) => {
+    const progressA = getProgress(a);
+    const progressB = getProgress(b);
+    const priorityDiff =
+      getMissionSortPriority(a, missions, progressA) -
+      getMissionSortPriority(b, missions, progressB);
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
+
+    const ratioA = progressA.target > 0 ? progressA.current / progressA.target : 0;
+    const ratioB = progressB.target > 0 ? progressB.current / progressB.target : 0;
+    if (ratioB !== ratioA) {
+      return ratioB - ratioA;
+    }
+
+    return a.localeCompare(b);
+  });
+}
+
+export function getDashboardMissionIds(
+  missions: MissionsState,
+  getProgress: (missionId: string) => MissionProgressResult,
+  limit = 3,
+): string[] {
+  const claimed = new Set(missions.claimedMissionRewardIds);
+  const starterRemaining = STARTER_MISSION_IDS.filter(
+    (missionId) => missions.activeMissionIds.includes(missionId) && !claimed.has(missionId),
+  );
+
+  const pool =
+    starterRemaining.length > 1
+      ? starterRemaining
+      : missions.activeMissionIds.filter((missionId) => !claimed.has(missionId));
+
+  return sortMissionIdsForDisplay(pool, missions, getProgress).slice(0, limit);
 }
 
 function markTutorialStepCompleted(tutorial: TutorialState, stepId: TutorialStepId): TutorialState {
@@ -260,7 +427,7 @@ export function dismissTutorialStepState(
 
 export function syncMissionsState(
   missions: MissionsState,
-  state: Pick<StoreGameState, 'player' | 'financeTotals' | 'financeLedger' | 'activeDeliveries' | 'missions'>,
+  state: MissionProgressState,
 ): MissionsState {
   const completed = new Set(missions.completedMissionIds);
 

@@ -1,3 +1,5 @@
+import { InteractionManager, Platform, StatusBar } from 'react-native';
+
 import type { TutorialLayoutRect, TutorialTargetId, TutorialTargetRegistration } from './types';
 import { isValidTutorialRect } from './types';
 
@@ -36,6 +38,38 @@ export function getTutorialTargetRegistration(
   return targets.get(id);
 }
 
+export function hasTutorialTarget(id: TutorialTargetId): boolean {
+  return targets.has(id);
+}
+
+/**
+ * measureInWindow ile overlay AbsoluteFill aynı window koordinat sistemini kullanır.
+ * Android Modal senaryolarında StatusBar offset gerekirse buradan tek yerden uygulanır.
+ * Root overlay Modal olmadığı için varsayılan olarak offset uygulanmaz.
+ */
+export function normalizeTutorialTargetRect(
+  rect: TutorialLayoutRect,
+  options?: { applyAndroidStatusBarOffset?: boolean },
+): TutorialLayoutRect {
+  if (!options?.applyAndroidStatusBarOffset || Platform.OS !== 'android') {
+    return rect;
+  }
+  const statusBarHeight = StatusBar.currentHeight ?? 0;
+  if (statusBarHeight <= 0) {
+    return rect;
+  }
+  return {
+    ...rect,
+    y: Math.max(0, rect.y - statusBarHeight),
+  };
+}
+
+function waitForInteractions(): Promise<void> {
+  return new Promise((resolve) => {
+    InteractionManager.runAfterInteractions(() => resolve());
+  });
+}
+
 export async function measureTutorialTarget(
   id: TutorialTargetId,
 ): Promise<TutorialLayoutRect | null> {
@@ -44,12 +78,28 @@ export async function measureTutorialTarget(
     return null;
   }
   try {
+    await waitForInteractions();
     await registration.scrollIntoView?.();
     const rect = await registration.measure();
-    return isValidTutorialRect(rect) ? rect : null;
+    if (!isValidTutorialRect(rect)) {
+      return null;
+    }
+    return normalizeTutorialTargetRect(rect);
   } catch {
     return null;
   }
+}
+
+export async function measureTutorialTargetChain(
+  targetIds: TutorialTargetId[],
+): Promise<{ targetId: TutorialTargetId; rect: TutorialLayoutRect } | null> {
+  for (const targetId of targetIds) {
+    const rect = await measureTutorialTarget(targetId);
+    if (rect) {
+      return { targetId, rect };
+    }
+  }
+  return null;
 }
 
 export async function invokeTutorialTargetPress(id: TutorialTargetId): Promise<void> {

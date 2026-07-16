@@ -222,6 +222,7 @@ export default function TutorialOverlay({ layer = 'root' }: TutorialOverlayProps
   const tutorialId = useSpotlightTutorialStore((state) => state.tutorialId);
   const currentStepIndex = useSpotlightTutorialStore((state) => state.currentStepIndex);
   const targetRect = useSpotlightTutorialStore((state) => state.targetRect);
+  const resolvedTargetId = useSpotlightTutorialStore((state) => state.resolvedTargetId);
   const targetFallbackActive = useSpotlightTutorialStore((state) => state.targetFallbackActive);
   const activeTab = useSpotlightTutorialStore((state) => state.activeTab);
   const pendingAdvanceToStepIndex = useSpotlightTutorialStore(
@@ -268,16 +269,11 @@ export default function TutorialOverlay({ layer = 'root' }: TutorialOverlayProps
     if (!shouldRender || wrongTab || screenSize.width === 0) {
       return;
     }
+    // Only remeasure on real dimension changes after initial layout.
     unlockTargetMeasurement();
     void refreshTargetRect({ force: true });
-  }, [
-    refreshTargetRect,
-    screenSize.height,
-    screenSize.width,
-    shouldRender,
-    unlockTargetMeasurement,
-    wrongTab,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only on size changes
+  }, [screenSize.width, screenSize.height]);
 
   useEffect(() => {
     const window = Dimensions.get('window');
@@ -307,10 +303,15 @@ export default function TutorialOverlay({ layer = 'root' }: TutorialOverlayProps
 
   const tutorial = getSpotlightTutorial(tutorialId);
   const stepLabel = `${currentStepIndex + 1}/${tutorial.steps.length}`;
+  const usingAlternateTarget =
+    resolvedTargetId != null &&
+    resolvedTargetId !== step.targetId &&
+    (step.fallbackTargetIds?.includes(resolvedTargetId) ?? false);
+  const useFallbackCopy = targetFallbackActive || usingAlternateTarget;
   const displayTitle =
-    targetFallbackActive && step.fallbackTitle ? step.fallbackTitle : step.title;
+    useFallbackCopy && step.fallbackTitle ? step.fallbackTitle : step.title;
   const displayDescription =
-    targetFallbackActive && step.fallbackDescription
+    useFallbackCopy && step.fallbackDescription
       ? step.fallbackDescription
       : step.description;
   const primaryButtonLabel = step.primaryButtonLabel ?? 'Sonraki';

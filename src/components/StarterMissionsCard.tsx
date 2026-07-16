@@ -1,14 +1,15 @@
 /**
- * Dashboard başlangıç görevleri kartı
+ * Dashboard görevler kartı — başlangıç ve kariyer hedeflerinden en fazla 3 görev
  */
 
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { ActionButton, AppCard, ProgressBar, SectionTitle, StatusBadge } from './ui';
-import { getMissionById } from '../config/missions';
+import { createDefaultMissionsState, getMissionById } from '../config/missions';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../theme';
+import { getDashboardMissionIds, getMissionDisplayStatus } from '../utils/missionProgress';
 
 function formatMissionReward(missionId: string): string {
   const mission = getMissionById(missionId);
@@ -31,16 +32,14 @@ function formatMissionReward(missionId: string): string {
 }
 
 export default function StarterMissionsCard() {
-  const missions = useGameStore((state) => state.missions);
+  const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
 
-  const visibleMissions = useMemo(() => {
-    const active = missions?.activeMissionIds ?? [];
-    return active
-      .filter((missionId) => !missions?.claimedMissionRewardIds?.includes(missionId))
-      .slice(0, 3);
-  }, [missions?.activeMissionIds, missions?.claimedMissionRewardIds]);
+  const visibleMissions = useMemo(
+    () => getDashboardMissionIds(missions, getMissionProgressValue, 3),
+    [missions, getMissionProgressValue],
+  );
 
   if (visibleMissions.length === 0) {
     return null;
@@ -48,15 +47,14 @@ export default function StarterMissionsCard() {
 
   return (
     <View style={styles.wrap}>
-      <SectionTitle title="Başlangıç Görevleri" compact />
+      <SectionTitle title="Görevler" compact />
       <AppCard style={styles.card} padded>
         {visibleMissions.map((missionId, index) => {
           const mission = getMissionById(missionId);
           if (!mission) return null;
 
           const progress = getMissionProgressValue(missionId);
-          const isClaimed = missions?.claimedMissionRewardIds?.includes(missionId) ?? false;
-          const isComplete = progress.isComplete;
+          const status = getMissionDisplayStatus(missionId, missions, progress);
           const ratio = progress.target > 0 ? progress.current / progress.target : 0;
 
           return (
@@ -68,9 +66,7 @@ export default function StarterMissionsCard() {
                 <Text style={styles.missionTitle} numberOfLines={1}>
                   {mission.title}
                 </Text>
-                {isClaimed ? (
-                  <StatusBadge label="Tamamlandı" variant="success" size="sm" />
-                ) : isComplete ? (
+                {status === 'ready' ? (
                   <StatusBadge label="Hazır" variant="amber" size="sm" />
                 ) : (
                   <Text style={styles.missionProgressText}>
@@ -79,7 +75,7 @@ export default function StarterMissionsCard() {
                 )}
               </View>
 
-              {!isComplete && !isClaimed ? (
+              {status === 'in_progress' ? (
                 <ProgressBar progress={ratio} color={colors.accentBlue} height={4} />
               ) : null}
 
@@ -87,7 +83,7 @@ export default function StarterMissionsCard() {
                 Ödül: {formatMissionReward(missionId)}
               </Text>
 
-              {isComplete && !isClaimed ? (
+              {status === 'ready' ? (
                 <ActionButton
                   label="Ödülü Al"
                   onPress={() => claimMissionReward(missionId)}

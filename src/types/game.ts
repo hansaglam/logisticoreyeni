@@ -19,6 +19,9 @@ export type ProductId =
   | 'furniture' // Mobilya
   | 'beverage'; // İçecek
 
+/** Şehir kimliği — kayıt ve piyasa verisinde string id */
+export type CityId = string;
+
 /** Depo türleri — ürün saklama uyumluluğu için */
 export type WarehouseType =
   | 'standard'
@@ -76,6 +79,10 @@ export interface CityProductState {
    * Başlangıç verisinde yoksa simülasyon basePrice değerini kullanır.
    */
   currentPrice?: number;
+  /**
+   * Son fiyat güncellemeleri — mini trend grafikleri için (en fazla 12 nokta).
+   */
+  priceHistory?: number[];
 }
 
 /**
@@ -253,8 +260,8 @@ export interface Driver {
   weeklySalary?: number;
   /** Maaş ödeme periyodu */
   salaryPeriod?: 'daily' | 'weekly';
-  /** İşe alım ücreti ($) — tek seferlik */
-  hireCost?: number;
+  /** İşe alım ücreti ($) — tek seferlik; eski kayıtlarda yoksa 0 */
+  hireCost: number;
   /** Atandığı kamyon; boştaysa null */
   assignedTruckId: string | null;
   status: DriverStatus;
@@ -443,6 +450,7 @@ export type FinanceLedgerCategory =
   | 'contract_income'
   | 'trade_sale'
   | 'bonus'
+  | 'mission_reward'
   | 'other_income'
   | 'fuel'
   | 'maintenance'
@@ -606,7 +614,8 @@ export type GameNotificationActionTarget =
   | 'contracts'
   | 'fleet'
   | 'finance'
-  | 'map';
+  | 'map'
+  | 'market';
 
 export interface GameNotification {
   id: string;
@@ -616,6 +625,7 @@ export interface GameNotification {
   message: string;
   actionLabel?: string;
   actionTarget?: GameNotificationActionTarget;
+  marketFocus?: MarketFocusRequest;
   autoDismissMs?: number;
 }
 
@@ -635,6 +645,46 @@ export function resolveNotificationDismissMs(
     return autoDismissMs;
   }
   return DEFAULT_TOAST_DURATION[type] ?? 3000;
+}
+
+/** Piyasa fiyat alarmı — oyuncu tanımlı hedef fiyat takibi */
+export type MarketPriceAlertCondition =
+  | 'price_below'
+  | 'price_above'
+  | 'change_up_percent'
+  | 'change_down_percent';
+
+export interface MarketPriceAlert {
+  id: string;
+  cityId: CityId;
+  productId: ProductId;
+  condition: MarketPriceAlertCondition;
+  targetPrice?: number;
+  targetPercent?: number;
+  isActive: boolean;
+  createdAt: number;
+  triggeredAt?: number;
+  expiresAt?: number;
+  notificationId?: string;
+}
+
+/** Bildirimden Piyasa ekranına odaklanma — save'e yazılmaz */
+export interface MarketFocusRequest {
+  cityId: CityId;
+  productId: ProductId;
+}
+
+export interface MarketAlertActionResult {
+  success: boolean;
+  message?: string;
+  alertId?: string;
+  errorCode?:
+    | 'DUPLICATE_ALERT'
+    | 'MAX_ALERTS_REACHED'
+    | 'INVALID_TARGET'
+    | 'ALERT_NOT_FOUND'
+    | 'CITY_NOT_FOUND'
+    | 'PRODUCT_NOT_FOUND';
 }
 
 /** Piyasa ekranından İşler sekmesine aktarılan filtre — save'e yazılmaz */
@@ -824,6 +874,8 @@ export interface StoreGameState {
   spotlightTutorial: SpotlightTutorialPersistence;
   /** Başlangıç görevleri */
   missions: MissionsState;
+  /** Oyuncu tanımlı piyasa fiyat alarmları */
+  marketAlerts: MarketPriceAlert[];
 }
 
 /**

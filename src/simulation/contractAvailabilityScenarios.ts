@@ -16,6 +16,8 @@ const DRIVER = {
   fuelSaving: 0,
   morale: 80,
   salaryPerDay: 100,
+  hireCost: 0,
+  assignedTruckId: null,
 } satisfies Driver;
 
 function baseLeasedTruck(overrides: Partial<Truck> = {}): Truck {

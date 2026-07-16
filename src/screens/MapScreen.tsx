@@ -7,13 +7,13 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { debugConfig } from '../config/debug';
 import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
@@ -24,24 +24,21 @@ import { getContractAvailability } from '../simulation/delivery';
 import { findMarketOpportunities } from '../simulation/contracts';
 import {
   getRecommendedContractById,
-  getRecommendedDeliveryById,
-  getRecommendedContractTons,
   getRecommendedMapAction,
 } from '../simulation/mapRecommendations';
 import { useGameStore } from '../store/gameStore';
 import { getWorldMapCityPosition } from '../data/worldMapPositions';
 import { STATUS_BAR_HEIGHT } from '../theme/ui';
-import { getCityName, getProductName } from '../utils/entityLookup';
+import { getCityName } from '../utils/entityLookup';
 import type {
   Contract,
   Delivery,
   DeliveryStatus,
+  Driver,
   Player,
-  RecommendedMapAction,
   Truck,
   TruckTransfer,
 } from '../types/game';
-import { formatMoney, formatRatioPercent } from '../theme';
 
 const DEFAULT_TRUCK_CITY_ID = 'izmir';
 
@@ -75,15 +72,6 @@ const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
 const MAX_TRUCK_TRACK_PREVIEW = 3;
 
-type MapContextualAction = 'contracts' | 'fleet' | 'market';
-
-interface MapContextualPrompt {
-  title: string;
-  message: string;
-  buttonLabel: string;
-  action: MapContextualAction;
-}
-
 const COLORS = {
   background: '#050A12',
   card: '#0F172A',
@@ -104,27 +92,6 @@ const MAP_FILTERS: { key: NetworkFilterKey; label: string }[] = [
   { key: 'routes', label: 'Rotalar' },
   { key: 'opportunities', label: 'Fırsatlar' },
 ];
-
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
-
-function formatDistance(km: number): string {
-  return `${Math.round(km)} km`;
-}
-
-function formatRemainingHours(currentTime: number, estimatedArrivalTime: number): string {
-  const remaining = Math.max(0, estimatedArrivalTime - currentTime);
-  const hrs = Math.floor(remaining);
-  const mins = Math.round((remaining - hrs) * 60);
-  return `${hrs} sa ${mins.toString().padStart(2, '0')} dk kaldı`;
-}
-
-function getDeliveryStatusLabel(status: DeliveryStatus): string {
-  if (status === 'preparing') return 'Yükleniyor';
-  if (status === 'on_route') return 'Yolda';
-  return 'Aktif';
-}
 
 function safeProgress(value: number | undefined): number {
   if (!Number.isFinite(value)) return 0;
@@ -170,55 +137,63 @@ function truckTrackSortPriority(status: Truck['status']): number {
   }
 }
 
-function resolveMapContextualPrompt(params: {
+function buildMapRecommendationSubtitle(params: {
+  availableContracts: Contract[];
+  trucks: Truck[];
+  drivers: Driver[];
+  playerLevel: number;
   runningDeliveries: Delivery[];
-  runningTransfers: TruckTransfer[];
-  idleTruckCount: number;
-  hasStartableContracts: boolean;
-}): MapContextualPrompt {
-  if (params.runningDeliveries.length > 0) {
-    return {
-      title: 'Teslimat takipte',
-      message: 'Yoldaki teslimatlarının ilerlemesini takip edebilirsin.',
-      buttonLabel: 'Filoyu Gör',
-      action: 'fleet',
-    };
+  idleTruckCountByCity: Record<string, number>;
+}): string {
+  const {
+    availableContracts,
+    trucks,
+    drivers,
+    playerLevel,
+    runningDeliveries,
+    idleTruckCountByCity,
+  } = params;
+
+  const startable = availableContracts.filter((contract) =>
+    getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
+  );
+
+  if (startable.length === 0) {
+    return '';
   }
 
-  if (params.runningTransfers.length > 0) {
-    return {
-      title: 'Transfer yolda',
-      message: 'Yönlendirdiğin kamyon hedef şehre ulaşınca yeni işler için hazır olacak.',
-      buttonLabel: 'Filoyu Gör',
-      action: 'fleet',
-    };
+  for (const delivery of runningDeliveries) {
+    const destinationId = delivery.destinationCityId;
+    if (!destinationId) continue;
+
+    const linkedCount = startable.filter((contract) => contract.originCityId === destinationId).length;
+    if (linkedCount > 0) {
+      return `${getCityName(destinationId)} varışlı kamyonun için sıradaki işler hazır.`;
+    }
   }
 
-  if (params.idleTruckCount > 0 && params.hasStartableContracts) {
-    return {
-      title: 'Yeni rota hazır',
-      message: 'Boştaki kamyonların bulunduğu şehirlerden uygun işler var.',
-      buttonLabel: 'Sözleşmeleri Gör',
-      action: 'contracts',
-    };
+  const idleCityIds = Object.entries(idleTruckCountByCity)
+    .filter(([, count]) => count > 0)
+    .map(([cityId]) => cityId);
+
+  const contractsFromIdleCities = startable.filter((contract) =>
+    idleCityIds.includes(contract.originCityId),
+  );
+
+  const cityCounts = new Map<string, number>();
+  for (const contract of contractsFromIdleCities) {
+    cityCounts.set(contract.originCityId, (cityCounts.get(contract.originCityId) ?? 0) + 1);
   }
 
-  if (params.idleTruckCount > 0) {
-    return {
-      title: 'Kamyon beklemede',
-      message:
-        'Boştaki kamyonların bulunduğu şehirlerde uygun iş yok. Kamyonu farklı şehre yönlendirebilirsin.',
-      buttonLabel: 'Filoyu Aç',
-      action: 'fleet',
-    };
+  const citiesWithJobs = [...cityCounts.entries()].filter(([, count]) => count > 0);
+
+  if (citiesWithJobs.length === 1) {
+    const [cityId, count] = citiesWithJobs[0];
+    return `${getCityName(cityId)} çıkışlı ${count} uygun iş var.`;
   }
 
-  return {
-    title: 'Fırsat Bekleniyor',
-    message: 'Piyasa yeni sözleşmeler oluşturdukça burada öneriler görünür.',
-    buttonLabel: 'Piyasayı Gör',
-    action: 'market',
-  };
+  const total = contractsFromIdleCities.length > 0 ? contractsFromIdleCities.length : startable.length;
+  return `Boştaki kamyon şehirlerinde ${total} uygun iş var.`;
 }
 
 function findDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery | undefined {
@@ -387,128 +362,36 @@ function TruckTrackingSection({
   );
 }
 
-interface RecommendedActionCardProps {
-  action: RecommendedMapAction;
-  contract?: Contract;
-  delivery?: Delivery;
-  runningDeliveries: Delivery[];
-  currentTime: number;
-  contextualPrompt: MapContextualPrompt;
-  onDeliverySelect: (deliveryId: string) => void;
-  onActionPress: () => void;
-  onContextualPress: () => void;
+interface CompactRecommendedActionRowProps {
+  subtitle: string;
+  onPress: () => void;
 }
 
-function RecommendedActionCard({
-  action,
-  contract,
-  delivery,
-  runningDeliveries,
-  currentTime,
-  contextualPrompt,
-  onDeliverySelect,
-  onActionPress,
-  onContextualPress,
-}: RecommendedActionCardProps) {
-  if (action.type === 'active_delivery' && delivery) {
-    return (
-      <View style={styles.infoCard}>
-        <View style={styles.cardHeaderRow}>
-          <View style={styles.cardTitleBlock}>
-            <Text style={styles.cardEyebrow}>ÖNERİLEN AKSİYON</Text>
-            <Text style={styles.cardTitle} numberOfLines={1}>
-              {contextualPrompt.title}
-            </Text>
-          </View>
-          <Text style={styles.cardStatusBadge}>{getDeliveryStatusLabel(delivery.status)}</Text>
-        </View>
-
-        <View style={styles.cardBodyRow}>
-          <View style={styles.cardThumb}>
-            <GameIcon name="truck" size={18} color={COLORS.cyan} />
-          </View>
-          <View style={styles.cardContent}>
-            <Text style={styles.cardMetaLine} numberOfLines={1}>
-              {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)} ·{' '}
-              {formatRatioPercent(delivery.progress)}
-            </Text>
-            <Text style={styles.cardMetaLine} numberOfLines={2}>
-              {formatRemainingHours(currentTime, delivery.estimatedArrivalTime)} · {contextualPrompt.message}
-            </Text>
-            <ProgressBar progress={safeProgress(delivery.progress)} color={COLORS.green} height={3} />
-          </View>
-        </View>
-
-        {runningDeliveries.length > 1 ? (
-          <View style={styles.deliveryPickerRow}>
-            {runningDeliveries.map((item) => {
-              const isActive = item.id === delivery.id;
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[styles.deliveryPickerChip, isActive && styles.deliveryPickerChipActive]}
-                  onPress={() => onDeliverySelect(item.id)}
-                  activeOpacity={0.85}
-                >
-                  <Text
-                    style={[styles.deliveryPickerText, isActive && styles.deliveryPickerTextActive]}
-                    numberOfLines={1}
-                  >
-                    {getCityName(item.originCityId).slice(0, 3)}→
-                    {getCityName(item.destinationCityId).slice(0, 3)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ) : null}
-
-        <TouchableOpacity style={styles.cardButton} onPress={onContextualPress} activeOpacity={0.85}>
-          <Text style={styles.cardButtonText}>{contextualPrompt.buttonLabel}</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (action.type === 'contract' && contract) {
-    return (
-      <View style={styles.infoCard}>
-        <View style={styles.cardHeaderRow}>
-          <View style={styles.cardTitleBlock}>
-            <Text style={styles.cardEyebrow}>ÖNERİLEN AKSİYON</Text>
-            <Text style={styles.cardTitle} numberOfLines={1}>
+function CompactRecommendedActionRow({ subtitle, onPress }: CompactRecommendedActionRowProps) {
+  return (
+    <TouchableOpacity style={styles.compactActionCard} onPress={onPress} activeOpacity={0.88}>
+      <View style={styles.compactActionAccent} />
+      <View style={styles.compactActionBody}>
+        <View style={styles.compactActionTextBlock}>
+          <View style={styles.compactActionTitleRow}>
+            <View style={styles.compactActionBadge}>
+              <Text style={styles.compactActionBadgeText}>Öneri</Text>
+            </View>
+            <Text style={styles.compactActionTitle} numberOfLines={1}>
               Yeni rota hazır
             </Text>
-            <Text style={styles.cardMetaLine} numberOfLines={1}>
-              {getProductName(contract.productId)} · {getRecommendedContractTons(contract).toFixed(1)} ton ·{' '}
-              {formatDistance(contract.distanceKm)}
-            </Text>
-            <Text style={styles.cardMetaLine} numberOfLines={1}>
-              Tahmini kâr {formatMoney(action.estimatedProfit)} · {action.riskLabel}
-            </Text>
-            <Text style={styles.cardReasonLine} numberOfLines={2}>
-              {contextualPrompt.message}
-            </Text>
           </View>
-          <Text style={styles.cardPayment}>{formatMoney(contract.payment)}</Text>
+          <Text style={styles.compactActionSubtitle} numberOfLines={1}>
+            {subtitle}
+          </Text>
         </View>
-
-        <TouchableOpacity style={styles.cardButton} onPress={onActionPress} activeOpacity={0.85}>
-          <Text style={styles.cardButtonText}>Sözleşmeleri Gör</Text>
-        </TouchableOpacity>
+        <View style={styles.compactActionButton}>
+          <Text style={styles.compactActionButtonText} numberOfLines={1}>
+            İşleri Gör
+          </Text>
+        </View>
       </View>
-    );
-  }
-
-  return (
-    <View style={styles.infoCard}>
-      <Text style={styles.cardEyebrow}>ÖNERİLEN AKSİYON</Text>
-      <Text style={styles.cardEmptyTitle}>{contextualPrompt.title}</Text>
-      <Text style={styles.cardMetaLine}>{contextualPrompt.message}</Text>
-      <TouchableOpacity style={styles.cardButton} onPress={onContextualPress} activeOpacity={0.85}>
-        <Text style={styles.cardButtonText}>{contextualPrompt.buttonLabel}</Text>
-      </TouchableOpacity>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -651,11 +534,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
 
-  const runningTransfers = useMemo(
-    () => (activeTransfers ?? []).filter((transfer) => transfer.status === 'active'),
-    [activeTransfers],
-  );
-
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
 
@@ -667,15 +545,24 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     [availableContracts, trucks, drivers, playerLevel],
   );
 
-  const contextualPrompt = useMemo(
+  const recommendationSubtitle = useMemo(
     () =>
-      resolveMapContextualPrompt({
+      buildMapRecommendationSubtitle({
+        availableContracts,
+        trucks,
+        drivers,
+        playerLevel,
         runningDeliveries,
-        runningTransfers,
-        idleTruckCount: idleTrucks.length,
-        hasStartableContracts,
+        idleTruckCountByCity,
       }),
-    [runningDeliveries, runningTransfers, idleTrucks.length, hasStartableContracts],
+    [
+      availableContracts,
+      trucks,
+      drivers,
+      playerLevel,
+      runningDeliveries,
+      idleTruckCountByCity,
+    ],
   );
 
   const recommendedAction = useMemo(
@@ -709,10 +596,11 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     return getRecommendedContractById(contracts, recommendedAction.contractId);
   }, [recommendedAction, contracts]);
 
-  const recommendedDelivery = useMemo(() => {
-    if (recommendedAction.type !== 'active_delivery') return undefined;
-    return getRecommendedDeliveryById(activeDeliveries, recommendedAction.deliveryId);
-  }, [recommendedAction, activeDeliveries]);
+  const showRecommendedAction =
+    hasStartableContracts &&
+    recommendedAction.type === 'contract' &&
+    Boolean(recommendedContract) &&
+    recommendationSubtitle.length > 0;
 
   const handleRefreshMarket = () => {
     try {
@@ -738,69 +626,21 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     setStatusMessage('Fırsat seçildi — alt kartta detayları gör');
   };
 
-  const handleContextualPress = () => {
-    switch (contextualPrompt.action) {
-      case 'contracts':
-        onOpenContracts?.();
-        break;
-      case 'fleet':
-        requestNavigationToFleet('trucks');
-        break;
-      case 'market':
-        useGameStore.setState({ navigationRequest: { tab: 'market' } });
-        break;
-      default:
-        break;
-    }
-  };
-
   const handleOpenFleet = () => {
     requestNavigationToFleet('trucks');
   };
 
   const handleRecommendedActionPress = () => {
-    switch (recommendedAction.type) {
-      case 'contract': {
-        const contract = getRecommendedContractById(contracts, recommendedAction.contractId);
-        if (!contract) {
-          console.warn('[MapScreen] Recommended contract not found', recommendedAction.contractId);
-          return;
-        }
-        if (__DEV__) {
-          console.log('Map recommended contract opened', contract.id);
-        }
-        openContractsForMapContract(contract);
-        onOpenContracts?.();
-        break;
-      }
-      case 'active_delivery':
-        if (recommendedAction.buttonLabel === "Filo'yu Aç") {
-          requestNavigationToFleet('trucks');
-        } else {
-          useGameStore.setState({ navigationRequest: { tab: 'dashboard' } });
-        }
-        break;
-      case 'fleet_upgrade':
-        if (recommendedAction.fleetTarget === 'hire_drivers') {
-          requestNavigationToFleet('hire_drivers');
-        } else if (recommendedAction.fleetTarget === 'shop') {
-          requestNavigationToFleet('shop');
-        } else {
-          requestNavigationToFleet('trucks');
-        }
-        break;
-      case 'warehouse_trade':
-        useGameStore.setState({
-          navigationRequest: { tab: 'more' },
-          pendingMoreSubRoute: 'warehouse',
-        });
-        break;
-      case 'none':
-        useGameStore.setState({ navigationRequest: { tab: 'market' } });
-        break;
-      default:
-        break;
+    if (recommendedAction.type !== 'contract' || !recommendedContract) {
+      onOpenContracts?.();
+      return;
     }
+
+    if (__DEV__) {
+      console.log('Map recommended contract opened', recommendedContract.id);
+    }
+    openContractsForMapContract(recommendedContract);
+    onOpenContracts?.();
   };
 
   if (!player) {
@@ -908,17 +748,12 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           onDeliveryPress={handleDeliveryPress}
         />
 
-        <RecommendedActionCard
-          action={recommendedAction}
-          contract={recommendedContract}
-          delivery={recommendedDelivery}
-          runningDeliveries={runningDeliveries}
-          currentTime={currentTime}
-          contextualPrompt={contextualPrompt}
-          onDeliverySelect={handleDeliveryPress}
-          onActionPress={handleRecommendedActionPress}
-          onContextualPress={handleContextualPress}
-        />
+        {showRecommendedAction ? (
+          <CompactRecommendedActionRow
+            subtitle={recommendationSubtitle}
+            onPress={handleRecommendedActionPress}
+          />
+        ) : null}
 
         <TruckTrackingSection
           trucks={trucks}
@@ -1089,129 +924,80 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  infoCard: {
-    marginTop: 12,
+  compactActionCard: {
+    marginTop: 10,
+    minHeight: 76,
     backgroundColor: COLORS.card,
-    borderColor: COLORS.border,
     borderWidth: 1,
-    borderRadius: 16,
-    padding: 12,
-  },
-  cardHeaderRow: {
+    borderColor: 'rgba(148, 163, 184, 0.16)',
+    borderRadius: 14,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-    gap: 8,
+    overflow: 'hidden',
   },
-  cardTitleBlock: {
+  compactActionAccent: {
+    width: 3,
+    backgroundColor: 'rgba(56, 189, 248, 0.55)',
+  },
+  compactActionBody: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  compactActionTextBlock: {
     flex: 1,
     minWidth: 0,
   },
-  cardEyebrow: {
-    color: COLORS.cyan,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-    marginBottom: 2,
-    textTransform: 'uppercase',
-  },
-  cardTitle: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  cardStatusBadge: {
-    color: COLORS.green,
-    fontSize: 10,
-    fontWeight: '800',
-    marginTop: 4,
-  },
-  cardBodyRow: {
+  compactActionTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    marginBottom: 3,
   },
-  cardThumb: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: COLORS.card2,
+  compactActionBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
     borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  cardThumbIcon: {
-    fontSize: 18,
-  },
-  cardContent: {
-    flex: 1,
-    minWidth: 0,
-  },
-  cardMetaLine: {
-    color: COLORS.muted,
-    fontSize: 11,
-    lineHeight: 16,
-    marginBottom: 2,
-  },
-  cardReasonLine: {
-    color: COLORS.cyan,
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 4,
-  },
-  cardPayment: {
-    color: COLORS.accent,
-    fontSize: 14,
-    fontWeight: '800',
-    marginTop: 2,
+    borderColor: 'rgba(56, 189, 248, 0.35)',
     flexShrink: 0,
   },
-  cardEmptyTitle: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  cardButton: {
-    marginTop: 8,
-    backgroundColor: COLORS.accent,
-    borderRadius: 10,
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  cardButtonText: {
-    color: '#111827',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  deliveryPickerRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 10,
-  },
-  deliveryPickerChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    backgroundColor: COLORS.card2,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  deliveryPickerChipActive: {
-    borderColor: COLORS.accent,
-    backgroundColor: 'rgba(245, 158, 11, 0.12)',
-  },
-  deliveryPickerText: {
-    color: COLORS.muted,
+  compactActionBadgeText: {
+    color: COLORS.cyan,
     fontSize: 10,
     fontWeight: '700',
   },
-  deliveryPickerTextActive: {
-    color: COLORS.accent,
+  compactActionTitle: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1,
+    minWidth: 0,
+  },
+  compactActionSubtitle: {
+    color: COLORS.muted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  compactActionButton: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(56, 189, 248, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  compactActionButtonText: {
+    color: COLORS.cyan,
+    fontSize: 11,
+    fontWeight: '800',
   },
 
   trackingSection: {

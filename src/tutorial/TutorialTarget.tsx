@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, type ViewProps } from 'react-native';
+import { InteractionManager, View, type ViewProps } from 'react-native';
 
 import type { TutorialTargetId } from './types';
 import { registerTutorialTarget } from './tutorialTargetRegistry';
@@ -23,17 +23,23 @@ export function TutorialTarget({
   useEffect(() => {
     const measure = () =>
       new Promise<import('./types').TutorialLayoutRect | null>((resolve) => {
-        const node = viewRef.current;
-        if (!node) {
-          resolve(null);
-          return;
-        }
-        node.measureInWindow((x, y, width, height) => {
-          if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        const runMeasure = () => {
+          const node = viewRef.current;
+          if (!node) {
             resolve(null);
             return;
           }
-          resolve({ x, y, width, height });
+          node.measureInWindow((x, y, width, height) => {
+            if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+              resolve(null);
+              return;
+            }
+            resolve({ x, y, width, height });
+          });
+        };
+
+        InteractionManager.runAfterInteractions(() => {
+          requestAnimationFrame(runMeasure);
         });
       });
 

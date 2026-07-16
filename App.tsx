@@ -16,6 +16,15 @@ import { useGameLoop } from './src/hooks/useGameLoop';
 import { useSpotlightTutorialTriggers } from './src/hooks/useSpotlightTutorialTriggers';
 import { useSpotlightTutorialStore } from './src/store/spotlightTutorialStore';
 import { useGameStore } from './src/store/gameStore';
+import {
+  addNotificationResponseListener,
+  getMarketAlertFocusFromResponse,
+  setupNotificationHandler,
+} from './src/services/notifications';
+import { initAnonymousAuth } from './src/services/authService';
+import { configureGoogleSignIn } from './src/services/googleAuthService';
+import { initCloudSaveSync } from './src/storage/cloudSaveSync';
+import type { ProductId } from './src/types/game';
 
 import DashboardScreen from './src/screens/DashboardScreen';
 import MapScreen from './src/screens/MapScreen';
@@ -112,18 +121,46 @@ export default function App() {
   const isGameReady = useGameStore((state) => state.isGameReady);
 
   useEffect(() => {
+    // Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.
+    configureGoogleSignIn();
+    // Auth restore tamamlanana kadar anonymous sign-in yapılmaz.
+    void initAnonymousAuth();
     void useGameStore.getState().initializeGame();
 
+    setupNotificationHandler();
+    const notificationSub = addNotificationResponseListener((response) => {
+      const focus = getMarketAlertFocusFromResponse(response);
+      if (focus) {
+        useGameStore.getState().openMarketFromAlert({
+          cityId: focus.cityId,
+          productId: focus.productId as ProductId,
+        });
+      }
+      useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
+    });
+
     const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
+      }
       if (nextState === 'background' || nextState === 'inactive') {
         void useGameStore.getState().saveGame();
       }
     });
 
     return () => {
+      notificationSub.remove();
       subscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isGameReady) {
+      return;
+    }
+
+    void initCloudSaveSync(() => useGameStore.getState());
+  }, [isGameReady]);
 
   return (
     <AppSafeAreaProvider>

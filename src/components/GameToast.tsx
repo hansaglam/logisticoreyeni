@@ -62,6 +62,7 @@ export default function GameToast() {
   const requestNavigationFromNotification = useGameStore(
     (state) => state.requestNavigationFromNotification,
   );
+  const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
   const insets = useAppSafeAreaInsets();
 
   useEffect(() => {
@@ -82,7 +83,9 @@ export default function GameToast() {
   const topOffset = Math.max(insets.top, STATUS_BAR_HEIGHT) + 12;
 
   const handleAction = () => {
-    if (notification.actionTarget) {
+    if (notification.actionTarget === 'market' && notification.marketFocus) {
+      openMarketFromAlert(notification.marketFocus);
+    } else if (notification.actionTarget) {
       requestNavigationFromNotification(notification.actionTarget);
     }
     dismissNotification(notification.id);

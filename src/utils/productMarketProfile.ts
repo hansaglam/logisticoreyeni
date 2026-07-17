@@ -7,6 +7,8 @@ import type { ProductId } from '../types/game';
 export interface ProductMarketProfile {
   /** Temel volatilite katsayısı */
   volatility: number;
+  /** Tek adımda izin verilen max fiyat değişimi (oran) — dik pump önleme */
+  maxSingleStepRatio: number;
   /** Ana trend ne kadar net */
   trendStrength: number;
   meanReversion: number;
@@ -73,6 +75,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'fruit':
       return {
         volatility: 0.028,
+        maxSingleStepRatio: 0.034,
         trendStrength: 0.58,
         meanReversion: 0.14,
         shockChance: 0.035,
@@ -86,6 +89,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'steel':
       return {
         volatility: 0.009,
+        maxSingleStepRatio: 0.011,
         trendStrength: 0.88,
         meanReversion: 0.09,
         shockChance: 0.012,
@@ -99,6 +103,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'electronics':
       return {
         volatility: 0.019,
+        maxSingleStepRatio: 0.022,
         trendStrength: 0.72,
         meanReversion: 0.11,
         shockChance: 0.048,
@@ -112,6 +117,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'machinery':
       return {
         volatility: 0.012,
+        maxSingleStepRatio: 0.014,
         trendStrength: 0.78,
         meanReversion: 0.1,
         shockChance: 0.022,
@@ -125,6 +131,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'textile':
       return {
         volatility: 0.016,
+        maxSingleStepRatio: 0.018,
         trendStrength: 0.66,
         meanReversion: 0.12,
         shockChance: 0.028,
@@ -138,6 +145,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'furniture':
       return {
         volatility: 0.013,
+        maxSingleStepRatio: 0.015,
         trendStrength: 0.7,
         meanReversion: 0.11,
         shockChance: 0.025,
@@ -151,6 +159,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     case 'beverage':
       return {
         volatility: 0.014,
+        maxSingleStepRatio: 0.016,
         trendStrength: 0.68,
         meanReversion: 0.12,
         shockChance: 0.03,
@@ -164,6 +173,7 @@ export function getProductMarketProfile(productId: ProductId | string): ProductM
     default:
       return {
         volatility: 0.012,
+        maxSingleStepRatio: 0.014,
         trendStrength: 0.68,
         meanReversion: 0.11,
         shockChance: 0.025,
@@ -271,19 +281,21 @@ export function buildMarketStorySegments(
   switch (pattern) {
     case 'TREND_UP_PULLBACK':
       return [
-        { phase: 'impulse_up', lengthRatio: 0.26 + jitter() },
-        { phase: 'pullback', lengthRatio: 0.16 + jitter() * 0.7 },
-        { phase: 'impulse_up', lengthRatio: 0.24 + jitter() },
-        { phase: 'consolidation', lengthRatio: 0.14 + jitter() * 0.6 },
-        { phase: 'deceleration', lengthRatio: 0.1 + jitter() * 0.5 },
+        { phase: 'impulse_up', lengthRatio: 0.2 + jitter() * 0.5 },
+        { phase: 'pullback', lengthRatio: 0.14 + jitter() * 0.55 },
+        { phase: 'impulse_up', lengthRatio: 0.18 + jitter() * 0.45 },
+        { phase: 'pullback', lengthRatio: 0.1 + jitter() * 0.4 },
+        { phase: 'impulse_up', lengthRatio: 0.16 + jitter() * 0.45 },
+        { phase: 'deceleration', lengthRatio: 0.1 + jitter() * 0.35 },
       ];
     case 'TREND_DOWN_BOUNCE':
       return [
-        { phase: 'impulse_down', lengthRatio: 0.24 + jitter() },
-        { phase: 'bounce', lengthRatio: 0.14 + jitter() * 0.7 },
-        { phase: 'impulse_down', lengthRatio: 0.22 + jitter() },
-        { phase: 'bounce', lengthRatio: 0.1 + jitter() * 0.5 },
-        { phase: 'deceleration', lengthRatio: 0.12 + jitter() * 0.5 },
+        { phase: 'impulse_down', lengthRatio: 0.18 + jitter() * 0.5 },
+        { phase: 'bounce', lengthRatio: 0.12 + jitter() * 0.55 },
+        { phase: 'impulse_down', lengthRatio: 0.16 + jitter() * 0.45 },
+        { phase: 'bounce', lengthRatio: 0.1 + jitter() * 0.45 },
+        { phase: 'impulse_down', lengthRatio: 0.14 + jitter() * 0.4 },
+        { phase: 'deceleration', lengthRatio: 0.14 + jitter() * 0.45 },
       ];
     case 'BREAKOUT_UP':
       return [

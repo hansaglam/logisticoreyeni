@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { ProductPriceTrend } from '../../utils/productPriceTrend';
+import { MARKET_MINI_CHART_HEIGHT } from './marketChartVisuals';
 import MiniTrendChart, { type MiniTrendDirection } from './MiniTrendChart';
 
 interface ProductMiniTrendChartProps {
@@ -24,9 +25,7 @@ export default function ProductMiniTrendChart({ trend }: ProductMiniTrendChartPr
         data={chartData}
         trend={mapDirection(trend.direction)}
         variant="mini"
-        height={42}
-        lineStyle="smooth"
-        strokeWidth={1.9}
+        height={MARKET_MINI_CHART_HEIGHT}
       />
     </View>
   );

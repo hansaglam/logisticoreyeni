@@ -131,9 +131,9 @@ function applyPhaseOffset(
 
   switch (phase) {
     case 'impulse_up':
-      return amplitude * (0.16 + localProgress * 0.62) + wave;
+      return amplitude * (0.1 + localProgress * 0.38) * profile.trendStrength + wave;
     case 'impulse_down':
-      return -amplitude * (0.16 + localProgress * 0.62) - wave;
+      return -amplitude * (0.1 + localProgress * 0.38) * profile.trendStrength - wave;
     case 'pullback':
       return -amplitude * profile.pullbackDepth * (0.42 + Math.sin(localProgress * Math.PI) * 0.72);
     case 'bounce':
@@ -243,7 +243,9 @@ export function injectSubtlePullbacks(
       : [];
   const bounceCenters =
     direction === 'down'
-      ? [0.3 + rng() * 0.06, 0.6 + rng() * 0.07]
+      ? productId === 'fruit'
+        ? [0.22 + rng() * 0.05, 0.42 + rng() * 0.06, 0.62 + rng() * 0.05, 0.78 + rng() * 0.04]
+        : [0.3 + rng() * 0.06, 0.55 + rng() * 0.07, 0.72 + rng() * 0.05]
       : [];
 
   for (let index = 0; index < n; index += 1) {
@@ -409,6 +411,50 @@ function blendSmoothPriceSeries(prices: number[], smoothing: number): number[] {
   );
 }
 
+export function capSingleStepChanges(
+  prices: number[],
+  endPrice: number,
+  productId: string,
+): number[] {
+  if (prices.length < 2) return prices;
+
+  const profile = getProductMarketProfile(productId);
+  const maxRatio = profile.maxSingleStepRatio;
+  const result = [roundPrice(prices[0])];
+
+  for (let index = 1; index < prices.length; index += 1) {
+    const previous = result[index - 1];
+    const target = prices[index];
+    const delta = target - previous;
+    const maxDelta = previous * maxRatio;
+
+    if (Math.abs(delta) > maxDelta) {
+      result.push(roundPrice(previous + Math.sign(delta) * maxDelta));
+    } else {
+      result.push(roundPrice(target));
+    }
+  }
+
+  result[result.length - 1] = roundPrice(endPrice);
+
+  const tailLen = Math.min(5, result.length - 1);
+  for (let step = 0; step < tailLen; step += 1) {
+    const index = result.length - 1 - step;
+    const previous = result[index - 1];
+    const remainingSteps = step + 1;
+    const ideal = endPrice - (endPrice - previous) / remainingSteps;
+    const delta = ideal - previous;
+    const maxDelta = previous * maxRatio;
+    result[index] = roundPrice(
+      previous + Math.sign(delta) * Math.min(Math.abs(delta), maxDelta),
+    );
+  }
+
+  result[result.length - 1] = roundPrice(endPrice);
+  result[0] = roundPrice(prices[0]);
+  return result;
+}
+
 function generatePatternSeries(input: {
   pattern: MarketPricePattern;
   startPrice: number;
@@ -424,17 +470,26 @@ function generatePatternSeries(input: {
   const rng = createSeededRng(`${seed}-${pattern}`);
 
   const direction = inferTrendDirection(startPrice, endPrice, stockStatus);
+  let effectiveStart = roundPrice(startPrice);
+  const minTrendGap = profile.volatility * 2.2 + 0.018;
+
+  if (direction === 'up' && endPrice <= effectiveStart * (1 + minTrendGap)) {
+    effectiveStart = roundPrice(endPrice / (1 + minTrendGap + rng() * 0.015));
+  } else if (direction === 'down' && endPrice >= effectiveStart * (1 - minTrendGap)) {
+    effectiveStart = roundPrice(endPrice / (1 - minTrendGap - rng() * 0.015));
+  }
+
   const amplitude =
-    endPrice * profile.volatility * bias.volatilityMultiplier * (3.0 + rng() * 1.0);
+    endPrice * profile.volatility * bias.volatilityMultiplier * (2.2 + rng() * 0.6);
 
   const rawSegments = buildMarketStorySegments(pattern, direction, profile, rng);
   const segments = normalizeSegmentRatios(rawSegments);
 
-  const prices: number[] = [roundPrice(startPrice)];
+  const prices: number[] = [effectiveStart];
 
   for (let index = 1; index < pointCount - 1; index += 1) {
     const progress = index / (pointCount - 1);
-    const drift = startPrice + (endPrice - startPrice) * progress;
+    const drift = effectiveStart + (endPrice - effectiveStart) * progress;
 
     const segment = segments.find((item) => progress >= item.start && progress < item.end) ?? segments[0];
     const localProgress =
@@ -462,25 +517,27 @@ function generatePatternSeries(input: {
       shock = (rng() > 0.5 ? 1 : -1) * amplitude * (0.22 + rng() * 0.26);
     }
 
-    const minBound = Math.min(startPrice, endPrice) * 0.84;
-    const maxBound = Math.max(startPrice, endPrice) * 1.16;
+    const minBound = Math.min(effectiveStart, endPrice) * 0.9;
+    const maxBound = Math.max(effectiveStart, endPrice) * 1.1;
     let nextPrice = drift + phaseOffset + counterMove + shock;
     nextPrice = Math.max(minBound, Math.min(maxBound, nextPrice));
+
+    const previous = prices[prices.length - 1];
+    const stepDelta = nextPrice - previous;
+    const maxStep = previous * profile.maxSingleStepRatio;
+    if (Math.abs(stepDelta) > maxStep) {
+      nextPrice = previous + Math.sign(stepDelta) * maxStep;
+    }
 
     prices.push(roundPrice(nextPrice));
   }
 
   prices.push(roundPrice(endPrice));
 
-  if (direction === 'up' && prices[prices.length - 1] <= prices[0] * 1.012) {
-    prices[0] = roundPrice(endPrice * (1 - 0.055 - rng() * 0.035));
-  } else if (direction === 'down' && prices[prices.length - 1] >= prices[0] * 0.988) {
-    prices[0] = roundPrice(endPrice * (1 + 0.055 + rng() * 0.035));
-  }
-
-  let result = blendSmoothPriceSeries(prices, profile.smoothing * 0.28);
+  let result = blendSmoothPriceSeries(prices, profile.smoothing * 0.22);
+  result = capSingleStepChanges(result, endPrice, productId);
   result[result.length - 1] = roundPrice(endPrice);
-  result[0] = roundPrice(result[0]);
+  result[0] = roundPrice(effectiveStart);
 
   return avoidOverLinearChartShape(result, endPrice, productId, `${seed}-shape`);
 }

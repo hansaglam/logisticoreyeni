@@ -1,11 +1,10 @@
 import { colors } from '../theme';
 import type { ProductId } from '../types/game';
 import {
-  buildMarketChartSeries,
+  buildMarketChartSnapshot,
   type ChartTrendInfo,
   type MarketChartPattern,
 } from './marketChartSeries';
-import { MARKET_PRICE_HISTORY_DISPLAY_POINTS } from './marketPriceHistoryGenerator';
 import { PRODUCT_PRICE_HISTORY_MAX } from './priceHistoryCore';
 
 export type ProductTrendDirection = 'up' | 'down' | 'stable';
@@ -26,10 +25,12 @@ export interface ProductPriceTrendInput {
 }
 
 export interface ProductPriceTrend {
-  /** Detay grafik fiyat serisi (24 nokta) */
+  /** Detay analiz grafiği (48 nokta) */
   prices: number[];
-  /** Mini kart sparkline (12 nokta, aynı hikâye) */
+  /** Mini kart sparkline (son 18 nokta) */
   miniPrices: number[];
+  /** Oyun zamanı — grafik X ekseni etiketleri */
+  chartCurrentTime: number;
   /** Kontrollü chart pattern */
   chartPattern: MarketChartPattern;
   /** Status + pattern ile hizalı trend bilgisi */
@@ -93,30 +94,21 @@ export function getProductPriceTrend(input: ProductPriceTrendInput): ProductPric
     currentTime: input.currentTime,
   };
 
-  const detailChart = buildMarketChartSeries({
-    ...chartInput,
-    mode: 'detail' as const,
-  });
+  const snapshot = buildMarketChartSnapshot(chartInput);
+  const detailPrices = [...snapshot.detailPrices];
+  const miniPrices = [...snapshot.miniPrices];
+  detailPrices[detailPrices.length - 1] = currentPrice;
+  miniPrices[miniPrices.length - 1] = currentPrice;
 
-  const miniChart = buildMarketChartSeries({
-    ...chartInput,
-    mode: 'mini' as const,
-  });
-
-  const uniqueTail = detailChart.prices.slice(-MARKET_PRICE_HISTORY_DISPLAY_POINTS);
-  uniqueTail[uniqueTail.length - 1] = currentPrice;
-
-  const miniTail = miniChart.prices;
-  miniTail[miniTail.length - 1] = currentPrice;
-
-  const { chartTrendInfo } = detailChart;
+  const { chartTrendInfo } = snapshot;
 
   return {
-    prices: uniqueTail,
-    miniPrices: miniTail,
+    prices: detailPrices,
+    miniPrices,
+    chartCurrentTime: input.currentTime,
     chartPattern: chartTrendInfo.selectedPattern,
     chartTrendInfo,
-    points: buildNormalizedPoints(uniqueTail),
+    points: buildNormalizedPoints(detailPrices),
     direction: chartTrendInfo.displayTrendDirection,
     changePercent: chartTrendInfo.displayPercentChange,
     label: chartTrendInfo.displayTrendLabel,
@@ -129,15 +121,8 @@ export function formatTrendChangeDisplay(
 ): { label: string; color: string } {
   const pct = trend.changePercent;
 
-  if (trend.direction === 'stable') {
-    if (Math.abs(pct) <= 1) {
-      return { label: 'Dengeli', color: trend.color };
-    }
-    const arrow = pct > 0 ? '▲' : '▼';
-    return {
-      label: `${arrow} ${pct > 0 ? `+${pct}` : pct}%`,
-      color: trend.color,
-    };
+  if (trend.direction === 'stable' || pct === 0) {
+    return { label: 'Dengeli', color: trend.color };
   }
 
   const arrow =

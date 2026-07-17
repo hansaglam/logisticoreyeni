@@ -17,7 +17,7 @@ import {
   type ProductPriceTrend,
   type ProductTrendDirection,
 } from './productPriceTrend';
-import { getChartTrendCommentary } from './marketChartSeries';
+import { getChartTrendCommentary, getMarketChartPatternCommentary } from './marketChartSeries';
 import { resolveInventoryTradeProfit, resolveMarketBuyState, resolveMarketSellState } from './tradeDisplay';
 
 export interface NormalizedProductMarket {
@@ -194,38 +194,17 @@ export function getMarketCommentary(input: {
   const isShortage = stockStatus === 'Kıtlık' || stockStatus === 'Kritik Kıtlık';
 
   if (isSurplus) {
-    return getChartTrendCommentary({
-      displayPercentChange: -5,
-      displayTrendDirection: 'down',
-      displayTrendLabel: 'Baskı Altında',
-      displayTrendColor: '#EF4444',
-      selectedPattern: 'DOWN_WITH_BOUNCE',
-      momentumType: 'bounce',
-      statusKey: 'STOK_FAZLA',
-    });
+    return getMarketChartPatternCommentary('DOWN_WITH_BOUNCE', 'STOK_FAZLA');
   }
 
   if (isShortage) {
-    return getChartTrendCommentary({
-      displayPercentChange: 8,
-      displayTrendDirection: 'up',
-      displayTrendLabel: 'Yükselişte',
-      displayTrendColor: '#22C55E',
-      selectedPattern: 'UP_WITH_PULLBACK',
-      momentumType: 'pullback',
-      statusKey: isShortage && stockStatus === 'Kritik Kıtlık' ? 'YOGUN_TALEP' : 'STOK_AZ',
-    });
+    return getMarketChartPatternCommentary(
+      'UP_WITH_PULLBACK',
+      stockStatus === 'Kritik Kıtlık' ? 'YOGUN_TALEP' : 'STOK_AZ',
+    );
   }
 
-  return getChartTrendCommentary({
-    displayPercentChange: 0,
-    displayTrendDirection: 'stable',
-    displayTrendLabel: 'Dengeli',
-    displayTrendColor: '#38BDF8',
-    selectedPattern: 'SIDEWAYS_ACCUMULATION',
-    momentumType: 'accumulation',
-    statusKey: 'NORMAL',
-  });
+  return getMarketChartPatternCommentary('SIDEWAYS_ACCUMULATION', 'NORMAL');
 }
 
 export interface BuildMarketProductViewModelInput {

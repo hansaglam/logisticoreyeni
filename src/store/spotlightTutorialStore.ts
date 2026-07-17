@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
-import type { TabKey } from '../components/BottomTabBar';
+import type { TabKey } from '../navigation/tabTypes';
+import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import { getSpotlightTutorial } from '../tutorial/spotlightTutorialConfig';
 import type {
   SpotlightTutorialId,
@@ -85,7 +86,7 @@ function getStepTargetCandidates(step: SpotlightTutorialStep): TutorialTargetId[
 }
 
 function warnFallbackOnce(stepId: string, requestedId: TutorialTargetId, usedId: TutorialTargetId): void {
-  if (!__DEV__) {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL || !__DEV__) {
     return;
   }
   const key = `${stepId}:${requestedId}:${usedId}`;
@@ -263,6 +264,9 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
   },
 
   startTutorial: (tutorialId, options?: { force?: boolean }) => {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+      return;
+    }
     const persistence = useGameStore.getState().spotlightTutorial;
     if (
       !options?.force &&
@@ -394,7 +398,7 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
         return;
       }
 
-      if (__DEV__ && tutorialId === 'first_contract') {
+      if (__DEV__ && ENABLE_SPOTLIGHT_TUTORIAL && tutorialId === 'first_contract') {
         console.warn('[tutorial] No starter contract found for first_contract tutorial');
       }
 
@@ -500,19 +504,21 @@ export const useSpotlightTutorialStore = create<SpotlightTutorialStore>((set, ge
   },
 }));
 
-subscribeTutorialTargets(() => {
-  const state = useSpotlightTutorialStore.getState();
-  if (!state.isActive) {
-    return;
-  }
-  if (state.pendingAdvanceToStepIndex != null) {
-    void state.tryCompletePendingAdvance();
-    return;
-  }
-  if (!state.isTargetRectLocked) {
-    void state.refreshTargetRect();
-  }
-});
+if (ENABLE_SPOTLIGHT_TUTORIAL) {
+  subscribeTutorialTargets(() => {
+    const state = useSpotlightTutorialStore.getState();
+    if (!state.isActive) {
+      return;
+    }
+    if (state.pendingAdvanceToStepIndex != null) {
+      void state.tryCompletePendingAdvance();
+      return;
+    }
+    if (!state.isTargetRectLocked) {
+      void state.refreshTargetRect();
+    }
+  });
+}
 
 export function isSpotlightTutorialCompleted(id: SpotlightTutorialId): boolean {
   const persistence = useGameStore.getState().spotlightTutorial;
@@ -520,5 +526,8 @@ export function isSpotlightTutorialCompleted(id: SpotlightTutorialId): boolean {
 }
 
 export function canAutoStartSpotlightTutorial(id: SpotlightTutorialId): boolean {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+    return false;
+  }
   return !isSpotlightTutorialCompleted(id);
 }

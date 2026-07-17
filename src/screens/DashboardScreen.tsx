@@ -1,51 +1,49 @@
 /**
- * LogistiCore - Ana Dashboard Ekranı
+ * LogistiCore - Ana Dashboard (Oyun Hub)
  *
- * Sade, aksiyon odaklı komuta merkezi — özet metrikler, sonraki adım ve kritik akış.
+ * Mobil tycoon tarzı kompakt ana sayfa — kaynaklar, hero kart, sıradaki hamle,
+ * operasyon HUD, modül grid ve fırsatlar. Büyük görev listesi yok; ödül durumu
+ * Sıradaki Hamle kartında özetlenir.
  */
 
 import React, { useMemo } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import type { TabKey } from '../components/BottomTabBar';
-import StarterMissionsCard from '../components/StarterMissionsCard';
-import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
-import { TutorialTarget } from '../tutorial/TutorialTarget';
+import type { TabKey } from '../navigation/tabTypes';
 import {
-  ActionButton,
-  AppCard,
-  AppScreen,
-  GameIcon,
-  IconButton,
-  ProgressBar,
-  SectionTitle,
-  StatusBadge,
-} from '../components/ui';
-import { getTutorialStep } from '../config/tutorial';
-import {
-  calculateCompanyScore,
-  formatCompanyScore,
-} from '../simulation/companyScore';
+  buildDashboardStatTiles,
+  DashboardHeroCard,
+  DashboardModuleGrid,
+  DashboardMarketOpportunitiesSection,
+  DashboardNextActionCard,
+  DashboardOpportunitiesSection,
+  DashboardResourceBar,
+  DashboardStatGrid,
+  resolveNextAction,
+} from '../components/dashboard';
+import { AppScreen, GameIcon } from '../components/ui';
+import { createDefaultMissionsState } from '../config/missions';
+import { calculateCompanyScore } from '../simulation/companyScore';
+import { countPlayableContracts } from '../simulation/contracts';
 import { getSafeFuelPrice } from '../simulation/economy';
-import { getCityName, getProductName } from '../utils/entityLookup';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import {
-  calculateDailyOperatingCostBreakdown,
-  getWeeklyLeaseBurden,
-} from '../simulation/dailyOperatingCosts';
 import { getLevelProgress } from '../simulation/leveling';
+import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { useGameStore } from '../store/gameStore';
+import { buildDashboardOpportunities, pickDiverseDashboardOpportunities } from '../utils/dashboardOpportunities';
 import {
-  getWarehouseUsedCapacityTon,
-  normalizeWarehouse,
-} from '../simulation/trading';
-import { getRecentGameEvents, useGameStore } from '../store/gameStore';
+  detectMarketTradeOpportunities,
+  pickDiverseMarketTradeOpportunities,
+} from '../utils/marketTradeOpportunities';
+import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import {
-  buildDashboardOpportunities,
-  type DashboardOpportunityBadge,
-  type DashboardOpportunityItem,
-} from '../utils/dashboardOpportunities';
-import { colors, formatGameTimeCompact, formatMoney, formatRatioPercent, formatUnitPrice, radius, spacing, typography } from '../theme';
-import type { Contract, Delivery, GameEvent, MarketNews, Player, TruckTransfer } from '../types/game';
+  buildOnboardingEvaluationState,
+  dispatchOnboardingNavigation,
+  isOnboardingActive,
+  resolveOnboardingDashboardAction,
+} from '../onboarding/onboardingProgress';
+import { colors, formatMoney, spacing, typography } from '../theme';
+import type { Player } from '../types/game';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
@@ -53,40 +51,6 @@ interface DashboardScreenProps {
 }
 
 const LOW_CASH_THRESHOLD = 8_000;
-
-function formatDuration(hours: number): string {
-  const totalHours = Math.max(0, Math.round(hours));
-  const days = Math.floor(totalHours / 24);
-  const remainingHours = totalHours % 24;
-  if (days > 0) return `${days}g ${remainingHours}s`;
-  return `${remainingHours}s`;
-}
-
-function getDeliveryStatusVariant(status: Delivery['status']): 'blue' | 'amber' | 'success' | 'danger' {
-  switch (status) {
-    case 'on_route':
-      return 'blue';
-    case 'preparing':
-      return 'amber';
-    case 'completed':
-      return 'success';
-    default:
-      return 'danger';
-  }
-}
-
-function getDeliveryStatusLabel(status: Delivery['status']): string {
-  switch (status) {
-    case 'on_route':
-      return 'Yolda';
-    case 'preparing':
-      return 'Hazırlanıyor';
-    case 'completed':
-      return 'Tamamlandı';
-    default:
-      return 'Başarısız';
-  }
-}
 
 function getWarehouseFillRatio(player: Player, currentTime: number): number {
   const warehouses = player.warehouses ?? [];
@@ -101,432 +65,64 @@ function getWarehouseFillRatio(player: Player, currentTime: number): number {
   return totalCapacity > 0 ? usedCapacity / totalCapacity : 0;
 }
 
-/** Aynı title+type tekrarlarını Dashboard'da gizler — eventLog'a dokunmaz */
-function dedupeDashboardEvents(events: GameEvent[], limit = 3): GameEvent[] {
-  const seen = new Set<string>();
-  const result: GameEvent[] = [];
-
-  for (const event of events) {
-    const key = `${event.type}|${event.title.trim()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(event);
-    if (result.length >= limit) break;
-  }
-
-  return result;
-}
-
-function getNewsAccent(importance: MarketNews['importance']): string {
-  switch (importance) {
-    case 'high':
-      return colors.danger;
-    case 'medium':
-      return colors.warning;
-    default:
-      return colors.info;
-  }
-}
-
-function getEventAccent(event: GameEvent): string {
-  if (event.type === 'delivery' && event.title === 'Teslimat tamamlandı') return colors.success;
-  if (event.importance === 'high') return colors.danger;
-  if (event.importance === 'medium') return colors.info;
-  return colors.textMuted;
-}
-
-function normalizeDevelopmentCategory(event: GameEvent): string {
-  const title = event.title.toLowerCase();
-  if (event.type === 'delivery') return 'delivery';
-  if (title.includes('stok') || title.includes('depo') || event.type === 'warehouse') return 'stock';
-  if (title.includes('bakım') || title.includes('bakim')) return 'maintenance';
-  if (title.includes('satın') || title.includes('satin')) return 'purchase';
-  if (event.type === 'market' || event.type === 'finance') return 'market';
-  return event.type;
-}
-
-function eventPriorityScore(event: GameEvent): number {
-  if (event.type === 'delivery' && event.title === 'Teslimat tamamlandı') return 0;
-  if (event.importance === 'high') return 1;
-  if (event.importance === 'medium') return 2;
-  return 3;
-}
-
-interface DevelopmentItem {
-  id: string;
-  title: string;
-  message: string;
-  accent: string;
-}
-
-function buildRecentDevelopments(
-  news: MarketNews[],
-  events: GameEvent[],
-  limit = 3,
-): DevelopmentItem[] {
-  const items: DevelopmentItem[] = [];
-  const usedCategories = new Set<string>();
-
-  const sortedNews = [...news].sort((a, b) => {
-    const rank = { high: 0, medium: 1, low: 2 } as const;
-    return (rank[a.importance] ?? 2) - (rank[b.importance] ?? 2);
-  });
-
-  const topNews = sortedNews.find((item) => item.importance === 'high' || item.importance === 'medium');
-  if (topNews) {
-    usedCategories.add('news');
-    items.push({
-      id: `news-${topNews.id}`,
-      title: topNews.title,
-      message: topNews.message,
-      accent: getNewsAccent(topNews.importance),
-    });
-  }
-
-  const recentEvents = dedupeDashboardEvents(getRecentGameEvents(events, 20), 12).sort(
-    (a, b) => eventPriorityScore(a) - eventPriorityScore(b),
-  );
-
-  for (const event of recentEvents) {
-    if (items.length >= limit) break;
-    const category = normalizeDevelopmentCategory(event);
-    if (usedCategories.has(category)) continue;
-    usedCategories.add(category);
-    items.push({
-      id: event.id,
-      title: event.title,
-      message: event.message,
-      accent: getEventAccent(event),
-    });
-  }
-
-  if (items.length < limit && topNews && !usedCategories.has('news')) {
-    items.push({
-      id: `news-${topNews.id}`,
-      title: topNews.title,
-      message: topNews.message,
-      accent: getNewsAccent(topNews.importance),
-    });
-  }
-
-  return items.slice(0, limit);
-}
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-function StatLine({
-  label,
-  value,
-  valueColor = colors.textPrimary,
-}: {
-  label: string;
-  value: string;
-  valueColor?: string;
-}) {
+function CashWarningBanner({ cash }: { cash: number }) {
   return (
-    <View style={styles.statLine}>
-      <Text style={styles.statLineLabel} numberOfLines={1}>
-        {label}
-      </Text>
-      <Text
-        style={[styles.statLineValue, { color: valueColor }]}
-        numberOfLines={1}
-      >
-        {value}
+    <View style={styles.cashWarning}>
+      <GameIcon name="warning" size={13} color={colors.warning} />
+      <Text style={styles.cashWarningText}>
+        Nakit düşük ({formatMoney(cash)}) — giderlere dikkat et.
       </Text>
     </View>
   );
 }
 
-function CompanyHeaderCard({
-  companyName,
-  level,
-  money,
-  diamonds,
-  currentTime,
-  fuelPrice,
-  isPaused,
-  onTogglePause,
-}: {
-  companyName: string;
-  level: number;
-  money: number;
-  diamonds: number;
-  currentTime: number;
-  fuelPrice: number;
-  isPaused: boolean;
-  onTogglePause: () => void;
-}) {
-  return (
-    <AppCard variant="soft" style={styles.headerCard}>
-      <View style={styles.headerRow}>
-        <View style={styles.headerLeft}>
-          <View style={styles.avatarWrap}>
-            <GameIcon name="company" size={22} color={colors.accentAmber} />
-          </View>
-          <View style={styles.headerTextBlock}>
-            <Text style={styles.brandTitle}>LogistiCore</Text>
-            <Text style={styles.companyName} numberOfLines={1}>
-              {companyName}
-            </Text>
-            <Text style={styles.headerMeta}>
-              Level {level} · {formatGameTimeCompact(currentTime)}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.headerRight}>
-          <Text style={styles.cashValue}>{formatMoney(money)}</Text>
-          <Text style={styles.diamondValue}>💎 {diamonds.toLocaleString('en-US')}</Text>
-          <IconButton
-            icon={isPaused ? 'play' : 'pause'}
-            onPress={onTogglePause}
-            size={16}
-            color={isPaused ? colors.success : colors.textPrimary}
-            backgroundColor={isPaused ? colors.successSoft : colors.cardSoft}
-          />
-        </View>
-      </View>
-
-      <View style={styles.headerFooter}>
-        <View style={styles.fuelPill}>
-          <GameIcon name="fuel" size={12} color={colors.warning} />
-          <Text style={styles.fuelPillText}>Yakıt {formatUnitPrice(fuelPrice, '/L')}</Text>
-        </View>
-      </View>
-    </AppCard>
-  );
-}
-
-function TutorialStepCard({
-  title,
-  description,
-  ctaLabel,
-  onPress,
-}: {
-  title: string;
-  description: string;
-  ctaLabel: string;
-  onPress: () => void;
-}) {
-  return (
-    <AppCard variant="highlighted" style={styles.nextActionCard} padded>
-      <View style={styles.tutorialBadgeWrap}>
-        <StatusBadge label="Sıradaki Adım" variant="amber" size="sm" />
-      </View>
-      <Text style={styles.nextActionTitle}>{title}</Text>
-      <Text style={styles.nextActionSubtitle}>{description}</Text>
-      <ActionButton label={ctaLabel} onPress={onPress} variant="primary" />
-    </AppCard>
-  );
-}
-
-function CompactSummaryCard({
-  title,
-  icon,
-  children,
-}: {
-  title: string;
-  icon: React.ComponentProps<typeof GameIcon>['name'];
-  children: React.ReactNode;
-}) {
-  return (
-    <AppCard style={styles.summaryCard} padded>
-      <View style={styles.summaryHeader}>
-        <View style={styles.summaryIconWrap}>
-          <GameIcon name={icon} size={14} color={colors.accentBlue} />
-        </View>
-        <Text style={styles.summaryTitle} numberOfLines={1}>
-          {title}
-        </Text>
-      </View>
-      {children}
-    </AppCard>
-  );
-}
-
-function ExpenseSummaryCard({
-  dailyFixed,
-  weeklyLease,
-}: {
-  dailyFixed: number;
-  weeklyLease: number;
-}) {
-  const safeDaily = Number.isFinite(dailyFixed) ? dailyFixed : 0;
-  const safeWeekly = Number.isFinite(weeklyLease) ? weeklyLease : 0;
-
-  return (
-    <AppCard style={styles.expenseCard} padded>
-      <View style={styles.summaryHeader}>
-        <View style={styles.summaryIconWrap}>
-          <GameIcon name="expense" size={14} color={colors.danger} />
-        </View>
-        <Text style={styles.summaryTitle} numberOfLines={1}>
-          Gider Özeti
-        </Text>
-      </View>
-      <StatLine
-        label="Günlük sabit gider"
-        value={formatMoney(safeDaily)}
-        valueColor={colors.danger}
-      />
-      <Text style={styles.expenseHint}>
-        Günlük sabit gider; şoför maaşı, depo ve operasyon maliyetlerini içerir.
-      </Text>
-      <StatLine
-        label="Aktif kiralık kamyon"
-        value={`${formatMoney(safeWeekly)} / hafta`}
-        valueColor={colors.accentAmber}
-      />
-      <Text style={styles.expenseHint}>
-        Kiralık kamyon kirası haftalık peşin ödenir; günlük sabit gidere dahil değildir.
-      </Text>
-    </AppCard>
-  );
-}
-
-function CashWarningCard({ cash }: { cash: number }) {
-  return (
-    <AppCard style={styles.warningCard} padded>
-      <View style={styles.warningRow}>
-        <GameIcon name="warning" size={14} color={colors.warning} />
-        <Text style={styles.warningText}>
-          Nakit rezervi düşük ({formatMoney(cash)}). Sabit giderlere dikkat et.
-        </Text>
-      </View>
-    </AppCard>
-  );
-}
-
-function DevelopmentItemRow({ item }: { item: DevelopmentItem }) {
-  return (
-    <AppCard style={styles.developmentItem} padded={false}>
-      <View style={[styles.developmentAccent, { backgroundColor: item.accent }]} />
-      <View style={styles.developmentContent}>
-        <Text style={styles.developmentTitle} numberOfLines={1}>
-          {item.title}
-        </Text>
-        <Text style={styles.developmentMessage} numberOfLines={2}>
-          {item.message}
-        </Text>
-      </View>
-    </AppCard>
-  );
-}
-
-function formatOpportunityCargo(contract: Contract): string {
-  const weight = contract.cargoWeight ?? contract.amount ?? 0;
-  return `${weight.toFixed(1)} t`;
-}
-
-function OpportunityBadge({ badge }: { badge: DashboardOpportunityBadge }) {
-  return (
-    <View
-      style={[
-        styles.opportunityBadge,
-        {
-          backgroundColor: badge.backgroundColor,
-          borderColor: badge.borderColor,
-        },
-      ]}
-    >
-      <Text style={[styles.opportunityBadgeText, { color: badge.textColor }]} numberOfLines={1}>
-        {badge.label}
-      </Text>
-    </View>
-  );
-}
-
-function OpportunityCard({
-  item,
-  onPress,
-}: {
-  item: DashboardOpportunityItem;
-  onPress: () => void;
-}) {
-  const { contract, badges, estimatedProfit } = item;
-  const profitColor = estimatedProfit >= 0 ? colors.success : colors.danger;
-
-  return (
-    <TouchableOpacity activeOpacity={0.88} onPress={onPress}>
-      <AppCard style={styles.opportunityCard} padded={false}>
-        <View style={styles.opportunityCardInner}>
-          <View style={styles.opportunityMainRow}>
-            <View style={styles.opportunityLeft}>
-              <Text style={styles.opportunityRoute} numberOfLines={1}>
-                {getCityName(contract.originCityId)} → {getCityName(contract.destinationCityId)}
-              </Text>
-              <Text style={styles.opportunityMeta} numberOfLines={1}>
-                {getProductName(contract.productId)} · {formatOpportunityCargo(contract)} ·{' '}
-                {formatDuration(contract.deadlineHours)}
-              </Text>
-            </View>
-            <View style={styles.opportunityRight}>
-              <Text style={styles.opportunityPayment} numberOfLines={1}>
-                {formatMoney(contract.payment)}
-              </Text>
-              <Text style={[styles.opportunityProfit, { color: profitColor }]} numberOfLines={1}>
-                İş kârı {formatMoney(estimatedProfit)}
-              </Text>
-            </View>
-          </View>
-          {badges.length > 0 ? (
-            <View style={styles.opportunityBadgeRow}>
-              {badges.map((badge) => (
-                <OpportunityBadge key={badge.key} badge={badge} />
-              ))}
-            </View>
-          ) : null}
-        </View>
-      </AppCard>
-    </TouchableOpacity>
-  );
-}
-
-function OpportunitiesEmptyState() {
-  return (
-    <View style={styles.opportunityEmptyWrap}>
-      <Text style={styles.opportunityEmptyTitle}>Şu anda uygun fırsat yok.</Text>
-      <Text style={styles.opportunityEmptyMessage}>
-        Kamyona uygun işler oluştuğunda burada görünecek.
-      </Text>
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main screen
-// ---------------------------------------------------------------------------
-
-export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
+export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const routes = useGameStore((state) => state.routes) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
-  const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
-  const marketNews = useGameStore((state) => state.marketNews) ?? [];
-  const eventLog = useGameStore((state) => state.eventLog) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const cities = useGameStore((state) => state.cities) ?? [];
   const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
   const financeTotals = useGameStore((state) => state.financeTotals);
-  const missions = useGameStore((state) => state.missions);
+  const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
+  const onboarding = useGameStore((state) => state.onboarding);
+  const dismissOnboardingGuide = useGameStore((state) => state.dismissOnboardingGuide);
+  const completeOnboardingStepPress = useGameStore((state) => state.completeOnboardingStepPress);
+  const advanceOnboardingProgress = useGameStore((state) => state.advanceOnboardingProgress);
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
   const resumeGame = useGameStore((state) => state.resumeGame);
-  const tutorial = useGameStore((state) => state.tutorial);
   const notifyActiveDeliverySeen = useGameStore((state) => state.notifyActiveDeliverySeen);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
+  const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
+  const claimMissionReward = useGameStore((state) => state.claimMissionReward);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
+  const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
   const { scrollBottomPadding } = useTabBarLayout();
+
+  useOnboardingScreenVisit('Dashboard');
 
   const availableContracts = useMemo(
     () => contracts.filter((c) => c.status === 'available'),
     [contracts],
+  );
+
+  const playableContractCount = useMemo(
+    () =>
+      player
+        ? countPlayableContracts(
+            availableContracts,
+            player.trucks ?? [],
+            player.drivers ?? [],
+            Math.max(1, player.level ?? player.companyLevel ?? 1),
+            currentTime,
+            { playerMoney: player.money, globalEconomy },
+          )
+        : 0,
+    [availableContracts, player, currentTime, globalEconomy],
   );
 
   const runningDeliveries = useMemo(
@@ -568,11 +164,34 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
     }
   }, [runningDeliveries.length, notifyActiveDeliverySeen]);
 
-  const topOpportunities = useMemo(() => {
-    if (!player) {
-      return [];
-    }
-    return buildDashboardOpportunities({
+  const fleetSnapshot = useMemo(() => {
+    const snapshotTrucks = player?.trucks ?? [];
+    const snapshotDrivers = player?.drivers ?? [];
+    return {
+      idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
+      idleDrivers: snapshotDrivers.filter((d) => d.status === 'idle').length,
+    };
+  }, [player]);
+
+  const marketTradeOpportunitiesAll = useMemo(() => {
+    if (!player) return [];
+    return detectMarketTradeOpportunities({
+      player,
+      cities,
+      products,
+      currentTime,
+      limit: 8,
+    });
+  }, [player, cities, products, currentTime]);
+
+  const marketTradeOpportunities = useMemo(
+    () => pickDiverseMarketTradeOpportunities(marketTradeOpportunitiesAll, 2),
+    [marketTradeOpportunitiesAll],
+  );
+
+  const opportunities = useMemo(() => {
+    if (!player) return [];
+    const built = buildDashboardOpportunities({
       contracts,
       trucks: player.trucks ?? [],
       drivers: player.drivers ?? [],
@@ -583,51 +202,82 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
       cities,
       routes,
       products,
-      limit: 3,
+      limit: 6,
     });
+    return pickDiverseDashboardOpportunities(built, 2);
+  }, [contracts, player, currentTime, globalEconomy, activeDeliveries, cities, routes, products]);
+
+  const topOpportunities = opportunities;
+
+  const warehouseFillRatio = useMemo(
+    () => (player ? getWarehouseFillRatio(player, currentTime) : 0),
+    [player, currentTime],
+  );
+
+  const companyScore = useMemo(
+    () =>
+      player
+        ? calculateCompanyScore({ player, cities, products, financeLedger, currentTime })
+        : 0,
+    [player, cities, products, financeLedger, currentTime],
+  );
+
+  React.useEffect(() => {
+    advanceOnboardingProgress();
   }, [
-    contracts,
-    player,
-    currentTime,
-    globalEconomy,
-    activeDeliveries,
-    cities,
-    routes,
-    products,
+    advanceOnboardingProgress,
+    onboarding?.currentStepId,
+    onboarding?.completed,
+    activeDeliveries.length,
+    runningDeliveries.length,
+    warehouseInventoryCount,
+    missions?.flags?.tradePurchased,
+    missions?.flags?.deliveryStarted,
+    onboarding?.visitedScreens?.length,
   ]);
 
-  const deliveryPreview = useMemo(() => runningDeliveries.slice(0, 2), [runningDeliveries]);
-  const extraDeliveryCount = Math.max(0, runningDeliveries.length - deliveryPreview.length);
-  const transferPreview = useMemo(
-    () => (activeTransfers ?? []).filter((transfer) => transfer.status === 'active').slice(0, 1),
-    [activeTransfers],
-  );
-
-  const fleetSnapshot = useMemo(() => {
-    const snapshotTrucks = player?.trucks ?? [];
-    const snapshotDrivers = player?.drivers ?? [];
-    return {
-      totalTrucks: snapshotTrucks.length,
-      idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
-      idleDrivers: snapshotDrivers.filter((d) => d.status === 'idle').length,
-    };
-  }, [player]);
-
-  const operationCosts = useMemo(() => {
-    if (!player) {
-      return { dailyFixed: 0, weeklyLeaseBurden: 0 };
+  const onboardingAction = useMemo(() => {
+    if (!player || !onboarding || !isOnboardingActive(onboarding)) {
+      return null;
     }
-    const breakdown = calculateDailyOperatingCostBreakdown(player);
-    return {
-      dailyFixed: breakdown.total,
-      weeklyLeaseBurden: getWeeklyLeaseBurden(player.trucks ?? []),
-    };
-  }, [player]);
+    return resolveOnboardingDashboardAction(
+      buildOnboardingEvaluationState({
+        onboarding,
+        activeDeliveries,
+        missions,
+        player,
+        getMissionProgress: getMissionProgressValue,
+      }),
+    );
+  }, [
+    player,
+    onboarding,
+    activeDeliveries,
+    missions,
+    getMissionProgressValue,
+  ]);
 
-  const recentDevelopments = useMemo(
-    () => buildRecentDevelopments(marketNews, eventLog, 2),
-    [marketNews, eventLog],
+  const nextAction = useMemo(
+    () =>
+      resolveNextAction({
+        runningDeliveries: runningDeliveries.length,
+        playableContracts: playableContractCount,
+        missions,
+        getMissionProgress: getMissionProgressValue,
+        marketOpened: missions.flags.marketOpened,
+      }),
+    [runningDeliveries.length, playableContractCount, missions, getMissionProgressValue],
   );
+
+  const statTiles = useMemo(() => {
+    if (!player) return [];
+    return buildDashboardStatTiles({
+      idleTrucks: fleetSnapshot.idleTrucks,
+      activeDeliveries: runningDeliveries.length,
+      idleDrivers: fleetSnapshot.idleDrivers,
+      warehouseFillRatio,
+    });
+  }, [player, fleetSnapshot, runningDeliveries.length, warehouseFillRatio]);
 
   if (!player) {
     return (
@@ -640,21 +290,7 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
 
   const levelProgress = getLevelProgress(player);
   const fuelPrice = getSafeFuelPrice(globalEconomy);
-  const warehouseFillRatio = getWarehouseFillRatio(player, currentTime);
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
-
-  const companyScore = useMemo(
-    () =>
-      calculateCompanyScore({
-        player,
-        cities,
-        products,
-        financeLedger,
-        currentTime,
-      }),
-    [player, cities, products, financeLedger, currentTime],
-  );
-
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
 
   const handleNavigate = (tab: TabKey) => {
@@ -665,16 +301,42 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
     }
   };
 
-  const isSpotlightActive = useSpotlightTutorialStore((state) => state.isActive);
-  const showTutorialCard =
-    tutorial?.isEnabled && !tutorial?.isCompleted && !isSpotlightActive;
-  const tutorialStep = showTutorialCard
-    ? getTutorialStep(tutorial.currentStepId)
-    : undefined;
+  const handleOpenMissions = () => {
+    useGameStore.setState({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: 'missions',
+    });
+  };
 
-  const handleTutorialPress = () => {
-    if (!tutorialStep) return;
-    handleNavigate(tutorialStep.targetScreen);
+  const handleOpenWarehouse = () => {
+    useGameStore.setState({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: 'warehouse',
+    });
+  };
+
+  const handleNextActionPress = () => {
+    if (onboardingAction) {
+      dispatchOnboardingNavigation(onboardingAction.action, {
+        navigate: handleNavigate,
+        openMissions: handleOpenMissions,
+        openWarehouse: handleOpenWarehouse,
+        completeStep: completeOnboardingStepPress,
+      });
+      return;
+    }
+
+    switch (nextAction.action.type) {
+      case 'claim':
+        claimMissionReward(nextAction.action.missionId);
+        return;
+      case 'open-missions':
+        handleOpenMissions();
+        return;
+      case 'navigate':
+        handleNavigate(nextAction.action.tab);
+        return;
+    }
   };
 
   return (
@@ -684,224 +346,78 @@ export default function DashboardScreen({ onNavigate }: DashboardScreenProps) {
       scrollBottomPadding={scrollBottomPadding}
       contentContainerStyle={styles.screenContent}
     >
-      <CompanyHeaderCard
-        companyName={player.companyName}
-        level={levelProgress.level}
+      <DashboardResourceBar
         money={player.money}
         diamonds={playerDiamonds}
-        currentTime={currentTime}
-        fuelPrice={fuelPrice}
+        level={levelProgress.level}
+        xpProgress={levelProgress.progressRatio}
+        activeDeliveries={runningDeliveries.length}
         isPaused={isPaused}
         onTogglePause={isPaused ? resumeGame : pauseGame}
       />
 
-      {showTutorialCard && tutorialStep ? (
-        <TutorialStepCard
-          title={tutorialStep.title}
-          description={tutorialStep.description}
-          ctaLabel={tutorialStep.ctaLabel}
-          onPress={handleTutorialPress}
-        />
-      ) : null}
-
-      <StarterMissionsCard />
-
-      {showCashWarning ? <CashWarningCard cash={player.money} /> : null}
-
-      <View style={styles.summarySection}>
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryCol}>
-            <CompactSummaryCard title="Şirket Özeti" icon="company">
-              <StatLine
-                label="Nakit"
-                value={formatMoney(player.money ?? 0)}
-                valueColor={colors.success}
-              />
-              <StatLine
-                label="Şirket Puanı"
-                value={formatCompanyScore(companyScore ?? 0)}
-                valueColor={colors.accentAmber}
-              />
-              <StatLine
-                label="Level"
-                value={`${levelProgress.level}`}
-                valueColor={colors.accentAmber}
-              />
-              <StatLine
-                label="İtibar"
-                value={`${Math.round(player.reputation ?? 0)}/100`}
-              />
-              {!levelProgress.isMaxLevel ? (
-                <View style={styles.xpBlock}>
-                  <View style={styles.xpRow}>
-                    <Text style={styles.statLineLabel} numberOfLines={1}>
-                      XP
-                    </Text>
-                    <Text style={styles.xpValue} numberOfLines={1}>
-                      {levelProgress.xp ?? 0} / {levelProgress.xpToNextLevel}
-                    </Text>
-                  </View>
-                  <ProgressBar
-                    progress={levelProgress.progressRatio}
-                    color={colors.accentAmber}
-                    height={4}
-                  />
-                </View>
-              ) : (
-                <StatLine label="XP" value="Maksimum" valueColor={colors.accentAmber} />
-              )}
-            </CompactSummaryCard>
-          </View>
-
-          <View style={styles.summaryCol}>
-            <CompactSummaryCard title="Operasyon Özeti" icon="truck">
-              <StatLine
-                label="Boşta kamyon"
-                value={`${fleetSnapshot.idleTrucks}`}
-                valueColor={colors.success}
-              />
-              {runningDeliveries.length > 0 ? (
-                <TutorialTarget id="dashboard-active-delivery">
-                  <StatLine
-                    label="Aktif teslimat"
-                    value={`${runningDeliveries.length}`}
-                    valueColor={colors.accentBlue}
-                  />
-                </TutorialTarget>
-              ) : (
-                <StatLine
-                  label="Aktif teslimat"
-                  value={`${runningDeliveries.length}`}
-                  valueColor={colors.accentBlue}
-                />
-              )}
-              <StatLine
-                label="Müsait sözleşme"
-                value={`${availableContracts.length}`}
-                valueColor={colors.accentAmber}
-              />
-              <StatLine
-                label="Depo doluluk"
-                value={formatRatioPercent(warehouseFillRatio)}
-              />
-            </CompactSummaryCard>
-          </View>
-        </View>
-
-        <ExpenseSummaryCard
-          dailyFixed={operationCosts.dailyFixed ?? 0}
-          weeklyLease={operationCosts.weeklyLeaseBurden ?? 0}
-        />
-      </View>
-
-      {deliveryPreview.length > 0 ? (
-        <>
-          <SectionTitle title="Aktif Teslimatlar" />
-          {deliveryPreview.map((delivery) => {
-            const truck = player.trucks?.find((t) => t.id === delivery.truckId);
-            const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
-            const statusVariant = getDeliveryStatusVariant(delivery.status);
-
-            return (
-              <AppCard key={delivery.id} style={styles.listCard} padded>
-                <View style={styles.listCardHeader}>
-                  <View style={styles.listCardTitleRow}>
-                    <GameIcon name="route" size={16} color={colors.accentBlue} />
-                    <Text style={styles.listCardTitle} numberOfLines={1}>
-                      {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
-                    </Text>
-                  </View>
-                  <StatusBadge label={getDeliveryStatusLabel(delivery.status)} variant={statusVariant} size="sm" />
-                </View>
-                <Text style={styles.listCardMeta}>
-                  {getProductName(delivery.productId)} · {delivery.amount.toFixed(1)} ton
-                  {truck ? ` · ${truck.name}` : ''}
-                </Text>
-                <View style={styles.deliveryProgressRow}>
-                  <ProgressBar progress={delivery.progress} color={colors.accentBlue} />
-                  <Text style={styles.progressLabel}>{formatRatioPercent(delivery.progress)}</Text>
-                </View>
-                <View style={styles.listCardFooter}>
-                  <Text style={styles.listCardFooterText}>Kalan: {formatDuration(hoursLeft)}</Text>
-                  <Text style={[styles.listCardFooterText, { color: colors.success }]}>
-                    {formatMoney(delivery.estimatedProfit)} kâr
-                  </Text>
-                </View>
-              </AppCard>
-            );
-          })}
-          {extraDeliveryCount > 0 ? (
-            <Text style={styles.moreItemsHint}>+{extraDeliveryCount} teslimat daha yolda</Text>
-          ) : null}
-        </>
-      ) : null}
-
-      {transferPreview.length > 0 ? (
-        <>
-          <SectionTitle title="Boş Transfer" style={styles.sectionSpaced} />
-          {transferPreview.map((transfer: TruckTransfer) => {
-            const truck = player?.trucks?.find((candidate) => candidate.id === transfer.truckId);
-            const hoursLeft = Math.max(0, transfer.estimatedArrivalAt - currentTime);
-            return (
-              <AppCard key={transfer.id} style={styles.listCard} padded>
-                <View style={styles.listCardHeader}>
-                  <View style={styles.listCardTitleRow}>
-                    <GameIcon name="truck" size={16} color={colors.info} />
-                    <Text style={styles.listCardTitle} numberOfLines={1}>
-                      {getCityName(transfer.fromCityId)} → {getCityName(transfer.toCityId)}
-                    </Text>
-                  </View>
-                  <StatusBadge label="Boş transfer" variant="blue" size="sm" />
-                </View>
-                <Text style={styles.listCardMeta}>
-                  {truck?.name ?? 'Kamyon'} · {formatMoney(transfer.totalCost)} maliyet
-                </Text>
-                <View style={styles.deliveryProgressRow}>
-                  <ProgressBar progress={transfer.progress} color={colors.info} />
-                  <Text style={styles.progressLabel}>{formatRatioPercent(transfer.progress)}</Text>
-                </View>
-                <Text style={styles.listCardFooterText}>Kalan: {formatDuration(hoursLeft)}</Text>
-              </AppCard>
-            );
-          })}
-        </>
-      ) : null}
-
-      <SectionTitle title="En İyi Fırsatlar" style={styles.sectionSpaced} />
-      {topOpportunities.length > 0 ? (
-        topOpportunities.map((item) => (
-          <OpportunityCard
-            key={item.contract.id}
-            item={item}
-            onPress={() => openContractsForMapContract(item.contract)}
-          />
-        ))
-      ) : (
-        <OpportunitiesEmptyState />
-      )}
-      <ActionButton
-        label="Tüm Sözleşmeleri Gör"
-        onPress={() => handleNavigate('contracts')}
-        variant="secondary"
-        compact
-        style={styles.sectionAction}
+      <DashboardHeroCard
+        companyName={player.companyName}
+        level={levelProgress.level}
+        currentTime={currentTime}
+        fuelPrice={fuelPrice}
+        xp={levelProgress.xp ?? 0}
+        xpToNext={levelProgress.xpToNextLevel}
+        xpProgress={levelProgress.progressRatio}
+        isMaxLevel={levelProgress.isMaxLevel}
+        money={player.money}
+        companyScore={companyScore}
+        reputation={player.reputation ?? 0}
       />
 
-      {recentDevelopments.length > 0 ? (
-        <>
-          <SectionTitle title="Son Gelişmeler" style={styles.sectionSpaced} />
-          {recentDevelopments.map((item) => (
-            <DevelopmentItemRow key={item.id} item={item} />
-          ))}
-        </>
-      ) : null}
+      {showCashWarning ? <CashWarningBanner cash={player.money} /> : null}
+
+      <DashboardNextActionCard
+        title={onboardingAction?.title ?? nextAction.title}
+        description={onboardingAction?.description ?? nextAction.description}
+        ctaLabel={onboardingAction?.ctaLabel ?? nextAction.ctaLabel}
+        variant={onboardingAction?.variant ?? nextAction.variant}
+        icon={onboardingAction?.icon ?? nextAction.icon}
+        badgeLabel={onboardingAction ? undefined : nextAction.badgeLabel}
+        rewardChips={onboardingAction ? undefined : nextAction.rewardChips}
+        eyebrowText={onboardingAction?.progressLabel}
+        onDismissGuide={onboardingAction ? dismissOnboardingGuide : undefined}
+        isOnboardingGuide={!!onboardingAction}
+        goalHintLabel={onboardingAction ? 'Sıradaki hedef' : undefined}
+        onPress={handleNextActionPress}
+      />
+
+      <DashboardStatGrid tiles={statTiles} />
+
+      <View style={styles.hubLower}>
+        <DashboardModuleGrid
+          onNavigate={handleNavigate}
+          onOpenWarehouse={onOpenWarehouse}
+          contractsAvailable={playableContractCount}
+          contractsOpen={availableContracts.length}
+          marketOpportunities={marketTradeOpportunitiesAll.length}
+          idleTrucks={fleetSnapshot.idleTrucks}
+          activeDeliveries={runningDeliveries.length}
+          warehouseFillRatio={warehouseFillRatio}
+        />
+
+        <DashboardOpportunitiesSection
+          items={topOpportunities}
+          onPressItem={(item) => openContractsForMapContract(item.contract)}
+          onViewAll={() => handleNavigate('contracts')}
+        />
+
+        <DashboardMarketOpportunitiesSection
+          items={marketTradeOpportunities}
+          onPressItem={(item) =>
+            openMarketFromAlert({ cityId: item.cityId, productId: item.productId })
+          }
+          onViewAll={() => handleNavigate('market')}
+        />
+      </View>
     </AppScreen>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
   loadingRoot: {
@@ -916,364 +432,28 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   screenContent: {
-    gap: spacing.md,
+    gap: 11,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.sm,
   },
-
-  headerCard: {
-    marginBottom: spacing.xs,
+  hubLower: {
+    gap: 13,
   },
-  headerRow: {
+  cashWarning: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerLeft: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: spacing.md,
-  },
-  avatarWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    backgroundColor: colors.accentAmberSoft,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.md,
-  },
-  headerTextBlock: {
-    flex: 1,
-    minWidth: 0,
-  },
-  brandTitle: {
-    ...typography.cardTitle,
-    fontSize: 16,
-    color: colors.accentAmber,
-  },
-  companyName: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  headerMeta: {
-    ...typography.caption,
-    marginTop: spacing.xs,
-  },
-  headerRight: {
-    alignItems: 'flex-end',
     gap: spacing.sm,
-  },
-  cashValue: {
-    ...typography.statValue,
-    fontSize: 17,
-    color: colors.success,
-  },
-  diamondValue: {
-    ...typography.caption,
-    color: colors.accentBlue,
-    fontWeight: '700',
-  },
-  headerFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  fuelPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    backgroundColor: colors.cardSoft,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  fuelPillText: {
-    ...typography.caption,
-    fontWeight: '600',
-    color: colors.textSecondary,
-  },
-
-  nextActionCard: {
-    marginBottom: spacing.xs,
-  },
-  tutorialBadgeWrap: {
-    marginBottom: spacing.sm,
-    alignSelf: 'flex-start',
-  },
-  nextActionTitle: {
-    ...typography.sectionTitle,
-    marginBottom: spacing.xs,
-  },
-  nextActionSubtitle: {
-    ...typography.bodySmall,
-    marginBottom: spacing.md,
-  },
-
-  warningCard: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 10,
     backgroundColor: colors.warningSoft,
-    borderColor: 'rgba(245, 158, 11, 0.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
   },
-  warningRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  warningText: {
-    ...typography.bodySmall,
+  cashWarningText: {
+    ...typography.caption,
     flex: 1,
     color: colors.warning,
-  },
-
-  summarySection: {
-    gap: 10,
-    marginBottom: spacing.xs,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  summaryCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  summaryCard: {
-    flex: 1,
-  },
-  expenseCard: {
-    paddingVertical: spacing.sm,
-  },
-  summaryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  summaryIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accentBlueSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  summaryTitle: {
-    ...typography.cardTitle,
-    fontSize: 12,
-  },
-  expenseHint: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontSize: 10,
-    marginBottom: spacing.xs,
-    marginTop: -2,
-  },
-  statLine: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 3,
-  },
-  statLineLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-    flex: 1,
-    flexShrink: 1,
-    marginRight: spacing.xs,
-  },
-  statLineValue: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    flexShrink: 0,
-    textAlign: 'right',
-    maxWidth: '52%',
-  },
-  xpBlock: {
-    marginTop: spacing.xs,
-    gap: 4,
-  },
-  xpRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  xpValue: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.accentAmber,
-    flexShrink: 0,
-    textAlign: 'right',
-  },
-
-  sectionSpaced: {
-    marginTop: spacing.xs,
-  },
-  sectionAction: {
-    marginBottom: spacing.xs,
-  },
-
-  listCard: {
-    marginBottom: spacing.sm,
-  },
-  listCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  listCardTitleRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    minWidth: 0,
-  },
-  listCardTitle: {
-    ...typography.cardTitle,
-    flex: 1,
-    fontSize: 13,
-  },
-  listCardMeta: {
-    ...typography.caption,
-    marginBottom: spacing.sm,
-  },
-  deliveryProgressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  progressLabel: {
-    ...typography.caption,
-    fontWeight: '700',
-    minWidth: 34,
-    textAlign: 'right',
-  },
-  listCardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  listCardFooterText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  moreItemsHint: {
-    ...typography.caption,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginBottom: spacing.xs,
-  },
-
-  opportunityCard: {
-    marginBottom: spacing.sm,
-    backgroundColor: colors.card,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-  },
-  opportunityCardInner: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  opportunityMainRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  opportunityLeft: {
-    flex: 1,
-    minWidth: 0,
-  },
-  opportunityRight: {
-    alignItems: 'flex-end',
-    flexShrink: 0,
-    maxWidth: '42%',
-  },
-  opportunityRoute: {
-    ...typography.cardTitle,
-    fontSize: 13,
-    marginBottom: 2,
-  },
-  opportunityMeta: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  opportunityPayment: {
-    ...typography.bodySmall,
-    fontWeight: '800',
-    color: colors.success,
-    textAlign: 'right',
-  },
-  opportunityProfit: {
-    ...typography.caption,
-    fontWeight: '700',
-    marginTop: 2,
-    textAlign: 'right',
-  },
-  opportunityBadgeRow: {
-    flexDirection: 'row',
-    flexWrap: 'nowrap',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-    overflow: 'hidden',
-  },
-  opportunityBadge: {
-    borderWidth: 1,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    maxWidth: '50%',
-  },
-  opportunityBadgeText: {
-    ...typography.caption,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  opportunityEmptyWrap: {
-    marginBottom: spacing.xs,
-    gap: 2,
-  },
-  opportunityEmptyTitle: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  opportunityEmptyMessage: {
-    ...typography.caption,
-    color: colors.textMuted,
-    lineHeight: 16,
-  },
-
-  developmentItem: {
-    marginBottom: spacing.sm,
-    flexDirection: 'row',
-    padding: 0,
-    overflow: 'hidden',
-  },
-  developmentAccent: {
-    width: 4,
-  },
-  developmentContent: {
-    flex: 1,
-    padding: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  developmentTitle: {
-    ...typography.cardTitle,
-    fontSize: 12,
-    marginBottom: 2,
-  },
-  developmentMessage: {
-    ...typography.caption,
-    lineHeight: 16,
+    fontWeight: '600',
   },
 });

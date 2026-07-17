@@ -8,9 +8,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { CITIES } from '../data/cities';
-import { normalizeDriver } from '../data/drivers';
+import { normalizeDriver, STARTER_DRIVER } from '../data/drivers';
 import { PRODUCTS } from '../data/products';
 import { ROUTES } from '../data/routes';
+import { STARTER_TRUCK } from '../data/trucks';
 import { normalizeGlobalEconomy } from '../simulation/economy';
 import { normalizeTruckCity } from '../simulation/delivery';
 import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/leveling';
@@ -18,9 +19,14 @@ import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals } from '../utils/financeLedger';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
+import {
+  inferLegacyOnboardingFromSave,
+  normalizeOnboardingState,
+} from '../onboarding/onboardingProgress';
 import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
 import { normalizeCitiesPriceHistory, seedProductPriceHistory } from '../utils/productPriceHistory';
 import { normalizeMarketAlerts } from '../utils/marketAlerts';
+import { migratePlayerTruckNames } from '../utils/truckDisplayNames';
 import type {
   City,
   Contract,
@@ -31,6 +37,7 @@ import type {
   GlobalEconomy,
   MarketNews,
   MissionsState,
+  OnboardingState,
   MarketPriceAlert,
   Player,
   Product,
@@ -101,6 +108,7 @@ export interface SaveGamePayload {
   lastManualContractRefreshTime?: number;
   tutorial?: TutorialState;
   missions?: MissionsState;
+  onboarding?: OnboardingState;
   spotlightTutorial?: SpotlightTutorialPersistence;
   marketAlerts?: MarketPriceAlert[];
 }
@@ -142,16 +150,38 @@ function cloneDefaultCities(): City[] {
   return structuredClone(CITIES).map((city) => ({
     ...city,
     products: Object.fromEntries(
-      Object.entries(city.products).map(([productId, productState]) => [
-        productId,
-        {
-          ...productState,
-          currentPrice: productState.currentPrice ?? productState.basePrice,
-          priceHistory: seedProductPriceHistory(
-            productState.currentPrice ?? productState.basePrice,
-          ),
-        },
-      ]),
+      Object.entries(city.products).map(([productId, productState]) => {
+        const stock = productState.stock ?? 0;
+        const targetStock =
+          productState.targetStock && productState.targetStock > 0
+            ? productState.targetStock
+            : Math.max(stock, 1);
+        const ratio = stock / targetStock;
+        let stockStatus = 'Dengeli';
+        if (ratio < 0.3) stockStatus = 'Kritik Kıtlık';
+        else if (ratio < 0.7) stockStatus = 'Kıtlık';
+        else if (ratio <= 1.2) stockStatus = 'Dengeli';
+        else if (ratio <= 1.6) stockStatus = 'Fazla';
+        else stockStatus = 'Yüksek Fazla';
+
+        const currentPrice = productState.currentPrice ?? productState.basePrice;
+
+        return [
+          productId,
+          {
+            ...productState,
+            currentPrice,
+            priceHistory: seedProductPriceHistory(currentPrice, {
+              productId,
+              cityId: city.id,
+              basePrice: productState.basePrice,
+              stock,
+              targetStock,
+              stockStatus,
+            }),
+          },
+        ];
+      }),
     ) as City['products'],
   }));
 }
@@ -176,6 +206,62 @@ function normalizePlayerWarehouses(warehouses: Warehouse[]): Warehouse[] {
   return (warehouses ?? []).map((warehouse) => normalizeWarehouse(warehouse));
 }
 
+function hasActiveDeliveriesInFlight(deliveries: Delivery[] | undefined): boolean {
+  return (deliveries ?? []).some(
+    (delivery) => delivery.status === 'on_route' || delivery.status === 'preparing',
+  );
+}
+
+/** Boş filo save'lerinde oynanabilirlik için güvenli kurtarma */
+function recoverStarterFleetIfMissing(
+  player: Player,
+  activeDeliveries: Delivery[] = [],
+): Player {
+  const trucks = player.trucks ?? [];
+  const drivers = player.drivers ?? [];
+
+  if (trucks.length > 0 && drivers.length > 0) {
+    return player;
+  }
+
+  if (hasActiveDeliveriesInFlight(activeDeliveries)) {
+    console.warn(
+      '[saveGame] Empty fleet with active deliveries — skipping starter fleet recovery',
+    );
+    return player;
+  }
+
+  const homeCityId = player.homeCityId ?? 'izmir';
+  const recoveredTrucks =
+    trucks.length > 0
+      ? trucks
+      : [normalizeTruckCity(structuredClone(STARTER_TRUCK), homeCityId)];
+  let recoveredDrivers =
+    drivers.length > 0 ? drivers : [structuredClone(STARTER_DRIVER)];
+
+  if (drivers.length === 0 && recoveredTrucks.length > 0) {
+    recoveredDrivers = [
+      {
+        ...recoveredDrivers[0],
+        assignedTruckId: recoveredTrucks[0].id,
+      },
+    ];
+  }
+
+  if (trucks.length === 0) {
+    console.warn('[saveGame] Recovered missing starter truck for playable save');
+  }
+  if (drivers.length === 0) {
+    console.warn('[saveGame] Recovered missing starter driver for playable save');
+  }
+
+  return {
+    ...player,
+    trucks: recoveredTrucks,
+    drivers: recoveredDrivers,
+  };
+}
+
 function normalizePlayerTrucks(trucks: Player['trucks'], homeCityId: string): Player['trucks'] {
   const fallbackHome = homeCityId || 'izmir';
   return (trucks ?? []).map((truck) => normalizeTruckCity(truck, fallbackHome));
@@ -183,13 +269,14 @@ function normalizePlayerTrucks(trucks: Player['trucks'], homeCityId: string): Pl
 
 export function normalizeLoadedPlayer(player: Player): Player {
   const homeCityId = player.homeCityId ?? 'izmir';
-  return normalizePlayerProgress({
+  const normalized = normalizePlayerProgress({
     ...player,
     homeCityId,
     warehouses: normalizePlayerWarehouses(player.warehouses ?? []),
     trucks: normalizePlayerTrucks(player.trucks, homeCityId),
     drivers: (player.drivers ?? []).map((driver) => normalizeDriver(driver)),
   });
+  return migratePlayerTruckNames(normalized);
 }
 
 /** Eski save'lerde eksik alanlar için varsayılan değerler */
@@ -287,6 +374,20 @@ export function createDefaultSaveFallbacks(
     missions: normalizeMissionsState(
       isRecord(payload.missions) ? (payload.missions as Partial<MissionsState>) : undefined,
     ),
+    onboarding: isRecord(payload.onboarding)
+      ? normalizeOnboardingState(payload.onboarding as Partial<OnboardingState>)
+      : inferLegacyOnboardingFromSave({
+          completedContracts: player.completedContracts ?? 0,
+          activeDeliveryCount: isArray(payload.activeDeliveries)
+            ? (payload.activeDeliveries as Delivery[]).length
+            : 0,
+          deliveryStarted: isRecord(payload.missions)
+            ? (payload.missions as Partial<MissionsState>).flags?.deliveryStarted === true
+            : false,
+          tradePurchased: isRecord(payload.missions)
+            ? (payload.missions as Partial<MissionsState>).flags?.tradePurchased === true
+            : false,
+        }),
     spotlightTutorial: normalizeSpotlightTutorialState(
       isRecord(payload.spotlightTutorial)
         ? (payload.spotlightTutorial as Partial<SpotlightTutorialPersistence>)
@@ -386,6 +487,7 @@ export function normalizeSavePayload(
     lastManualContractRefreshTime: withFallbacks.lastManualContractRefreshTime as number,
     tutorial: withFallbacks.tutorial as TutorialState,
     missions: withFallbacks.missions as MissionsState,
+    onboarding: withFallbacks.onboarding as OnboardingState,
     spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
     marketAlerts: normalizeMarketAlerts(withFallbacks.marketAlerts as MarketPriceAlert[] | undefined),
   };
@@ -406,6 +508,10 @@ function hasMinimalSaveStructure(payload: Record<string, unknown>): boolean {
   if (!isArray(payload.player.trucks) || !isArray(payload.player.drivers)) {
     console.warn('[saveGame] Save missing player trucks/drivers arrays.');
     return false;
+  }
+
+  if (payload.player.trucks.length === 0 || payload.player.drivers.length === 0) {
+    console.warn('[saveGame] Save has empty trucks or drivers — will attempt recovery on load.');
   }
 
   return true;
@@ -731,6 +837,7 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastManualContractRefreshTime: state.lastManualContractRefreshTime,
     tutorial: structuredClone(state.tutorial),
     missions: structuredClone(state.missions),
+    onboarding: structuredClone(state.onboarding),
     spotlightTutorial: structuredClone(state.spotlightTutorial),
     marketAlerts: structuredClone(state.marketAlerts ?? []),
   };
@@ -741,10 +848,13 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
   const safeCurrentTime = payload.currentTime ?? 0;
   const fallbackTickTime =
     Math.floor(safeCurrentTime / economyTickInterval) * economyTickInterval;
-  const player: Player = normalizeLoadedPlayer({
-    ...payload.player,
-    warehouses: payload.player.warehouses ?? [],
-  });
+  const player: Player = recoverStarterFleetIfMissing(
+    normalizeLoadedPlayer({
+      ...payload.player,
+      warehouses: payload.player.warehouses ?? [],
+    }),
+    payload.activeDeliveries ?? [],
+  );
 
   return {
     currentTime: safeCurrentTime,
@@ -772,6 +882,14 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
     tutorial: normalizeTutorialState(payload.tutorial),
     missions: normalizeMissionsState(payload.missions),
+    onboarding: payload.onboarding
+      ? normalizeOnboardingState(payload.onboarding)
+      : inferLegacyOnboardingFromSave({
+          completedContracts: player.completedContracts ?? 0,
+          activeDeliveryCount: payload.activeDeliveries?.length ?? 0,
+          deliveryStarted: payload.missions?.flags?.deliveryStarted === true,
+          tradePurchased: payload.missions?.flags?.tradePurchased === true,
+        }),
     spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
     marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
   };

@@ -13,12 +13,12 @@ import {
   View,
   type ScrollView as ScrollViewType,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import ContractQuickActionSheet from '../components/contracts/ContractQuickActionSheet';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
+import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import {
   AppScreen,
   EmptyState,
@@ -52,9 +52,10 @@ import {
   isRouteContractFilter,
 } from '../utils/contractSorting';
 import { useGameStore } from '../store/gameStore';
+import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
-import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
 
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
@@ -392,7 +393,7 @@ function ContractsSummaryStrip({
     <View style={styles.summaryStrip}>
       <Text style={styles.compactStatText}>
         <Text style={styles.statValueInfo}>{availableCount}</Text>
-        {' müsait · '}
+        {' iş ilanı · '}
         <Text style={styles.statValueAmber}>{activeCount}</Text>
         {' aktif · En yüksek '}
         <Text style={styles.statValueSuccess}>{formatMoney(bestPayment)}</Text>
@@ -689,7 +690,10 @@ export default function ContractsScreen() {
   const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
   const notifyContractsScreenOpened = useGameStore((state) => state.notifyContractsScreenOpened);
   const notifyContractAssignmentOpened = useGameStore((state) => state.notifyContractAssignmentOpened);
-  const { tabBarHeight, scrollBottomPadding } = useTabBarLayout();
+  const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+
+  useOnboardingScreenVisit('Contracts');
+  const onboardingHint = useActiveOnboardingHint(['first_contract']);
 
   const scrollRef = useRef<ScrollViewType>(null);
 
@@ -768,8 +772,9 @@ export default function ContractsScreen() {
         drivers,
         playerLevel,
         currentTime,
+        { playerMoney: player?.money, globalEconomy },
       ),
-    [availableContracts, trucks, drivers, playerLevel, currentTime],
+    [availableContracts, trucks, drivers, playerLevel, currentTime, player?.money, globalEconomy],
   );
 
   const filteredContracts = useMemo(() => {
@@ -809,7 +814,7 @@ export default function ContractsScreen() {
     isMarketOpportunityFilter(marketContractFilter) || isRouteContractFilter(marketContractFilter);
 
   useEffect(() => {
-    if (!__DEV__) {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL || !__DEV__) {
       return;
     }
     const spotlight = useSpotlightTutorialStore.getState();
@@ -1035,8 +1040,8 @@ export default function ContractsScreen() {
     : '';
 
   return (
-    <View style={[styles.screenRoot, { paddingBottom: tabBarHeight }]}>
-      <SafeAreaView style={styles.safeArea}>
+    <View style={styles.screenRoot}>
+      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
         <View style={styles.header}>
           <View style={styles.headerSideSlot} />
           <Text style={styles.headerTitle}>Sözleşmeler</Text>
@@ -1074,6 +1079,18 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
+        {onboardingHint ? (
+          <OnboardingHintCard
+            title={onboardingHint.title}
+            description={onboardingHint.description}
+            icon={onboardingHint.icon}
+            badgeLabel={onboardingHint.badgeLabel}
+            accentVariant={onboardingHint.accentVariant}
+            onDismiss={onboardingHint.onDismiss}
+            style={styles.onboardingHint}
+          />
+        ) : null}
+
         <ContractsSummaryStrip
           availableCount={availableContracts.length}
           activeCount={runningDeliveries.length}
@@ -1093,7 +1110,7 @@ export default function ContractsScreen() {
           style={styles.listScroll}
           contentContainerStyle={[
             styles.listScrollContent,
-            { paddingBottom: Math.max(scrollBottomPadding, tabBarHeight + 48) },
+            { paddingBottom: scrollBottomPadding },
           ]}
           showsVerticalScrollIndicator={false}
         >
@@ -1213,7 +1230,7 @@ export default function ContractsScreen() {
             )
           ) : null}
         </ScrollView>
-      </SafeAreaView>
+      </View>
 
       <ContractQuickActionSheet
         visible={quickSheetVisible}
@@ -1253,8 +1270,10 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,
-    paddingTop: STATUS_BAR_HEIGHT,
     paddingHorizontal: spacing.lg,
+  },
+  onboardingHint: {
+    marginBottom: 12,
   },
   listScroll: {
     flex: 1,

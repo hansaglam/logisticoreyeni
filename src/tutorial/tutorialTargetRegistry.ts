@@ -1,5 +1,6 @@
 import { InteractionManager, Platform, StatusBar } from 'react-native';
 
+import { ENABLE_SPOTLIGHT_TUTORIAL } from './featureFlags';
 import type { TutorialLayoutRect, TutorialTargetId, TutorialTargetRegistration } from './types';
 import { isValidTutorialRect } from './types';
 
@@ -21,6 +22,9 @@ export function registerTutorialTarget(
   id: TutorialTargetId,
   registration: TutorialTargetRegistration,
 ): () => void {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+    return () => {};
+  }
   targets.set(id, registration);
   notifyTutorialTargetChange();
   return () => {
@@ -73,6 +77,9 @@ function waitForInteractions(): Promise<void> {
 export async function measureTutorialTarget(
   id: TutorialTargetId,
 ): Promise<TutorialLayoutRect | null> {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+    return null;
+  }
   const registration = targets.get(id);
   if (!registration) {
     return null;

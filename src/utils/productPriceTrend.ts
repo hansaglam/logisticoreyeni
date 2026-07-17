@@ -1,5 +1,9 @@
 import { colors } from '../theme';
 import type { ProductId } from '../types/game';
+import {
+  MARKET_PRICE_HISTORY_DISPLAY_POINTS,
+  slicePriceHistoryForDisplay,
+} from './marketPriceHistoryGenerator';
 import { PRODUCT_PRICE_HISTORY_MAX } from './priceHistoryCore';
 
 export type ProductTrendDirection = 'up' | 'down' | 'stable';
@@ -98,7 +102,7 @@ export function getProductPriceTrend(input: ProductPriceTrendInput): ProductPric
     .map((value) => Number(value))
     .filter((value) => Number.isFinite(value) && value > 0);
 
-  const prices =
+  let prices =
     cleanedHistory.length > 0
       ? cleanedHistory.slice(-PRODUCT_PRICE_HISTORY_MAX)
       : [currentPrice];
@@ -110,7 +114,10 @@ export function getProductPriceTrend(input: ProductPriceTrendInput): ProductPric
     prices.push(currentPrice);
   }
 
-  const uniqueTail = prices.slice(-PRODUCT_PRICE_HISTORY_MAX);
+  const uniqueTail = slicePriceHistoryForDisplay(
+    prices.slice(-PRODUCT_PRICE_HISTORY_MAX),
+    MARKET_PRICE_HISTORY_DISPLAY_POINTS,
+  );
   const direction = resolveDirectionFromPrices(uniqueTail);
 
   const historyFirst = uniqueTail[0] ?? currentPrice;

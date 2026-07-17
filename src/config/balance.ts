@@ -355,8 +355,10 @@ export const tradingBalance = {
   minTradeQuantity: 5,
   defaultTradeQuantity: 10,
   maxTradeQuantity: 50,
-  warehouseBuyFeeRate: 0.02,
-  warehouseSellFeeRate: 0.02,
+  /** Depo alım işlem gideri (piyasa arbitrajını törpüler) */
+  warehouseBuyFeeRate: 0.03,
+  /** Depo satım işlem gideri */
+  warehouseSellFeeRate: 0.03,
   minProfitHintPercent: 8,
   highProfitHintPercent: 20,
   /** Yeni depo varsayılan kapasitesi (ton) */
@@ -377,6 +379,8 @@ export const marketAlertBalance = {
 } as const;
 
 export const financeBalance = {
+  /** Zorunlu giderler sonrası izin verilen minimum nakit ($) */
+  minCashBalance: -5_000,
   /** Kritik nakit eşiği ($) */
   lowCashThreshold: 5000,
   /** Net kâr negatifken sağlık cezası */

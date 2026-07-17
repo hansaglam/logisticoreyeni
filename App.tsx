@@ -5,13 +5,17 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, Platform, StyleSheet, Text, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
 import { AppDialogProvider } from './src/components/AppDialogProvider';
-import BottomTabBar, { type TabDefinition, type TabKey } from './src/components/BottomTabBar';
+import GameTabBar from './src/components/navigation/GameTabBar';
 import GameToast from './src/components/GameToast';
+import type { TabDefinition, TabKey } from './src/navigation/tabTypes';
+import type { QuickAccessAction } from './src/navigation/quickAccessTypes';
 import TutorialOverlay from './src/components/tutorial/TutorialOverlay';
+import { ENABLE_SPOTLIGHT_TUTORIAL } from './src/tutorial/featureFlags';
 import { useGameLoop } from './src/hooks/useGameLoop';
 import { useSpotlightTutorialTriggers } from './src/hooks/useSpotlightTutorialTriggers';
 import { useSpotlightTutorialStore } from './src/store/spotlightTutorialStore';
@@ -25,6 +29,10 @@ import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
 import type { ProductId } from './src/types/game';
+import {
+  enableImmersiveGameMode,
+  subscribeImmersiveModeRefresh,
+} from './src/utils/systemBars';
 
 import DashboardScreen from './src/screens/DashboardScreen';
 import MapScreen from './src/screens/MapScreen';
@@ -34,13 +42,11 @@ import MarketScreen from './src/screens/MarketScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import { UI } from './src/theme/ui';
 
-const TABS: TabDefinition[] = [
-  { key: 'dashboard', label: 'Ana Sayfa', icon: 'dashboard' },
+const MAIN_TABS: TabDefinition[] = [
+  { key: 'dashboard', label: 'Ana', icon: 'dashboard' },
   { key: 'map', label: 'Harita', icon: 'map' },
   { key: 'contracts', label: 'İşler', icon: 'contract' },
-  { key: 'fleet', label: 'Filo', icon: 'truck' },
   { key: 'market', label: 'Piyasa', icon: 'market' },
-  { key: 'more', label: 'Daha Fazla', icon: 'more' },
 ];
 
 function renderActiveScreen(
@@ -76,6 +82,9 @@ function AppShell() {
   useSpotlightTutorialTriggers({ activeTab, isGameReady });
 
   useEffect(() => {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+      return;
+    }
     useSpotlightTutorialStore.getState().setTabNavigator(setActiveTab);
     return () => {
       useSpotlightTutorialStore.getState().setTabNavigator(null);
@@ -89,6 +98,35 @@ function AppShell() {
     });
   };
 
+  const handleQuickAccess = (action: QuickAccessAction) => {
+    switch (action) {
+      case 'fleet':
+        setActiveTab('fleet');
+        break;
+      case 'warehouse':
+        handleOpenWarehouse();
+        break;
+      case 'finance':
+        useGameStore.setState({
+          navigationRequest: { tab: 'more' },
+          pendingMoreSubRoute: 'finance',
+        });
+        break;
+      case 'missions':
+        useGameStore.setState({
+          navigationRequest: { tab: 'more' },
+          pendingMoreSubRoute: 'missions',
+        });
+        break;
+      case 'settings':
+      case 'account':
+        setActiveTab('more');
+        break;
+      default:
+        break;
+    }
+  };
+
   useEffect(() => {
     if (!navigationRequest) return;
     setActiveTab(navigationRequest.tab);
@@ -96,14 +134,26 @@ function AppShell() {
   }, [navigationRequest, clearNavigationRequest]);
 
   return (
-    <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={UI.colors.background} />
+    <View
+      style={styles.root}
+      onTouchStart={() => {
+        if (Platform.OS === 'android') {
+          void enableImmersiveGameMode();
+        }
+      }}
+    >
+      <StatusBar hidden />
       <View style={styles.screenContainer}>
         {renderActiveScreen(activeTab, setActiveTab, handleOpenWarehouse)}
       </View>
       <GameToast />
-      <TutorialOverlay layer="root" />
-      <BottomTabBar tabs={TABS} activeTab={activeTab} onTabPress={setActiveTab} />
+      {ENABLE_SPOTLIGHT_TUTORIAL ? <TutorialOverlay layer="root" /> : null}
+      <GameTabBar
+        tabs={MAIN_TABS}
+        activeTab={activeTab}
+        onTabPress={setActiveTab}
+        onQuickAccess={handleQuickAccess}
+      />
     </View>
   );
 }
@@ -119,6 +169,14 @@ function GameLoadingScreen() {
 
 export default function App() {
   const isGameReady = useGameStore((state) => state.isGameReady);
+
+  useEffect(() => {
+    void enableImmersiveGameMode();
+    const unsubscribeImmersive = subscribeImmersiveModeRefresh();
+    return () => {
+      unsubscribeImmersive();
+    };
+  }, []);
 
   useEffect(() => {
     // Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.

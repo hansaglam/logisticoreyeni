@@ -3,7 +3,7 @@
  * Çalıştır: npx tsx src/simulation/contractAvailabilityScenarios.ts
  */
 
-import { getContractAvailability } from './delivery';
+import { getContractAvailability, isContractOfferExpired } from './delivery';
 import type { Contract, Driver, Truck } from '../types/game';
 
 const DRIVER = {
@@ -24,7 +24,7 @@ function baseLeasedTruck(overrides: Partial<Truck> = {}): Truck {
   return {
     id: 'lease-1',
     catalogId: 'truck-ford-cargo',
-    name: 'Ford Cargo 1833 (Kiralık)',
+    name: 'Fordan CargoPro (Kiralık)',
     capacity: 18,
     ownershipType: 'leased',
     leaseExpired: false,
@@ -43,7 +43,7 @@ function baseLeasedTruck(overrides: Partial<Truck> = {}): Truck {
   };
 }
 
-function baseContract(cargoWeight: number): Contract {
+function baseContract(cargoWeight: number, overrides: Partial<Contract> = {}): Contract {
   return {
     id: 'c1',
     originCityId: 'istanbul',
@@ -59,6 +59,7 @@ function baseContract(cargoWeight: number): Contract {
     urgency: 0.3,
     expiresAt: 999_999,
     createdAt: 0,
+    ...overrides,
   };
 }
 
@@ -130,7 +131,7 @@ export function runContractAvailabilityScenarios(): void {
         {
           ...baseLeasedTruck({
             id: 'owned-1',
-            name: 'Owned Volvo',
+            name: 'Nordvik Titan',
             ownershipType: 'owned',
             capacity: 30,
           }),
@@ -145,7 +146,20 @@ export function runContractAvailabilityScenarios(): void {
   );
 
   assertScenario(
-    'Test 6: expired lease idle still shows tonaj not busy for 28t',
+    'Test 6: expired lease with capacity fit shows lease expired',
+    getContractAvailability(
+      baseContract(14),
+      [baseLeasedTruck({ leaseExpired: true })],
+      [DRIVER],
+      1,
+      100,
+    ),
+    'LEASE_EXPIRED',
+    false,
+  );
+
+  assertScenario(
+    'Test 6b: expired lease with insufficient capacity shows tonaj',
     getContractAvailability(
       baseContract(28),
       [baseLeasedTruck({ leaseExpired: true })],
@@ -154,6 +168,32 @@ export function runContractAvailabilityScenarios(): void {
       100,
     ),
     'NO_TRUCK_WITH_CAPACITY',
+    false,
+  );
+
+  assertScenario(
+    'Test 7: expired offer blocks start even if status still available',
+    getContractAvailability(
+      baseContract(20, { expiresAt: 50 }),
+      [baseLeasedTruck()],
+      [DRIVER],
+      1,
+      100,
+    ),
+    'CONTRACT_EXPIRED',
+    false,
+  );
+
+  assertScenario(
+    'Test 8: lease expires by time shows lease expired',
+    getContractAvailability(
+      baseContract(14),
+      [baseLeasedTruck({ leaseExpiresAt: 50 })],
+      [DRIVER],
+      1,
+      100,
+    ),
+    'LEASE_EXPIRED',
     false,
   );
 

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import { colors } from '../../theme';
 
@@ -11,6 +11,10 @@ export interface MiniTrendChartProps {
   trend: MiniTrendDirection;
   width?: number;
   height?: number;
+  /** Keskin çizgi = piyasa dalgalanması; smooth = yumuşak eğri */
+  lineStyle?: 'sharp' | 'smooth';
+  strokeWidth?: number;
+  showLastPoint?: boolean;
 }
 
 const DEFAULT_WIDTH = 200;
@@ -69,13 +73,21 @@ function buildChartPoints(
   });
 }
 
-function buildSmoothLinePath(points: ChartPoint[], width: number): string {
+function buildLinePath(points: ChartPoint[], width: number, style: 'sharp' | 'smooth'): string {
   if (points.length === 0) {
     return '';
   }
   if (points.length === 1) {
     const p = points[0];
     return `M ${PADDING_X} ${p.y} L ${width - PADDING_X} ${p.y}`;
+  }
+
+  if (style === 'sharp') {
+    let path = `M ${points[0].x} ${points[0].y}`;
+    for (let index = 1; index < points.length; index += 1) {
+      path += ` L ${points[index].x} ${points[index].y}`;
+    }
+    return path;
   }
 
   let path = `M ${points[0].x} ${points[0].y}`;
@@ -90,8 +102,13 @@ function buildSmoothLinePath(points: ChartPoint[], width: number): string {
   return path;
 }
 
-function buildAreaPath(points: ChartPoint[], height: number, width: number): string {
-  const linePath = buildSmoothLinePath(points, width);
+function buildAreaPath(
+  points: ChartPoint[],
+  height: number,
+  width: number,
+  lineStyle: 'sharp' | 'smooth',
+): string {
+  const linePath = buildLinePath(points, width, lineStyle);
   if (!linePath || points.length === 0) {
     return '';
   }
@@ -108,25 +125,29 @@ export default function MiniTrendChart({
   trend,
   width = DEFAULT_WIDTH,
   height = DEFAULT_HEIGHT,
+  lineStyle = 'smooth',
+  strokeWidth = 2,
+  showLastPoint = false,
 }: MiniTrendChartProps) {
   const strokeColor = resolveTrendColor(trend);
   const fillColor = resolveTrendFill(trend);
   const gradientId = `trend-fill-${trend}`;
 
-  const { linePath, areaPath, hasEnoughData } = useMemo(() => {
+  const { linePath, areaPath, hasEnoughData, lastPoint } = useMemo(() => {
     const cleaned = data.filter((value) => Number.isFinite(value) && value > 0);
 
     if (cleaned.length === 0) {
-      return { linePath: '', areaPath: '', hasEnoughData: false };
+      return { linePath: '', areaPath: '', hasEnoughData: false, lastPoint: null };
     }
 
     const points = buildChartPoints(cleaned, width, height);
     return {
-      linePath: buildSmoothLinePath(points, width),
-      areaPath: buildAreaPath(points, height, width),
+      linePath: buildLinePath(points, width, lineStyle),
+      areaPath: buildAreaPath(points, height, width, lineStyle),
       hasEnoughData: cleaned.length >= 2,
+      lastPoint: points[points.length - 1] ?? null,
     };
-  }, [data, height, width]);
+  }, [data, height, lineStyle, width]);
 
   if (!hasEnoughData) {
     return (
@@ -153,9 +174,19 @@ export default function MiniTrendChart({
             d={linePath}
             fill="none"
             stroke={strokeColor}
-            strokeWidth={2}
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
+          />
+        ) : null}
+        {showLastPoint && lastPoint ? (
+          <Circle
+            cx={lastPoint.x}
+            cy={lastPoint.y}
+            r={strokeWidth + 1.5}
+            fill={strokeColor}
+            stroke={colors.card}
+            strokeWidth={1.5}
           />
         ) : null}
       </Svg>

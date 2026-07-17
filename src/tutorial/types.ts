@@ -1,4 +1,4 @@
-import type { TabKey } from '../components/BottomTabBar';
+import type { TabKey } from '../navigation/tabTypes';
 
 export type SpotlightTutorialId = 'first_contract' | 'track_delivery' | 'market_basics';
 

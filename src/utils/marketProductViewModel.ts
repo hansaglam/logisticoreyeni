@@ -1,4 +1,4 @@
-import { calculateTradeProfit, getWarehouseInventoryItem } from '../simulation/trading';
+import { buildTradeProfitBreakdown, getWarehouseInventoryItem } from '../simulation/trading';
 import { getInventoryQuality } from '../simulation/warehouseStorage';
 import { formatMoney } from '../theme';
 import type { City, CityProductState, Product, ProductId, Warehouse } from '../types/game';
@@ -13,6 +13,7 @@ import {
   type ProductPriceTrend,
   type ProductTrendDirection,
 } from './productPriceTrend';
+import { computePriceMomentum } from './marketPriceHistoryGenerator';
 
 export interface NormalizedProductMarket {
   productId: ProductId;
@@ -183,8 +184,10 @@ export function getMarketCommentary(input: {
   trendDirection: ProductTrendDirection;
   warehouseQuantity: number;
   profitLoss: number | null;
+  priceHistory?: number[];
 }): string {
-  const { stockStatus, trendDirection, warehouseQuantity, profitLoss } = input;
+  const { stockStatus, trendDirection, warehouseQuantity, profitLoss, priceHistory } = input;
+  const momentum = computePriceMomentum(priceHistory ?? []);
 
   if (warehouseQuantity > 0 && profitLoss != null) {
     if (profitLoss > 1) {
@@ -199,13 +202,27 @@ export function getMarketCommentary(input: {
   const isShortage = stockStatus === 'Kıtlık' || stockStatus === 'Kritik Kıtlık';
 
   if (isSurplus && trendDirection === 'down') {
+    if (momentum.isSlowing) {
+      return 'Fiyat düşüşü yavaşlamış. Alım için takip edilebilir.';
+    }
+    if (momentum.isAccelerating) {
+      return 'Fiyat baskı altında. Acele etmeden takip etmek mantıklı olabilir.';
+    }
     return getMarketStatusDescription('Fazla');
   }
 
   if (isShortage && trendDirection === 'up') {
-    return getMarketStatusDescription(
-      stockStatus === 'Kritik Kıtlık' ? 'Kritik Kıtlık' : 'Kıtlık',
-    );
+    if (stockStatus === 'Kritik Kıtlık' && momentum.isAccelerating) {
+      return 'Talep güçlü. Depoda stok varsa kârla satış fırsatı oluşabilir.';
+    }
+    if (momentum.isSlowing) {
+      return 'Yükseliş devam ediyor ama tempo yavaşlıyor. Satış için izlenebilir.';
+    }
+    return 'Fiyat güçlü seyrediyor. Stok varsa satış fırsatı olabilir.';
+  }
+
+  if (stockStatus === 'Dengeli' && trendDirection === 'stable') {
+    return 'Piyasa sakin. Daha net hareket için takip edilebilir.';
   }
 
   if (stockStatus === 'Dengeli') {
@@ -261,12 +278,12 @@ export function buildMarketProductViewModel(
   const priceChangeDisplay = formatTrendChangeDisplay(trend);
   const profitLoss =
     inventory.quantity > 0
-      ? calculateTradeProfit(
+      ? buildTradeProfitBreakdown(
           market.currentPrice,
           inventory.averageBuyPrice,
           inventory.quantity,
           inventory.quality,
-        )
+        ).netProfit
       : null;
 
   const currentValue = inventory.quantity > 0 ? inventory.quantity * market.currentPrice : 0;
@@ -305,6 +322,7 @@ export function buildMarketProductViewModel(
       trendDirection: trend.direction,
       warehouseQuantity: inventory.quantity,
       profitLoss,
+      priceHistory: market.priceHistory,
     }),
     stockStatusDescription: getMarketStatusDescription(stockStatus),
     canBuy,

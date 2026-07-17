@@ -2,7 +2,7 @@
  * Fiyat geçmişi yardımcıları — döngüsel import riski olmadan paylaşılır.
  */
 
-export const PRODUCT_PRICE_HISTORY_MAX = 12;
+export const PRODUCT_PRICE_HISTORY_MAX = 48;
 
 export function appendProductPriceHistory(
   history: number[] | undefined,

@@ -92,7 +92,7 @@ export default function GameToast() {
   };
 
   return (
-    <View style={[styles.container, { top: topOffset }]} pointerEvents="box-none">
+    <View style={[styles.container, { top: topOffset, pointerEvents: 'box-none' }]}>
       <ToastCard
         notification={notification}
         onDismiss={() => dismissNotification(notification.id)}

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
-import type { TabKey } from '../components/BottomTabBar';
+import type { TabKey } from '../navigation/tabTypes';
+import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import type { SpotlightTutorialId } from '../tutorial/types';
 import {
   canAutoStartSpotlightTutorial,
@@ -26,12 +27,15 @@ export function useSpotlightTutorialTriggers({
   const spotlightTutorial = useGameStore((state) => state.spotlightTutorial);
 
   useEffect(() => {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+      return;
+    }
     setActiveTab(activeTab);
     void useSpotlightTutorialStore.getState().tryCompletePendingAdvance();
   }, [activeTab, setActiveTab]);
 
   useEffect(() => {
-    if (!isGameReady || isSpotlightActive) {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL || !isGameReady || isSpotlightActive) {
       return;
     }
 
@@ -51,7 +55,7 @@ export function useSpotlightTutorialTriggers({
   }, [activeTab, currentTime, isGameReady, isSpotlightActive, startTutorial]);
 
   useEffect(() => {
-    if (!isGameReady || isSpotlightActive) {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL || !isGameReady || isSpotlightActive) {
       return;
     }
     if ((activeDeliveries?.length ?? 0) === 0) {
@@ -72,7 +76,7 @@ export function useSpotlightTutorialTriggers({
   }, [activeDeliveries?.length, activeTab, isGameReady, isSpotlightActive, startTutorial]);
 
   useEffect(() => {
-    if (!isGameReady || isSpotlightActive) {
+    if (!ENABLE_SPOTLIGHT_TUTORIAL || !isGameReady || isSpotlightActive) {
       return;
     }
     if (activeTab !== 'market') {
@@ -91,6 +95,9 @@ export function useSpotlightTutorialTriggers({
 }
 
 export function restartSpotlightTutorial(tutorialId: SpotlightTutorialId): void {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+    return;
+  }
   useGameStore.getState().clearSpotlightTutorialProgress(tutorialId);
   useSpotlightTutorialStore.getState().startTutorial(tutorialId, { force: true });
 }

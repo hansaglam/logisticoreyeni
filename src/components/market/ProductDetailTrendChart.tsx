@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { colors, formatMoney, spacing, typography } from '../../theme';
+import { MARKET_PRICE_HISTORY_DISPLAY_POINTS } from '../../utils/marketPriceHistoryGenerator';
 import type { ProductPriceTrend } from '../../utils/productPriceTrend';
 import MiniTrendChart from './MiniTrendChart';
 
@@ -32,7 +33,9 @@ export default function ProductDetailTrendChart({ trend }: ProductDetailTrendCha
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionLabel}>Son 12 hareket</Text>
+      <Text style={styles.sectionLabel}>
+        Son {MARKET_PRICE_HISTORY_DISPLAY_POINTS} hareket
+      </Text>
 
       {hasEnoughHistory ? (
         <>
@@ -40,6 +43,9 @@ export default function ProductDetailTrendChart({ trend }: ProductDetailTrendCha
             data={trend.prices}
             trend={mapDirection(trend.direction)}
             height={CHART_HEIGHT}
+            lineStyle="smooth"
+            strokeWidth={2.25}
+            showLastPoint
           />
           <View style={styles.rangeRow}>
             <Text style={styles.rangeText} numberOfLines={1}>

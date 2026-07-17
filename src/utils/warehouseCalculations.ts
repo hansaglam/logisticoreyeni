@@ -91,6 +91,23 @@ export function calculateWarehouseDailyOperatingCostBreakdown(
   };
 }
 
+/** Kapasite/tier değişiminden sonra güncel günlük işletme maliyetini hesaplar */
+export function resolveWarehouseDailyOperatingCost(
+  warehouse: WarehouseCostInput,
+  city?: Pick<City, 'warehouseCostModifier'>,
+): number {
+  const breakdown = calculateWarehouseDailyOperatingCostBreakdown(
+    {
+      ...warehouse,
+      rent: undefined,
+      electricityCost: undefined,
+      staffCost: undefined,
+    },
+    city,
+  );
+  return breakdown.total;
+}
+
 export function calculateWarehouseDailyOperatingCost(
   warehouse: WarehouseCostInput,
   city?: Pick<City, 'warehouseCostModifier'>,

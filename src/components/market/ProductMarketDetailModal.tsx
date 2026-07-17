@@ -13,9 +13,14 @@ import { getBottomInset } from '../../constants/layout';
 import { useGameStore } from '../../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import type { ProductId } from '../../types/game';
+import {
+  buildTradeProfitBreakdown,
+  getTradeFeeSummaryLabel,
+  getWarehouseFreeCapacityTon,
+  normalizeWarehouse,
+} from '../../simulation/trading';
 import { buildMarketProductViewModel, getProductMarket } from '../../utils/marketProductViewModel';
 import { getMarketStatusColorVariant } from '../../utils/marketStatusLabels';
-import { getWarehouseFreeCapacityTon, normalizeWarehouse } from '../../simulation/trading';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { ActionButton, IconButton, ProductIcon, StatusBadge } from '../ui';
 import ProductDetailTrendChart from './ProductDetailTrendChart';
@@ -109,6 +114,15 @@ export default function ProductMarketDetailModal({
       ? colors.success
       : colors.danger;
 
+  const profitBreakdown =
+    viewModel.warehouseQuantity > 0
+      ? buildTradeProfitBreakdown(
+          viewModel.currentPrice,
+          viewModel.averageBuyPrice,
+          viewModel.warehouseQuantity,
+        )
+      : null;
+
   const handleBuy = () => {
     onClose();
     onBuy(productId);
@@ -199,19 +213,31 @@ export default function ProductMarketDetailModal({
                     Depoda: {viewModel.warehouseQuantity.toFixed(1)} t
                   </Text>
                   <Text style={styles.infoLine}>
-                    Ortalama alış: {formatMoney(viewModel.averageBuyPrice)} / ton
+                    Ortalama maliyet: {formatMoney(viewModel.averageBuyPrice)} / ton
                   </Text>
+                  <Text style={styles.infoLine}>
+                    Güncel satış geliri: {formatMoney(profitBreakdown?.sellRevenueAfterFee ?? 0)}
+                  </Text>
+                  {profitBreakdown ? (
+                    <Text style={styles.infoMuted}>
+                      İşlem gideri: {formatMoney(profitBreakdown.totalFees)}
+                    </Text>
+                  ) : null}
                   <Text style={styles.infoLine}>
                     Güncel değer: {formatMoney(viewModel.currentValue)}
                   </Text>
                   {viewModel.profitLoss != null ? (
                     <Text style={[styles.infoLine, { color: profitColor, fontWeight: '700' }]}>
-                      Kâr/Zarar:{' '}
+                      Net kâr:{' '}
                       {viewModel.profitLoss >= 0
                         ? `+${formatMoney(viewModel.profitLoss)}`
                         : formatMoney(viewModel.profitLoss)}
                     </Text>
                   ) : null}
+                  <Text style={styles.infoMuted}>{getTradeFeeSummaryLabel()}</Text>
+                  <Text style={styles.infoMuted}>
+                    Ürünler yalnızca bulunduğu şehirdeki depodan satılabilir.
+                  </Text>
                 </>
               )}
             </View>

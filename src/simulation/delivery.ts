@@ -139,6 +139,14 @@ export function isTruckIdle(truck: Truck): boolean {
   return truck.status === 'idle';
 }
 
+/** Kiralık kamyon görev için kullanılamaz mı? */
+export function isTruckLeaseUnavailable(truck: Truck, currentTime: number): boolean {
+  if ((truck.ownershipType ?? 'owned') !== 'leased') {
+    return false;
+  }
+  return truck.leaseExpired === true || !isTruckLeaseActive(truck, currentTime);
+}
+
 /** Kamyon görev atanabilir mi? (kira süresi dolmuş kamyonlar hariç) */
 export function isTruckAvailableForAssignment(truck: Truck, currentTime: number): boolean {
   if (truck.status !== 'idle') {
@@ -365,6 +373,14 @@ function buildContractAvailabilityDebug(
   };
 }
 
+export function isContractOfferExpired(contract: Contract, currentTime: number): boolean {
+  const expiresAt = contract.expiresAt;
+  if (expiresAt == null || !Number.isFinite(expiresAt)) {
+    return false;
+  }
+  return currentTime >= expiresAt;
+}
+
 export function getContractAvailability(
   contract: Contract,
   trucks: Truck[] | undefined,
@@ -384,6 +400,13 @@ export function getContractAvailability(
     requiredLevel,
     playerLevel: safePlayerLevel,
   };
+
+  if (isContractOfferExpired(contract, currentTime)) {
+    return buildUnavailableContractAvailability('CONTRACT_EXPIRED', {
+      ...baseContext,
+      requiredCapacity,
+    });
+  }
 
   if (requiredLevel > safePlayerLevel) {
     return buildUnavailableContractAvailability('LEVEL_INSUFFICIENT', {
@@ -481,6 +504,19 @@ export function getContractAvailability(
   );
 
   if (assignableTrucksAtOrigin.length === 0) {
+    const onlyExpiredLeasedTrucks =
+      healthyTrucksAtOrigin.length > 0 &&
+      healthyTrucksAtOrigin.every((truck) => isTruckLeaseUnavailable(truck, currentTime));
+
+    if (onlyExpiredLeasedTrucks) {
+      return buildUnavailableContractAvailability('LEASE_EXPIRED', {
+        ...originContext,
+        requiredCapacity,
+        maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+        debug: buildOriginDebug('LEASE_EXPIRED'),
+      });
+    }
+
     return buildUnavailableContractAvailability('NO_IDLE_TRUCKS', {
       ...originContext,
       requiredCapacity,
@@ -547,6 +583,10 @@ export function getContractAvailabilityWarningText(
       return `${(availability.requiredCapacity ?? 0).toFixed(1)}t gerekli / en iyi kamyonun ${(availability.maxIdleTruckCapacity ?? 0).toFixed(1)}t`;
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Kamyon tamir gerekli';
+    case 'LEASE_EXPIRED':
+      return 'Kira süresi doldu';
+    case 'CONTRACT_EXPIRED':
+      return 'Süresi doldu';
     default:
       return null;
   }
@@ -576,6 +616,10 @@ export function availabilityReasonToStartDeliveryErrorCode(
       return 'CAPACITY_INSUFFICIENT';
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'TRUCK_CONDITION_TOO_LOW';
+    case 'CONTRACT_EXPIRED':
+      return 'CONTRACT_EXPIRED';
+    case 'LEASE_EXPIRED':
+      return 'LEASE_EXPIRED';
     default:
       return 'DELIVERY_CREATE_FAILED';
   }
@@ -851,6 +895,11 @@ export function calculateAccidentChance(
 // Ceza ve kâr
 // ---------------------------------------------------------------------------
 
+function safeSettlementAmount(value: number | undefined | null): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /**
  * Geç teslim cezasını hesaplar ($).
  * Bozulabilir ürünlerde ceza daha yüksektir.
@@ -893,6 +942,44 @@ export function calculateDeliveryProfit(
   return payment - (fuelCost ?? 0) - (maintenanceCost ?? 0) - (penaltyCost ?? 0);
 }
 
+/** UI preview ve settlement için tek kaynak nakit akışı tahmini */
+export interface ExpectedContractCashFlow {
+  payment: number;
+  fuelCost: number;
+  maintenanceCost: number;
+  penaltyCost: number;
+  /** Yakıt + bakım + ceza — oyuncuya gösterilen gerçek gider kalemleri */
+  settlementDeductions: number;
+  estimatedNetProfit: number;
+}
+
+export function calculateExpectedContractCashFlow(
+  contract: Contract,
+  fuelCost: number,
+  maintenanceCost: number,
+  penaltyCost = 0,
+): ExpectedContractCashFlow {
+  const payment = contract.payment ?? 0;
+  const safeFuel = safeSettlementAmount(fuelCost);
+  const safeMaintenance = safeSettlementAmount(maintenanceCost);
+  const safePenalty = safeSettlementAmount(penaltyCost);
+  const estimatedNetProfit = calculateDeliveryProfit(
+    contract,
+    safeFuel,
+    safeMaintenance,
+    safePenalty,
+  );
+
+  return {
+    payment,
+    fuelCost: safeFuel,
+    maintenanceCost: safeMaintenance,
+    penaltyCost: safePenalty,
+    settlementDeductions: safeFuel + safeMaintenance + safePenalty,
+    estimatedNetProfit,
+  };
+}
+
 export interface DeliverySettlementParams {
   contractPayment: number;
   fuelCost?: number;
@@ -923,11 +1010,6 @@ export interface DeliverySettlementDebugSnapshot {
   penaltyCost: number;
   reportedNetProfit: number;
   cashDeltaOnCompletion: number;
-}
-
-function safeSettlementAmount(value: number | undefined | null): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
 }
 
 /**
@@ -1008,12 +1090,13 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
 
   const travelHours = calculateTravelHours(contract, truck, driver, route, product);
   const fuelCost = calculateFuelCost(contract, truck, driver, route, product, globalEconomy);
-  const maintenanceCost = calculateMaintenanceCost(truck, route);
+  const maintenanceCost = calculateMaintenanceCost(truck, route, contract, product);
   const conditionLoss = calculateConditionLoss(contract, truck, driver, route, product);
   const breakdownChance = calculateBreakdownChance(contract, truck, driver, route, product);
   const accidentChance = calculateAccidentChance(contract, truck, driver, route, product);
 
-  const estimatedProfit = calculateDeliveryProfit(contract, fuelCost, maintenanceCost, 0);
+  const cashFlow = calculateExpectedContractCashFlow(contract, fuelCost, maintenanceCost, 0);
+  const estimatedProfit = cashFlow.estimatedNetProfit;
   const estimatedArrivalTime = currentTime + travelHours;
   const deadlineTime = currentTime + contract.deadlineHours;
 

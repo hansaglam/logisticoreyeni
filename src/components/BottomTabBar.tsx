@@ -11,12 +11,12 @@ import {
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { TutorialTargetId } from '../tutorial/types';
+import type { TabDefinition, TabKey } from '../navigation/tabTypes';
 import { colors, typography } from '../theme';
-import type { GameIconName } from '../theme/icons';
 import { isSafeAreaContextAvailable } from '../utils/safeArea';
 import GameIcon from './ui/GameIcon';
 
-export type TabKey = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'market' | 'more';
+export type { TabDefinition, TabKey } from '../navigation/tabTypes';
 
 const TAB_TARGET_IDS: Record<TabKey, TutorialTargetId> = {
   dashboard: 'tab-dashboard',
@@ -26,12 +26,6 @@ const TAB_TARGET_IDS: Record<TabKey, TutorialTargetId> = {
   market: 'tab-market',
   more: 'tab-more',
 };
-
-export interface TabDefinition {
-  key: TabKey;
-  label: string;
-  icon: GameIconName;
-}
 
 interface BottomTabBarProps {
   tabs: TabDefinition[];

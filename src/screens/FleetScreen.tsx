@@ -302,6 +302,8 @@ function OwnedTruckCard({
   const canTransfer = isIdle && hasIdleDriver;
   const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
   const isLeased = isActiveLeasedTruck(truck);
+  const isLeaseExpired =
+    (truck.ownershipType ?? 'owned') === 'leased' && !isLeased;
   const weeklyLeaseCost = getTruckWeeklyLeaseCost(truck);
   const leaseDailyAccrual = truck.leaseDailyCost ?? 0;
   const resaleValue = isLeased ? 0 : calculateTruckResaleValue(truck);
@@ -338,7 +340,16 @@ function OwnedTruckCard({
         Konum: {truckCityName} · {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
       </Text>
 
-      {isLeased ? (
+      {isLeaseExpired ? (
+        <View style={styles.leaseInfoBlock}>
+          <View style={styles.leaseBadgeRow}>
+            <StatusBadge label="Kira süresi doldu" variant="danger" size="sm" />
+            <Text style={styles.leaseInfoText} numberOfLines={1} ellipsizeMode="tail">
+              Bu kamyon yeni işlerde kullanılamaz.
+            </Text>
+          </View>
+        </View>
+      ) : isLeased ? (
         <View style={styles.leaseInfoBlock}>
           <View style={styles.leaseBadgeRow}>
             <StatusBadge label="Kiralık" variant="amber" size="sm" />

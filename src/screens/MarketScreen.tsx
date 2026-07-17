@@ -13,6 +13,8 @@ import ActiveMarketAlertsSection from '../components/market/ActiveMarketAlertsSe
 import ProductMarketDetailModal from '../components/market/ProductMarketDetailModal';
 import ProductMiniTrendChart from '../components/market/ProductMiniTrendChart';
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
+import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   ActionButton,
@@ -60,7 +62,13 @@ import {
   getWarehouseFreeCapacityTon,
   getWarehouseInventoryItem,
   normalizeWarehouse,
+  WAREHOUSE_SELL_SAME_CITY_RULE,
 } from '../simulation/trading';
+import {
+  detectMarketTradeOpportunities,
+  formatMarketTradeOpportunityTitle,
+  type MarketTradeOpportunity,
+} from '../utils/marketTradeOpportunities';
 import {
   cityHasWarehouseType,
   evaluateStorageSuitability,
@@ -238,13 +246,18 @@ function MarketStatusSummary({
   mood,
   criticalCount,
   opportunityCount,
+  compact = false,
 }: {
   mood: MarketMood;
   criticalCount: number;
   opportunityCount: number;
+  compact?: boolean;
 }) {
   return (
-    <Text style={styles.marketStatusSummary} numberOfLines={1}>
+    <Text
+      style={[styles.marketStatusSummary, compact && styles.marketStatusSummaryCompact]}
+      numberOfLines={1}
+    >
       Piyasa durumu: {mood} · {criticalCount} talep · {opportunityCount} fırsat
     </Text>
   );
@@ -255,6 +268,7 @@ interface MarketMetricStripProps {
   currentTime: number;
   criticalCount: number;
   opportunityCount: number;
+  compact?: boolean;
 }
 
 function MarketMetricStrip({
@@ -262,12 +276,13 @@ function MarketMetricStrip({
   currentTime,
   criticalCount,
   opportunityCount,
+  compact = false,
 }: MarketMetricStripProps) {
   return (
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.metricStrip}
+      contentContainerStyle={[styles.metricStrip, compact && styles.metricStripCompact]}
     >
       <SmallStatPill
         label="Yakıt"
@@ -597,6 +612,53 @@ function ProductMarketCard({
   );
 }
 
+function TradeOpportunityCard({
+  opportunity,
+  onPress,
+}: {
+  opportunity: MarketTradeOpportunity;
+  onPress: () => void;
+}) {
+  const badgeVariant: StatusBadgeVariant =
+    opportunity.type === 'sell' ? 'amber' : opportunity.type === 'buy' ? 'success' : 'info';
+
+  return (
+    <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
+      <AppCard style={styles.tradeOpportunityCard} padded>
+        <View style={styles.cardTopRow}>
+          <View style={styles.productIconBox}>
+            <GameIcon
+              name={opportunity.type === 'sell' ? 'warehouse' : 'market'}
+              size={16}
+              color={colors.accentBlue}
+            />
+          </View>
+          <View style={styles.cardMain}>
+            <Text style={styles.opportunityRoute} numberOfLines={1}>
+              {formatMarketTradeOpportunityTitle(opportunity)}
+            </Text>
+            <Text style={styles.opportunityProduct} numberOfLines={2}>
+              {opportunity.description}
+            </Text>
+          </View>
+          <StatusBadge label={opportunity.label} variant={badgeVariant} size="sm" />
+        </View>
+        {opportunity.netProfit != null ? (
+          <Text
+            style={[
+              styles.tradeOpportunityProfit,
+              { color: opportunity.netProfit >= 0 ? colors.success : colors.danger },
+            ]}
+          >
+            Net kâr: {opportunity.netProfit >= 0 ? '+' : ''}
+            {formatMoney(opportunity.netProfit)}
+          </Text>
+        ) : null}
+      </AppCard>
+    </TouchableOpacity>
+  );
+}
+
 function OpportunityCard({
   opportunity,
   exactMatchesCount,
@@ -713,6 +775,10 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const pendingMarketFocus = useGameStore((state) => state.pendingMarketFocus);
   const clearPendingMarketFocus = useGameStore((state) => state.clearPendingMarketFocus);
 
+  useOnboardingScreenVisit('Market');
+  const onboardingHint = useActiveOnboardingHint(['market_intro', 'first_trade']);
+  const isOnboardingMarket = !!onboardingHint;
+
   const [activeTab, setActiveTab] = useState<MarketTab>('products');
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -728,6 +794,8 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     if (!pendingMarketFocus) return;
     setActiveTab('products');
     setSelectedCityId(pendingMarketFocus.cityId);
+    setDetailProductId(pendingMarketFocus.productId);
+    setDetailModalVisible(true);
     clearPendingMarketFocus();
   }, [pendingMarketFocus, clearPendingMarketFocus]);
 
@@ -768,6 +836,17 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     () => findMarketOpportunities(cities, routes, products, MAX_OPPORTUNITIES),
     [cities, routes, products],
   );
+
+  const tradeOpportunities = useMemo(() => {
+    if (!player) return [];
+    return detectMarketTradeOpportunities({
+      player,
+      cities,
+      products,
+      currentTime,
+      limit: 6,
+    });
+  }, [player, cities, products, currentTime]);
 
   const availableContracts = useMemo(
     () => contracts.filter((contract) => contract.status === 'available'),
@@ -1144,6 +1223,18 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         }
       />
 
+      {onboardingHint ? (
+        <OnboardingHintCard
+          title={onboardingHint.title}
+          description={onboardingHint.description}
+          icon={onboardingHint.icon}
+          badgeLabel={onboardingHint.badgeLabel}
+          accentVariant={onboardingHint.accentVariant}
+          onDismiss={onboardingHint.onDismiss}
+          style={styles.onboardingHint}
+        />
+      ) : null}
+
       {statusMessage ? (
         <AppCard variant="success" style={styles.statusBanner} padded>
           <View style={styles.statusBannerRow}>
@@ -1153,17 +1244,26 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         </AppCard>
       ) : null}
 
+      <View style={[styles.ruleBanner, isOnboardingMarket && styles.ruleBannerCompact]}>
+        <GameIcon name="alert" size={11} color={colors.info} />
+        <Text style={[styles.ruleBannerText, isOnboardingMarket && styles.ruleBannerTextCompact]}>
+          {WAREHOUSE_SELL_SAME_CITY_RULE}
+        </Text>
+      </View>
+
       <MarketMetricStrip
         fuelPrice={fuelPrice}
         currentTime={currentTime}
         criticalCount={marketHighlights.criticalCount}
         opportunityCount={opportunities.length}
+        compact={isOnboardingMarket}
       />
 
       <MarketStatusSummary
         mood={marketMood}
         criticalCount={marketHighlights.criticalCount}
         opportunityCount={opportunities.length}
+        compact={isOnboardingMarket}
       />
 
       <SegmentedControl
@@ -1199,6 +1299,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
             selectedCityId={selectedCityId}
             onPressAlert={handlePressMarketAlert}
             onDeleteAlert={(alertId) => void handleDeleteMarketAlert(alertId)}
+            hideEmptyHint={isOnboardingMarket}
           />
 
           {!selectedCity ? (
@@ -1298,8 +1399,34 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       {activeTab === 'opportunities' ? (
         <View style={styles.tabContent}>
           <SectionTitle
-            title="Fırsat Tarayıcı"
-            subtitle="Şehirler arası fiyat farklarına göre olası kârlı rotalar."
+            title="Depo Ticaret Fırsatları"
+            subtitle="Alım, satış ve takip önerileri — net kâr fee sonrası hesaplanır."
+            compact
+          />
+
+          {tradeOpportunities.length === 0 ? (
+            <EmptyState
+              title="Şu an depo ticaret fırsatı yok"
+              message="Depo, stok veya nakit uygun olduğunda yeni fırsatlar görünecek."
+              icon="warehouse"
+            />
+          ) : (
+            tradeOpportunities.map((item) => (
+              <TradeOpportunityCard
+                key={item.id}
+                opportunity={item}
+                onPress={() => {
+                  setSelectedCityId(item.cityId);
+                  setDetailProductId(item.productId);
+                  setDetailModalVisible(true);
+                }}
+              />
+            ))
+          )}
+
+          <SectionTitle
+            title="Taşıma Fırsatları"
+            subtitle="Şehirler arası fiyat farklarına göre olası sözleşme rotaları."
             compact
           />
 
@@ -1423,10 +1550,47 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flex: 1,
   },
+  ruleBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs + 2,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 10,
+    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.2)',
+    marginBottom: spacing.sm,
+  },
+  ruleBannerCompact: {
+    paddingVertical: 7,
+    paddingHorizontal: spacing.sm + 2,
+    marginTop: -2,
+    marginBottom: 6,
+    backgroundColor: 'rgba(56, 189, 248, 0.05)',
+    borderColor: 'rgba(56, 189, 248, 0.14)',
+  },
+  ruleBannerText: {
+    ...typography.caption,
+    flex: 1,
+    color: colors.textSecondary,
+    lineHeight: 16,
+  },
+  ruleBannerTextCompact: {
+    fontSize: 11,
+    lineHeight: 14,
+    color: colors.textMuted,
+  },
+  onboardingHint: {
+    marginBottom: 6,
+  },
   metricStrip: {
     gap: spacing.xs,
     paddingBottom: spacing.xs,
     paddingRight: spacing.sm,
+  },
+  metricStripCompact: {
+    paddingBottom: 2,
   },
   marketStatusSummary: {
     ...typography.caption,
@@ -1434,6 +1598,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginBottom: spacing.sm,
     paddingHorizontal: 2,
+  },
+  marketStatusSummaryCompact: {
+    fontSize: 10,
+    marginBottom: 6,
+    color: colors.textMuted,
   },
   citySummaryRow: {
     flexDirection: 'row',
@@ -1484,6 +1653,14 @@ const styles = StyleSheet.create({
   },
   opportunityCard: {
     marginBottom: 9,
+  },
+  tradeOpportunityCard: {
+    marginBottom: 8,
+  },
+  tradeOpportunityProfit: {
+    ...typography.caption,
+    fontWeight: '800',
+    marginTop: 6,
   },
   cardTopRow: {
     flexDirection: 'row',

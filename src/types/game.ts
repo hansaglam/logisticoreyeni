@@ -370,6 +370,8 @@ export interface Delivery {
   conditionLoss: number;
   /** Başarısızlık nedeni — yalnızca failed durumunda */
   failureReason?: DeliveryFailureReason;
+  /** Finansal settlement uygulandı (çift ödeme koruması) */
+  settledAt?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +829,42 @@ export interface MissionsState {
   };
 }
 
+export type OnboardingStepId =
+  | 'welcome'
+  | 'first_contract'
+  | 'track_delivery'
+  | 'market_intro'
+  | 'first_trade'
+  | 'warehouse_intro'
+  | 'claim_rewards'
+  | 'finish';
+
+export type OnboardingScreenId =
+  | 'Dashboard'
+  | 'Contracts'
+  | 'Map'
+  | 'Market'
+  | 'Warehouse'
+  | 'Missions';
+
+export type OnboardingRoute =
+  | 'Dashboard'
+  | 'Contracts'
+  | 'Map'
+  | 'Market'
+  | 'Warehouse'
+  | 'Missions'
+  | null;
+
+export interface OnboardingState {
+  enabled: boolean;
+  completed: boolean;
+  currentStepId: OnboardingStepId | null;
+  completedStepIds: string[];
+  dismissedHintIds: string[];
+  visitedScreens: string[];
+}
+
 /**
  * Zustand store'un yönettiği ana oyun durumu.
  * Simülasyon modülleri için ayrı SimulationGameState tipi kullanılır.
@@ -874,6 +912,8 @@ export interface StoreGameState {
   spotlightTutorial: SpotlightTutorialPersistence;
   /** Başlangıç görevleri */
   missions: MissionsState;
+  /** Başlangıç rehberi (Onboarding Guide V1) */
+  onboarding: OnboardingState;
   /** Oyuncu tanımlı piyasa fiyat alarmları */
   marketAlerts: MarketPriceAlert[];
 }
@@ -896,6 +936,8 @@ export interface SimulationGameState {
 
 /** Teslimat başlatma sonucu */
 export type StartDeliveryErrorCode =
+  | 'CONTRACT_EXPIRED'
+  | 'LEASE_EXPIRED'
   | 'CONTRACT_NOT_FOUND'
   | 'TRUCK_NOT_FOUND'
   | 'DRIVER_NOT_FOUND'
@@ -923,6 +965,9 @@ export type ContractAvailabilityReason =
   | 'NO_TRUCK_WITH_CAPACITY'
   | 'CAPACITY_INSUFFICIENT'
   | 'TRUCK_CONDITION_TOO_LOW'
+  | 'CONTRACT_EXPIRED'
+  | 'LEASE_EXPIRED'
+  | 'INSUFFICIENT_FUNDS'
   | 'OK';
 
 export interface ContractAvailabilityDebug {

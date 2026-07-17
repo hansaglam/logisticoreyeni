@@ -41,7 +41,7 @@ export const STARTER_TRUCK: Truck = {
 export const TRUCK_MARKET: TruckMarketItem[] = [
   {
     id: 'truck-ford-cargo',
-    name: 'Ford Cargo 1833',
+    name: 'Fordan CargoPro',
     capacity: 18,
     fuelConsumptionPerKm: 0.35,
     speed: 68,
@@ -55,7 +55,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
   },
   {
     id: 'truck-volvo-fh',
-    name: 'Volvo FH 460',
+    name: 'Nordvik Titan',
     capacity: 30,
     fuelConsumptionPerKm: 0.28,
     speed: 78,
@@ -69,7 +69,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
   },
   {
     id: 'truck-mercedes-actros',
-    name: 'Mercedes Actros',
+    name: 'Sternberg Atlas',
     capacity: 28,
     fuelConsumptionPerKm: 0.3,
     speed: 80,
@@ -83,7 +83,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
   },
   {
     id: 'truck-refrigerated',
-    name: 'Soğutmalı Kamyon',
+    name: 'Ege Coldline',
     capacity: 22,
     fuelConsumptionPerKm: 0.38,
     speed: 70,
@@ -97,7 +97,7 @@ export const TRUCK_MARKET: TruckMarketItem[] = [
   },
   {
     id: 'truck-heavy-haul',
-    name: 'Ağır Yük Kamyonu',
+    name: 'Marmara Heavy',
     capacity: 40,
     fuelConsumptionPerKm: 0.42,
     speed: 65,

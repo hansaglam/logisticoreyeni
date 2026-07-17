@@ -7,11 +7,9 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import { colors, spacing } from '../../theme';
-import { STATUS_BAR_HEIGHT } from '../../theme/ui';
 
 interface AppScreenProps {
   children: React.ReactNode;
@@ -46,20 +44,21 @@ export default function AppScreen({
   scrollBottomPadding: scrollBottomPaddingOverride,
   scrollRef,
 }: AppScreenProps) {
-  const { scrollBottomPadding: defaultScrollPadding } = useTabBarLayout();
+  const { scrollBottomPadding: defaultScrollPadding, screenTopPadding } = useTabBarLayout();
   const bottomPadding = resolveBottomPadding(
     defaultScrollPadding,
     contentContainerStyle,
     scrollBottomPaddingOverride,
   );
+  const topPadding = embedded ? 0 : screenTopPadding;
 
   const paddedStyle = padding
     ? [styles.paddedContent, embedded && styles.paddedContentEmbedded]
     : undefined;
 
   return (
-    <View style={[styles.root, embedded && styles.rootEmbedded]}>
-      <SafeAreaView style={styles.safeArea}>
+    <View style={styles.root}>
+      <View style={[styles.contentArea, { paddingTop: topPadding }]}>
         {scroll ? (
           <ScrollView
             ref={scrollRef}
@@ -85,7 +84,7 @@ export default function AppScreen({
             {children}
           </View>
         )}
-      </SafeAreaView>
+      </View>
     </View>
   );
 }
@@ -94,9 +93,8 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingTop: STATUS_BAR_HEIGHT,
   },
-  safeArea: {
+  contentArea: {
     flex: 1,
     backgroundColor: colors.background,
   },
@@ -108,12 +106,8 @@ const styles = StyleSheet.create({
   },
   paddedContent: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
   },
   paddedContentEmbedded: {
-    paddingTop: 0,
-  },
-  rootEmbedded: {
     paddingTop: 0,
   },
 });

@@ -13,13 +13,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { debugConfig } from '../config/debug';
 import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
 import { AppCard, GameIcon, ProgressBar, StatusBadge, type StatusBadgeVariant } from '../components/ui';
 import { normalizeCityId } from '../data/networkPositions';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { getContractAvailability } from '../simulation/delivery';
 import { findMarketOpportunities } from '../simulation/contracts';
 import {
@@ -28,7 +29,6 @@ import {
 } from '../simulation/mapRecommendations';
 import { useGameStore } from '../store/gameStore';
 import { getWorldMapCityPosition } from '../data/worldMapPositions';
-import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import { getCityName } from '../utils/entityLookup';
 import type {
   Contract,
@@ -407,7 +407,10 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const currentTime = useGameStore((state) => state.currentTime);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+
+  useOnboardingScreenVisit('Map');
+  const onboardingHint = useActiveOnboardingHint(['track_delivery']);
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
@@ -645,27 +648,27 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   if (!player) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (cities.length === 0) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.emptyStateTitle}>Harita verisi yok</Text>
           <Text style={styles.emptyStateSubtitle}>Şehir verileri henüz yüklenmedi.</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
@@ -687,6 +690,17 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
             </TouchableOpacity>
           </View>
         </View>
+
+        {onboardingHint ? (
+          <OnboardingHintCard
+            title={onboardingHint.title}
+            description={onboardingHint.description}
+            icon={onboardingHint.icon}
+            badgeLabel={onboardingHint.badgeLabel}
+            accentVariant={onboardingHint.accentVariant}
+            onDismiss={onboardingHint.onDismiss}
+          />
+        ) : null}
 
         <ScrollView
           horizontal
@@ -765,7 +779,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           onOpenFleet={handleOpenFleet}
         />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -773,11 +787,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,
-    paddingTop: STATUS_BAR_HEIGHT,
   },
   scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 12,
   },
   loadingContainer: {
     flex: 1,

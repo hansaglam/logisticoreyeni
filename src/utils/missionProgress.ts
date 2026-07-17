@@ -234,7 +234,11 @@ export function getMissionProgress(
       });
       break;
     case 'own_2_trucks':
-      current = (state.player?.trucks ?? []).filter((truck) => !truck.leaseExpired).length;
+      current = (state.player?.trucks ?? []).filter(
+        (truck) =>
+          (truck.ownershipType ?? 'owned') === 'owned' ||
+          ((truck.ownershipType ?? 'owned') === 'leased' && !truck.leaseExpired),
+      ).length;
       break;
     case 'reach_warehouse_value_25000':
       current = getWarehouseInventoryMarketValue(state);

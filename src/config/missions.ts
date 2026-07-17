@@ -55,7 +55,7 @@ export const STARTER_MISSIONS: MissionConfig[] = [
     title: 'Piyasayı Keşfet',
     description: 'Piyasa ekranını aç ve fırsatları incele.',
     targetValue: 1,
-    reward: { diamonds: 10, xp: 25 },
+    reward: { diamonds: 5, xp: 25 },
     category: 'market',
   },
   {
@@ -74,7 +74,7 @@ export const CAREER_MISSIONS: MissionConfig[] = [
     title: '5 Teslimat Tamamla',
     description: 'Toplam 5 başarılı teslimat yap.',
     targetValue: 5,
-    reward: { money: 3000, xp: 100, reputation: 1 },
+    reward: { money: 2500, xp: 100, reputation: 1 },
     category: 'career',
   },
   {
@@ -87,18 +87,18 @@ export const CAREER_MISSIONS: MissionConfig[] = [
   },
   {
     id: 'reach_company_score_150k',
-    title: 'Şirket Puanı 150.000',
-    description: 'Şirket puanını 150.000 seviyesine çıkar.',
-    targetValue: 150000,
+    title: 'Şirket Puanı 250.000',
+    description: 'Şirket puanını 250.000 seviyesine çıkar.',
+    targetValue: 250_000,
     reward: { money: 5000, xp: 150 },
     category: 'career',
   },
   {
     id: 'own_2_trucks',
-    title: 'İkinci Kamyon',
-    description: 'Filona ikinci kamyonu ekle.',
+    title: '2 Kamyonla Operasyon Yap',
+    description: 'Filonda toplam 2 aktif kamyon bulundur (sahip veya kiralık).',
     targetValue: 2,
-    reward: { money: 4000, xp: 120 },
+    reward: { money: 3000, xp: 120 },
     category: 'career',
   },
   {

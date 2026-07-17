@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { InteractionManager, View, type ViewProps } from 'react-native';
 
+import { ENABLE_SPOTLIGHT_TUTORIAL } from './featureFlags';
 import type { TutorialTargetId } from './types';
 import { registerTutorialTarget } from './tutorialTargetRegistry';
 
@@ -10,7 +11,40 @@ export interface TutorialTargetProps extends ViewProps {
   scrollIntoView?: () => void | Promise<void>;
 }
 
+/** Spotlight kapalıyken sadece children render eder — layout style korunur. */
 export function TutorialTarget({
+  id,
+  onTutorialPress,
+  scrollIntoView,
+  children,
+  style,
+  ...rest
+}: TutorialTargetProps) {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+    if (style) {
+      return (
+        <View style={style} {...rest}>
+          {children}
+        </View>
+      );
+    }
+    return <>{children}</>;
+  }
+
+  return (
+    <TutorialTargetMeasured
+      id={id}
+      onTutorialPress={onTutorialPress}
+      scrollIntoView={scrollIntoView}
+      style={style}
+      {...rest}
+    >
+      {children}
+    </TutorialTargetMeasured>
+  );
+}
+
+function TutorialTargetMeasured({
   id,
   onTutorialPress,
   scrollIntoView,

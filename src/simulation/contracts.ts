@@ -30,14 +30,21 @@ import {
   pickContractGenerationLevelTier,
   resolveContractGenerationRange,
 } from '../config/levelConfig';
-import { toProductMarket } from './economy';
+import { toProductMarket, getSafeGlobalEconomy } from './economy';
 import {
+  calculateFuelCost,
   getActiveDeliveryDestinationCityIds,
   getBusyTruckOriginCityIds,
   getContractAvailability,
+  getIdleDrivers,
   getIdleTruckOriginCityIds,
   getMaxIdleTruckCapacityAtOrigin,
+  isContractOfferExpired,
+  selectIdleTruckForContract,
 } from './delivery';
+import { getRoute as findRoute } from '../data/routes';
+import { getProductByIdSafe } from '../utils/entityLookup';
+import { canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
 import { getMarketContractMatchScore } from '../utils/marketContractMatch';
 import {
@@ -637,26 +644,64 @@ function getOriginCityWeightBonus(
   return bonus;
 }
 
+export interface PlayableContractContext {
+  playerMoney?: number;
+  globalEconomy?: GlobalEconomy;
+}
+
 export function isPlayableContract(
   contract: Contract,
   trucks: Truck[] | undefined,
   drivers: Driver[] | undefined,
   playerLevel: number,
   currentTime: number,
+  context?: PlayableContractContext,
 ): boolean {
   if (contract.status !== 'available') {
     return false;
   }
-  if (currentTime >= (contract.expiresAt ?? 0)) {
+  if (isContractOfferExpired(contract, currentTime)) {
     return false;
   }
-  return getContractAvailability(
-    contract,
+  if (
+    !getContractAvailability(
+      contract,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+    ).canStart
+  ) {
+    return false;
+  }
+
+  if (context?.playerMoney == null || context?.globalEconomy == null) {
+    return true;
+  }
+
+  const product = getProductByIdSafe(contract.productId);
+  const route = findRoute(contract.originCityId, contract.destinationCityId);
+  const truck = selectIdleTruckForContract(
     trucks,
-    drivers,
-    playerLevel,
+    contract,
+    product ?? undefined,
     currentTime,
-  ).canStart;
+  );
+  const driver = getIdleDrivers(drivers)[0];
+
+  if (!truck || !driver || !route || !product) {
+    return false;
+  }
+
+  const fuelCost = calculateFuelCost(
+    contract,
+    truck,
+    driver,
+    route,
+    product,
+    getSafeGlobalEconomy(context.globalEconomy),
+  );
+  return canAffordVoluntaryPurchase(context.playerMoney, fuelCost);
 }
 
 export function countPlayableContracts(
@@ -665,9 +710,10 @@ export function countPlayableContracts(
   drivers: Driver[] | undefined,
   playerLevel: number,
   currentTime: number,
+  context?: PlayableContractContext,
 ): number {
   return (contracts ?? []).filter((contract) =>
-    isPlayableContract(contract, trucks, drivers, playerLevel, currentTime),
+    isPlayableContract(contract, trucks, drivers, playerLevel, currentTime, context),
   ).length;
 }
 
@@ -678,11 +724,12 @@ export function countPlayableContractsFromOrigin(
   drivers: Driver[] | undefined,
   playerLevel: number,
   currentTime: number,
+  context?: PlayableContractContext,
 ): number {
   return (contracts ?? []).filter(
     (contract) =>
       contract.originCityId === originCityId &&
-      isPlayableContract(contract, trucks, drivers, playerLevel, currentTime),
+      isPlayableContract(contract, trucks, drivers, playerLevel, currentTime, context),
   ).length;
 }
 

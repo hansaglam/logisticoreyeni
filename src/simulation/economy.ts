@@ -17,6 +17,7 @@ import { PRODUCT_IDS } from '../data/products';
 import { economyBalance } from '../config/balance';
 import { clamp, randomBetween } from '../utils/math';
 import { appendProductPriceHistory } from '../utils/priceHistoryCore';
+import { applyMarketPriceMicroMove } from './marketPriceTick';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -385,11 +386,31 @@ export function updateCityProductEconomy(
 
   const newPrice = calculateDynamicPrice(marketAfterStock, globalEconomy, factors.price);
 
+  const stockRatio = calculateStockRatio(newStock, productMarket.targetStock);
+  const historyLength = Array.isArray(productMarket.priceHistory)
+    ? productMarket.priceHistory.length
+    : 0;
+  const marketVolatility = safeEconomyNumber(
+    globalEconomy.marketVolatility,
+    economyBalance.marketVolatility ?? 0.08,
+  );
+
+  const microPrice = applyMarketPriceMicroMove({
+    cityId: city.id,
+    productId,
+    previousPrice: productMarket.currentPrice,
+    targetPrice: newPrice,
+    basePrice: productMarket.basePrice,
+    stockRatio,
+    tickIndex: historyLength,
+    globalVolatility: marketVolatility / 0.08,
+  });
+
   const updatedProduct: CityProductState = {
     ...productMarket,
     stock: newStock,
-    currentPrice: newPrice,
-    priceHistory: appendProductPriceHistory(productMarket.priceHistory, newPrice),
+    currentPrice: microPrice,
+    priceHistory: appendProductPriceHistory(productMarket.priceHistory, microPrice),
   };
 
   return {

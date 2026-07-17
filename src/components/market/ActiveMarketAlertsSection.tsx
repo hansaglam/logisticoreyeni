@@ -23,6 +23,7 @@ interface ActiveMarketAlertsSectionProps {
   selectedCityId: string | null;
   onPressAlert: (alert: MarketPriceAlert) => void;
   onDeleteAlert: (alertId: string) => void;
+  hideEmptyHint?: boolean;
 }
 
 function sortAlertsForDisplay(
@@ -84,6 +85,7 @@ export default function ActiveMarketAlertsSection({
   selectedCityId,
   onPressAlert,
   onDeleteAlert,
+  hideEmptyHint = false,
 }: ActiveMarketAlertsSectionProps) {
   const [showAllModal, setShowAllModal] = useState(false);
 
@@ -96,6 +98,9 @@ export default function ActiveMarketAlertsSection({
   const hasMoreAlerts = sortedAlerts.length > MAX_VISIBLE_ALERTS;
 
   if (alerts.length === 0) {
+    if (hideEmptyHint) {
+      return null;
+    }
     return (
       <Text style={styles.emptyHint}>
         Alarm kurmak için ürün kartındaki Alarm butonunu kullan.

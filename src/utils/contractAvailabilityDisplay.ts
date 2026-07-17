@@ -37,6 +37,10 @@ export function getContractAvailabilityLabel(
       return 'Tonaj yetersiz';
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Kondisyon düşük';
+    case 'CONTRACT_EXPIRED':
+      return 'Süresi doldu';
+    case 'LEASE_EXPIRED':
+      return 'Kira süresi doldu';
     case 'NO_TRUCKS':
       return 'Kamyon yok';
     case 'NO_IDLE_TRUCKS':
@@ -101,6 +105,10 @@ export function buildContractAvailabilityMessage(
       );
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Bu iş için uygun kamyonun var ancak kondisyonu düşük. Bakım yaptırarak bu sözleşmeyi alabilirsin.';
+    case 'CONTRACT_EXPIRED':
+      return 'İşin süresi doldu.';
+    case 'LEASE_EXPIRED':
+      return 'Kiralık kamyonun süresi doldu.';
     default:
       return 'Bu iş şu anda başlatılamıyor.';
   }

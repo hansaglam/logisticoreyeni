@@ -36,6 +36,8 @@ import type {
   Truck,
   TruckTransfer,
   TutorialStepId,
+  OnboardingScreenId,
+  OnboardingStepId,
   Warehouse,
   WarehouseType,
 } from '../types/game';
@@ -107,6 +109,8 @@ import {
   getActiveDeliveryDestinationCityIds,
   getBusyTruckOriginCityIds,
   getIdleTrucks,
+  isContractOfferExpired,
+  isTruckAvailableForAssignment,
   normalizeTruckCity,
   resolveTruckCityId,
   selectIdleTruckForContract,
@@ -132,6 +136,7 @@ import {
   mergeInventoryOnBuy,
   normalizeWarehouse,
   reduceInventoryOnSell,
+  validateTradeQuantity,
 } from '../simulation/trading';
 import {
   buildStorageWarningForPurchase,
@@ -157,7 +162,9 @@ import type { MissionProgressResult } from '../utils/missionProgress';
 import {
   calculateWarehouseDailyOperatingCostBreakdown,
   estimateWarehouseUpgradeCost,
+  resolveWarehouseDailyOperatingCost,
 } from '../utils/warehouseCalculations';
+import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   cancelMarketAlertNotification,
@@ -179,6 +186,16 @@ import {
 import { createDefaultMissionsState } from '../config/missions';
 import { getMissionById } from '../config/missions';
 import { createDefaultTutorialState } from '../config/tutorial';
+import {
+  advanceOnboardingIfNeeded,
+  buildOnboardingEvaluationState,
+  completeOnboardingStep,
+  createDefaultOnboardingState,
+  dismissOnboardingGuide,
+  dismissOnboardingHint,
+  markOnboardingScreenVisited as markOnboardingScreenVisitedState,
+  resetOnboardingForDev as resetOnboardingStateForDev,
+} from '../onboarding/onboardingProgress';
 import {
   clearSpotlightTutorialProgressState,
   createDefaultSpotlightTutorialState,
@@ -281,7 +298,7 @@ export type NavigationTab = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'marke
 
 export interface NavigationRequest {
   tab: NavigationTab;
-  moreSubRoute?: 'finance' | 'warehouse' | 'debug';
+  moreSubRoute?: 'finance' | 'warehouse' | 'debug' | 'missions';
 }
 
 export type FleetSubTab = 'trucks' | 'drivers' | 'shop' | 'hire_drivers';
@@ -1015,6 +1032,7 @@ export function createInitialGameState(): StoreGameState {
     financeTotals: createEmptyFinanceTotals(),
     tutorial: createDefaultTutorialState(),
     missions: createDefaultMissionsState(),
+    onboarding: createDefaultOnboardingState(),
     spotlightTutorial: createDefaultSpotlightTutorialState(),
     marketAlerts: [],
   };
@@ -1028,7 +1046,7 @@ export interface GameStore extends StoreGameState {
   /** Geçici UI bildirimleri — save'e yazılmaz */
   notifications: GameNotification[];
   navigationRequest: NavigationRequest | null;
-  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | null;
+  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | null;
   pendingFleetSubTab: FleetSubTab | null;
   marketContractFilter: MarketContractFilter | null;
   highlightedContractId: string | null;
@@ -1167,6 +1185,12 @@ export interface GameStore extends StoreGameState {
   syncMissionProgress: () => void;
   getMissionProgressValue: (missionId: string) => MissionProgressResult;
   claimMissionReward: (missionId: string) => { success: boolean; message?: string };
+  markOnboardingScreenVisited: (screenId: OnboardingScreenId) => void;
+  dismissOnboardingHint: (hintId: string) => void;
+  dismissOnboardingGuide: () => void;
+  completeOnboardingStepPress: (stepId: OnboardingStepId) => void;
+  advanceOnboardingProgress: () => void;
+  resetOnboardingForDev: () => void;
   addCompanyXp: (amount: number, reason?: string) => void;
   checkLevelUp: () => void;
   getLevelBenefits: (level?: number) => LevelBenefits;
@@ -1516,6 +1540,74 @@ export const useGameStore = create<GameStore>((set, get) => ({
       missions: nextMissions,
     });
     get().markSaveDirty();
+    get().advanceOnboardingProgress();
+  },
+
+  markOnboardingScreenVisited: (screenId) => {
+    const state = get();
+    const onboarding = state.onboarding ?? createDefaultOnboardingState();
+    const nextOnboarding = markOnboardingScreenVisitedState(onboarding, screenId);
+    if (nextOnboarding === onboarding) {
+      return;
+    }
+    set({ onboarding: nextOnboarding });
+    get().markSaveDirty();
+    get().advanceOnboardingProgress();
+  },
+
+  dismissOnboardingHint: (hintId) => {
+    const state = get();
+    const onboarding = state.onboarding ?? createDefaultOnboardingState();
+    const nextOnboarding = dismissOnboardingHint(onboarding, hintId);
+    if (nextOnboarding === onboarding) {
+      return;
+    }
+    set({ onboarding: nextOnboarding });
+    get().markSaveDirty();
+  },
+
+  dismissOnboardingGuide: () => {
+    const state = get();
+    const onboarding = state.onboarding ?? createDefaultOnboardingState();
+    set({ onboarding: dismissOnboardingGuide(onboarding) });
+    get().markSaveDirty();
+  },
+
+  completeOnboardingStepPress: (stepId) => {
+    const state = get();
+    const onboarding = state.onboarding ?? createDefaultOnboardingState();
+    const nextOnboarding = completeOnboardingStep(onboarding, stepId);
+    set({ onboarding: nextOnboarding });
+    get().markSaveDirty();
+    get().advanceOnboardingProgress();
+  },
+
+  advanceOnboardingProgress: () => {
+    const state = get();
+    const currentOnboarding = state.onboarding ?? createDefaultOnboardingState();
+    const nextOnboarding = advanceOnboardingIfNeeded(
+      buildOnboardingEvaluationState({
+        onboarding: currentOnboarding,
+        activeDeliveries: state.activeDeliveries ?? [],
+        missions: state.missions ?? createDefaultMissionsState(),
+        player: state.player,
+        getMissionProgress: (missionId) => getMissionProgress(missionId, state),
+      }),
+    );
+    if (
+      nextOnboarding.currentStepId === currentOnboarding.currentStepId &&
+      nextOnboarding.completed === currentOnboarding.completed &&
+      nextOnboarding.completedStepIds.length === currentOnboarding.completedStepIds.length
+    ) {
+      return;
+    }
+    set({ onboarding: nextOnboarding });
+    get().markSaveDirty();
+  },
+
+  resetOnboardingForDev: () => {
+    set({ onboarding: resetOnboardingStateForDev() });
+    get().markSaveDirty();
   },
 
   createMarketPriceAlert: async (input) => {
@@ -1861,6 +1953,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     get().markSaveDirty();
+    get().advanceOnboardingProgress();
     void get()
       .saveGame()
       .then(() => {
@@ -2097,6 +2190,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         });
       }
       get().checkMarketPriceAlerts({ sendLocal: false });
+      get().advanceOnboardingProgress();
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Kayıt yüklenemedi.';
@@ -2356,7 +2450,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const maxOfflineDays = operatingCostBalance.maxOfflineChargeDays ?? 3;
       const chargedDays = Math.min(elapsedDays, maxOfflineDays);
       const newLastDailyOperatingCostTime =
-        lastDailyOperatingCostTime + elapsedDays * DAILY_COST_INTERVAL_HOURS;
+        lastDailyOperatingCostTime + chargedDays * DAILY_COST_INTERVAL_HOURS;
 
       get().processDailyOperatingCosts({
         days: chargedDays,
@@ -2530,7 +2624,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const patch: Partial<GameStore> = {
       player: {
         ...state.player,
-        money: (state.player.money ?? 0) - totalCost,
+        money: applyMandatoryCashDeduction(state.player.money ?? 0, totalCost),
       },
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
@@ -3002,6 +3096,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    if (isContractOfferExpired(contract, state.currentTime)) {
+      return {
+        success: false,
+        errorCode: 'CONTRACT_EXPIRED',
+        message: 'İşin süresi doldu.',
+      };
+    }
+
     const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
     const requiredLevel = contract.requiredLevel ?? 1;
     if (requiredLevel > playerLevel) {
@@ -3098,6 +3200,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    if (!isTruckAvailableForAssignment(truck, state.currentTime)) {
+      return {
+        success: false,
+        errorCode: 'LEASE_EXPIRED',
+        message: 'Kiralık kamyonun süresi doldu.',
+      };
+    }
+
     if (!canTruckCarryContract(truck, contract, product)) {
       const maxIdleTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
       return {
@@ -3146,7 +3256,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (state.player.money < delivery.fuelCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, delivery.fuelCost)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -3229,6 +3339,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     get().autoSave('delivery_started');
     get().notifyTutorialDeliveryStarted();
+    get().advanceOnboardingProgress();
     return { success: true };
   },
 
@@ -3497,7 +3608,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (state.player.money < transfer.totalCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, transfer.totalCost)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -3673,6 +3784,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
+    if (delivery.settledAt != null) {
+      return;
+    }
+
     if (!isDeliveryProgressComplete(delivery.progress)) {
       console.warn(
         '[delivery] complete skipped: delivery not ready',
@@ -3745,6 +3860,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       : `Kamyon ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`;
 
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterComplete);
+    const settledAt = state.currentTime;
+    const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
+      item.id === deliveryId ? { ...item, settledAt } : item,
+    );
     const completionLedgerEntries = buildDeliveryCompletionLedgerEntries(
       settlement,
       routeLabel,
@@ -3755,6 +3874,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     set({
       ...merged,
+      activeDeliveries: settledDeliveries,
       ...ledgerPatch,
       deliverySettlementDebug: {
         phase: 'complete',
@@ -3846,15 +3966,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
+    if (delivery.settledAt != null) {
+      return;
+    }
+
     const newSimState = failDeliverySim(simState, deliveryId, reason);
     const contract = simState.contracts.find((c) => c.id === delivery.contractId);
     const penaltyAmount = calculateFailurePenalty(contract);
-    const moneyAfterFail = state.player.money - penaltyAmount;
+    const moneyAfterFail = applyMandatoryCashDeduction(state.player.money, penaltyAmount);
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterFail);
+    const settledAt = state.currentTime;
+    const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
+      item.id === deliveryId ? { ...item, settledAt } : item,
+    );
     const routeLabel = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
 
     set({
       ...merged,
+      activeDeliveries: settledDeliveries,
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
@@ -3931,7 +4060,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (state.player.money < template.purchasePrice) {
+    if (!canAffordVoluntaryPurchase(state.player.money, template.purchasePrice)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -4027,7 +4156,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         };
       }
 
-      if (state.player.money < weeklyLeaseCost) {
+      if (!canAffordVoluntaryPurchase(state.player.money, weeklyLeaseCost)) {
         return {
           success: false,
           errorCode: 'INSUFFICIENT_FUNDS',
@@ -4130,7 +4259,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const hireCost = template.hiringFee;
-    if (state.player.money < hireCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, hireCost)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -4371,7 +4500,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    if (state.player.money < repairCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, repairCost)) {
       throw new Error('Yetersiz bakiye.');
     }
 
@@ -4454,7 +4583,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const openCost = Math.round(warehouseBalance.baseOpenCost * costModifier * typeCostMultiplier);
     const typeLabel = getWarehouseTypeLabel(resolvedType);
 
-    if (state.player.money < openCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, openCost)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -4559,7 +4688,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const costModifier = city?.warehouseCostModifier ?? 1;
     const upgradeCost = estimateWarehouseUpgradeCost(city, warehouse.cityId);
 
-    if (state.player.money < upgradeCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, upgradeCost)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -4574,10 +4703,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (candidate.id !== warehouse.id) {
         return candidate;
       }
-      return {
+      const nextCapacity = candidate.capacityTons + capacityIncrease;
+      const upgraded = {
         ...candidate,
-        capacityTons: candidate.capacityTons + capacityIncrease,
+        capacityTons: nextCapacity,
+        capacityTon: nextCapacity,
         upgradeTier: nextTier,
+      };
+      return {
+        ...upgraded,
+        dailyOperatingCost: resolveWarehouseDailyOperatingCost(upgraded, city),
       };
     });
 
@@ -4624,19 +4759,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   }): TradeActionResult => {
     const state = get();
 
-    if (!Number.isFinite(quantity) || quantity <= 0) {
+    const quantityError = validateTradeQuantity(quantity);
+    if (quantityError) {
       return {
         success: false,
         errorCode: 'INVALID_QUANTITY',
-        message: 'Geçerli bir miktar seçmelisin.',
-      };
-    }
-
-    if (quantity < tradingBalance.minTradeQuantity) {
-      return {
-        success: false,
-        errorCode: 'INVALID_QUANTITY',
-        message: `Minimum alım miktarı ${tradingBalance.minTradeQuantity} ton.`,
+        message: quantityError,
       };
     }
 
@@ -4708,7 +4836,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const totalCost = calculateTradeBuyCost(unitPrice, quantity);
-    if (state.player.money < totalCost) {
+    if (!canAffordVoluntaryPurchase(state.player.money, totalCost)) {
       return {
         success: false,
         errorCode: 'INSUFFICIENT_FUNDS',
@@ -4753,7 +4881,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         type: 'expense',
         category: 'trade_purchase',
         amount: totalCost,
-        description: `${cityName} · ${quantity.toFixed(1)} ton ${productName}`,
+        description: `${cityName} · ${quantity.toFixed(1)} ton ${productName} (işlem gideri dahil)`,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -4796,6 +4924,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         latest,
       ),
     });
+    get().advanceOnboardingProgress();
     return {
       success: true,
       message: `${quantity.toFixed(1)} ton ${productName} depoya eklendi.`,
@@ -4809,11 +4938,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   }): TradeActionResult => {
     const state = get();
 
-    if (!Number.isFinite(quantity) || quantity <= 0) {
+    const quantityError = validateTradeQuantity(quantity);
+    if (quantityError) {
       return {
         success: false,
         errorCode: 'INVALID_QUANTITY',
-        message: 'Geçerli bir miktar seçmelisin.',
+        message: quantityError,
       };
     }
 
@@ -4894,7 +5024,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         type: 'income',
         category: 'trade_sale',
         amount: revenue,
-        description: `${productName} · Kâr: ${formatNotificationMoney(profit)}`,
+        description: `${productName} · Net kâr: ${formatNotificationMoney(profit)} (işlem gideri dahil)`,
       }),
       eventLog: prependGameEvent(
         state.eventLog,

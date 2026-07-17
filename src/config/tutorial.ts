@@ -1,4 +1,4 @@
-import type { TabKey } from '../components/BottomTabBar';
+import type { TabKey } from '../navigation/tabTypes';
 import type { TutorialState, TutorialStepId } from '../types/game';
 
 export interface TutorialStepConfig {

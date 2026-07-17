@@ -80,7 +80,42 @@ const BADGE_STYLES = {
 } as const;
 
 function getContractRouteKey(contract: Contract): string {
+  return `${contract.originCityId}-${contract.destinationCityId}`;
+}
+
+function getContractRouteKeyFull(contract: Contract): string {
   return `${contract.originCityId}-${contract.destinationCityId}-${contract.productId}`;
+}
+
+/**
+ * Dashboard önizlemesi için skor sırasını koruyarak farklı rota/ürün çeşitliliği sağlar.
+ */
+export function pickDiverseDashboardOpportunities(
+  items: DashboardOpportunityItem[],
+  limit = 2,
+): DashboardOpportunityItem[] {
+  if (items.length <= limit) {
+    return items;
+  }
+
+  const picked: DashboardOpportunityItem[] = [items[0]];
+  const first = items[0];
+  const firstRoute = getContractRouteKey(first.contract);
+  const firstProduct = first.contract.productId ?? '';
+
+  const diverse = items.slice(1).find((item) => {
+    const route = getContractRouteKey(item.contract);
+    const product = item.contract.productId ?? '';
+    return route !== firstRoute || product !== firstProduct;
+  });
+
+  if (diverse) {
+    picked.push(diverse);
+  } else {
+    picked.push(items[1]);
+  }
+
+  return picked.slice(0, limit);
 }
 
 function buildMarketOpportunityKeySet(
@@ -128,7 +163,7 @@ export function buildDashboardOpportunityBadges(params: {
     candidates.push({ key: 'next-route', label: 'Sıradaki rota', ...BADGE_STYLES.route });
   }
 
-  if (marketOpportunityKeys.has(getContractRouteKey(contract))) {
+  if (marketOpportunityKeys.has(getContractRouteKeyFull(contract))) {
     candidates.push({ key: 'market', label: 'Piyasa fırsatı', ...BADGE_STYLES.market });
   }
 
@@ -163,7 +198,7 @@ function getDashboardOpportunitySortScore(params: {
     score += 1500;
   }
 
-  if (marketOpportunityKeys.has(getContractRouteKey(contract))) {
+  if (marketOpportunityKeys.has(getContractRouteKeyFull(contract))) {
     score += 1000;
   }
 

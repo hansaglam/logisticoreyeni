@@ -120,6 +120,10 @@ export function getWarehouseInventoryItem(
   return normalizeWarehouseInventory(warehouse).find((item) => item.productId === productId);
 }
 
+/** Ürünler yalnızca bulunduğu şehirdeki depodan satılabilir */
+export const WAREHOUSE_SELL_SAME_CITY_RULE =
+  'Ürünler yalnızca bulunduğu şehirdeki depodan satılabilir.';
+
 export function calculateTradeBuyCost(unitPrice: number, quantity: number): number {
   const base = unitPrice * quantity;
   const fee = base * tradingBalance.warehouseBuyFeeRate;
@@ -143,9 +147,75 @@ export function calculateTradeProfit(
   quantity: number,
   quality = 100,
 ): number {
-  const revenue = calculateTradeSellRevenue(sellUnitPrice, quantity, quality);
-  const costBasis = averageBuyPrice * quantity;
-  return revenue - costBasis;
+  return buildTradeProfitBreakdown(sellUnitPrice, averageBuyPrice, quantity, quality).netProfit;
+}
+
+/** UI ve ledger için tek kaynak net kâr dökümü */
+export interface TradeProfitBreakdown {
+  quantity: number;
+  sellUnitPrice: number;
+  averageBuyPrice: number;
+  quality: number;
+  grossSellRevenue: number;
+  sellFeeAmount: number;
+  sellRevenueAfterFee: number;
+  averageCostIncludingBuyFee: number;
+  buyFeeAmount: number;
+  totalFees: number;
+  netProfit: number;
+}
+
+export function buildTradeProfitBreakdown(
+  sellUnitPrice: number,
+  averageBuyPrice: number,
+  quantity: number,
+  quality = 100,
+): TradeProfitBreakdown {
+  const safeQty = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+  const safeSell = Number.isFinite(sellUnitPrice) ? Math.max(0, sellUnitPrice) : 0;
+  const safeBuy = Number.isFinite(averageBuyPrice) ? Math.max(0, averageBuyPrice) : 0;
+  const safeQuality = Number.isFinite(quality)
+    ? Math.max(0, Math.min(100, quality))
+    : 100;
+
+  const averageCostIncludingBuyFee = calculateTradeBuyCost(safeBuy, safeQty);
+  const buyFeeAmount = safeBuy * safeQty * tradingBalance.warehouseBuyFeeRate;
+  const sellRevenueAfterFee = calculateTradeSellRevenue(safeSell, safeQty, safeQuality);
+  const effectiveUnitPrice = getEffectiveSellPrice(safeSell, safeQuality);
+  const grossSellRevenue = effectiveUnitPrice * safeQty;
+  const sellFeeAmount = grossSellRevenue * tradingBalance.warehouseSellFeeRate;
+  const totalFees = buyFeeAmount + sellFeeAmount;
+  const netProfit = sellRevenueAfterFee - averageCostIncludingBuyFee;
+
+  return {
+    quantity: safeQty,
+    sellUnitPrice: safeSell,
+    averageBuyPrice: safeBuy,
+    quality: safeQuality,
+    grossSellRevenue,
+    sellFeeAmount,
+    sellRevenueAfterFee,
+    averageCostIncludingBuyFee,
+    buyFeeAmount,
+    totalFees,
+    netProfit,
+  };
+}
+
+/** Aynı fiyattan al-sat senaryosunda net sonuç (fee sonrası, zarar beklenir) */
+export function calculateSamePriceRoundTripTradeResult(
+  unitPrice: number,
+  quantity: number,
+  quality = 100,
+): number {
+  return calculateTradeProfit(unitPrice, unitPrice, quantity, quality);
+}
+
+/** UI için işlem gideri özeti */
+export function getTradeFeeSummaryLabel(): string {
+  const buyPct = Math.round(tradingBalance.warehouseBuyFeeRate * 100);
+  const sellPct = Math.round(tradingBalance.warehouseSellFeeRate * 100);
+  return `İşlem gideri: alım %${buyPct} · satım %${sellPct}`;
 }
 
 export function mergeInventoryOnBuy(
@@ -222,6 +292,20 @@ export function clampTradeQuantity(
     caps.push(maxByCapacity);
   }
   return Math.min(safeRequested, ...caps.filter((cap) => cap >= 0));
+}
+
+/** Store katmanı trade miktar doğrulaması — hata mesajı veya null */
+export function validateTradeQuantity(quantity: number): string | null {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return 'Geçerli bir miktar seçmelisin.';
+  }
+  if (quantity < tradingBalance.minTradeQuantity) {
+    return `Minimum işlem miktarı ${tradingBalance.minTradeQuantity} ton.`;
+  }
+  if (quantity > tradingBalance.maxTradeQuantity) {
+    return `Maksimum işlem miktarı ${tradingBalance.maxTradeQuantity} ton.`;
+  }
+  return null;
 }
 
 export function getTradeQuantityPresets(

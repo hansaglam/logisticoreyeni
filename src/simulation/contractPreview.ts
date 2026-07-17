@@ -21,7 +21,7 @@ import {
   estimateContractTripCostBreakdown,
 } from './contractEconomics';
 import {
-  calculateDeliveryProfit,
+  calculateExpectedContractCashFlow,
   calculateFuelCost,
   calculateMaintenanceCost,
   calculateTravelHours,
@@ -223,7 +223,7 @@ function estimateMaintenanceCostFallback(
     urgency: contract.urgency ?? 0,
     globalEconomy: getSafeGlobalEconomy(globalEconomy),
   });
-  return breakdown.maintenanceCost + breakdown.routeDifficultyCost + breakdown.cargoHandlingCost;
+  return breakdown.maintenanceCost;
 }
 
 export function buildContractPreview(input: BuildContractPreviewInput): ContractPreview {
@@ -268,21 +268,14 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     estimatedMaintenanceCost = estimateMaintenanceCostFallback(contract, route, safeEconomy);
   }
 
-  const estimatedTripCost =
-    estimatedFuelCost +
-    estimatedMaintenanceCost +
-    (truck && route && product
-      ? Math.round(
-          (contract.cargoWeight ?? contract.amount ?? 0) *
-            deliveryCostBalance.cargoHandlingCostPerTon,
-        )
-      : 0);
-  const estimatedOperationalProfit = calculateDeliveryProfit(
+  const cashFlow = calculateExpectedContractCashFlow(
     contract,
     estimatedFuelCost,
     estimatedMaintenanceCost,
     0,
   );
+  const estimatedTripCost = cashFlow.fuelCost + cashFlow.maintenanceCost;
+  const estimatedOperationalProfit = cashFlow.estimatedNetProfit;
   const estimatedMarginPercent = payment > 0 ? estimatedOperationalProfit / payment : 0;
 
   const { riskLevel, riskLabel } = calculateContractRiskLevel(contract, route, product);

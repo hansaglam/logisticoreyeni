@@ -24,8 +24,8 @@ import { CITIES_BY_ID } from '../data/cities';
 import { getLevelProgress } from '../simulation/leveling';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../theme';
-import { STATUS_BAR_HEIGHT } from '../theme/ui';
 import { restartSpotlightTutorial } from '../hooks/useSpotlightTutorialTriggers';
+import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import DebugSimulationScreen from './DebugSimulationScreen';
 import FinanceScreen from './FinanceScreen';
@@ -338,7 +338,7 @@ export default function MoreScreen() {
         />
       ))}
 
-      {__DEV__ ? (
+      {__DEV__ && ENABLE_SPOTLIGHT_TUTORIAL ? (
         <AppCard variant="soft" style={styles.debugNoteCard} padded>
           <SectionTitle title="Tutorial (Test)" compact />
           <Text style={styles.debugNoteText}>
@@ -377,6 +377,20 @@ export default function MoreScreen() {
       ) : null}
 
       {__DEV__ ? (
+        <AppCard variant="soft" style={styles.debugNoteCard} padded>
+          <SectionTitle title="Başlangıç Rehberi (Test)" compact />
+          <TouchableOpacity
+            onPress={() => {
+              useGameStore.getState().resetOnboardingForDev();
+              showAlert('Rehber sıfırlandı', 'Başlangıç rehberi yeniden başlatıldı.');
+            }}
+          >
+            <Text style={styles.tutorialResetAll}>Başlangıç rehberini sıfırla</Text>
+          </TouchableOpacity>
+        </AppCard>
+      ) : null}
+
+      {__DEV__ ? (
         <AppCard variant="soft" style={styles.debugNoteCard} padded={false}>
           <GameIcon name="warning" size={14} color={colors.accentAmber} />
           <Text style={styles.debugNoteText}>
@@ -405,7 +419,6 @@ const styles = StyleSheet.create({
   embeddedRoot: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingTop: STATUS_BAR_HEIGHT,
   },
   subNav: {
     flexDirection: 'row',

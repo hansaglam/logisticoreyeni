@@ -39,8 +39,8 @@ const CONDITION_OPTIONS: Array<{
   key: AlertConditionOption;
   label: string;
 }> = [
-  { key: 'price_below', label: 'Fiyat altına düşünce' },
-  { key: 'price_above', label: 'Fiyat üstüne çıkınca' },
+  { key: 'price_below', label: 'Fiyat düşünce haber ver' },
+  { key: 'price_above', label: 'Fiyat yükselince haber ver' },
 ];
 
 function parsePriceInput(value: string): number | null {

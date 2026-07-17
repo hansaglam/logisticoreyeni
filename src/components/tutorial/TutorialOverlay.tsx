@@ -7,6 +7,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ENABLE_SPOTLIGHT_TUTORIAL } from '../../tutorial/featureFlags';
 import { getSpotlightTutorial } from '../../tutorial/spotlightTutorialConfig';
 import {
   expandTutorialRect,
@@ -211,6 +212,13 @@ function NonBlockingSpotlight({
 }
 
 export default function TutorialOverlay({ layer = 'root' }: TutorialOverlayProps) {
+  if (!ENABLE_SPOTLIGHT_TUTORIAL) {
+    return null;
+  }
+  return <TutorialOverlayActive layer={layer} />;
+}
+
+function TutorialOverlayActive({ layer = 'root' }: TutorialOverlayProps) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = getTabBarHeight(insets.bottom);
   const [screenSize, setScreenSize] = useState({

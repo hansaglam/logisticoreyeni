@@ -15,6 +15,8 @@ import {
 import { useAppDialog } from '../components/AppDialogProvider';
 
 import TradeProductModal from '../components/TradeProductModal';
+import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import {
   ActionButton,
   AppCard,
@@ -38,10 +40,12 @@ import {
 } from '../config/levelConfig';
 import { getCityByIdSafe, getCityName, getProductName } from '../utils/entityLookup';
 import {
+  buildTradeProfitBreakdown,
   calculateTradeProfit,
   getCityProductMarketPrice,
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
+  WAREHOUSE_SELL_SAME_CITY_RULE,
 } from '../simulation/trading';
 import {
   calculateWarehouseDailyOperatingCostBreakdown,
@@ -332,8 +336,8 @@ function WarehouseMetricsGrid({
         <WarehouseMetricCard
           label="Depo Doluluk"
           value={formatPercent(utilization)}
-          subtitle={`${usedCapacity.toFixed(1)} / ${totalCapacity.toFixed(1)} t`}
-          valueColor={colors.accentBlue}
+          subtitle={`${usedCapacity.toFixed(1)} / ${totalCapacity.toFixed(1)} t · Boş: ${Math.max(0, totalCapacity - usedCapacity).toFixed(1)} t`}
+          valueColor={utilization >= 0.8 ? colors.warning : colors.accentBlue}
         />
       </View>
       <View style={styles.metricsRow}>
@@ -354,12 +358,37 @@ function WarehouseMetricsGrid({
   );
 }
 
+function getInventoryDecisionHint(estimatedProfit: number): {
+  statusLabel: string;
+  hint: string;
+  variant: 'success' | 'danger' | 'muted';
+} {
+  if (estimatedProfit > 1) {
+    return {
+      statusLabel: 'Kârda',
+      hint: 'Satış düşünülebilir',
+      variant: 'success',
+    };
+  }
+  if (estimatedProfit < -1) {
+    return {
+      statusLabel: 'Zararda',
+      hint: 'Beklemek mantıklı olabilir',
+      variant: 'danger',
+    };
+  }
+  return {
+    statusLabel: 'Takipte',
+    hint: 'Fiyat normale yakın',
+    variant: 'muted',
+  };
+}
+
 function InventoryRow({
   productId,
   quantity,
   averageBuyPrice,
   currentPrice,
-  estimatedProfit,
   storageWarning,
   showColdHint,
   qualityHint,
@@ -369,15 +398,24 @@ function InventoryRow({
   quantity: number;
   averageBuyPrice: number;
   currentPrice: number;
-  estimatedProfit: number;
   storageWarning?: string;
   showColdHint: boolean;
   qualityHint: 'normal' | 'warning' | 'critical';
   onSell: () => void;
 }) {
-  const profitPositive = estimatedProfit >= 0;
-  const profitLabel = profitPositive ? 'Kâr' : 'Zarar';
-  const profitColor = profitPositive ? colors.success : colors.danger;
+  const breakdown = buildTradeProfitBreakdown(
+    currentPrice,
+    averageBuyPrice,
+    quantity,
+  );
+  const netProfit = breakdown.netProfit;
+  const decision = getInventoryDecisionHint(netProfit);
+  const profitColor =
+    decision.variant === 'success'
+      ? colors.success
+      : decision.variant === 'danger'
+        ? colors.danger
+        : colors.textMuted;
 
   return (
     <View style={styles.inventoryRow}>
@@ -392,10 +430,13 @@ function InventoryRow({
           </Text>
         </View>
         <Text style={styles.inventoryMeta} numberOfLines={1} ellipsizeMode="tail">
-          Alış: {formatMoney(averageBuyPrice)} / ton
+          Ortalama maliyet: {formatMoney(averageBuyPrice)} / ton
         </Text>
         <Text style={styles.inventoryMeta} numberOfLines={1} ellipsizeMode="tail">
-          Güncel: {formatMoney(currentPrice)} / ton
+          Güncel fiyat: {formatMoney(currentPrice)} / ton
+        </Text>
+        <Text style={[styles.inventoryHint, { color: profitColor }]} numberOfLines={1}>
+          {decision.statusLabel} · {decision.hint}
         </Text>
         {showColdHint ? (
           <Text style={styles.inventoryHint} numberOfLines={1}>
@@ -414,8 +455,8 @@ function InventoryRow({
       </View>
       <View style={styles.inventoryRight}>
         <Text style={[styles.inventoryProfit, { color: profitColor }]} numberOfLines={1} ellipsizeMode="tail">
-          {profitLabel}: {profitPositive ? '+' : ''}
-          {formatMoney(estimatedProfit)}
+          Net kâr: {netProfit >= 0 ? '+' : ''}
+          {formatMoney(netProfit)}
         </Text>
         <ActionButton label="Sat" onPress={onSell} variant="primary" compact style={styles.sellButton} />
       </View>
@@ -497,6 +538,13 @@ function WarehouseCard({
           </Text>
         </View>
         <ProgressBar progress={warehouseUtilization} color={barColor} height={6} />
+        {warehouseUtilization >= 1 ? (
+          <Text style={styles.capacityWarning}>Depoda yer yok — yeni alım yapılamaz.</Text>
+        ) : warehouseUtilization >= 0.8 ? (
+          <Text style={styles.capacityWarning}>
+            Depo doluyor — Satış yap veya kapasite yükselt.
+          </Text>
+        ) : null}
       </View>
 
       <Text style={styles.dailyCostLine}>
@@ -516,12 +564,6 @@ function WarehouseCard({
               productNeedsColdStorage(product) &&
               warehouseType !== 'cold' &&
               !item.storageWarning;
-            const estimatedProfit = calculateTradeProfit(
-              safePrice,
-              item.averageBuyPrice ?? 0,
-              item.quantity ?? 0,
-              itemQuality,
-            );
 
             return (
               <View
@@ -536,7 +578,6 @@ function WarehouseCard({
                   quantity={item.quantity ?? 0}
                   averageBuyPrice={item.averageBuyPrice ?? 0}
                   currentPrice={safePrice}
-                  estimatedProfit={estimatedProfit}
                   storageWarning={item.storageWarning}
                   showColdHint={showColdHint}
                   qualityHint={qualityHint}
@@ -645,6 +686,9 @@ export default function WarehouseScreen() {
   const openWarehouse = useGameStore((state) => state.openWarehouse);
   const upgradeWarehouse = useGameStore((state) => state.upgradeWarehouse);
   const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
+
+  useOnboardingScreenVisit('Warehouse');
+  const onboardingHint = useActiveOnboardingHint(['warehouse_intro']);
 
   const warehouses: WarehouseLike[] = player?.warehouses ?? [];
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -800,6 +844,17 @@ export default function WarehouseScreen() {
         }
       />
 
+      {onboardingHint ? (
+        <OnboardingHintCard
+          title={onboardingHint.title}
+          description={onboardingHint.description}
+          icon={onboardingHint.icon}
+          badgeLabel={onboardingHint.badgeLabel}
+          accentVariant={onboardingHint.accentVariant}
+          onDismiss={onboardingHint.onDismiss}
+        />
+      ) : null}
+
       {statusMessage ? (
         <View style={styles.statusToast}>
           <GameIcon name="success" size={14} color={colors.info} />
@@ -814,6 +869,11 @@ export default function WarehouseScreen() {
         dailyCost={dailyCost}
         productCount={portfolioMetrics.productCount}
       />
+
+      <View style={styles.ruleBanner}>
+        <GameIcon name="alert" size={13} color={colors.info} />
+        <Text style={styles.ruleBannerText}>{WAREHOUSE_SELL_SAME_CITY_RULE}</Text>
+      </View>
 
       <Text style={styles.limitHint}>
         Depo limiti: {warehouses.length}/{maxWarehouses}
@@ -1368,5 +1428,28 @@ const styles = StyleSheet.create({
     flex: 1,
     lineHeight: 17,
     color: colors.textSecondary,
+  },
+  capacityWarning: {
+    ...typography.caption,
+    color: colors.warning,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  ruleBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 10,
+    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.2)',
+  },
+  ruleBannerText: {
+    ...typography.caption,
+    flex: 1,
+    color: colors.textSecondary,
+    lineHeight: 16,
   },
 });

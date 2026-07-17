@@ -54,9 +54,12 @@ export const gameIcons = {
   minus: 'minus',
   search: 'magnify',
   dashboard: 'view-dashboard-outline',
+  account: 'account-circle-outline',
+  quickAccess: 'view-grid-plus',
   more: 'dots-grid',
   pause: 'pause',
   play: 'play',
+  diamond: 'diamond-stone',
 } as const;
 
 export type GameIconName = keyof typeof gameIcons;

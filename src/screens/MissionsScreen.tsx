@@ -14,6 +14,8 @@ import {
   StatusBadge,
 } from '../components/ui';
 import { CAREER_MISSIONS, STARTER_MISSIONS, createDefaultMissionsState, getMissionById } from '../config/missions';
+import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { useGameStore } from '../store/gameStore';
 import {
   getMissionDisplayStatus,
@@ -128,6 +130,9 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
 
+  useOnboardingScreenVisit('Missions');
+  const onboardingHint = useActiveOnboardingHint(['claim_rewards']);
+
   useEffect(() => {
     syncMissionProgress();
   }, [syncMissionProgress]);
@@ -158,6 +163,17 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
         onBack={onBack}
         compact
       />
+
+      {onboardingHint ? (
+        <OnboardingHintCard
+          title={onboardingHint.title}
+          description={onboardingHint.description}
+          icon={onboardingHint.icon}
+          badgeLabel={onboardingHint.badgeLabel}
+          accentVariant={onboardingHint.accentVariant}
+          onDismiss={onboardingHint.onDismiss}
+        />
+      ) : null}
 
       <SectionTitle title="Başlangıç Görevleri" compact />
       {starterMissionIds.map((missionId) => (

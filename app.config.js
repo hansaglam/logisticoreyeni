@@ -20,6 +20,12 @@ module.exports = () => {
 
   return {
     ...expo,
+    androidNavigationBar: {
+      visible: 'immersive',
+      barStyle: 'light-content',
+      backgroundColor: '#020712',
+      ...(expo.androidNavigationBar ?? {}),
+    },
     android: {
       ...(expo.android ?? {}),
       package: 'com.anonymous.logisticore',
@@ -32,6 +38,15 @@ module.exports = () => {
     },
     plugins: [
       ...existingPlugins,
+      [
+        'expo-navigation-bar',
+        {
+          visibility: 'hidden',
+          behavior: 'overlay-swipe',
+          position: 'absolute',
+          backgroundColor: '#020712',
+        },
+      ],
       'expo-apple-authentication',
       // Native Google Sign-In — Expo Go'da çalışmayabilir; development build gerekir.
       '@react-native-google-signin/google-signin',

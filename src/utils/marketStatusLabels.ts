@@ -110,11 +110,11 @@ export function getMarketStatusShortLabel(status: MarketStatusInput): string {
 export function getMarketStatusDescription(status: MarketStatusInput): string {
   switch (normalizeMarketStatusKey(status)) {
     case 'critical':
-      return 'Bu ürüne talep yüksek. Depoda stok varsa satış fırsatı olabilir.';
+      return 'Bu ürüne talep yüksek. Depoda stok varsa satış için iyi olabilir.';
     case 'shortage':
-      return 'Şehirde stok düşük. Fiyat güçlü seyredebilir.';
+      return 'Şehirde stok düşük. Fiyat güçlü seyredebilir; satış için takip edilebilir.';
     case 'surplus':
-      return 'Şehirde stok yüksek. Alım için takip edilebilir.';
+      return 'Şehirde stok yüksek. Alım için iyi olabilir; düşük fiyattan stok yapılabilir.';
     default:
       return 'Piyasa sakin. Fiyat hareketleri normal seviyede.';
   }

@@ -162,18 +162,57 @@ function alignTrendWithStatus(input: {
   }
 
   if (statusKey === 'YOGUN_TALEP' || statusKey === 'STOK_AZ') {
-    if (percentChange > 0.5) direction = 'up';
+    if (percentChange >= 6) direction = 'up';
+    else if (percentChange > 0.5) direction = 'up';
     else if (percentChange < -1.5) direction = 'down';
-    else if (percentChange > 0 && direction === 'stable') direction = 'up';
   }
 
   if (statusKey === 'STOK_FAZLA') {
-    if (percentChange < -0.5) direction = 'down';
+    if (percentChange <= -5) direction = 'down';
+    else if (percentChange < -0.5) direction = 'down';
     else if (percentChange > 1.5) direction = 'up';
-    else if (percentChange < 0 && direction === 'stable') direction = 'down';
   }
 
   return direction;
+}
+
+function clampDisplayPercentChange(
+  rawPercent: number,
+  statusKey: MarketStatusKey,
+  productId: string,
+): number {
+  const product = String(productId);
+
+  if (statusKey === 'STOK_FAZLA') {
+    const floor = product === 'fruit' ? -32 : -28;
+    if (rawPercent >= 0) {
+      return -Math.min(12, Math.max(5, Math.round(Math.abs(rawPercent) * 0.12 + 5)));
+    }
+    return Math.round(Math.max(floor, Math.min(-5, rawPercent)));
+  }
+
+  if (statusKey === 'YOGUN_TALEP' || statusKey === 'STOK_AZ') {
+    let minUp = 6;
+    let maxUp = 28;
+
+    if (product === 'steel' || product === 'machinery') {
+      maxUp = 24;
+    } else if (product === 'electronics') {
+      minUp = 10;
+      maxUp = 35;
+    }
+
+    if (rawPercent <= 0) {
+      return minUp;
+    }
+    return Math.round(Math.max(minUp, Math.min(maxUp, rawPercent)));
+  }
+
+  const clamped = Math.max(-6, Math.min(6, rawPercent));
+  if (Math.abs(clamped) <= 1) {
+    return 0;
+  }
+  return Math.round(clamped);
 }
 
 function buildChartTrendInfo(input: {
@@ -181,12 +220,19 @@ function buildChartTrendInfo(input: {
   marketStatus?: string;
   dataSource: 'history' | 'enriched';
   momentum: MomentumSignal;
+  productId: string;
 }): ChartTrendInfo {
   const statusKey = normalizeMarketStatusKey(input.marketStatus);
   const first = input.prices[0] ?? input.prices[input.prices.length - 1];
   const last = input.prices[input.prices.length - 1] ?? first;
-  let displayPercentChange = Math.round(
+  const rawPercentChange = Math.round(
     ((last - first) / Math.max(first, 0.01)) * 100,
+  );
+
+  let displayPercentChange = clampDisplayPercentChange(
+    rawPercentChange,
+    statusKey,
+    input.productId,
   );
 
   if (Math.abs(displayPercentChange) <= 0) {
@@ -230,6 +276,7 @@ export function buildMarketChartSnapshot(
     marketStatus: input.marketStatus,
     dataSource: analysis.dataSource === 'history' ? 'history' : 'enriched',
     momentum: analysis.momentum,
+    productId: String(input.productId),
   });
 
   return {

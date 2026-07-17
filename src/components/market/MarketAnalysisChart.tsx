@@ -262,9 +262,9 @@ export default function MarketAnalysisChart({
               d={maPath}
               fill="none"
               stroke={strokeColor}
-              strokeOpacity={0.28}
-              strokeWidth={1.2}
-              strokeDasharray="4 3"
+              strokeOpacity={0.14}
+              strokeWidth={1}
+              strokeDasharray="3 4"
               transform={`translate(${MARGIN_LEFT}, ${MARGIN_TOP})`}
             />
           ) : null}

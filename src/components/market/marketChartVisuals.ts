@@ -8,8 +8,12 @@ export const MARKET_MINI_CHART_HEIGHT = 40;
 export const MARKET_DETAIL_VIEW_WIDTH = 320;
 
 const Y_PAD_RATIO = 0.14;
+const MINI_Y_PAD_RATIO = 0.1;
 const MIN_VISUAL_RANGE_RATIO = 0.032;
-const MINI_VISUAL_AMPLITUDE_BOOST = 2.1;
+const MINI_VISUAL_RANGE_RATIO = 0.041;
+const MINI_VISUAL_AMPLITUDE_BOOST = 3.1;
+const MINI_FLAT_RANGE_BOOST = 1.28;
+const MINI_VERY_FLAT_RANGE_BOOST = 1.38;
 
 const PADDING = {
   mini: { x: 2, y: 5 },
@@ -45,6 +49,28 @@ export function resolveMarketChartColors(trend: MarketChartTrend): MarketChartCo
   }
 }
 
+function emphasizeMiniMicroMoves(data: number[]): number[] {
+  if (data.length < 3) return data;
+
+  const first = data[0];
+  const last = data[data.length - 1];
+  const span = data.length - 1;
+  const mean = data.reduce((sum, value) => sum + value, 0) / data.length;
+  const rangeRatio = (Math.max(...data) - Math.min(...data)) / Math.max(mean, 0.01);
+
+  let emphasis = 1.22;
+  if (rangeRatio < 0.012) emphasis = 1.48;
+  else if (rangeRatio < 0.025) emphasis = 1.38;
+  else if (rangeRatio < 0.045) emphasis = 1.28;
+
+  return data.map((value, index) => {
+    if (index === 0 || index === span) return value;
+    const trend = first + ((last - first) * index) / span;
+    const deviation = value - trend;
+    return trend + deviation * emphasis;
+  });
+}
+
 function buildChartPoints(
   data: number[],
   width: number,
@@ -52,21 +78,40 @@ function buildChartPoints(
   paddingX: number,
   paddingY: number,
   visualAmplitudeBoost: number,
+  isMini = false,
 ): MarketChartPoint[] {
+  const renderData = isMini ? emphasizeMiniMicroMoves(data) : data;
   const innerWidth = width - paddingX * 2;
   const innerHeight = height - paddingY * 2;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const min = Math.min(...renderData);
+  const max = Math.max(...renderData);
   const range = max - min;
-  const mean = data.reduce((sum, value) => sum + value, 0) / Math.max(data.length, 1);
-  const minVisualRange = mean * MIN_VISUAL_RANGE_RATIO * visualAmplitudeBoost;
+  const mean = renderData.reduce((sum, value) => sum + value, 0) / Math.max(renderData.length, 1);
+  const rangeRatio = range / Math.max(mean, 0.01);
+  let effectiveBoost = visualAmplitudeBoost;
+  const yPadRatio = isMini ? MINI_Y_PAD_RATIO : Y_PAD_RATIO;
+  const minRangeRatio = isMini ? MINI_VISUAL_RANGE_RATIO : MIN_VISUAL_RANGE_RATIO;
+
+  if (isMini) {
+    if (rangeRatio < 0.012) {
+      effectiveBoost *= MINI_VERY_FLAT_RANGE_BOOST;
+    } else if (rangeRatio < 0.025) {
+      effectiveBoost *= MINI_FLAT_RANGE_BOOST;
+    } else if (rangeRatio < 0.045) {
+      effectiveBoost *= 1.12;
+    }
+  } else if (visualAmplitudeBoost > 1 && rangeRatio < 0.025) {
+    effectiveBoost *= MINI_FLAT_RANGE_BOOST;
+  }
+
+  const minVisualRange = mean * minRangeRatio * effectiveBoost;
 
   let paddedMin: number;
   let paddedMax: number;
 
   if (range > 0.001) {
-    paddedMin = min - range * Y_PAD_RATIO * visualAmplitudeBoost;
-    paddedMax = max + range * Y_PAD_RATIO * visualAmplitudeBoost;
+    paddedMin = min - range * yPadRatio * effectiveBoost;
+    paddedMax = max + range * yPadRatio * effectiveBoost;
 
     if (paddedMax - paddedMin < minVisualRange) {
       const mid = (min + max) / 2;
@@ -80,11 +125,11 @@ function buildChartPoints(
 
   const paddedRange = Math.max(paddedMax - paddedMin, 0.001);
 
-  return data.map((value, index) => {
+  return renderData.map((value, index) => {
     const x =
-      data.length <= 1
+      renderData.length <= 1
         ? width / 2
-        : paddingX + (index / (data.length - 1)) * innerWidth;
+        : paddingX + (index / (renderData.length - 1)) * innerWidth;
     const normalizedY = (value - paddedMin) / paddedRange;
     const y = paddingY + (1 - normalizedY) * innerHeight;
     return { x, y };
@@ -182,7 +227,7 @@ export function buildMarketChartGeometry(input: {
   const isDetail = input.variant === 'detail';
   const padding = isDetail ? PADDING.detail : PADDING.mini;
   const visualAmplitudeBoost = isDetail ? 1 : MINI_VISUAL_AMPLITUDE_BOOST;
-  const curveTension = isDetail ? 0.3 : 0.24;
+  const curveTension = isDetail ? 0.3 : 0.19;
 
   const points = buildChartPoints(
     cleaned,
@@ -191,6 +236,7 @@ export function buildMarketChartGeometry(input: {
     padding.x,
     padding.y,
     visualAmplitudeBoost,
+    !isDetail,
   );
 
   const linePath = buildSmoothLinePath(points, input.width, curveTension);
@@ -211,7 +257,7 @@ export function buildMarketChartGeometry(input: {
 }
 
 export function getMarketChartStrokeWidth(variant: MarketChartVariant): number {
-  return variant === 'detail' ? 2.1 : 1.85;
+  return variant === 'detail' ? 2.1 : 1.95;
 }
 
 export function getMarketChartGradientStops(variant: MarketChartVariant): {
@@ -222,5 +268,5 @@ export function getMarketChartGradientStops(variant: MarketChartVariant): {
   if (variant === 'detail') {
     return { top: 0.32, mid: 0.1, bottom: 0.01 };
   }
-  return { top: 0.24, mid: 0.07, bottom: 0.01 };
+  return { top: 0.3, mid: 0.1, bottom: 0.015 };
 }

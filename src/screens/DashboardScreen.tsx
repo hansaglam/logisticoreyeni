@@ -22,6 +22,7 @@ import {
   resolveNextAction,
 } from '../components/dashboard';
 import { AppScreen, GameIcon } from '../components/ui';
+import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import { createDefaultMissionsState } from '../config/missions';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { countPlayableContracts } from '../simulation/contracts';
@@ -44,6 +45,7 @@ import {
 } from '../onboarding/onboardingProgress';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import type { Player } from '../types/game';
+import { shouldShowPostDeliveryLocationHint } from '../utils/truckLocationUx';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
@@ -228,11 +230,14 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     advanceOnboardingProgress,
     onboarding?.currentStepId,
     onboarding?.completed,
+    onboarding?.missionRewardClaimed,
     activeDeliveries.length,
     runningDeliveries.length,
     warehouseInventoryCount,
+    player?.completedContracts,
     missions?.flags?.tradePurchased,
     missions?.flags?.deliveryStarted,
+    missions?.claimedMissionRewardIds?.length,
     onboarding?.visitedScreens?.length,
   ]);
 
@@ -262,11 +267,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       resolveNextAction({
         runningDeliveries: runningDeliveries.length,
         playableContracts: playableContractCount,
+        idleTruckCount: fleetSnapshot.idleTrucks,
         missions,
         getMissionProgress: getMissionProgressValue,
         marketOpened: missions.flags.marketOpened,
       }),
-    [runningDeliveries.length, playableContractCount, missions, getMissionProgressValue],
+    [runningDeliveries.length, playableContractCount, fleetSnapshot.idleTrucks, missions, getMissionProgressValue],
   );
 
   const statTiles = useMemo(() => {
@@ -292,6 +298,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const fuelPrice = getSafeFuelPrice(globalEconomy);
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
+  const showTruckLocationHint = shouldShowPostDeliveryLocationHint(player.completedContracts ?? 0);
 
   const handleNavigate = (tab: TabKey) => {
     try {
@@ -387,6 +394,8 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         onPress={handleNextActionPress}
       />
 
+      {showTruckLocationHint ? <TruckLocationHintRow style={styles.truckLocationHint} /> : null}
+
       <DashboardStatGrid tiles={statTiles} />
 
       <View style={styles.hubLower}>
@@ -455,5 +464,8 @@ const styles = StyleSheet.create({
     flex: 1,
     color: colors.warning,
     fontWeight: '600',
+  },
+  truckLocationHint: {
+    marginTop: -2,
   },
 });

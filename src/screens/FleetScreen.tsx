@@ -54,7 +54,7 @@ import {
 } from '../simulation/fleetManagement';
 import TruckTransferModal from '../components/TruckTransferModal';
 import { useGameStore } from '../store/gameStore';
-import { colors, formatDisplayPercent, formatIdleTruckReadyHint, formatMoney, formatRatioPercent, spacing, typography } from '../theme';
+import { colors, formatDisplayPercent, formatCityLocative, formatIdleTruckReadyHint, formatMoney, formatRatioPercent, spacing, typography } from '../theme';
 import type { Delivery, DeliveryStatus, Driver, Truck, TruckTransfer } from '../types/game';
 
 const CONDITION_GOOD_THRESHOLD = 70;
@@ -332,12 +332,20 @@ function OwnedTruckCard({
         </View>
 
         <View style={styles.cardRight}>
+          {isIdle ? (
+            <StatusBadge
+              label={formatCityLocative(truckCityId, truckCityName)}
+              variant="info"
+              size="sm"
+            />
+          ) : null}
           <StatusBadge label={statusBadge.label} variant={statusBadge.variant} size="sm" />
         </View>
       </View>
 
       <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        Konum: {truckCityName} · {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
+        {isIdle ? null : `Konum: ${truckCityName} · `}
+        {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
       </Text>
 
       {isLeaseExpired ? (

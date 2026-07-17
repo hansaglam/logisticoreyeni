@@ -1,10 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import {
-  MARKET_PRICE_HISTORY_MINI_POINTS,
-  slicePriceHistoryForDisplay,
-} from '../../utils/marketPriceHistoryGenerator';
 import type { ProductPriceTrend } from '../../utils/productPriceTrend';
 import MiniTrendChart, { type MiniTrendDirection } from './MiniTrendChart';
 
@@ -19,19 +15,18 @@ function mapDirection(direction: ProductPriceTrend['direction']): MiniTrendDirec
 }
 
 export default function ProductMiniTrendChart({ trend }: ProductMiniTrendChartProps) {
-  const chartData = slicePriceHistoryForDisplay(
-    trend.prices,
-    MARKET_PRICE_HISTORY_MINI_POINTS,
-  );
+  const chartData =
+    trend.miniPrices.length >= 2 ? trend.miniPrices : trend.prices.slice(-12);
 
   return (
     <View style={styles.container}>
       <MiniTrendChart
         data={chartData}
         trend={mapDirection(trend.direction)}
-        height={36}
+        variant="mini"
+        height={42}
         lineStyle="smooth"
-        strokeWidth={1.75}
+        strokeWidth={1.9}
       />
     </View>
   );

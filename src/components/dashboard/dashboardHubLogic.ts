@@ -63,7 +63,7 @@ function buildRewardChips(missionIds: string[], includeCount: boolean): RewardCh
     chips.push({ key: 'xp', icon: 'xp', label: `+${xp} XP` });
   }
   if (diamonds > 0) {
-    chips.push({ key: 'diamonds', icon: 'diamond', label: `+${diamonds}` });
+    chips.push({ key: 'diamonds', icon: 'diamond', label: `+${diamonds} Elmas` });
   }
   if (reputation > 0) {
     chips.push({ key: 'reputation', icon: 'reputation', label: `+${reputation} İtibar` });
@@ -75,6 +75,7 @@ function buildRewardChips(missionIds: string[], includeCount: boolean): RewardCh
 interface ResolveNextActionInput {
   runningDeliveries: number;
   playableContracts: number;
+  idleTruckCount: number;
   missions: MissionsState;
   getMissionProgress: (missionId: string) => MissionProgressResult;
   marketOpened: boolean;
@@ -133,6 +134,17 @@ export function resolveNextAction(input: ResolveNextActionInput): NextActionStat
       ctaLabel: 'İşlere Git',
       variant: 'primary',
       icon: 'contract',
+      action: { type: 'navigate', tab: 'contracts' },
+    };
+  }
+
+  if (input.idleTruckCount > 0) {
+    return {
+      title: 'Kamyonunu Konumlandır',
+      description: 'Boştaki kamyonun bulunduğu şehirden uygun iş seçebilirsin.',
+      ctaLabel: 'İşleri Gör',
+      variant: 'primary',
+      icon: 'city',
       action: { type: 'navigate', tab: 'contracts' },
     };
   }

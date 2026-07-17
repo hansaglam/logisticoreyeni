@@ -1299,6 +1299,68 @@ export function ensurePlayableContractSupply(
   };
 }
 
+export interface EnsurePlayableContractsAfterDeliveryParams extends EnsurePlayableContractsParams {
+  destinationCityId: string;
+  completedContracts: number;
+}
+
+/**
+ * Teslimat sonrası kamyonun vardığı şehirden oynanabilir iş garantisi.
+ * İlk 3 teslimatta hedef şehirde en az 2 playable; sonrasında config eşiği.
+ */
+export function ensurePlayableContractsAfterDelivery(
+  params: EnsurePlayableContractsAfterDeliveryParams,
+): EnsurePlayableContractsResult {
+  const gen = contractGenerationBalance;
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const trucks = params.trucks ?? [];
+  const drivers = params.drivers ?? [];
+  const currentTime = params.currentTime ?? 0;
+  const destinationCityId = params.destinationCityId;
+
+  const contracts = expireOldContracts(params.contracts ?? [], currentTime);
+  const earlyPhase = params.completedContracts <= 3;
+  const minAtDestination = earlyPhase ? 2 : gen.minAvailableContractsPerIdleTruckCity;
+
+  const playableAtDestination = countPlayableContractsFromOrigin(
+    contracts,
+    destinationCityId,
+    trucks,
+    drivers,
+    playerLevel,
+    currentTime,
+  );
+
+  if (playableAtDestination >= minAtDestination) {
+    return {
+      contracts,
+      newContracts: [],
+      playableContractsCount: countPlayableContracts(
+        contracts,
+        trucks,
+        drivers,
+        playerLevel,
+        currentTime,
+      ),
+      generatedPlayableCount: 0,
+    };
+  }
+
+  const needed = minAtDestination - playableAtDestination;
+
+  return ensurePlayableContractSupply({
+    ...params,
+    contracts,
+    idleTruckOriginCityIds: [destinationCityId],
+    forceFallback: true,
+    maxNewContracts: Math.min(
+      needed,
+      earlyPhase ? 2 : gen.maxPlayableContractsGeneratedAtOnce,
+      params.maxNewContracts ?? gen.maxPlayableContractsGeneratedAtOnce,
+    ),
+  });
+}
+
 export interface ReplenishContractsParams {
   cities: Record<string, City>;
   routes: Route[];

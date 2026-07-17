@@ -14,13 +14,13 @@ import { useGameStore } from '../../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import type { ProductId } from '../../types/game';
 import {
-  buildTradeProfitBreakdown,
   getTradeFeeSummaryLabel,
   getWarehouseFreeCapacityTon,
   normalizeWarehouse,
 } from '../../simulation/trading';
 import { buildMarketProductViewModel, getProductMarket } from '../../utils/marketProductViewModel';
 import { getMarketStatusColorVariant } from '../../utils/marketStatusLabels';
+import { resolveInventoryTradeProfit } from '../../utils/tradeDisplay';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { ActionButton, IconButton, ProductIcon, StatusBadge } from '../ui';
 import ProductDetailTrendChart from './ProductDetailTrendChart';
@@ -109,19 +109,17 @@ export default function ProductMarketDetailModal({
   }
 
   const sheetMaxHeight = Math.min(windowHeight * 0.8, 640);
-  const profitColor =
-    viewModel.profitLoss != null && viewModel.profitLoss >= 0
-      ? colors.success
-      : colors.danger;
-
-  const profitBreakdown =
+  const inventoryTrade =
     viewModel.warehouseQuantity > 0
-      ? buildTradeProfitBreakdown(
+      ? resolveInventoryTradeProfit(
           viewModel.currentPrice,
           viewModel.averageBuyPrice,
           viewModel.warehouseQuantity,
+          viewModel.warehouseQuality,
         )
       : null;
+  const profitDisplay = inventoryTrade?.display ?? null;
+  const profitBreakdown = inventoryTrade?.breakdown ?? null;
 
   const handleBuy = () => {
     onClose();
@@ -226,13 +224,20 @@ export default function ProductMarketDetailModal({
                   <Text style={styles.infoLine}>
                     Güncel değer: {formatMoney(viewModel.currentValue)}
                   </Text>
-                  {viewModel.profitLoss != null ? (
-                    <Text style={[styles.infoLine, { color: profitColor, fontWeight: '700' }]}>
-                      Net kâr:{' '}
-                      {viewModel.profitLoss >= 0
-                        ? `+${formatMoney(viewModel.profitLoss)}`
-                        : formatMoney(viewModel.profitLoss)}
-                    </Text>
+                  {profitDisplay ? (
+                    <>
+                      <Text
+                        style={[styles.infoLine, { color: profitDisplay.color, fontWeight: '700' }]}
+                      >
+                        {profitDisplay.label}
+                      </Text>
+                      {profitDisplay.sublabel ? (
+                        <Text style={styles.infoFeeHint}>{profitDisplay.sublabel}</Text>
+                      ) : null}
+                      {profitDisplay.feeNote ? (
+                        <Text style={styles.infoFeeNote}>{profitDisplay.feeNote}</Text>
+                      ) : null}
+                    </>
                   ) : null}
                   <Text style={styles.infoMuted}>{getTradeFeeSummaryLabel()}</Text>
                   <Text style={styles.infoMuted}>
@@ -257,12 +262,13 @@ export default function ProductMarketDetailModal({
               disabled={viewModel.buyButtonDisabled}
               style={styles.actionButton}
             />
-            {viewModel.canSell ? (
+            {viewModel.showSellButton ? (
               <ActionButton
-                label="Sat"
+                label={viewModel.sellButtonLabel}
                 onPress={handleSell}
                 variant="secondary"
                 icon="market"
+                disabled={viewModel.sellButtonDisabled}
                 style={styles.actionButton}
               />
             ) : null}
@@ -395,6 +401,16 @@ const styles = StyleSheet.create({
   infoMuted: {
     ...typography.bodySmall,
     color: colors.textMuted,
+  },
+  infoFeeHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  infoFeeNote: {
+    ...typography.caption,
+    color: colors.accentAmber,
+    lineHeight: 18,
+    marginTop: 2,
   },
   commentaryText: {
     ...typography.bodySmall,

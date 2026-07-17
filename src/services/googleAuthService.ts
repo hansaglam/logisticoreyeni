@@ -14,6 +14,8 @@ import Constants from 'expo-constants';
 import { GoogleAuthProvider, type AuthCredential } from 'firebase/auth';
 import { Platform } from 'react-native';
 
+import { devLog, devWarn } from '../utils/devLog';
+
 export type GoogleSignInConfig = {
   webClientId?: string;
   iosClientId?: string;
@@ -75,7 +77,7 @@ function logGoogleEnvCheckOnce(): void {
   const config = readGoogleConfig();
   const fromExtra = readExtraGoogleConfig();
 
-  console.log('[google-auth] env check', {
+  devLog('[google-auth] env check', {
     webClientIdExists: Boolean(config.webClientId),
     webClientIdLength: config.webClientId?.length ?? 0,
     iosClientIdExists: Boolean(config.iosClientId),
@@ -148,7 +150,7 @@ export function configureGoogleSignIn(): boolean {
       offlineAccess: false,
     });
     configured = true;
-    console.log('[google-auth] GoogleSignin.configure ok', {
+    devLog('[google-auth] GoogleSignin.configure ok', {
       webClientIdLength: googleWebClientId.length,
       hasIosClientId: Boolean(googleIosClientId),
     });
@@ -239,7 +241,7 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
       return { ok: false, error: 'in-progress' };
     }
 
-    console.warn('[google-auth] sign-in failed', error);
+    devWarn('[google-auth] sign-in failed', error);
     const message =
       error instanceof Error
         ? error.message

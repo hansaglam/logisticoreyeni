@@ -53,10 +53,15 @@ import {
 } from '../utils/contractSorting';
 import { useGameStore } from '../store/gameStore';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
+import {
+  formatIdleTruckSummaryLine,
+  shouldShowPostDeliveryLocationHint,
+} from '../utils/truckLocationUx';
 
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const MARKET_HIGHLIGHT_TIMEOUT_MS = 8000;
@@ -384,14 +389,13 @@ function ContractsSummaryStrip({
   const originCityIds = getIdleTruckOriginCityIds(trucks);
   const cityLabels = originCityIds.map((cityId) => getCityName(cityId)).join(', ');
 
-  const originLine =
-    idleCount === 0
-      ? 'Boşta kamyon yok — teslimat bitince yeni iş al.'
-      : `Uygun çıkış: ${cityLabels || '—'} · Alınabilir iş: ${playableCount}`;
+  const originLine = formatIdleTruckSummaryLine(cityLabels, idleCount, playableCount);
 
   return (
     <View style={styles.summaryStrip}>
       <Text style={styles.compactStatText}>
+        <Text style={styles.statValueSuccess}>{playableCount}</Text>
+        {' uygun iş · '}
         <Text style={styles.statValueInfo}>{availableCount}</Text>
         {' iş ilanı · '}
         <Text style={styles.statValueAmber}>{activeCount}</Text>
@@ -717,6 +721,8 @@ export default function ContractsScreen() {
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
+  const completedDeliveryCount = player?.completedContracts ?? 0;
+  const showTruckLocationHint = shouldShowPostDeliveryLocationHint(completedDeliveryCount);
 
   const availableContracts = useMemo(
     () => dedupeAvailableContracts(contracts.filter((c) => c.status === 'available')),
@@ -1099,6 +1105,10 @@ export default function ContractsScreen() {
           trucks={trucks}
         />
 
+        {showTruckLocationHint ? (
+          <TruckLocationHintRow style={styles.truckLocationHint} />
+        ) : null}
+
         <ContractsTabBar
           segments={tabSegments}
           activeKey={activeSegment}
@@ -1354,6 +1364,9 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  truckLocationHint: {
+    marginBottom: spacing.sm,
   },
   nextRouteHint: {
     marginBottom: spacing.sm,

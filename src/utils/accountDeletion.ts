@@ -66,7 +66,9 @@ export async function deleteAccountAndCloudData(options: {
   clearLocalSave: () => Promise<void>;
 }): Promise<AccountDeletionResult> {
   const uid = getCurrentUserId();
-  console.log('[account-delete] started', { uid: uid ?? null });
+  if (__DEV__) {
+    console.log('[account-delete] started', { uid: uid ?? null });
+  }
 
   beginAccountDeletion();
 
@@ -94,7 +96,9 @@ export async function deleteAccountAndCloudData(options: {
     if (uid && isFirebaseEnabled()) {
       try {
         await deleteCurrentFirebaseUser();
-        console.log('[account-delete] firebase user deleted');
+        if (__DEV__) {
+          console.log('[account-delete] firebase user deleted');
+        }
       } catch (error) {
         const authCode = getAuthDeleteErrorCode(error);
         if (authCode === 'requires-recent-login') {
@@ -117,7 +121,9 @@ export async function deleteAccountAndCloudData(options: {
 
     try {
       await options.clearLocalSave();
-      console.log('[account-delete] local save cleared');
+      if (__DEV__) {
+        console.log('[account-delete] local save cleared');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Local save temizlenemedi.';
       console.warn('[account-delete] local clear failed', error);
@@ -133,10 +139,14 @@ export async function deleteAccountAndCloudData(options: {
 
     if (isFirebaseEnabled()) {
       const newUser = await initAnonymousAuth();
-      console.log('[account-delete] new session ready', newUser?.uid ?? null);
+      if (__DEV__) {
+        console.log('[account-delete] new session ready', newUser?.uid ?? null);
+      }
     }
 
-    console.log('[account-delete] success');
+    if (__DEV__) {
+      console.log('[account-delete] success');
+    }
     return { ok: true };
   } finally {
     endAccountDeletion();

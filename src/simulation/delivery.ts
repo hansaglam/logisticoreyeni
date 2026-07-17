@@ -569,11 +569,11 @@ export function getContractAvailabilityWarningText(
     case 'INVALID_ORIGIN_CITY':
       return 'Geçersiz çıkış şehri';
     case 'NO_TRUCK_IN_ORIGIN_CITY':
-      return 'Şehirde kamyon yok';
+      return 'Bu şehirde boşta kamyon yok';
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
       return 'Kamyon meşgul';
     case 'NO_TRUCK_AT_ORIGIN':
-      return 'Şehirde kamyon yok';
+      return 'Bu şehirde boşta kamyon yok';
     case 'NO_DRIVERS':
       return 'Şoför yok';
     case 'NO_IDLE_DRIVERS':
@@ -584,7 +584,7 @@ export function getContractAvailabilityWarningText(
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Kamyon tamir gerekli';
     case 'LEASE_EXPIRED':
-      return 'Kira süresi doldu';
+      return 'Kiralık kamyonun süresi doldu';
     case 'CONTRACT_EXPIRED':
       return 'Süresi doldu';
     default:

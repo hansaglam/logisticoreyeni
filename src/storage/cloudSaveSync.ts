@@ -83,12 +83,16 @@ let isAccountDeletionInProgress = false;
 
 export function beginAccountDeletion(): void {
   isAccountDeletionInProgress = true;
-  console.log('[cloud-save] account deletion in progress — sync paused');
+  if (__DEV__) {
+    console.log('[cloud-save] account deletion in progress — sync paused');
+  }
 }
 
 export function endAccountDeletion(): void {
   isAccountDeletionInProgress = false;
-  console.log('[cloud-save] account deletion finished — sync resumed');
+  if (__DEV__) {
+    console.log('[cloud-save] account deletion finished — sync resumed');
+  }
 }
 
 export function isAccountDeletionActive(): boolean {
@@ -220,7 +224,9 @@ export async function syncLocalSaveToCloud(
   },
 ): Promise<boolean> {
   if (isAccountDeletionInProgress) {
-    console.log('[cloud-save] sync skipped — account deletion in progress');
+    if (__DEV__) {
+      console.log('[cloud-save] sync skipped — account deletion in progress');
+    }
     return false;
   }
 
@@ -252,7 +258,9 @@ export async function syncLocalSaveToCloud(
 
   try {
     setCloudSaveStatus('syncing');
-    console.log('[cloud-save] sync started', reason);
+    if (__DEV__) {
+      console.log('[cloud-save] sync started', reason);
+    }
     const payload = serializeGameState(options.state);
     const result = await saveGameToCloud(uid, payload);
 
@@ -264,7 +272,9 @@ export async function syncLocalSaveToCloud(
 
     lastCloudSyncAt = Date.now();
     setCloudSaveStatus('success');
-    console.log('[cloud-save] sync success');
+    if (__DEV__) {
+      console.log('[cloud-save] sync success');
+    }
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Cloud sync failed';
@@ -312,7 +322,9 @@ export async function initCloudSaveSync(getState: () => StoreGameState): Promise
       return;
     }
 
-    console.log('[cloud-save] enabled');
+    if (__DEV__) {
+      console.log('[cloud-save] enabled');
+    }
     cloudSyncInitialized = true;
 
     const state = getState();
@@ -322,7 +334,7 @@ export async function initCloudSaveSync(getState: () => StoreGameState): Promise
     const cloudMeta = await getCloudSaveMeta(user.uid);
     restoreCandidate = detectCloudRestoreCandidate(localPayload, cloudMeta);
 
-    if (restoreCandidate.hasCandidate) {
+    if (restoreCandidate.hasCandidate && __DEV__) {
       console.log('[cloud-save] cloud newer, restore prompt needed later');
     }
 

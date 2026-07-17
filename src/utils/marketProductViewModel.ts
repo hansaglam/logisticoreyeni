@@ -1,5 +1,9 @@
-import { buildTradeProfitBreakdown, getWarehouseInventoryItem } from '../simulation/trading';
-import { getInventoryQuality } from '../simulation/warehouseStorage';
+import { getWarehouseInventoryItem } from '../simulation/trading';
+import {
+  evaluateStorageSuitability,
+  getInventoryQuality,
+  resolveWarehouseType,
+} from '../simulation/warehouseStorage';
 import { formatMoney } from '../theme';
 import type { City, CityProductState, Product, ProductId, Warehouse } from '../types/game';
 import { getCityName, getProductName } from './entityLookup';
@@ -13,7 +17,8 @@ import {
   type ProductPriceTrend,
   type ProductTrendDirection,
 } from './productPriceTrend';
-import { computePriceMomentum } from './marketPriceHistoryGenerator';
+import { getChartTrendCommentary } from './marketChartSeries';
+import { resolveInventoryTradeProfit, resolveMarketBuyState, resolveMarketSellState } from './tradeDisplay';
 
 export interface NormalizedProductMarket {
   productId: ProductId;
@@ -56,6 +61,7 @@ export interface MarketProductViewModel {
   stockStatusLabel: string;
   warehouseQuantity: number;
   averageBuyPrice: number;
+  warehouseQuality: number;
   currentValue: number;
   profitLoss: number | null;
   commentary: string;
@@ -64,6 +70,9 @@ export interface MarketProductViewModel {
   canSell: boolean;
   buyButtonLabel: string;
   buyButtonDisabled: boolean;
+  showSellButton: boolean;
+  sellButtonLabel: string;
+  sellButtonDisabled: boolean;
   hasWarehouse: boolean;
 }
 
@@ -148,35 +157,15 @@ export function getCityProductInventorySummary(
   };
 }
 
-function resolveBuyButtonState({
-  hasWarehouse,
-  canBuy,
-  marketStock,
-  freeCapacity,
-  playerMoney,
-}: {
-  hasWarehouse: boolean;
-  canBuy: boolean;
-  marketStock: number;
-  freeCapacity: number;
-  playerMoney: number;
-}): { label: string; disabled: boolean } {
-  if (!hasWarehouse) {
-    return { label: 'Depo gerekli', disabled: true };
+function canStoreProductInCity(warehouses: Warehouse[], product: Product | undefined): boolean {
+  if (!product || warehouses.length === 0) {
+    return warehouses.length > 0;
   }
-  if (canBuy) {
-    return { label: 'Satın Al', disabled: false };
-  }
-  if (marketStock <= 0) {
-    return { label: 'Stok yok', disabled: true };
-  }
-  if (freeCapacity <= 0) {
-    return { label: 'Depo dolu', disabled: true };
-  }
-  if (playerMoney <= 0) {
-    return { label: 'Nakit yetersiz', disabled: true };
-  }
-  return { label: 'Satın Al', disabled: true };
+
+  return warehouses.some((warehouse) => {
+    const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+    return evaluateStorageSuitability(product, warehouseType) !== 'blocked';
+  });
 }
 
 export function getMarketCommentary(input: {
@@ -184,10 +173,9 @@ export function getMarketCommentary(input: {
   trendDirection: ProductTrendDirection;
   warehouseQuantity: number;
   profitLoss: number | null;
-  priceHistory?: number[];
+  chartTrendInfo?: ProductPriceTrend['chartTrendInfo'];
 }): string {
-  const { stockStatus, trendDirection, warehouseQuantity, profitLoss, priceHistory } = input;
-  const momentum = computePriceMomentum(priceHistory ?? []);
+  const { stockStatus, warehouseQuantity, profitLoss, chartTrendInfo } = input;
 
   if (warehouseQuantity > 0 && profitLoss != null) {
     if (profitLoss > 1) {
@@ -198,38 +186,46 @@ export function getMarketCommentary(input: {
     }
   }
 
+  if (chartTrendInfo) {
+    return getChartTrendCommentary(chartTrendInfo);
+  }
+
   const isSurplus = stockStatus === 'Fazla' || stockStatus === 'Yüksek Fazla';
   const isShortage = stockStatus === 'Kıtlık' || stockStatus === 'Kritik Kıtlık';
 
-  if (isSurplus && trendDirection === 'down') {
-    if (momentum.isSlowing) {
-      return 'Fiyat düşüşü yavaşlamış. Alım için takip edilebilir.';
-    }
-    if (momentum.isAccelerating) {
-      return 'Fiyat baskı altında. Acele etmeden takip etmek mantıklı olabilir.';
-    }
-    return getMarketStatusDescription('Fazla');
+  if (isSurplus) {
+    return getChartTrendCommentary({
+      displayPercentChange: -5,
+      displayTrendDirection: 'down',
+      displayTrendLabel: 'Baskı Altında',
+      displayTrendColor: '#EF4444',
+      selectedPattern: 'DOWN_WITH_BOUNCE',
+      momentumType: 'bounce',
+      statusKey: 'STOK_FAZLA',
+    });
   }
 
-  if (isShortage && trendDirection === 'up') {
-    if (stockStatus === 'Kritik Kıtlık' && momentum.isAccelerating) {
-      return 'Talep güçlü. Depoda stok varsa kârla satış fırsatı oluşabilir.';
-    }
-    if (momentum.isSlowing) {
-      return 'Yükseliş devam ediyor ama tempo yavaşlıyor. Satış için izlenebilir.';
-    }
-    return 'Fiyat güçlü seyrediyor. Stok varsa satış fırsatı olabilir.';
+  if (isShortage) {
+    return getChartTrendCommentary({
+      displayPercentChange: 8,
+      displayTrendDirection: 'up',
+      displayTrendLabel: 'Yükselişte',
+      displayTrendColor: '#22C55E',
+      selectedPattern: 'UP_WITH_PULLBACK',
+      momentumType: 'pullback',
+      statusKey: isShortage && stockStatus === 'Kritik Kıtlık' ? 'YOGUN_TALEP' : 'STOK_AZ',
+    });
   }
 
-  if (stockStatus === 'Dengeli' && trendDirection === 'stable') {
-    return 'Piyasa sakin. Daha net hareket için takip edilebilir.';
-  }
-
-  if (stockStatus === 'Dengeli') {
-    return getMarketStatusDescription('Dengeli');
-  }
-
-  return getMarketStatusDescription(stockStatus);
+  return getChartTrendCommentary({
+    displayPercentChange: 0,
+    displayTrendDirection: 'stable',
+    displayTrendLabel: 'Dengeli',
+    displayTrendColor: '#38BDF8',
+    selectedPattern: 'SIDEWAYS_ACCUMULATION',
+    momentumType: 'accumulation',
+    statusKey: 'NORMAL',
+  });
 }
 
 export interface BuildMarketProductViewModelInput {
@@ -268,6 +264,7 @@ export function buildMarketProductViewModel(
     cityId: city.id,
     productId,
     currentTime,
+    stockStatus,
     marketState: {
       currentPrice: market.currentPrice,
       basePrice: market.basePrice,
@@ -276,27 +273,38 @@ export function buildMarketProductViewModel(
   });
 
   const priceChangeDisplay = formatTrendChangeDisplay(trend);
-  const profitLoss =
+  const trendChangeLabel =
+    priceChangeDisplay.label === trend.label
+      ? trend.label
+      : `${priceChangeDisplay.label} · ${trend.label}`;
+  const inventoryTrade =
     inventory.quantity > 0
-      ? buildTradeProfitBreakdown(
+      ? resolveInventoryTradeProfit(
           market.currentPrice,
           inventory.averageBuyPrice,
           inventory.quantity,
           inventory.quality,
-        ).netProfit
+        )
       : null;
+  const profitLoss = inventoryTrade?.breakdown.netProfit ?? null;
 
   const currentValue = inventory.quantity > 0 ? inventory.quantity * market.currentPrice : 0;
 
-  const canBuy =
-    hasWarehouse && market.stock > 0 && totalFreeCapacity > 0 && playerMoney > 0;
-  const canSell = hasWarehouse && inventory.quantity > 0;
-  const buyButton = resolveBuyButtonState({
+  const productDef = input.products?.find((item) => item.id === productId);
+  const canStoreProduct = canStoreProductInCity(warehouses, productDef);
+
+  const buyState = resolveMarketBuyState({
     hasWarehouse,
-    canBuy,
     marketStock: market.stock,
     freeCapacity: totalFreeCapacity,
     playerMoney,
+    unitPrice: market.currentPrice,
+    canStoreProduct,
+  });
+
+  const sellState = resolveMarketSellState({
+    hasWarehouse,
+    inventoryQuantity: inventory.quantity,
   });
 
   return {
@@ -308,13 +316,14 @@ export function buildMarketProductViewModel(
     trendDirection: trend.direction,
     trendLabel: trend.label,
     trendColor: trend.color,
-    trendChangeLabel: `${priceChangeDisplay.label} ${trend.label}`,
+    trendChangeLabel,
     trend,
     priceHistory: trend.prices,
     stockStatus,
     stockStatusLabel: getMarketStatusLabel(stockStatus),
     warehouseQuantity: inventory.quantity,
     averageBuyPrice: inventory.averageBuyPrice,
+    warehouseQuality: inventory.quality,
     currentValue,
     profitLoss,
     commentary: getMarketCommentary({
@@ -322,13 +331,16 @@ export function buildMarketProductViewModel(
       trendDirection: trend.direction,
       warehouseQuantity: inventory.quantity,
       profitLoss,
-      priceHistory: market.priceHistory,
+      chartTrendInfo: trend.chartTrendInfo,
     }),
     stockStatusDescription: getMarketStatusDescription(stockStatus),
-    canBuy,
-    canSell,
-    buyButtonLabel: buyButton.label,
-    buyButtonDisabled: buyButton.disabled,
+    canBuy: buyState.canBuy,
+    canSell: sellState.canSell,
+    buyButtonLabel: buyState.label,
+    buyButtonDisabled: buyState.disabled,
+    showSellButton: sellState.showSellButton,
+    sellButtonLabel: sellState.label,
+    sellButtonDisabled: sellState.disabled,
     hasWarehouse,
   };
 }

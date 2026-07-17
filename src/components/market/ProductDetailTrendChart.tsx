@@ -6,7 +6,7 @@ import { MARKET_PRICE_HISTORY_DISPLAY_POINTS } from '../../utils/marketPriceHist
 import type { ProductPriceTrend } from '../../utils/productPriceTrend';
 import MiniTrendChart from './MiniTrendChart';
 
-const CHART_HEIGHT = 140;
+const CHART_HEIGHT = 148;
 
 interface ProductDetailTrendChartProps {
   trend: ProductPriceTrend;
@@ -42,9 +42,10 @@ export default function ProductDetailTrendChart({ trend }: ProductDetailTrendCha
           <MiniTrendChart
             data={trend.prices}
             trend={mapDirection(trend.direction)}
+            variant="detail"
             height={CHART_HEIGHT}
             lineStyle="smooth"
-            strokeWidth={2.25}
+            strokeWidth={2.1}
             showLastPoint
           />
           <View style={styles.rangeRow}>
@@ -68,6 +69,7 @@ export default function ProductDetailTrendChart({ trend }: ProductDetailTrendCha
                 : [100, 100]
             }
             trend="stable"
+            variant="detail"
             height={CHART_HEIGHT}
           />
           <Text style={styles.fallbackText}>Yeterli fiyat geçmişi yok</Text>
@@ -91,7 +93,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
   },
   rangeText: {
     ...typography.caption,

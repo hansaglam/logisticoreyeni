@@ -3,6 +3,7 @@
  */
 
 import type { ContractAvailabilityReason } from '../types/game';
+import { TRUCK_STAYS_AT_DESTINATION_NOTE } from './truckLocationUx';
 
 export interface ContractAvailabilityMessageContext {
   fromCityName?: string;
@@ -29,7 +30,7 @@ export function getContractAvailabilityLabel(
       return 'Seviye yetersiz';
     case 'NO_TRUCK_AT_ORIGIN':
     case 'NO_TRUCK_IN_ORIGIN_CITY':
-      return 'Şehirde kamyon yok';
+      return 'Bu şehirde boşta kamyon yok';
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
       return 'Kamyon meşgul';
     case 'NO_TRUCK_WITH_CAPACITY':
@@ -40,7 +41,7 @@ export function getContractAvailabilityLabel(
     case 'CONTRACT_EXPIRED':
       return 'Süresi doldu';
     case 'LEASE_EXPIRED':
-      return 'Kira süresi doldu';
+      return 'Kiralık kamyonun süresi doldu';
     case 'NO_TRUCKS':
       return 'Kamyon yok';
     case 'NO_IDLE_TRUCKS':
@@ -81,8 +82,8 @@ export function buildContractAvailabilityMessage(
     case 'NO_TRUCK_IN_ORIGIN_CITY':
     case 'NO_TRUCK_AT_ORIGIN':
       return (
-        `Bu iş ${fromCityName} çıkışlı. Bu şehirde kamyonun yok. ` +
-        'Bu işi alabilmek için kamyonunu bu şehre taşımalı veya bu şehirden çıkan başka bir uygun iş beklemelisin.'
+        `Bu iş ${fromCityName} çıkışlı. Bu şehirde boşta kamyonun yok. ` +
+        `${TRUCK_STAYS_AT_DESTINATION_NOTE} Kamyonunun bulunduğu şehirden çıkan işleri seçebilirsin.`
       );
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
       return (

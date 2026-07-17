@@ -69,6 +69,7 @@ import {
   formatMarketTradeOpportunityTitle,
   type MarketTradeOpportunity,
 } from '../utils/marketTradeOpportunities';
+import { formatTradeProfitDisplay, resolveMarketBuyState, resolveMarketSellState } from '../utils/tradeDisplay';
 import {
   cityHasWarehouseType,
   evaluateStorageSuitability,
@@ -398,47 +399,6 @@ function getMarketMood(
   return 'Sakin';
 }
 
-function resolveBuyButtonState({
-  hasWarehouse,
-  canBuy,
-  marketStock,
-  freeCapacity,
-  playerMoney,
-}: {
-  hasWarehouse: boolean;
-  canBuy: boolean;
-  marketStock: number;
-  freeCapacity: number;
-  playerMoney: number;
-}): { label: string; disabled: boolean } {
-  if (!hasWarehouse) {
-    return { label: 'Depo gerekli', disabled: true };
-  }
-  if (canBuy) {
-    return { label: 'Satın Al', disabled: false };
-  }
-  if (marketStock <= 0) {
-    return { label: 'Stok yok', disabled: true };
-  }
-  if (freeCapacity <= 0) {
-    return { label: 'Depo dolu', disabled: true };
-  }
-  if (playerMoney <= 0) {
-    return { label: 'Nakit yetersiz', disabled: true };
-  }
-  return { label: 'Satın Al', disabled: true };
-}
-
-function formatEstimatedProfitLabel(profit: number): { label: string; color: string } {
-  if (Math.abs(profit) < 1) {
-    return { label: 'Başabaş', color: colors.textMuted };
-  }
-  if (profit > 0) {
-    return { label: `Kâr: +${formatMoney(profit)}`, color: colors.success };
-  }
-  return { label: `Zarar: ${formatMoney(profit)}`, color: colors.danger };
-}
-
 function ProductMarketCard({
   cityId,
   currentTime,
@@ -449,6 +409,9 @@ function ProductMarketCard({
   canSell,
   buyButtonLabel,
   buyButtonDisabled,
+  showSellButton,
+  sellButtonLabel,
+  sellButtonDisabled,
   onBuyPress,
   onSellPress,
   onAlarmPress,
@@ -463,6 +426,9 @@ function ProductMarketCard({
   canSell: boolean;
   buyButtonLabel: string;
   buyButtonDisabled: boolean;
+  showSellButton: boolean;
+  sellButtonLabel: string;
+  sellButtonDisabled: boolean;
   onBuyPress: () => void;
   onSellPress: () => void;
   onAlarmPress: () => void;
@@ -477,6 +443,7 @@ function ProductMarketCard({
     cityId,
     productId: market.productId,
     currentTime,
+    stockStatus: status,
     marketState: {
       currentPrice: market.currentPrice,
       basePrice: market.basePrice,
@@ -486,7 +453,7 @@ function ProductMarketCard({
   const priceChangeDisplay = formatTrendChangeDisplay(trend);
   const profitDisplay =
     hasWarehouse && depotQuantity > 0 && estimatedProfit != null
-      ? formatEstimatedProfitLabel(estimatedProfit)
+      ? formatTradeProfitDisplay(estimatedProfit)
       : null;
 
   const cardMainContent = (
@@ -574,14 +541,15 @@ function ProductMarketCard({
           disabled={buyButtonDisabled}
           style={styles.productAction}
         />
-        {canSell ? (
+        {showSellButton ? (
           <ActionButton
-            label="Sat"
+            label={sellButtonLabel}
             onPress={onSellPress}
             variant="secondary"
             icon="market"
             iconSize={11}
             compact
+            disabled={sellButtonDisabled}
             style={styles.productAction}
           />
         ) : null}
@@ -993,6 +961,27 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       return;
     }
 
+    const market = getProductMarket(selectedCity, productId);
+    const productDef = products.find((item) => item.id === productId);
+    const canStoreProduct = selectedCityWarehouses.some((warehouse) => {
+      const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+      return productDef
+        ? evaluateStorageSuitability(productDef, warehouseType) !== 'blocked'
+        : true;
+    });
+    const buyState = resolveMarketBuyState({
+      hasWarehouse: true,
+      marketStock: market?.stock ?? 0,
+      freeCapacity: selectedCityTotalFreeCapacity,
+      playerMoney: player?.money ?? 0,
+      unitPrice: market?.currentPrice ?? 0,
+      canStoreProduct,
+    });
+
+    if (!buyState.canBuy) {
+      return;
+    }
+
     setTradeMode('buy');
     setTradeProductId(productId);
     setTradeModalVisible(true);
@@ -1002,8 +991,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     if (!selectedCity) return;
 
     const inventory = cityInventoryByProduct.get(productId);
-    if (!inventory || inventory.quantity <= 0) {
-      showAlert('Stok yok', 'Bu şehirdeki depolarında satılacak ürün bulunmuyor.');
+    const sellState = resolveMarketSellState({
+      hasWarehouse: selectedCityWarehouses.length > 0,
+      inventoryQuantity: inventory?.quantity ?? 0,
+    });
+
+    if (!sellState.canSell) {
+      if ((inventory?.quantity ?? 0) <= 0) {
+        showAlert('Stok yok', 'Bu şehirdeki depolarında satılacak ürün bulunmuyor.');
+      }
       return;
     }
 
@@ -1346,18 +1342,21 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                             inventory.quality,
                           )
                         : null;
-                    const canBuy =
-                      hasWarehouse &&
-                      market.stock > 0 &&
-                      selectedCityTotalFreeCapacity > 0 &&
-                      (player?.money ?? 0) > 0;
-                    const canSell = hasWarehouse && inventory.quantity > 0;
-                    const buyButton = resolveBuyButtonState({
+                    const canStoreProduct = selectedCityWarehouses.some((warehouse) => {
+                      const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+                      return evaluateStorageSuitability(product, warehouseType) !== 'blocked';
+                    });
+                    const buyButton = resolveMarketBuyState({
                       hasWarehouse,
-                      canBuy,
                       marketStock: market.stock,
                       freeCapacity: selectedCityTotalFreeCapacity,
                       playerMoney: player?.money ?? 0,
+                      unitPrice: market.currentPrice,
+                      canStoreProduct,
+                    });
+                    const sellButton = resolveMarketSellState({
+                      hasWarehouse,
+                      inventoryQuantity: inventory.quantity,
                     });
 
                     const card = (
@@ -1368,9 +1367,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                         hasWarehouse={hasWarehouse}
                         depotQuantity={inventory.quantity}
                         estimatedProfit={estimatedProfit}
-                        canSell={canSell}
+                        canSell={sellButton.canSell}
                         buyButtonLabel={buyButton.label}
                         buyButtonDisabled={buyButton.disabled}
+                        showSellButton={sellButton.showSellButton}
+                        sellButtonLabel={sellButton.label}
+                        sellButtonDisabled={sellButton.disabled}
                         onBuyPress={() => handleBuyProductPress(product.id)}
                         onSellPress={() => handleSellProductPress(product.id)}
                         onAlarmPress={() => handleAlarmProductPress(product.id)}

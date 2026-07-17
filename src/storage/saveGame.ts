@@ -968,12 +968,14 @@ export async function loadGameStateWithMeta(): Promise<SaveLoadResult> {
   };
 }
 
-export async function saveGameState(state: StoreGameState): Promise<void> {
+export async function saveGameState(state: StoreGameState): Promise<boolean> {
   try {
     const payload = serializeGameState(state);
     await activeSaveProvider.save(payload);
+    return true;
   } catch (error) {
     console.warn('[saveGame] saveGameState failed:', error);
+    return false;
   }
 }
 

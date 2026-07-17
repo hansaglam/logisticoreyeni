@@ -259,7 +259,7 @@ export default function MoreScreen() {
     );
   }
 
-  if (route === 'debug') {
+  if (route === 'debug' && __DEV__) {
     return (
       <View style={styles.embeddedRoot}>
         <SubNavBar title="Simülasyon Testi" onBack={() => setRoute('menu')} />

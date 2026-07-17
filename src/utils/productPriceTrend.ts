@@ -1,9 +1,11 @@
 import { colors } from '../theme';
 import type { ProductId } from '../types/game';
 import {
-  MARKET_PRICE_HISTORY_DISPLAY_POINTS,
-  slicePriceHistoryForDisplay,
-} from './marketPriceHistoryGenerator';
+  buildMarketChartSeries,
+  type ChartTrendInfo,
+  type MarketChartPattern,
+} from './marketChartSeries';
+import { MARKET_PRICE_HISTORY_DISPLAY_POINTS } from './marketPriceHistoryGenerator';
 import { PRODUCT_PRICE_HISTORY_MAX } from './priceHistoryCore';
 
 export type ProductTrendDirection = 'up' | 'down' | 'stable';
@@ -19,58 +21,25 @@ export interface ProductPriceTrendInput {
   productId: ProductId;
   currentTime: number;
   marketState: ProductPriceTrendMarketState;
+  /** Stok durumu — grafik pattern seçimi için */
+  stockStatus?: string;
 }
 
 export interface ProductPriceTrend {
-  /** Ham fiyat serisi — grafik için */
+  /** Detay grafik fiyat serisi (24 nokta) */
   prices: number[];
+  /** Mini kart sparkline (12 nokta, aynı hikâye) */
+  miniPrices: number[];
+  /** Kontrollü chart pattern */
+  chartPattern: MarketChartPattern;
+  /** Status + pattern ile hizalı trend bilgisi */
+  chartTrendInfo: ChartTrendInfo;
   /** 0–1 normalize edilmiş noktalar (legacy uyumluluk) */
   points: number[];
   direction: ProductTrendDirection;
   changePercent: number;
   label: string;
   color: string;
-}
-
-function resolveTrendLabel(direction: ProductTrendDirection): string {
-  switch (direction) {
-    case 'up':
-      return 'Yükselişte';
-    case 'down':
-      return 'Düşüşte';
-    default:
-      return 'Dengeli';
-  }
-}
-
-function resolveTrendColor(direction: ProductTrendDirection): string {
-  switch (direction) {
-    case 'up':
-      return colors.success;
-    case 'down':
-      return colors.danger;
-    default:
-      return colors.info;
-  }
-}
-
-function resolveDirectionFromPrices(prices: number[]): ProductTrendDirection {
-  if (prices.length < 2) {
-    return 'stable';
-  }
-
-  const first = prices[0];
-  const last = prices[prices.length - 1];
-  const safeFirst = Math.max(first, 0.01);
-  const changePercent = ((last - first) / safeFirst) * 100;
-
-  if (changePercent > 1.5) {
-    return 'up';
-  }
-  if (changePercent < -1.5) {
-    return 'down';
-  }
-  return 'stable';
 }
 
 function buildNormalizedPoints(prices: number[]): number[] {
@@ -94,7 +63,6 @@ function buildNormalizedPoints(prices: number[]): number[] {
 
 export function getProductPriceTrend(input: ProductPriceTrendInput): ProductPriceTrend {
   const { marketState } = input;
-  const safeBase = Math.max(marketState.basePrice, 1);
   const currentPrice = marketState.currentPrice;
 
   const rawHistory = marketState.priceHistory ?? [];
@@ -102,63 +70,88 @@ export function getProductPriceTrend(input: ProductPriceTrendInput): ProductPric
     .map((value) => Number(value))
     .filter((value) => Number.isFinite(value) && value > 0);
 
-  let prices =
+  let rawPrices =
     cleanedHistory.length > 0
       ? cleanedHistory.slice(-PRODUCT_PRICE_HISTORY_MAX)
       : [currentPrice];
 
   if (
-    prices.length === 0 ||
-    Math.abs(prices[prices.length - 1] - currentPrice) > 0.001
+    rawPrices.length === 0 ||
+    Math.abs(rawPrices[rawPrices.length - 1] - currentPrice) > 0.001
   ) {
-    prices.push(currentPrice);
+    rawPrices.push(currentPrice);
+  } else {
+    rawPrices[rawPrices.length - 1] = currentPrice;
   }
 
-  const uniqueTail = slicePriceHistoryForDisplay(
-    prices.slice(-PRODUCT_PRICE_HISTORY_MAX),
-    MARKET_PRICE_HISTORY_DISPLAY_POINTS,
-  );
-  const direction = resolveDirectionFromPrices(uniqueTail);
+  const chartInput = {
+    rawHistory: rawPrices,
+    currentPrice,
+    productId: input.productId,
+    cityId: input.cityId,
+    marketStatus: input.stockStatus,
+    currentTime: input.currentTime,
+  };
 
-  const historyFirst = uniqueTail[0] ?? currentPrice;
-  const historyChangePercent = Math.round(
-    ((currentPrice - historyFirst) / Math.max(historyFirst, 0.01)) * 100,
-  );
-  const baseChangePercent = Math.round(((currentPrice - safeBase) / safeBase) * 100);
+  const detailChart = buildMarketChartSeries({
+    ...chartInput,
+    mode: 'detail' as const,
+  });
 
-  const changePercent =
-    uniqueTail.length >= 2 ? historyChangePercent : baseChangePercent;
+  const miniChart = buildMarketChartSeries({
+    ...chartInput,
+    mode: 'mini' as const,
+  });
+
+  const uniqueTail = detailChart.prices.slice(-MARKET_PRICE_HISTORY_DISPLAY_POINTS);
+  uniqueTail[uniqueTail.length - 1] = currentPrice;
+
+  const miniTail = miniChart.prices;
+  miniTail[miniTail.length - 1] = currentPrice;
+
+  const { chartTrendInfo } = detailChart;
 
   return {
     prices: uniqueTail,
+    miniPrices: miniTail,
+    chartPattern: chartTrendInfo.selectedPattern,
+    chartTrendInfo,
     points: buildNormalizedPoints(uniqueTail),
-    direction,
-    changePercent,
-    label: resolveTrendLabel(direction),
-    color: resolveTrendColor(direction),
+    direction: chartTrendInfo.displayTrendDirection,
+    changePercent: chartTrendInfo.displayPercentChange,
+    label: chartTrendInfo.displayTrendLabel,
+    color: chartTrendInfo.displayTrendColor,
   };
 }
 
 export function formatTrendChangeDisplay(
   trend: ProductPriceTrend,
 ): { label: string; color: string } {
-  if (trend.direction === 'stable' && Math.abs(trend.changePercent) <= 1) {
-    return { label: '— 0%', color: colors.textMuted };
+  const pct = trend.changePercent;
+
+  if (trend.direction === 'stable') {
+    if (Math.abs(pct) <= 1) {
+      return { label: 'Dengeli', color: trend.color };
+    }
+    const arrow = pct > 0 ? '▲' : '▼';
+    return {
+      label: `${arrow} ${pct > 0 ? `+${pct}` : pct}%`,
+      color: trend.color,
+    };
   }
 
   const arrow =
     trend.direction === 'up' ? '▲' : trend.direction === 'down' ? '▼' : '—';
-  const signed =
-    trend.changePercent > 0
-      ? `+${trend.changePercent}%`
-      : trend.changePercent < 0
-        ? `${trend.changePercent}%`
-        : '0%';
 
-  return {
-    label: `${arrow} ${signed}`,
-    color: trend.color,
-  };
+  if (trend.direction === 'up') {
+    return { label: `${arrow} +${Math.abs(pct)}%`, color: trend.color };
+  }
+  if (trend.direction === 'down') {
+    return { label: `${arrow} -${Math.abs(pct)}%`, color: trend.color };
+  }
+
+  const signed = pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : '0%';
+  return { label: `${arrow} ${signed}`, color: trend.color };
 }
 
 /** @deprecated Prefer getMarketStatusLabel from marketStatusLabels */
@@ -182,6 +175,8 @@ export function getCompactMarketStatusLabel(status: string): string {
     case 'BALANCED':
       return 'Normal';
     default:
-      return status;
+      return 'Normal';
   }
 }
+
+export type { MarketChartPattern, ChartTrendInfo } from './marketChartSeries';

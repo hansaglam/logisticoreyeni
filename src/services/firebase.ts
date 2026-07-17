@@ -17,6 +17,8 @@ import {
 } from 'firebase/auth';
 import { getFirestore, initializeFirestore, type Firestore } from 'firebase/firestore';
 
+import { devLog, devWarn } from '../utils/devLog';
+
 export interface FirebaseConfig {
   apiKey?: string;
   authDomain?: string;
@@ -110,7 +112,7 @@ function logEnvCheckOnce(): void {
   envCheckLogged = true;
 
   const config = readFirebaseConfig();
-  console.log('[firebase] env check', {
+  devLog('[firebase] env check', {
     apiKey: Boolean(config.apiKey),
     authDomain: Boolean(config.authDomain),
     projectId: Boolean(config.projectId),
@@ -189,7 +191,7 @@ export function getFirebaseAppSafe(): FirebaseApp | null {
 
     if (!enabledLogged) {
       enabledLogged = true;
-      console.log('[firebase] enabled');
+      devLog('[firebase] enabled');
     }
 
     return appInstance;
@@ -240,7 +242,7 @@ export function getFirebaseAuthSafe(): Auth | null {
 
     if (!authInitializedLogged) {
       authInitializedLogged = true;
-      console.log('[firebase] auth initialized with AsyncStorage persistence');
+      devLog('[firebase] auth initialized with AsyncStorage persistence');
     }
 
     return authInstance;
@@ -249,7 +251,7 @@ export function getFirebaseAuthSafe(): Auth | null {
       const existing = getCachedAuthFromGlobal();
       if (existing) {
         authInstance = existing;
-        console.log('[firebase] auth reused after Fast Refresh');
+        devLog('[firebase] auth reused after Fast Refresh');
         return authInstance;
       }
 
@@ -301,7 +303,7 @@ export function getFirestoreSafe(): Firestore | null {
 
     if (!firestoreInitializedLogged) {
       firestoreInitializedLogged = true;
-      console.log('[firebase] firestore initialized with long polling');
+      devLog('[firebase] firestore initialized with long polling');
     }
 
     return firestoreInstance;
@@ -309,7 +311,7 @@ export function getFirestoreSafe(): Firestore | null {
     try {
       firestoreInstance = getFirestore(app);
       (globalThis as GlobalFirestoreStore)[FIRESTORE_GLOBAL_KEY] = firestoreInstance;
-      console.log('[firebase] firestore existing instance reused');
+      devLog('[firebase] firestore existing instance reused');
       return firestoreInstance;
     } catch (fallbackError) {
       firestoreInitFailed = true;

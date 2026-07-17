@@ -1,5 +1,6 @@
 import type { NextActionDispatch } from '../components/dashboard/dashboardHubLogic';
 import type { TabKey } from '../navigation/tabTypes';
+import { STARTER_MISSION_IDS } from '../config/missions';
 import { getTotalInventoryTons } from '../simulation/trading';
 import type {
   Delivery,
@@ -92,6 +93,7 @@ export function normalizeOnboardingState(
     completedStepIds,
     dismissedHintIds,
     visitedScreens,
+    missionRewardClaimed: raw.missionRewardClaimed === true,
   };
 }
 
@@ -120,6 +122,39 @@ function countReadyMissionRewards(state: OnboardingEvaluationState): number {
   }).length;
 }
 
+function countReadyStarterMissionRewards(state: OnboardingEvaluationState): number {
+  const missions = state.missions;
+  const getProgress =
+    state.getMissionProgress ??
+    ((missionId: string) => getMissionProgress(missionId, state as never));
+
+  return missions.activeMissionIds.filter((missionId) => {
+    if (!STARTER_MISSION_IDS.includes(missionId)) {
+      return false;
+    }
+    const progress = getProgress(missionId);
+    return getMissionDisplayStatus(missionId, missions, progress) === 'ready';
+  }).length;
+}
+
+function hasClaimedAnyStarterReward(state: OnboardingEvaluationState): boolean {
+  return STARTER_MISSION_IDS.some((missionId) =>
+    state.missions.claimedMissionRewardIds.includes(missionId),
+  );
+}
+
+function areAllActiveStarterRewardsClaimed(state: OnboardingEvaluationState): boolean {
+  const activeStarterIds = state.missions.activeMissionIds.filter((missionId) =>
+    STARTER_MISSION_IDS.includes(missionId),
+  );
+  if (activeStarterIds.length === 0) {
+    return hasClaimedAnyStarterReward(state);
+  }
+  return activeStarterIds.every((missionId) =>
+    state.missions.claimedMissionRewardIds.includes(missionId),
+  );
+}
+
 function hasVisitedScreen(onboarding: OnboardingState, screenId: OnboardingScreenId): boolean {
   return onboarding.visitedScreens.includes(screenId);
 }
@@ -131,6 +166,7 @@ export function isOnboardingStepComplete(
   const { onboarding, activeDeliveries, missions, player } = state;
   const deliveryCount = activeDeliveries.length;
   const deliveryStarted = missions.flags.deliveryStarted || deliveryCount > 0;
+  const completedDeliveries = (player.completedContracts ?? 0) > 0;
   const inventoryTons = getTotalInventoryTons(player.warehouses);
   const readyMissionCount = countReadyMissionRewards(state);
 
@@ -140,8 +176,15 @@ export function isOnboardingStepComplete(
       return false;
     case 'first_contract':
       return deliveryStarted;
-    case 'track_delivery':
-      return hasVisitedScreen(onboarding, 'Map') && deliveryCount > 0;
+    case 'track_delivery': {
+      if (completedDeliveries) {
+        return true;
+      }
+      if (!hasVisitedScreen(onboarding, 'Map')) {
+        return false;
+      }
+      return deliveryCount > 0 || deliveryStarted;
+    }
     case 'market_intro':
       return hasVisitedScreen(onboarding, 'Market');
     case 'first_trade':
@@ -149,7 +192,20 @@ export function isOnboardingStepComplete(
     case 'warehouse_intro':
       return hasVisitedScreen(onboarding, 'Warehouse');
     case 'claim_rewards':
-      return readyMissionCount === 0;
+      if (onboarding.missionRewardClaimed) {
+        return true;
+      }
+      if (hasClaimedAnyStarterReward(state)) {
+        return true;
+      }
+      if (
+        hasVisitedScreen(onboarding, 'Missions') &&
+        countReadyStarterMissionRewards(state) === 0 &&
+        areAllActiveStarterRewardsClaimed(state)
+      ) {
+        return true;
+      }
+      return false;
     default:
       return false;
   }
@@ -218,10 +274,6 @@ export function advanceOnboardingIfNeeded(state: OnboardingEvaluationState): Onb
 
   let next = completeOnboardingStep(onboarding, currentStepId);
 
-  if (currentStepId === 'claim_rewards' && next.currentStepId === 'claim_rewards') {
-    return next;
-  }
-
   const advancedState: OnboardingEvaluationState = {
     ...state,
     onboarding: next,
@@ -257,6 +309,16 @@ export function markOnboardingScreenVisited(
   return {
     ...onboarding,
     visitedScreens: [...onboarding.visitedScreens, screenId],
+  };
+}
+
+export function markOnboardingMissionRewardClaimed(onboarding: OnboardingState): OnboardingState {
+  if (onboarding.missionRewardClaimed) {
+    return onboarding;
+  }
+  return {
+    ...onboarding,
+    missionRewardClaimed: true,
   };
 }
 
@@ -312,29 +374,67 @@ export function resolveOnboardingDashboardAction(
   }
 
   const progressLabel = getOnboardingProgressLabel(state.onboarding.currentStepId);
-  const description = step.dashboardDescription ?? step.description;
+  let title = step.title;
+  let description = step.dashboardDescription ?? step.description;
+  let ctaLabel = step.ctaLabel;
+  let variant = step.variant;
+  let icon = step.icon;
 
   if (step.manualComplete) {
     return {
-      title: step.title,
+      title,
       description,
-      ctaLabel: step.ctaLabel,
-      variant: step.variant,
-      icon: step.icon,
+      ctaLabel,
+      variant,
+      icon,
       progressLabel,
       stepId: step.id,
       action: { type: 'complete-step', stepId: step.id },
     };
   }
 
-  const navigationAction = getOnboardingNavigationAction(step.route);
+  let navigationAction = getOnboardingNavigationAction(step.route);
+
+  if (step.id === 'track_delivery') {
+    const completedCount = state.player.completedContracts ?? 0;
+    const activeCount = state.activeDeliveries.length;
+    if (activeCount === 0 && completedCount > 0) {
+      title = 'Teslimat Tamamlandı';
+      description = 'İlk teslimatın tamamlandı. Şimdi piyasayı keşfedebilirsin.';
+      ctaLabel = 'Piyasaya Git';
+      navigationAction = { type: 'navigate', tab: 'market' };
+    }
+  }
+
+  if (step.id === 'claim_rewards') {
+    const readyCount = countReadyStarterMissionRewards(state);
+    const hasClaimed = hasClaimedAnyStarterReward(state);
+    if (readyCount > 0) {
+      title = 'Görev Ödüllerini Al';
+      description = `${readyCount} görev ödülü seni bekliyor.`;
+      ctaLabel = 'Görevlere Git';
+    } else if (!hasClaimed) {
+      title = 'Görev Ödülü Aç';
+      description = 'İlk teslimatını tamamlayarak görev ödülü açabilirsin.';
+      ctaLabel = 'İşlere Git';
+      navigationAction = { type: 'navigate', tab: 'contracts' };
+    } else {
+      title = 'Görevleri Kontrol Et';
+      description = 'Başlangıç görev ödüllerini aldın. Rehberi tamamlayabilirsin.';
+      ctaLabel = 'Görevlere Git';
+    }
+    if (readyCount > 0 || hasClaimed) {
+      navigationAction = getOnboardingNavigationAction('Missions');
+    }
+  }
+
   if (!navigationAction) {
     return {
-      title: step.title,
+      title,
       description,
-      ctaLabel: step.ctaLabel,
-      variant: step.variant,
-      icon: step.icon,
+      ctaLabel,
+      variant,
+      icon,
       progressLabel,
       stepId: step.id,
       action: { type: 'navigate', tab: 'dashboard' },
@@ -342,11 +442,11 @@ export function resolveOnboardingDashboardAction(
   }
 
   return {
-    title: step.title,
+    title,
     description,
-    ctaLabel: step.ctaLabel,
-    variant: step.variant,
-    icon: step.icon,
+    ctaLabel,
+    variant,
+    icon,
     progressLabel,
     stepId: step.id,
     action: navigationAction,

@@ -16,6 +16,7 @@ import {
 import { CAREER_MISSIONS, STARTER_MISSIONS, createDefaultMissionsState, getMissionById } from '../config/missions';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useGameStore } from '../store/gameStore';
 import {
   getMissionDisplayStatus,
@@ -29,19 +30,21 @@ function formatMissionReward(missionId: string): string {
   if (!mission) return '';
 
   const parts: string[] = [];
-  if (mission.reward.money) parts.push(formatMoney(mission.reward.money));
-  if (mission.reward.xp) parts.push(`${mission.reward.xp} XP`);
-  if (mission.reward.diamonds) parts.push(`${mission.reward.diamonds} elmas`);
-  if (mission.reward.reputation) parts.push(`+${mission.reward.reputation} itibar`);
-  return parts.join(' + ');
+  if (mission.reward.money) parts.push(`+${formatMoney(mission.reward.money)}`);
+  if (mission.reward.xp) parts.push(`+${mission.reward.xp} XP`);
+  if (mission.reward.diamonds) parts.push(`+${mission.reward.diamonds} Elmas`);
+  if (mission.reward.reputation) parts.push(`+${mission.reward.reputation} İtibar`);
+  return parts.join(' · ');
 }
 
 function formatProgressValue(current: number, target: number, missionId: string): string {
   if (missionId === 'reach_company_score_150k') {
     return `${Math.floor(current).toLocaleString('en-US')} / ${target.toLocaleString('en-US')}`;
   }
+  if (missionId === 'first_profit') {
+    return `${formatMoney(current)} / ${formatMoney(target)} sözleşme geliri`;
+  }
   if (
-    missionId === 'first_profit' ||
     missionId === 'reach_warehouse_value_25000' ||
     missionId === 'earn_10000_trade_profit'
   ) {
@@ -125,6 +128,7 @@ interface MissionsScreenProps {
 }
 
 export default function MissionsScreen({ onBack }: MissionsScreenProps) {
+  const { scrollBottomPadding } = useTabBarLayout();
   const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
@@ -154,7 +158,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   return (
     <ScrollView
       style={styles.root}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: scrollBottomPadding }]}
       showsVerticalScrollIndicator={false}
     >
       <ScreenHeader
@@ -206,7 +210,6 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl,
   },
   sectionSpaced: {
     marginTop: spacing.sm,

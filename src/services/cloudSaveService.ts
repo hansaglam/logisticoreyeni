@@ -31,6 +31,12 @@ import {
 import { findUndefinedPaths, sanitizeForFirestore } from '../utils/sanitizeForFirestore';
 import { getFirestoreSafe, isFirebaseEnabled, resetFirebaseFirestoreCache } from './firebase';
 
+function devCloudLog(message: string, ...args: unknown[]): void {
+  if (__DEV__) {
+    console.log(message, ...args);
+  }
+}
+
 export type { CloudSaveSummary };
 
 const CURRENT_SAVE_DOC_ID = 'current';
@@ -188,9 +194,9 @@ async function updateCloudSyncMeta(
   });
 
   try {
-    console.log('[cloud-save] write meta/status started');
+    devCloudLog('[cloud-save] write meta/status started');
     await setDoc(statusRef, asRecord(statusData), { merge: true });
-    console.log('[cloud-save] write meta/status success');
+    devCloudLog('[cloud-save] write meta/status success');
     return true;
   } catch (metaError) {
     const info = getFirestoreErrorInfo(metaError);
@@ -231,7 +237,7 @@ export async function markUserProviderLinked(
       platform: getPlatform(),
     });
     await setDoc(userRef, asRecord(profileData), { merge: true });
-    console.log('[cloud-save] user provider linked', provider);
+    devCloudLog('[cloud-save] user provider linked', provider);
     return { ok: true };
   } catch (error) {
     const info = getFirestoreErrorInfo(error);
@@ -331,7 +337,7 @@ export async function saveGameToCloud(
     estimatedSize = MAX_SAVE_SIZE_BYTES + 1;
   }
 
-  console.log('[cloud-save] estimated save size', estimatedSize);
+  devCloudLog('[cloud-save] estimated save size', estimatedSize);
   if (estimatedSize > MAX_SAVE_SIZE_BYTES) {
     await updateCloudSyncMeta(uid, 'failed', {
       code: 'save-too-large',
@@ -370,9 +376,9 @@ export async function saveGameToCloud(
       ...(existing.exists() ? {} : { createdAt: serverTimestamp() }),
     });
 
-    console.log('[cloud-save] write user profile started');
+    devCloudLog('[cloud-save] write user profile started');
     await setDoc(userRef, asRecord(profileData), { merge: true });
-    console.log('[cloud-save] write user profile success');
+    devCloudLog('[cloud-save] write user profile success');
 
     const cloudSaveData = sanitizeForFirestore({
       schemaVersion: 1,
@@ -384,9 +390,9 @@ export async function saveGameToCloud(
       summary: sanitizedSummary,
     });
 
-    console.log('[cloud-save] write save/current started');
+    devCloudLog('[cloud-save] write save/current started');
     await setDoc(saveRef, asRecord(cloudSaveData), { merge: true });
-    console.log('[cloud-save] write save/current success');
+    devCloudLog('[cloud-save] write save/current success');
 
     const metaOk = await updateCloudSyncMeta(uid, 'success');
     if (!metaOk) {
@@ -466,13 +472,13 @@ export async function deleteUserCloudData(uid: string): Promise<CloudSaveOperati
   // TODO: Gelecekte users/{uid} altına yeni subcollection eklenirse burada silinmeli.
 
   try {
-    console.log('[cloud-save] deleteUserCloudData started', uid);
+    devCloudLog('[cloud-save] deleteUserCloudData started', uid);
     const batch = writeBatch(db);
     batch.delete(saveRef);
     batch.delete(metaRef);
     batch.delete(userRef);
     await batch.commit();
-    console.log('[cloud-save] deleteUserCloudData success');
+    devCloudLog('[cloud-save] deleteUserCloudData success');
     return { ok: true };
   } catch (error) {
     const info = getFirestoreErrorInfo(error);
@@ -507,7 +513,7 @@ export async function deleteUserCloudData(uid: string): Promise<CloudSaveOperati
     }
     try {
       await deleteDoc(userRef);
-      console.log('[cloud-save] deleteUserCloudData partial success');
+      devCloudLog('[cloud-save] deleteUserCloudData partial success');
       return { ok: true };
     } catch (fallbackError) {
       const fallbackInfo = getFirestoreErrorInfo(fallbackError);

@@ -85,6 +85,7 @@ import {
   buildPlayerFleetCityContext,
   countPlayableContracts,
   ensurePlayableContractSupply,
+  ensurePlayableContractsAfterDelivery,
   type ContractGenerationDebugSnapshot,
 } from '../simulation/contracts';
 import { ensureStarterContracts } from '../simulation/starterContracts';
@@ -165,6 +166,7 @@ import {
   resolveWarehouseDailyOperatingCost,
 } from '../utils/warehouseCalculations';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
+import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
 import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   cancelMarketAlertNotification,
@@ -193,6 +195,8 @@ import {
   createDefaultOnboardingState,
   dismissOnboardingGuide,
   dismissOnboardingHint,
+  isOnboardingActive,
+  markOnboardingMissionRewardClaimed,
   markOnboardingScreenVisited as markOnboardingScreenVisitedState,
   resetOnboardingForDev as resetOnboardingStateForDev,
 } from '../onboarding/onboardingProgress';
@@ -293,6 +297,59 @@ let gameInitPromise: Promise<void> | null = null;
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
 const completedDeliveryNotificationIds = new Set<string>();
 const completedTransferNotificationIds = new Set<string>();
+
+let saveLoadFailureToastShown = false;
+let saveWriteFailureToastShown = false;
+
+const SAVE_LOAD_FAILURE_TOAST = {
+  title: 'Kayıt yüklenemedi',
+  message: 'Yeni oyun başlatıldı.',
+} as const;
+
+const SAVE_WRITE_FAILURE_TOAST = {
+  title: 'Kayıt kaydedilemedi',
+  message: 'Kayıt şu anda kaydedilemedi. Biraz sonra tekrar denenecek.',
+} as const;
+
+function notifySaveLoadFailureOnce(
+  currentTime: number,
+  addNotification: (notification: Omit<GameNotification, 'id'> & { id?: string }) => void,
+  debugDetail?: string | null,
+): void {
+  if (saveLoadFailureToastShown) {
+    return;
+  }
+  saveLoadFailureToastShown = true;
+  addNotification({
+    time: currentTime,
+    type: 'warning',
+    title: SAVE_LOAD_FAILURE_TOAST.title,
+    message: SAVE_LOAD_FAILURE_TOAST.message,
+  });
+  if (__DEV__ && debugDetail) {
+    console.warn('[gameStore] Save load failure detail:', debugDetail);
+  }
+}
+
+function notifySaveWriteFailureOnce(
+  currentTime: number,
+  addNotification: (notification: Omit<GameNotification, 'id'> & { id?: string }) => void,
+  debugDetail?: string | null,
+): void {
+  if (saveWriteFailureToastShown) {
+    return;
+  }
+  saveWriteFailureToastShown = true;
+  addNotification({
+    time: currentTime,
+    type: 'warning',
+    title: SAVE_WRITE_FAILURE_TOAST.title,
+    message: SAVE_WRITE_FAILURE_TOAST.message,
+  });
+  if (__DEV__ && debugDetail) {
+    console.warn('[gameStore] Save write failure detail:', debugDetail);
+  }
+}
 
 export type NavigationTab = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'market' | 'more';
 
@@ -1909,6 +1966,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ? missions.completedMissionIds
       : [...missions.completedMissionIds, missionId];
 
+    const currentOnboarding = state.onboarding ?? createDefaultOnboardingState();
+    const nextOnboarding =
+      isOnboardingActive(currentOnboarding) &&
+      currentOnboarding.currentStepId === 'claim_rewards'
+        ? markOnboardingMissionRewardClaimed(currentOnboarding)
+        : currentOnboarding;
+
     set({
       player: {
         ...state.player,
@@ -1921,6 +1985,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         claimedMissionRewardIds,
         completedMissionIds,
       },
+      onboarding: nextOnboarding,
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
       eventLog: prependGameEvent(
@@ -2009,6 +2074,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         set({ saveError: null });
 
         const hadSaveOnDisk = await hasSavedGame();
+        let saveLoadFailed = false;
         if (hadSaveOnDisk) {
           const loadResult = await loadGameStateWithMeta();
           if (loadResult.state) {
@@ -2020,6 +2086,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
             }
           }
 
+          saveLoadFailed = true;
           const loadError =
             loadResult.error ??
             'Kayıt dosyası bulundu ancak yüklenemedi. Yeni oyun başlatılıyor.';
@@ -2045,6 +2112,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         });
         resetAutoSaveTracking(0);
         hasHydratedGame = true;
+        if (saveLoadFailed) {
+          notifySaveLoadFailureOnce(get().currentTime, get().addNotification, get().saveError);
+        }
         await get().saveGame();
         await get().refreshSaveStatus();
       } catch (error) {
@@ -2098,27 +2168,34 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   saveGame: async () => {
     const state = get();
-    try {
-      await saveGameState(state);
-      lastSavedGameTime = state.currentTime;
-      lastAutoSaveAt = Date.now();
-      saveDirty = false;
+    const saved = await saveGameState(state);
+    if (!saved) {
+      const userMessage = SAVE_WRITE_FAILURE_TOAST.message;
       patchSaveStatus(set, {
-        hasSave: true,
-        lastSavedAt: lastAutoSaveAt,
-        isDirty: false,
+        hasSave: get().saveStatus.hasSave,
         isSaving: false,
-        lastSaveReason,
-        autoSaveEnabled,
+        lastSaveError: __DEV__ ? 'saveGameState returned false' : userMessage,
       });
-      if (__DEV__ && ENABLE_SAVE_LOGS) {
-        console.log('[gameStore] Game saved at game time', state.currentTime);
-      }
-
-      void syncLocalSaveToCloud(mapAutoSaveReasonToCloudSync(lastSaveReason), { state });
-    } catch (error) {
-      console.warn('[gameStore] saveGame failed:', error);
+      notifySaveWriteFailureOnce(state.currentTime, get().addNotification, userMessage);
+      return;
     }
+
+    lastSavedGameTime = state.currentTime;
+    lastAutoSaveAt = Date.now();
+    saveDirty = false;
+    patchSaveStatus(set, {
+      hasSave: true,
+      lastSavedAt: lastAutoSaveAt,
+      isDirty: false,
+      isSaving: false,
+      lastSaveReason,
+      autoSaveEnabled,
+    });
+    if (__DEV__ && ENABLE_SAVE_LOGS) {
+      console.log('[gameStore] Game saved at game time', state.currentTime);
+    }
+
+    void syncLocalSaveToCloud(mapAutoSaveReasonToCloudSync(lastSaveReason), { state });
   },
 
   loadGame: async (preloaded?: Awaited<ReturnType<typeof loadGameStateWithMeta>>) => {
@@ -3851,10 +3928,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const distanceKm = contract.distanceKm ?? delivery.distanceKm ?? 0;
     const riskTier = getDeliveryRiskTier(delivery);
     const xpGain = calculateDeliveryXp(distanceKm, netProfit, riskTier);
-    const notificationMessage = `Teslimat tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)}`;
+    const destinationCityName = getCityName(delivery.destinationCityId);
+    const locationToastMessage = formatDeliveryCompleteLocationToast(destinationCityName, !!delivery.driverId);
+    const notificationMessage = `${locationToastMessage} Net kâr: ${formatNotificationMoney(netProfit)}`;
     const eventMessage = `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
     const completedTruck = newSimState.trucks.find((t) => t.id === delivery.truckId);
-    const destinationCityName = getCityName(delivery.destinationCityId);
     const truckArrivalMessage = completedTruck
       ? `${completedTruck.name} ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`
       : `Kamyon ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`;
@@ -3939,6 +4017,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().notifyFirstDeliveryCompleted();
     get().syncMissionProgress();
 
+    const postState = get();
+    if (postState.player) {
+      const refreshParams = buildContractRefreshParams(postState);
+      const supplyResult = ensurePlayableContractsAfterDelivery({
+        ...refreshParams,
+        contracts: postState.contracts ?? [],
+        destinationCityId: delivery.destinationCityId,
+        completedContracts: postState.player.completedContracts ?? 0,
+      });
+
+      if (
+        supplyResult.newContracts.length > 0 ||
+        supplyResult.contracts !== postState.contracts
+      ) {
+        set({
+          contracts: supplyResult.contracts,
+          lastPlayableContractGeneratedTime:
+            supplyResult.updatedLastPlayableContractGeneratedTime ??
+            postState.lastPlayableContractGeneratedTime,
+        });
+        get().markSaveDirty();
+      }
+    }
+
     try {
       get().addNotification({
         time: state.currentTime,
@@ -3947,7 +4049,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: notificationMessage,
         actionLabel: 'Finansı Gör',
         actionTarget: 'finance',
-        autoDismissMs: 3000,
+        autoDismissMs: 3500,
       });
     } catch (error) {
       console.warn('[gameStore] addNotification failed:', error);
@@ -3955,6 +4057,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     get().autoSave('delivery_completed');
     get().processExpiredLeases();
+    get().advanceOnboardingProgress();
   },
 
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => {

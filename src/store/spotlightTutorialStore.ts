@@ -94,11 +94,13 @@ function warnFallbackOnce(stepId: string, requestedId: TutorialTargetId, usedId:
     return;
   }
   fallbackWarnKeys.add(key);
-  console.log('[tutorial] using fallback target', {
-    stepId,
-    requested: requestedId,
-    used: usedId,
-  });
+  if (__DEV__) {
+    console.log('[tutorial] using fallback target', {
+      stepId,
+      requested: requestedId,
+      used: usedId,
+    });
+  }
 }
 
 function clearMeasurementState(): Pick<

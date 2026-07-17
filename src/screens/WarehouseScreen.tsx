@@ -40,13 +40,13 @@ import {
 } from '../config/levelConfig';
 import { getCityByIdSafe, getCityName, getProductName } from '../utils/entityLookup';
 import {
-  buildTradeProfitBreakdown,
   calculateTradeProfit,
   getCityProductMarketPrice,
   getWarehouseUsedCapacityTon,
   normalizeWarehouse,
   WAREHOUSE_SELL_SAME_CITY_RULE,
 } from '../simulation/trading';
+import { resolveInventoryTradeProfit, resolveMarketSellState } from '../utils/tradeDisplay';
 import {
   calculateWarehouseDailyOperatingCostBreakdown,
   estimateNewWarehouseDailyOperatingCost,
@@ -389,6 +389,7 @@ function InventoryRow({
   quantity,
   averageBuyPrice,
   currentPrice,
+  quality,
   storageWarning,
   showColdHint,
   qualityHint,
@@ -398,24 +399,25 @@ function InventoryRow({
   quantity: number;
   averageBuyPrice: number;
   currentPrice: number;
+  quality: number;
   storageWarning?: string;
   showColdHint: boolean;
   qualityHint: 'normal' | 'warning' | 'critical';
   onSell: () => void;
 }) {
-  const breakdown = buildTradeProfitBreakdown(
+  const { breakdown, display: profitDisplay } = resolveInventoryTradeProfit(
     currentPrice,
     averageBuyPrice,
     quantity,
+    quality,
   );
   const netProfit = breakdown.netProfit;
   const decision = getInventoryDecisionHint(netProfit);
-  const profitColor =
-    decision.variant === 'success'
-      ? colors.success
-      : decision.variant === 'danger'
-        ? colors.danger
-        : colors.textMuted;
+  const sellState = resolveMarketSellState({
+    hasWarehouse: true,
+    inventoryQuantity: quantity,
+  });
+  const profitColor = profitDisplay.color;
 
   return (
     <View style={styles.inventoryRow}>
@@ -438,6 +440,16 @@ function InventoryRow({
         <Text style={[styles.inventoryHint, { color: profitColor }]} numberOfLines={1}>
           {decision.statusLabel} · {decision.hint}
         </Text>
+        {profitDisplay.sublabel ? (
+          <Text style={styles.inventoryFeeHint} numberOfLines={1}>
+            {profitDisplay.sublabel}
+          </Text>
+        ) : null}
+        {profitDisplay.feeNote ? (
+          <Text style={styles.inventoryFeeNote} numberOfLines={2}>
+            {profitDisplay.feeNote}
+          </Text>
+        ) : null}
         {showColdHint ? (
           <Text style={styles.inventoryHint} numberOfLines={1}>
             Soğuk depo önerilir
@@ -454,11 +466,17 @@ function InventoryRow({
         ) : null}
       </View>
       <View style={styles.inventoryRight}>
-        <Text style={[styles.inventoryProfit, { color: profitColor }]} numberOfLines={1} ellipsizeMode="tail">
-          Net kâr: {netProfit >= 0 ? '+' : ''}
-          {formatMoney(netProfit)}
+        <Text style={[styles.inventoryProfit, { color: profitColor }]} numberOfLines={2} ellipsizeMode="tail">
+          {profitDisplay.label}
         </Text>
-        <ActionButton label="Sat" onPress={onSell} variant="primary" compact style={styles.sellButton} />
+        <ActionButton
+          label={sellState.label}
+          onPress={onSell}
+          variant="primary"
+          compact
+          disabled={sellState.disabled}
+          style={styles.sellButton}
+        />
       </View>
     </View>
   );
@@ -578,6 +596,7 @@ function WarehouseCard({
                   quantity={item.quantity ?? 0}
                   averageBuyPrice={item.averageBuyPrice ?? 0}
                   currentPrice={safePrice}
+                  quality={itemQuality}
                   storageWarning={item.storageWarning}
                   showColdHint={showColdHint}
                   qualityHint={qualityHint}
@@ -1263,6 +1282,17 @@ const styles = StyleSheet.create({
     color: colors.accentAmber,
     marginTop: 3,
     fontWeight: '600',
+  },
+  inventoryFeeHint: {
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  inventoryFeeNote: {
+    fontSize: 10,
+    color: colors.accentAmber,
+    lineHeight: 14,
+    marginTop: 2,
   },
   inventoryDanger: {
     fontSize: 10,

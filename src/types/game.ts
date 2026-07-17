@@ -863,6 +863,8 @@ export interface OnboardingState {
   completedStepIds: string[];
   dismissedHintIds: string[];
   visitedScreens: string[];
+  /** claim_rewards adımında en az bir görev ödülü alındı */
+  missionRewardClaimed?: boolean;
 }
 
 /**

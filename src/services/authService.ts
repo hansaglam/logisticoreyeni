@@ -34,6 +34,7 @@ import { Platform } from 'react-native';
 import { markUserProviderLinked } from './cloudSaveService';
 import { getFirebaseAuthSafe, resetFirebaseAuthCache } from './firebase';
 import { createGoogleFirebaseCredential } from './googleAuthService';
+import { devLog, devWarn } from '../utils/devLog';
 
 export type AccountProvider = 'guest' | 'google' | 'apple' | 'unknown';
 
@@ -83,12 +84,12 @@ function resolveAccountProvider(user: User): AccountProvider {
 
 function logRestoredUser(user: User): void {
   const provider = resolveAccountProvider(user);
-  console.log('[auth] restored user', user.uid, {
+  devLog('[auth] restored user', user.uid, {
     isAnonymous: user.isAnonymous,
     provider,
   });
   if (!user.isAnonymous && provider !== 'guest' && provider !== 'unknown') {
-    console.log('[auth] provider', provider);
+    devLog('[auth] provider', provider);
   }
 }
 
@@ -202,7 +203,7 @@ async function finalizeAccountLink(
   provider: 'google' | 'apple',
   user: User,
 ): Promise<void> {
-  console.log('[auth] account linked with', provider, user.uid);
+  devLog('[auth] account linked with', provider, user.uid);
 
   try {
     await markUserProviderLinked(user.uid, provider);
@@ -332,9 +333,9 @@ export async function initAnonymousAuth(): Promise<User | null> {
     }
 
     try {
-      console.log('[auth] no restored user, signing in anonymously');
+      devLog('[auth] no restored user, signing in anonymously');
       const credential = await signInAnonymously(auth);
-      console.log('[auth] anonymous user ready', credential.user.uid);
+      devLog('[auth] anonymous user ready', credential.user.uid);
       authSessionReady = true;
       return credential.user;
     } catch (error) {
@@ -369,9 +370,9 @@ export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResul
 
     const uidAfter = linkResult.user.uid;
     if (uidBefore && uidAfter !== uidBefore) {
-      console.warn('[auth] UID changed during Google link', { uidBefore, uidAfter });
+      devWarn('[auth] UID changed during Google link', { uidBefore, uidAfter });
     } else {
-      console.log('[auth] Google account linked, UID preserved', uidAfter);
+      devLog('[auth] Google account linked, UID preserved', uidAfter);
     }
 
     await finalizeAccountLink('google', linkResult.user);
@@ -405,7 +406,7 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
     }
 
     await finalizeAccountLink('apple', linkResult.user);
-    console.log('[auth] Apple account linked', linkResult.user.uid);
+    devLog('[auth] Apple account linked', linkResult.user.uid);
     return { ok: true, provider: 'apple' };
   } catch (error) {
     const mapped = mapLinkError(error);

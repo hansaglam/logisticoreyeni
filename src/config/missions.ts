@@ -29,7 +29,7 @@ export const STARTER_MISSIONS: MissionConfig[] = [
   {
     id: 'first_contract_start',
     title: 'İlk İşini Başlat',
-    description: 'Bir sözleşme seç, kamyon ve şoför atayarak teslimatı başlat.',
+    description: 'İlk sözleşmeni seç ve teslimatı başlat.',
     targetValue: 1,
     reward: { money: 500, xp: 25 },
     category: 'starter',
@@ -37,15 +37,15 @@ export const STARTER_MISSIONS: MissionConfig[] = [
   {
     id: 'first_delivery',
     title: 'İlk Teslimat',
-    description: 'İlk teslimatını başarıyla tamamla.',
+    description: 'İlk teslimatını tamamla.',
     targetValue: 1,
     reward: { money: 1500, xp: 50, reputation: 1 },
     category: 'delivery',
   },
   {
     id: 'first_profit',
-    title: 'Kâra Geç',
-    description: 'Toplam 5.000$ sözleşme geliri elde et.',
+    title: 'İlk Büyük Gelir',
+    description: 'Sözleşmelerden toplam $5.000 gelir elde et.',
     targetValue: 5000,
     reward: { money: 2000, xp: 75 },
     category: 'delivery',
@@ -53,7 +53,7 @@ export const STARTER_MISSIONS: MissionConfig[] = [
   {
     id: 'open_market',
     title: 'Piyasayı Keşfet',
-    description: 'Piyasa ekranını aç ve fırsatları incele.',
+    description: 'Piyasa ekranını aç ve ürün fiyatlarını incele.',
     targetValue: 1,
     reward: { diamonds: 5, xp: 25 },
     category: 'market',
@@ -61,7 +61,7 @@ export const STARTER_MISSIONS: MissionConfig[] = [
   {
     id: 'first_trade',
     title: 'İlk Ticaret',
-    description: 'Depo üzerinden ilk ürün alımını yap.',
+    description: 'Deposu olan bir şehirde ilk ürün alımını yap.',
     targetValue: 1,
     reward: { money: 1000, xp: 50 },
     category: 'warehouse',

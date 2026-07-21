@@ -37,6 +37,11 @@ export interface AppDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  actions?: Array<{
+    label: string;
+    onPress: () => void;
+    variant?: 'primary' | 'secondary' | 'destructive';
+  }>;
   onConfirm?: () => void;
   onCancel?: () => void;
   onDismiss?: () => void;
@@ -153,12 +158,14 @@ export default function AppDialog({
   confirmLabel = 'Tamam',
   cancelLabel,
   destructive = false,
+  actions,
   onConfirm,
   onCancel,
   onDismiss,
 }: AppDialogProps) {
   const config = VARIANT_CONFIG[variant];
-  const isDualAction = Boolean(cancelLabel);
+  const hasCustomActions = Boolean(actions && actions.length > 0);
+  const isDualAction = !hasCustomActions && Boolean(cancelLabel);
   const confirmVariant = destructive ? 'destructive' : 'primary';
 
   const handleDismiss = () => {
@@ -213,8 +220,27 @@ export default function AppDialog({
 
           {footerNote ? <Text style={styles.footerNote}>{footerNote}</Text> : null}
 
-          <View style={[styles.actionsRow, !isDualAction && styles.actionsRowSingle]}>
-            {isDualAction ? (
+          <View
+            style={[
+              styles.actionsRow,
+              hasCustomActions && styles.actionsRowStacked,
+              !isDualAction && !hasCustomActions && styles.actionsRowSingle,
+            ]}
+          >
+            {hasCustomActions ? (
+              actions!.map((action) => (
+                <DialogActionButton
+                  key={action.label}
+                  label={action.label}
+                  onPress={() => {
+                    action.onPress();
+                    handleDismiss();
+                  }}
+                  variant={action.variant ?? 'secondary'}
+                  style={styles.actionFull}
+                />
+              ))
+            ) : isDualAction ? (
               <>
                 <DialogActionButton
                   label={cancelLabel ?? 'Vazgeç'}
@@ -325,6 +351,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
     marginTop: spacing.xs,
+  },
+  actionsRowStacked: {
+    flexDirection: 'column',
   },
   actionsRowSingle: {
     flexDirection: 'column',

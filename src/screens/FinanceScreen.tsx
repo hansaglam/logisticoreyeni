@@ -405,8 +405,8 @@ export default function FinanceScreen() {
 
   const companyScoreHint =
     companyScoreBreakdown.penaltyScore < 0
-      ? 'Başarısız ve geç teslimatlar şirket puanını düşürür. Haftalık leaderboard sıralaması bu puana göre yapılacak.'
-      : 'Haftalık leaderboard sıralaması bu puana göre yapılacak. Sadece nakit değil, filo ve operasyon gücü de sayılır.';
+      ? 'Başarısız ve geç teslimatlar şirket puanını düşürür. Haftalık liderlik tablosu bu puana göre sıralanır.'
+      : 'Haftalık liderlik tablosu bu puana göre sıralanır. Sadece nakit değil, filo ve operasyon gücü de sayılır.';
 
   const availableContractCount = useMemo(
     () => contracts.filter((c) => c.status === 'available').length,

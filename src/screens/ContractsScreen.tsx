@@ -6,12 +6,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ScrollView,
+  FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  type ScrollView as ScrollViewType,
+  type FlatList as FlatListType,
 } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
@@ -434,6 +434,11 @@ function NextRouteHintCard({ deliveries }: NextRouteHintCardProps) {
   );
 }
 
+type ContractsListItem =
+  | { key: string; type: 'available'; contract: Contract }
+  | { key: string; type: 'active'; delivery: Delivery }
+  | { key: string; type: 'completed'; contract: Contract };
+
 interface ContractCardProps {
   contract: Contract;
   preview: ContractPreview;
@@ -442,7 +447,7 @@ interface ContractCardProps {
   onPress: () => void;
 }
 
-function ContractCard({
+const ContractCard = React.memo(function ContractCard({
   contract,
   preview,
   playerLevel,
@@ -576,7 +581,7 @@ function ContractCard({
       ) : null}
     </TouchableOpacity>
   );
-}
+});
 
 interface ActiveDeliveryCardProps {
   delivery: Delivery;
@@ -699,7 +704,7 @@ export default function ContractsScreen() {
   useOnboardingScreenVisit('Contracts');
   const onboardingHint = useActiveOnboardingHint(['first_contract']);
 
-  const scrollRef = useRef<ScrollViewType>(null);
+  const scrollRef = useRef<FlatListType<ContractsListItem>>(null);
 
   const [activeSegment, setActiveSegment] = useState<SegmentKey>('available');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
@@ -836,7 +841,7 @@ export default function ContractsScreen() {
   }, [firstTutorialContractId]);
 
   const scrollTutorialContractIntoView = useCallback(() => {
-    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    scrollRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, []);
 
   const completedPreviewById = useMemo(() => {
@@ -907,7 +912,7 @@ export default function ContractsScreen() {
       setHighlightedContractId(null);
     }
 
-    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    scrollRef.current?.scrollToOffset({ offset: 0, animated: true });
 
     const timer = setTimeout(() => {
       setHighlightedContractId(null);
@@ -1045,6 +1050,183 @@ export default function ContractsScreen() {
     ? `${marketContractFilter.fromCityName} → ${marketContractFilter.toCityName} · ${marketContractFilter.productName}`
     : '';
 
+  const listItems = useMemo((): ContractsListItem[] => {
+    if (activeSegment === 'available') {
+      return filteredContracts.map((contract) => ({
+        key: contract.id,
+        type: 'available',
+        contract,
+      }));
+    }
+    if (activeSegment === 'active') {
+      return runningDeliveries.map((delivery) => ({
+        key: delivery.id,
+        type: 'active',
+        delivery,
+      }));
+    }
+    return completedContracts.map((contract) => ({
+      key: contract.id,
+      type: 'completed',
+      contract,
+    }));
+  }, [activeSegment, filteredContracts, runningDeliveries, completedContracts]);
+
+  const renderContractListItem = useCallback(
+    ({ item }: { item: ContractsListItem }) => {
+      if (item.type === 'available') {
+        const preview = contractPreviewById.get(item.contract.id);
+        if (!preview) {
+          return null;
+        }
+
+        const card = (
+          <ContractCard
+            contract={item.contract}
+            preview={preview}
+            playerLevel={player.level ?? player.companyLevel ?? 1}
+            isPinnedMarketMatch={highlightedContractId === item.contract.id}
+            onPress={() => openQuickSheet(item.contract)}
+          />
+        );
+
+        if (item.contract.id !== firstTutorialContractId) {
+          return card;
+        }
+
+        return (
+          <TutorialTarget
+            id="contract-first-card"
+            onTutorialPress={() => openQuickSheet(item.contract)}
+            scrollIntoView={scrollTutorialContractIntoView}
+          >
+            {card}
+          </TutorialTarget>
+        );
+      }
+
+      if (item.type === 'active') {
+        return (
+          <ActiveDeliveryCard
+            delivery={item.delivery}
+            trucks={player.trucks ?? []}
+            drivers={player.drivers ?? []}
+            currentTime={currentTime}
+          />
+        );
+      }
+
+      const linkedDelivery = findDeliveryForContract(item.contract.id, activeDeliveries);
+      return (
+        <CompletedContractCard
+          contract={item.contract}
+          netProfit={linkedDelivery?.estimatedProfit}
+          fallbackPreview={completedPreviewById.get(item.contract.id)}
+        />
+      );
+    },
+    [
+      contractPreviewById,
+      player,
+      highlightedContractId,
+      firstTutorialContractId,
+      scrollTutorialContractIntoView,
+      currentTime,
+      activeDeliveries,
+      completedPreviewById,
+      openQuickSheet,
+    ],
+  );
+
+  const listHeader = useMemo(() => {
+    if (activeSegment !== 'available') {
+      return null;
+    }
+
+    return (
+      <>
+        <NextRouteHintCard deliveries={runningDeliveries} />
+
+        {isMarketOpportunityFilter(marketContractFilter) ? (
+          <MarketFilterInfoCard
+            routeLine={marketFilterLine}
+            exactCount={marketMatchStats.exactMatchesCount}
+            relatedCount={marketMatchStats.relatedMatchesCount}
+            onClear={handleClearMarketFilter}
+          />
+        ) : isRouteContractFilter(marketContractFilter) ? (
+          <View style={styles.marketFilterCompact}>
+            <Text style={styles.marketFilterLine} numberOfLines={1}>
+              Harita önerisi · {marketFilterLine}
+            </Text>
+            <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
+              <Text style={styles.marketFilterClear}>Temizle</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </>
+    );
+  }, [
+    activeSegment,
+    runningDeliveries,
+    marketContractFilter,
+    marketFilterLine,
+    marketMatchStats.exactMatchesCount,
+    marketMatchStats.relatedMatchesCount,
+    handleClearMarketFilter,
+  ]);
+
+  const listEmpty = useMemo(() => {
+    if (activeSegment === 'available') {
+      if (availableContracts.length === 0) {
+        return (
+          <EmptyState
+            title="Şu anda piyasada sözleşme yok."
+            message="Piyasa yeni fırsatlar oluşturdukça burada görünecek."
+            icon="contract"
+          />
+        );
+      }
+      if (filteredContracts.length === 0) {
+        return (
+          <EmptyState
+            title="Bu filtreye uygun sözleşme yok."
+            message={
+              hasActiveMarketFilter
+                ? 'Filtreyi temizleyerek tüm müsait sözleşmeleri görebilirsin.'
+                : 'Farklı bir filtre seçerek veya piyasanın yenilenmesini bekleyerek tekrar dene.'
+            }
+            icon="contract"
+          />
+        );
+      }
+      return null;
+    }
+
+    if (activeSegment === 'active') {
+      return (
+        <EmptyState
+          title="Şu anda aktif teslimat yok."
+          message="Yeni bir sözleşme başlattığında rotalar burada görünecek."
+          icon="truck"
+        />
+      );
+    }
+
+    return (
+      <EmptyState
+        title="Henüz tamamlanan sözleşme yok."
+        message="Tamamlanan işler burada listelenecek."
+        icon="success"
+      />
+    );
+  }, [
+    activeSegment,
+    availableContracts.length,
+    filteredContracts.length,
+    hasActiveMarketFilter,
+  ]);
+
   return (
     <View style={styles.screenRoot}>
       <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
@@ -1115,131 +1297,23 @@ export default function ContractsScreen() {
           onChange={setActiveSegment}
         />
 
-        <ScrollView
+        <FlatList
           ref={scrollRef}
+          data={listItems}
+          keyExtractor={(item) => item.key}
+          renderItem={renderContractListItem}
+          ListHeaderComponent={listHeader}
+          ListEmptyComponent={listEmpty}
           style={styles.listScroll}
           contentContainerStyle={[
             styles.listScrollContent,
             { paddingBottom: scrollBottomPadding },
           ]}
           showsVerticalScrollIndicator={false}
-        >
-          {activeSegment === 'available' ? (
-            <>
-              <NextRouteHintCard deliveries={runningDeliveries} />
-
-              {isMarketOpportunityFilter(marketContractFilter) ? (
-                <MarketFilterInfoCard
-                  routeLine={marketFilterLine}
-                  exactCount={marketMatchStats.exactMatchesCount}
-                  relatedCount={marketMatchStats.relatedMatchesCount}
-                  onClear={handleClearMarketFilter}
-                />
-              ) : isRouteContractFilter(marketContractFilter) ? (
-                <View style={styles.marketFilterCompact}>
-                  <Text style={styles.marketFilterLine} numberOfLines={1}>
-                    Harita önerisi · {marketFilterLine}
-                  </Text>
-                  <TouchableOpacity onPress={handleClearMarketFilter} activeOpacity={0.85}>
-                    <Text style={styles.marketFilterClear}>Temizle</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-
-              {availableContracts.length === 0 ? (
-                <EmptyState
-                  title="Şu anda piyasada sözleşme yok."
-                  message="Piyasa yeni fırsatlar oluşturdukça burada görünecek."
-                  icon="contract"
-                />
-              ) : filteredContracts.length === 0 ? (
-                <EmptyState
-                  title="Bu filtreye uygun sözleşme yok."
-                  message={
-                    hasActiveMarketFilter
-                      ? 'Filtreyi temizleyerek tüm müsait sözleşmeleri görebilirsin.'
-                      : 'Farklı bir filtre seçerek veya piyasanın yenilenmesini bekleyerek tekrar dene.'
-                  }
-                  icon="contract"
-                />
-              ) : (
-                filteredContracts.map((contract) => {
-                  const preview = contractPreviewById.get(contract.id);
-                  if (!preview) {
-                    return null;
-                  }
-
-                  const card = (
-                    <ContractCard
-                      contract={contract}
-                      preview={preview}
-                      playerLevel={player.level ?? player.companyLevel ?? 1}
-                      isPinnedMarketMatch={highlightedContractId === contract.id}
-                      onPress={() => openQuickSheet(contract)}
-                    />
-                  );
-
-                  if (contract.id !== firstTutorialContractId) {
-                    return <React.Fragment key={contract.id}>{card}</React.Fragment>;
-                  }
-
-                  return (
-                    <TutorialTarget
-                      key={contract.id}
-                      id="contract-first-card"
-                      onTutorialPress={() => openQuickSheet(contract)}
-                      scrollIntoView={scrollTutorialContractIntoView}
-                    >
-                      {card}
-                    </TutorialTarget>
-                  );
-                })
-              )}
-            </>
-          ) : null}
-
-          {activeSegment === 'active' ? (
-            runningDeliveries.length === 0 ? (
-              <EmptyState
-                title="Şu anda aktif teslimat yok."
-                message="Yeni bir sözleşme başlattığında rotalar burada görünecek."
-                icon="truck"
-              />
-            ) : (
-              runningDeliveries.map((delivery) => (
-                <ActiveDeliveryCard
-                  key={delivery.id}
-                  delivery={delivery}
-                  trucks={player.trucks ?? []}
-                  drivers={player.drivers ?? []}
-                  currentTime={currentTime}
-                />
-              ))
-            )
-          ) : null}
-
-          {activeSegment === 'completed' ? (
-            completedContracts.length === 0 ? (
-              <EmptyState
-                title="Henüz tamamlanan sözleşme yok."
-                message="Tamamlanan işler burada listelenecek."
-                icon="success"
-              />
-            ) : (
-              completedContracts.map((contract) => {
-                const linkedDelivery = findDeliveryForContract(contract.id, activeDeliveries);
-                return (
-                  <CompletedContractCard
-                    key={contract.id}
-                    contract={contract}
-                    netProfit={linkedDelivery?.estimatedProfit}
-                    fallbackPreview={completedPreviewById.get(contract.id)}
-                  />
-                );
-              })
-            )
-          ) : null}
-        </ScrollView>
+          initialNumToRender={8}
+          maxToRenderPerBatch={12}
+          windowSize={8}
+        />
       </View>
 
       <ContractQuickActionSheet
@@ -1762,12 +1836,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
-    maxWidth: 160,
+    maxWidth: '48%',
     flexShrink: 1,
+    minWidth: 0,
   },
   miniBadgeCompact: {
     maxWidth: 160,

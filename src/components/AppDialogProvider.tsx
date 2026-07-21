@@ -19,6 +19,12 @@ import AppDialog, {
 
 export type { AppDialogDetailRow, AppDialogVariant };
 
+export interface AppDialogAction {
+  label: string;
+  onPress: () => void;
+  variant?: 'primary' | 'secondary' | 'destructive';
+}
+
 export interface AppDialogOptions {
   title: string;
   message?: string;
@@ -28,6 +34,8 @@ export interface AppDialogOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  /** Üç veya daha fazla seçenek için dikey buton listesi */
+  actions?: AppDialogAction[];
   onConfirm?: () => void;
   onCancel?: () => void;
 }
@@ -113,6 +121,7 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
         confirmLabel: options.confirmLabel ?? 'Tamam',
         cancelLabel: options.cancelLabel,
         destructive: options.destructive ?? false,
+        actions: options.actions,
         onConfirm: options.onConfirm,
         onCancel: options.onCancel,
         onDismiss: hideDialog,

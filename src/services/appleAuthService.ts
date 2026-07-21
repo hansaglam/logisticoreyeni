@@ -50,6 +50,32 @@ export type AppleCredentialResult =
   | { ok: false; error: string };
 
 export async function createAppleFirebaseCredential(): Promise<AppleCredentialResult> {
+  return requestAppleFirebaseCredential();
+}
+
+/**
+ * Misafir hesabı Apple'a bağlamak için credential üretir (linkWithCredential).
+ */
+export async function linkWithAppleAccount(): Promise<AppleCredentialResult> {
+  return requestAppleFirebaseCredential();
+}
+
+/**
+ * Mevcut Apple hesabına giriş için credential üretir (signInWithCredential).
+ * Apple authorization tek kullanımlık olabileceğinden çakışma geçişinde yeniden çağrılır.
+ */
+export async function signInWithAppleAccount(): Promise<AppleCredentialResult> {
+  return requestAppleFirebaseCredential();
+}
+
+/**
+ * Apple oturumunu sıfırlar — native tarafta kalıcı session yok; no-op.
+ */
+export async function clearAppleSignInSession(): Promise<void> {
+  // Apple Sign-In her signInAsync çağrısında kullanıcıyı yeniden doğrular.
+}
+
+async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> {
   if (Platform.OS !== 'ios') {
     return { ok: false, error: 'apple-not-supported' };
   }

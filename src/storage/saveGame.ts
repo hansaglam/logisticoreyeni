@@ -7,6 +7,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { reputationBalance } from '../config/balance';
 import { CITIES } from '../data/cities';
 import { normalizeDriver, STARTER_DRIVER } from '../data/drivers';
 import { PRODUCTS } from '../data/products';
@@ -308,7 +309,10 @@ export function createDefaultSaveFallbacks(
     xpToNextLevel: safeNumber(playerRecord.xpToNextLevel, calculateXpToNextLevel(level)),
     totalXp: safeNumber(playerRecord.totalXp, xp),
     homeCityId,
-    reputation: safeNumber(playerRecord.reputation, 50),
+    reputation: Math.max(
+      reputationBalance.min,
+      Math.min(reputationBalance.max, safeNumber(playerRecord.reputation, reputationBalance.initial)),
+    ),
     completedContracts: safeNumber(playerRecord.completedContracts, 0),
     failedDeliveries: safeNumber(playerRecord.failedDeliveries, 0),
     lateDeliveries: safeNumber(playerRecord.lateDeliveries, 0),

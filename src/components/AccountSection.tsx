@@ -12,6 +12,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import type { AuthCredential } from 'firebase/auth';
 
 import { useAppDialog } from './AppDialogProvider';
 import { ActionButton, AppCard, SectionTitle, StatusBadge } from './ui';
@@ -20,13 +21,16 @@ import {
   getAccountStatus,
   linkAnonymousAccountWithApple,
   linkAnonymousAccountWithGoogle,
+  retryProviderAccountLink,
   subscribeAuthState,
+  switchToLinkedProviderAccount,
   type AccountStatus,
 } from '../services/authService';
 import {
   configureGoogleSignIn,
   isGoogleSignInConfigured,
 } from '../services/googleAuthService';
+import { isAppleSignInAvailable } from '../services/appleAuthService';
 import { useGameStore } from '../store/gameStore';
 import {
   checkCloudSaveMeta,
@@ -40,6 +44,13 @@ import {
   getAccountDeletionErrorMessage,
   type AccountDeletionErrorCode,
 } from '../utils/accountDeletion';
+import {
+  getAccountLinkConflictFooter,
+  getAccountLinkConflictMessage,
+  getAccountLinkConflictTitle,
+  getAccountLinkGeneralErrorMessage,
+  isAccountLinkConflictError,
+} from '../utils/accountLinkErrors';
 import { colors, spacing, typography } from '../theme';
 
 function getStatusBadgeVariant(
@@ -62,8 +73,8 @@ function linkErrorMessage(error: string | undefined): string | null {
   if (!error || error === 'cancelled') {
     return null;
   }
-  if (error === 'credential-already-in-use') {
-    return 'Bu hesap başka bir oyun kaydına bağlı. Kayıt birleştirme sonraki sürümde desteklenecek.';
+  if (isAccountLinkConflictError(error)) {
+    return null;
   }
   if (error === 'config-missing') {
     return Platform.OS === 'ios'
@@ -82,7 +93,7 @@ function linkErrorMessage(error: string | undefined): string | null {
   if (error === 'not-implemented') {
     return 'Hesap bağlama henüz hazır değil.';
   }
-  return 'Hesap bağlanamadı. Lütfen tekrar dene.';
+  return getAccountLinkGeneralErrorMessage();
 }
 
 function DeveloperCloudStatus({
@@ -141,6 +152,7 @@ export default function AccountSection() {
   const [isLinking, setIsLinking] = useState<'google' | 'apple' | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(() => isGoogleSignInConfigured());
+  const [appleAvailable, setAppleAvailable] = useState(false);
   const deleteAccountAndCloudData = useGameStore((state) => state.deleteAccountAndCloudData);
 
   const safeAccountStatus = account ?? DEFAULT_ACCOUNT_STATUS;
@@ -171,6 +183,24 @@ export default function AccountSection() {
       unsubAuth();
     };
   }, [refreshAccount]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') {
+      setAppleAvailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    void isAppleSignInAvailable().then((available) => {
+      if (!cancelled) {
+        setAppleAvailable(available);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!__DEV__) {
@@ -233,13 +263,157 @@ export default function AccountSection() {
         return;
       }
 
+      if (
+        isAccountLinkConflictError(result.error, result.errorKind) &&
+        result.pendingCredential
+      ) {
+        showAccountConflictDialog(provider, result.pendingCredential);
+        return;
+      }
+
       const message = linkErrorMessage(result.error);
       if (message) {
         showAlert('Hesap Bağlanamadı', message);
       }
     } catch (error) {
       console.warn('[account] link failed', error);
-      showAlert('Hesap Bağlanamadı', 'Hesap bağlanamadı. Lütfen tekrar dene.');
+      showAlert('Hesap Bağlanamadı', getAccountLinkGeneralErrorMessage());
+    } finally {
+      setIsLinking(null);
+    }
+  };
+
+  const handleSwitchToProviderAccount = async (
+    provider: 'google' | 'apple',
+    pendingCredential: AuthCredential,
+  ) => {
+    if (isLinking) {
+      return;
+    }
+
+    setIsLinking(provider);
+    try {
+      const result = await switchToLinkedProviderAccount(pendingCredential, provider);
+      refreshAccount();
+      refreshCloudStatus();
+
+      if (result.ok) {
+        const providerLabel = provider === 'google' ? 'Google' : 'Apple';
+        showAlert(`${providerLabel} kaydına geçildi`, 'Hesabına bağlı oyun kaydı yüklendi.');
+        return;
+      }
+
+      if (result.revertedToGuest) {
+        if (result.error === 'no-cloud-save') {
+          showAlert(
+            'Kayıt bulunamadı',
+            'Bu hesapta yüklenecek bulut kaydı bulunamadı. Misafir kaydınla devam ediyorsun.',
+          );
+        } else if (result.error === 'cancelled') {
+          showAlert(
+            'Geçiş iptal edildi',
+            'Apple girişi tamamlanmadı. Misafir kaydınla devam ediyorsun.',
+          );
+        } else {
+          showAlert(
+            'Geçiş başarısız',
+            'Hesap kaydına geçilemedi. Misafir kaydınla devam ediyorsun.',
+          );
+        }
+        return;
+      }
+
+      showAlert('Geçiş başarısız', getAccountLinkGeneralErrorMessage());
+    } catch (error) {
+      console.warn('[account] switch to linked account failed', error);
+      showAlert('Geçiş başarısız', getAccountLinkGeneralErrorMessage());
+    } finally {
+      setIsLinking(null);
+    }
+  };
+
+  const showSwitchConfirmDialog = (
+    provider: 'google' | 'apple',
+    pendingCredential: AuthCredential,
+  ) => {
+    const providerLabel = provider === 'google' ? 'Google' : 'Apple';
+    showDialog({
+      title: `${providerLabel} kaydına geçilsin mi?`,
+      message: `Mevcut misafir kaydın bu hesapla birleştirilmeyecek. ${providerLabel} hesabına bağlı kayıt yüklenecek.`,
+      footerNote: 'Onay vermeden mevcut misafir kaydın silinmez veya üzerine yazılmaz.',
+      variant: 'danger',
+      cancelLabel: 'Vazgeç',
+      confirmLabel: `${providerLabel} Kaydına Geç`,
+      destructive: true,
+      onConfirm: () => {
+        void handleSwitchToProviderAccount(provider, pendingCredential);
+      },
+    });
+  };
+
+  const showAccountConflictDialog = (
+    provider: 'google' | 'apple',
+    pendingCredential: AuthCredential,
+  ) => {
+    const switchLabel = provider === 'google' ? 'Google Kaydına Geç' : 'Apple Kaydına Geç';
+    showDialog({
+      title: getAccountLinkConflictTitle(provider),
+      message: getAccountLinkConflictMessage(provider),
+      footerNote: getAccountLinkConflictFooter(provider),
+      variant: 'warning',
+      actions: [
+        {
+          label: switchLabel,
+          variant: 'primary',
+          onPress: () => showSwitchConfirmDialog(provider, pendingCredential),
+        },
+        {
+          label: 'Misafir Kaydıyla Devam Et',
+          variant: 'secondary',
+          onPress: () => {},
+        },
+        {
+          label: 'Farklı Hesap Dene',
+          variant: 'secondary',
+          onPress: () => {
+            void handleRetryLink(provider);
+          },
+        },
+      ],
+    });
+  };
+
+  const handleRetryLink = async (provider: 'google' | 'apple') => {
+    if (isLinking) {
+      return;
+    }
+
+    setIsLinking(provider);
+    try {
+      const result = await retryProviderAccountLink(provider);
+      refreshAccount();
+      refreshCloudStatus();
+
+      if (result.ok) {
+        showAlert('Hesap bağlandı', 'İlerlemen artık hesabınla korunuyor.');
+        return;
+      }
+
+      if (
+        isAccountLinkConflictError(result.error, result.errorKind) &&
+        result.pendingCredential
+      ) {
+        showAccountConflictDialog(provider, result.pendingCredential);
+        return;
+      }
+
+      const message = linkErrorMessage(result.error);
+      if (message) {
+        showAlert('Hesap Bağlanamadı', message);
+      }
+    } catch (error) {
+      console.warn('[account] retry link failed', error);
+      showAlert('Hesap Bağlanamadı', getAccountLinkGeneralErrorMessage());
     } finally {
       setIsLinking(null);
     }
@@ -295,7 +469,7 @@ export default function AccountSection() {
 
   const isGuest =
     safeAccountStatus.isAnonymous || safeAccountStatus.provider === 'guest';
-  const showApple = Platform.OS === 'ios';
+  const showApple = Platform.OS === 'ios' && appleAvailable;
   const showGoogle = Platform.OS === 'ios' || Platform.OS === 'android';
 
   const linkedTitle =

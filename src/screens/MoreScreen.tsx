@@ -29,11 +29,12 @@ import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import DebugSimulationScreen from './DebugSimulationScreen';
 import FinanceScreen from './FinanceScreen';
+import LeaderboardScreen from './LeaderboardScreen';
 import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
 import AccountSection from '../components/AccountSection';
 
-type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions';
+type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions' | 'leaderboard';
 
 interface ModuleItem {
   key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
@@ -44,7 +45,6 @@ interface ModuleItem {
   placeholder?: boolean;
 }
 
-// TODO: Hide Debug Simulation in production builds.
 const MODULE_ITEMS: ModuleItem[] = [
   {
     key: 'finance',
@@ -65,20 +65,18 @@ const MODULE_ITEMS: ModuleItem[] = [
     icon: 'contract',
   },
   {
+    key: 'leaderboard',
+    label: 'Liderlik Tablosu',
+    subtitle: 'Haftalık şirket puanı sıralaması',
+    icon: 'company',
+  },
+  {
     key: 'stats',
     label: 'Şirket İstatistikleri',
     subtitle: 'Performans ve kariyer özetini incele',
     icon: 'profit',
     placeholder: true,
     badge: { label: 'Yakında', variant: 'muted' },
-  },
-  {
-    key: 'leaderboard',
-    label: 'Liderlik Tablosu',
-    subtitle: 'Haftalık sıralama yakında.',
-    icon: 'company',
-    placeholder: true,
-    badge: { label: 'Yakında', variant: 'info' },
   },
   {
     key: 'upgrades',
@@ -89,13 +87,6 @@ const MODULE_ITEMS: ModuleItem[] = [
     badge: { label: 'Yakında', variant: 'muted' },
   },
   {
-    key: 'debug',
-    label: 'Simülasyon Testi',
-    subtitle: 'Internal test araçları',
-    icon: 'maintenance',
-    badge: { label: 'DEBUG', variant: 'amber' },
-  },
-  {
     key: 'settings',
     label: 'Ayarlar',
     subtitle: 'Oyun tercihleri ve bildirimler',
@@ -103,13 +94,26 @@ const MODULE_ITEMS: ModuleItem[] = [
     placeholder: true,
     badge: { label: 'Yakında', variant: 'muted' },
   },
+  {
+    key: 'debug',
+    label: 'Simülasyon Testi',
+    subtitle: 'Internal test araçları',
+    icon: 'maintenance',
+    badge: { label: 'DEBUG', variant: 'amber' },
+  },
 ];
 
 const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
 
-const VISIBLE_MODULE_ITEMS = __DEV__
-  ? MODULE_ITEMS
-  : MODULE_ITEMS.filter((item) => item.key !== 'debug');
+const VISIBLE_MODULE_ITEMS = MODULE_ITEMS.filter((item) => {
+  if (item.key === 'debug') {
+    return __DEV__;
+  }
+  if (item.placeholder) {
+    return __DEV__;
+  }
+  return true;
+});
 
 function getCityName(cityId: string | undefined): string {
   if (!cityId) return 'Bilinmeyen şehir';
@@ -145,7 +149,7 @@ function CompanyProfileCard({
             {companyName}
           </Text>
           <Text style={styles.profileMeta} numberOfLines={1}>
-            Level {level} · İtibar {safeReputation}/100
+            Seviye {level} · İtibar {safeReputation}/100
           </Text>
           <Text style={styles.profileMeta} numberOfLines={1}>
             {driverCount} şoför · {truckCount} kamyon · Merkez: {homeCityName}
@@ -179,7 +183,7 @@ function CompanyGrowthCard({
 
       <View style={styles.growthStats}>
         <View style={styles.growthStatItem}>
-          <Text style={styles.growthStatLabel}>Level</Text>
+          <Text style={styles.growthStatLabel}>Seviye</Text>
           <Text style={styles.growthStatValue}>{level}</Text>
         </View>
         <View style={styles.growthStatItem}>
@@ -259,6 +263,14 @@ export default function MoreScreen() {
     );
   }
 
+  if (route === 'leaderboard') {
+    return (
+      <View style={styles.embeddedRoot}>
+        <LeaderboardScreen onBack={() => setRoute('menu')} />
+      </View>
+    );
+  }
+
   if (route === 'debug' && __DEV__) {
     return (
       <View style={styles.embeddedRoot}>
@@ -282,7 +294,7 @@ export default function MoreScreen() {
     <AppScreen scroll>
       <ScreenHeader
         title="Şirket"
-        subtitle="Şirketini, finansını ve yönetim araçlarını kontrol et"
+        subtitle="Şirket özeti, gelişim ve yönetim modülleri"
         titleIcon="company"
         compact
       />

@@ -7,10 +7,10 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "android": {
-      "package": "com.anonymous.logisticore"
+      "package": "com.ethemsincar.logisticore"
     },
     "ios": {
-      "bundleIdentifier": "com.anonymous.logisticore"
+      "bundleIdentifier": "com.ethemsincar.logisticore"
     },
     "plugins": [
       "expo-notifications"

@@ -405,6 +405,24 @@ export const financeBalance = {
   reputationValuePerPoint: 100,
 } as const;
 
+/**
+ * İtibar puanı — teslimat sonuçlarına göre kazanım/kayıp.
+ * Zamanında teslimat itibar kazandırır; geç teslimat para cezası yer ama
+ * itibar kazandırmaz; başarısız teslimat itibar kaybettirir.
+ */
+export const reputationBalance = {
+  /** Yeni oyunda başlangıç itibarı */
+  initial: 50,
+  /** Zamanında tamamlanan teslimat kazancı */
+  onTimeDeliveryGain: 2,
+  /** Başarısız teslimat kaybı */
+  failedDeliveryLoss: 5,
+  /** Alt sınır */
+  min: 0,
+  /** Üst sınır */
+  max: 100,
+} as const;
+
 /** Şirket puanı (Company Score) — haftalık leaderboard sıralaması için */
 export const companyScoreBalance = {
   truckValueWeight: 0.85,

@@ -28,11 +28,13 @@ module.exports = () => {
     },
     android: {
       ...(expo.android ?? {}),
-      package: 'com.anonymous.logisticore',
+      package: 'com.ethemsincar.logisticore',
       googleServicesFile: './google-services.json',
     },
     ios: {
       ...(expo.ios ?? {}),
+      bundleIdentifier: 'com.ethemsincar.logisticore',
+      googleServicesFile: './GoogleService-Info.plist',
       // Apple Sign-In entitlement (expo-apple-authentication)
       usesAppleSignIn: true,
     },
@@ -49,7 +51,13 @@ module.exports = () => {
       ],
       'expo-apple-authentication',
       // Native Google Sign-In — Expo Go'da çalışmayabilir; development build gerekir.
-      '@react-native-google-signin/google-signin',
+      // iosUrlScheme: GoogleService-Info.plist REVERSED_CLIENT_ID değeri.
+      [
+        '@react-native-google-signin/google-signin',
+        {
+          iosUrlScheme: 'com.googleusercontent.apps.363783837598-tvbeuhmirctkrpdam51lsqm5uj8nac3l',
+        },
+      ],
     ],
     extra: {
       ...(expo.extra ?? {}),

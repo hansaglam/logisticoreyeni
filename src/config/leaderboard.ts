@@ -1,13 +1,12 @@
 /**
- * Haftalık leaderboard ödül yapılandırması.
+ * Haftalık leaderboard yapılandırması (V1).
  *
- * TODO: Weekly leaderboard and diamond reward distribution will be handled by
- * Firebase backend / Cloud Functions.
+ * Ödül dağıtımı sonraki fazda Cloud Functions ile yapılacak.
  */
 
 export const leaderboardConfig = {
   seasonType: 'weekly' as const,
-  leaderboardSize: 10,
+  leaderboardSize: 50,
   rewardRanks: [1, 2, 3] as const,
   rewards: {
     1: { diamonds: 300 },

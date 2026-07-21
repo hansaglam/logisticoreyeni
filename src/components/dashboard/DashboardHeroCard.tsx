@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { GameIcon, ProgressBar } from '../ui';
 import { formatCompanyScore } from '../../simulation/companyScore';
-import { colors, formatGameTimeCompact, formatMoney, radius, spacing, typography } from '../../theme';
+import { colors, formatGameTimeCompact, formatMoney, formatUnitPrice, radius, spacing, typography } from '../../theme';
 
 interface DashboardHeroCardProps {
   companyName: string;
@@ -95,7 +95,9 @@ export default function DashboardHeroCard({
         </View>
         <View style={styles.fuelPill}>
           <GameIcon name="fuel" size={11} color={colors.textMuted} />
-          <Text style={styles.fuelText}>Yakıt {fuelPrice.toFixed(2)} ₺/L</Text>
+          <Text style={styles.fuelText} numberOfLines={1}>
+            Yakıt fiyatı {formatUnitPrice(fuelPrice, '/L')}
+          </Text>
         </View>
       </View>
 

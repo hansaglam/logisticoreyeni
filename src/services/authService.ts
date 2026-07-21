@@ -25,16 +25,19 @@ import {
   linkWithCredential,
   onAuthStateChanged,
   signInAnonymously,
+  signInWithCredential,
+  signOut,
   deleteUser,
   type AuthCredential,
   type User,
 } from 'firebase/auth';
 import { Platform } from 'react-native';
 
-import { markUserProviderLinked } from './cloudSaveService';
+import { loadGameFromCloud, markUserProviderLinked } from './cloudSaveService';
 import { getFirebaseAuthSafe, resetFirebaseAuthCache } from './firebase';
-import { createGoogleFirebaseCredential } from './googleAuthService';
+import { clearGoogleSignInSession, createGoogleFirebaseCredential } from './googleAuthService';
 import { devLog, devWarn } from '../utils/devLog';
+import type { AccountLinkErrorKind } from '../utils/accountLinkErrors';
 
 export type AccountProvider = 'guest' | 'google' | 'apple' | 'unknown';
 
@@ -55,8 +58,14 @@ export const DEFAULT_ACCOUNT_STATUS: AccountStatus = {
 export interface AccountLinkResult {
   ok: boolean;
   error?: string;
+  errorKind?: AccountLinkErrorKind;
   provider?: 'google' | 'apple';
+  pendingCredential?: AuthCredential;
 }
+
+export type AccountSwitchResult =
+  | { ok: true }
+  | { ok: false; error: string; revertedToGuest?: boolean };
 
 type AuthStateCallback = (user: User | null) => void;
 
@@ -93,7 +102,107 @@ function logRestoredUser(user: User): void {
   }
 }
 
+function mapLinkErrorKind(error: unknown): AccountLinkErrorKind {
+  if (!error || typeof error !== 'object') {
+    return 'general';
+  }
+
+  const code =
+    'code' in error && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : null;
+  const message =
+    'message' in error && typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : error instanceof Error
+        ? error.message
+        : '';
+
+  if (
+    code === 'auth/credential-already-in-use' ||
+    code === 'auth/email-already-in-use' ||
+    message.includes('credential-already-in-use') ||
+    message.includes('email-already-in-use')
+  ) {
+    return 'credential-already-in-use';
+  }
+
+  if (
+    code === 'auth/account-exists-with-different-credential' ||
+    message.includes('account-exists-with-different-credential')
+  ) {
+    return 'account-exists-with-different-credential';
+  }
+
+  if (code === 'auth/cancelled-popup-request' || code === 'auth/popup-closed-by-user') {
+    return 'cancelled';
+  }
+
+  return 'general';
+}
+
+function getAuthErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+  return 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : null;
+}
+
+function isAppleCredentialReuseError(error: unknown): boolean {
+  const code = getAuthErrorCode(error);
+  return (
+    code === 'auth/invalid-credential' ||
+    code === 'auth/user-token-expired' ||
+    code === 'auth/invalid-custom-token'
+  );
+}
+
+async function signInWithProviderCredential(
+  credential: AuthCredential,
+  provider: 'google' | 'apple',
+): Promise<User> {
+  const auth = getFirebaseAuthSafe();
+  if (!auth) {
+    throw new Error('auth-unavailable');
+  }
+
+  try {
+    const result = await signInWithCredential(auth, credential);
+    return result.user;
+  } catch (error) {
+    if (provider !== 'apple' || !isAppleCredentialReuseError(error)) {
+      throw error;
+    }
+
+    if (__DEV__) {
+      devWarn('[auth] Apple pending credential invalid — requesting fresh sign-in');
+    }
+
+    const { signInWithAppleAccount } = await import('./appleAuthService');
+    const freshResult = await signInWithAppleAccount();
+    if (!freshResult.ok) {
+      throw new Error(freshResult.error);
+    }
+
+    const retryResult = await signInWithCredential(auth, freshResult.credential);
+    return retryResult.user;
+  }
+}
+
 function mapLinkError(error: unknown): string {
+  const kind = mapLinkErrorKind(error);
+  if (kind === 'credential-already-in-use') {
+    return 'credential-already-in-use';
+  }
+  if (kind === 'account-exists-with-different-credential') {
+    return 'account-exists-with-different-credential';
+  }
+  if (kind === 'cancelled') {
+    return 'cancelled';
+  }
+
   if (!error || typeof error !== 'object') {
     return error instanceof Error ? error.message : 'link-failed';
   }
@@ -108,18 +217,6 @@ function mapLinkError(error: unknown): string {
       : error instanceof Error
         ? error.message
         : 'link-failed';
-
-  if (
-    code === 'auth/credential-already-in-use' ||
-    code === 'auth/email-already-in-use' ||
-    message.includes('credential-already-in-use')
-  ) {
-    return 'credential-already-in-use';
-  }
-
-  if (code === 'auth/cancelled-popup-request' || code === 'auth/popup-closed-by-user') {
-    return 'cancelled';
-  }
 
   return code ?? message;
 }
@@ -175,15 +272,18 @@ async function ensureAuthenticatedUser(): Promise<User | null> {
 
 async function applyCredentialToCurrentUser(
   credential: AuthCredential,
-): Promise<{ ok: true; user: User } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; user: User }
+  | { ok: false; error: string; errorKind?: AccountLinkErrorKind; pendingCredential?: AuthCredential }
+> {
   const auth = getFirebaseAuthSafe();
   if (!auth) {
-    return { ok: false, error: 'auth-unavailable' };
+    return { ok: false, error: 'auth-unavailable', errorKind: 'general' };
   }
 
   const currentUser = await ensureAuthenticatedUser();
   if (!currentUser) {
-    return { ok: false, error: 'no-current-user' };
+    return { ok: false, error: 'no-current-user', errorKind: 'general' };
   }
 
   try {
@@ -193,10 +293,37 @@ async function applyCredentialToCurrentUser(
     }
 
     // Misafir değilse oturum değiştirme — V1 güvenli davranış
-    return { ok: false, error: 'already-linked' };
+    return { ok: false, error: 'already-linked', errorKind: 'general' };
   } catch (error) {
-    return { ok: false, error: mapLinkError(error) };
+    const errorKind = mapLinkErrorKind(error);
+    const mapped = mapLinkError(error);
+    if (
+      errorKind === 'credential-already-in-use' ||
+      errorKind === 'account-exists-with-different-credential'
+    ) {
+      return { ok: false, error: mapped, errorKind, pendingCredential: credential };
+    }
+    return { ok: false, error: mapped, errorKind };
   }
+}
+
+async function restoreGuestAnonymousSession(): Promise<void> {
+  const auth = getFirebaseAuthSafe();
+  if (auth) {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('[auth] signOut during guest restore failed', error);
+      }
+    }
+  }
+
+  initPromise = null;
+  initialAuthStatePromise = null;
+  authSessionReady = false;
+  resetFirebaseAuthCache();
+  await initAnonymousAuth();
 }
 
 async function finalizeAccountLink(
@@ -365,7 +492,12 @@ export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResul
     const uidBefore = getCurrentUserId();
     const linkResult = await applyCredentialToCurrentUser(googleResult.credential);
     if (!linkResult.ok) {
-      return { ok: false, error: linkResult.error };
+      return {
+        ok: false,
+        error: linkResult.error,
+        errorKind: linkResult.errorKind,
+        pendingCredential: linkResult.pendingCredential,
+      };
     }
 
     const uidAfter = linkResult.user.uid;
@@ -380,7 +512,7 @@ export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResul
   } catch (error) {
     const mapped = mapLinkError(error);
     console.warn('[auth] linkAnonymousAccountWithGoogle failed', mapped);
-    return { ok: false, error: mapped };
+    return { ok: false, error: mapped, errorKind: mapLinkErrorKind(error) };
   }
 }
 
@@ -394,15 +526,21 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
   }
 
   try {
-    const { createAppleFirebaseCredential } = await import('./appleAuthService');
-    const appleResult = await createAppleFirebaseCredential();
+    const { linkWithAppleAccount } = await import('./appleAuthService');
+    const appleResult = await linkWithAppleAccount();
     if (!appleResult.ok) {
       return { ok: false, error: appleResult.error };
     }
 
     const linkResult = await applyCredentialToCurrentUser(appleResult.credential);
     if (!linkResult.ok) {
-      return { ok: false, error: linkResult.error };
+      return {
+        ok: false,
+        error: linkResult.error,
+        errorKind: linkResult.errorKind,
+        pendingCredential: linkResult.pendingCredential,
+        provider: 'apple',
+      };
     }
 
     await finalizeAccountLink('apple', linkResult.user);
@@ -411,8 +549,85 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
   } catch (error) {
     const mapped = mapLinkError(error);
     console.warn('[auth] linkAnonymousAccountWithApple failed', mapped);
-    return { ok: false, error: mapped };
+    return { ok: false, error: mapped, errorKind: mapLinkErrorKind(error), provider: 'apple' };
   }
+}
+
+/**
+ * Misafir kaydı birleştirmeden mevcut Google/Apple hesabına geçiş.
+ * Onay sonrası çağrılır; bulut kaydı yoksa misafir oturumuna geri döner.
+ */
+export async function switchToLinkedProviderAccount(
+  credential: AuthCredential,
+  provider: 'google' | 'apple',
+): Promise<AccountSwitchResult> {
+  const auth = getFirebaseAuthSafe();
+  if (!auth) {
+    return { ok: false, error: 'auth-unavailable' };
+  }
+
+  try {
+    const user = await signInWithProviderCredential(credential, provider);
+    initPromise = Promise.resolve(user);
+    authSessionReady = true;
+
+    if (__DEV__) {
+      devLog('[auth] switched to linked account', user.uid, provider);
+    }
+
+    const cloudPayload = await loadGameFromCloud(user.uid);
+    if (!cloudPayload?.gameState) {
+      await restoreGuestAnonymousSession();
+      return { ok: false, error: 'no-cloud-save', revertedToGuest: true };
+    }
+
+    const { payloadToStoreState, saveGameState } = await import('../storage/saveGame');
+    const { useGameStore } = await import('../store/gameStore');
+    const restoredState = payloadToStoreState(cloudPayload.gameState);
+    const saved = await saveGameState(restoredState);
+    if (!saved) {
+      await restoreGuestAnonymousSession();
+      return { ok: false, error: 'local-save-failed', revertedToGuest: true };
+    }
+
+    const loaded = await useGameStore.getState().loadGame();
+    if (!loaded) {
+      await restoreGuestAnonymousSession();
+      return { ok: false, error: 'load-failed', revertedToGuest: true };
+    }
+
+    try {
+      await markUserProviderLinked(user.uid, provider);
+    } catch (error) {
+      console.warn('[auth] markUserProviderLinked after account switch failed', error);
+    }
+
+    try {
+      const { initCloudSaveSync } = await import('../storage/cloudSaveSync');
+      await initCloudSaveSync(() => useGameStore.getState());
+    } catch (error) {
+      console.warn('[auth] cloud sync refresh after account switch failed', error);
+    }
+
+    return { ok: true };
+  } catch (error) {
+    const mapped = mapLinkError(error);
+    console.warn('[auth] switchToLinkedProviderAccount failed', mapped);
+    await restoreGuestAnonymousSession();
+    return { ok: false, error: mapped, revertedToGuest: true };
+  }
+}
+
+export async function retryProviderAccountLink(
+  provider: 'google' | 'apple',
+): Promise<AccountLinkResult> {
+  if (provider === 'google') {
+    await clearGoogleSignInSession();
+    return linkAnonymousAccountWithGoogle();
+  }
+  const { clearAppleSignInSession } = await import('./appleAuthService');
+  await clearAppleSignInSession();
+  return linkAnonymousAccountWithApple();
 }
 
 export async function deleteCurrentFirebaseUser(): Promise<void> {

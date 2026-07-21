@@ -12,6 +12,7 @@ import {
   updateUserProfileSummary,
   type CloudSaveMeta,
 } from '../services/cloudSaveService';
+import { syncLeaderboardEntry } from '../services/leaderboardService';
 import { isFirebaseEnabled } from '../services/firebase';
 import { SAVE_GAME_VERSION, serializeGameState, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
@@ -272,6 +273,7 @@ export async function syncLocalSaveToCloud(
 
     lastCloudSyncAt = Date.now();
     setCloudSaveStatus('success');
+    void syncLeaderboardFromGameState(options.state);
     if (__DEV__) {
       console.log('[cloud-save] sync success');
     }
@@ -394,4 +396,21 @@ export function getCloudSaveStatusSubtitle(status: CloudSaveStatusState): string
 export function buildCloudSaveSummaryForState(state: StoreGameState): CloudSaveSummary {
   const payload = serializeGameState(state);
   return buildCloudSaveSummary(state, payload.meta.savedAt);
+}
+
+async function syncLeaderboardFromGameState(state: StoreGameState): Promise<void> {
+  const uid = getCurrentUserId();
+  if (!uid) {
+    return;
+  }
+
+  const summary = buildCloudSaveSummary(state);
+  await syncLeaderboardEntry({
+    uid,
+    companyName: summary.companyName,
+    companyScore: summary.companyScore,
+    level: summary.level,
+    reputation: state.player?.reputation ?? 0,
+    completedContracts: summary.completedDeliveries,
+  });
 }

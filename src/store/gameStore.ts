@@ -167,7 +167,7 @@ import {
 } from '../utils/warehouseCalculations';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
-import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   cancelMarketAlertNotification,
   getDefaultAlertExpiryTime,
@@ -274,8 +274,8 @@ const MARKET_NEWS_MAX_AGE_HOURS = 72;
 const MARKET_NEWS_MAX_COUNT = 30;
 const EVENT_LOG_MAX_AGE_HOURS = 72;
 const EVENT_LOG_MAX_COUNT = 50;
-const REPUTATION_GAIN = 2;
-const REPUTATION_LOSS = 5;
+const REPUTATION_GAIN = reputationBalance.onTimeDeliveryGain;
+const REPUTATION_LOSS = reputationBalance.failedDeliveryLoss;
 const HIGH_PAYMENT_CONTRACT_THRESHOLD = 8_000;
 const FUEL_PRICE_CHANGE_THRESHOLD = 0.05;
 const MIN_TRUCK_CONDITION_FOR_DELIVERY = 30;
@@ -1035,7 +1035,7 @@ export function createInitialGameState(): StoreGameState {
       xpToNextLevel: calculateXpToNextLevel(1),
       totalXp: 0,
       homeCityId: 'izmir',
-      reputation: 50,
+      reputation: reputationBalance.initial,
       completedContracts: 0,
       failedDeliveries: 0,
       lateDeliveries: 0,
@@ -1103,7 +1103,7 @@ export interface GameStore extends StoreGameState {
   /** Geçici UI bildirimleri — save'e yazılmaz */
   notifications: GameNotification[];
   navigationRequest: NavigationRequest | null;
-  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | null;
+  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | 'leaderboard' | null;
   pendingFleetSubTab: FleetSubTab | null;
   marketContractFilter: MarketContractFilter | null;
   highlightedContractId: string | null;
@@ -3914,6 +3914,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         )
       : 0;
 
+    // Deadline aşıldı ama kritik eşik geçilmedi → teslimat tamamlanır,
+    // para cezası uygulanır, itibar kazanılmaz ve geç teslimat sayılır.
+    const isLateDelivery = actualTravelHours > contract.deadlineHours;
+
     const settlement = calculateDeliverySettlement({
       contractPayment: contract.payment ?? 0,
       fuelCost: delivery.fuelCost ?? 0,
@@ -3972,7 +3976,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
         warehouses: merged.player!.warehouses,
         money: moneyAfterComplete,
         completedContracts: state.player.completedContracts + 1,
-        reputation: Math.min(100, state.player.reputation + REPUTATION_GAIN),
+        lateDeliveries: isLateDelivery
+          ? (state.player.lateDeliveries ?? 0) + 1
+          : (state.player.lateDeliveries ?? 0),
+        reputation: isLateDelivery
+          ? state.player.reputation
+          : Math.min(100, state.player.reputation + REPUTATION_GAIN),
       },
       marketNews: [
         {

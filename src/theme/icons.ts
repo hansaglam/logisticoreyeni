@@ -35,6 +35,7 @@ export const gameIcons = {
   maintenance: 'cog-outline',
   warning: 'alert-circle-outline',
   success: 'check-circle-outline',
+  trophy: 'trophy-outline',
   level: 'shield-star-outline',
   xp: 'star-circle-outline',
   reputation: 'star-outline',

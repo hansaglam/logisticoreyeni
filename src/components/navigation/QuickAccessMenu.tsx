@@ -24,14 +24,16 @@ interface QuickAccessItemDef {
   icon: GameIconName;
 }
 
-const QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = [
-  { key: 'fleet', label: 'Filo', icon: 'truck' },
-  { key: 'warehouse', label: 'Depolar', icon: 'warehouse' },
-  { key: 'finance', label: 'Finans', icon: 'cash' },
-  { key: 'missions', label: 'Görevler', icon: 'contract' },
-  { key: 'settings', label: 'Ayarlar', icon: 'settings' },
-  { key: 'account', label: 'Hesap', icon: 'account' },
-];
+const QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = (
+  [
+    { key: 'fleet', label: 'Filo', icon: 'truck' },
+    { key: 'warehouse', label: 'Depolar', icon: 'warehouse' },
+    { key: 'finance', label: 'Finans', icon: 'cash' },
+    { key: 'missions', label: 'Görevler', icon: 'contract' },
+    { key: 'settings', label: 'Ayarlar', icon: 'settings' },
+    { key: 'account', label: 'Hesap', icon: 'account' },
+  ] as QuickAccessItemDef[]
+).filter((item) => __DEV__ || item.key !== 'settings');
 
 interface QuickAccessMenuProps {
   visible: boolean;
@@ -83,8 +85,8 @@ export default function QuickAccessMenu({
         <View style={[styles.panel, { bottom: bottomOffset }]} pointerEvents="box-none">
           <Pressable onPress={(event) => event.stopPropagation()}>
             <View style={[styles.panelInner, { maxHeight: maxPanelHeight }]}>
-              <Text style={styles.panelTitle}>Hızlı Erişim</Text>
-              <Text style={styles.panelSubtitle}>Şirketini yönet</Text>
+              <Text style={styles.panelTitle}>Yönetim</Text>
+              <Text style={styles.panelSubtitle}>Filo, finans ve şirket araçları</Text>
               <ScrollView
                 style={styles.gridScroll}
                 contentContainerStyle={styles.grid}

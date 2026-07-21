@@ -258,3 +258,22 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
     return { ok: false, error: code ?? message };
   }
 }
+
+export async function clearGoogleSignInSession(): Promise<void> {
+  if (!configureGoogleSignIn()) {
+    return;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { GoogleSignin } = require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin');
+    await GoogleSignin.signOut();
+    if (__DEV__) {
+      devLog('[google-auth] signOut ok — account picker can reopen');
+    }
+  } catch (error) {
+    if (__DEV__) {
+      devWarn('[google-auth] signOut failed', error);
+    }
+  }
+}

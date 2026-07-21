@@ -286,7 +286,7 @@ function MarketMetricStrip({
       contentContainerStyle={[styles.metricStrip, compact && styles.metricStripCompact]}
     >
       <SmallStatPill
-        label="Yakıt"
+        label="Yakıt fiyatı"
         value={formatUnitPrice(fuelPrice, '/L')}
         icon="fuel"
         accentColor={isFuelExpensiveForDisplay(fuelPrice) ? colors.danger : colors.accentAmber}
@@ -399,7 +399,7 @@ function getMarketMood(
   return 'Sakin';
 }
 
-function ProductMarketCard({
+const ProductMarketCard = React.memo(function ProductMarketCard({
   cityId,
   currentTime,
   market,
@@ -578,7 +578,7 @@ function ProductMarketCard({
       {cardFooter}
     </AppCard>
   );
-}
+});
 
 function TradeOpportunityCard({
   opportunity,

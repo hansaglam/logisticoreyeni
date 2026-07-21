@@ -28,6 +28,7 @@ import {
 import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
+import { initializeAdProvider } from './src/services/adProvider';
 import type { ProductId } from './src/types/game';
 import {
   enableImmersiveGameMode,
@@ -173,6 +174,7 @@ export default function App() {
   useEffect(() => {
     void enableImmersiveGameMode();
     const unsubscribeImmersive = subscribeImmersiveModeRefresh();
+    void initializeAdProvider();
     return () => {
       unsubscribeImmersive();
     };

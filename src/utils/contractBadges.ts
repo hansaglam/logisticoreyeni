@@ -157,7 +157,7 @@ export function buildContractCardBadges(params: {
   } else if (urgent) {
     badges.push({
       key: 'urgent',
-      label: 'Acil',
+      label: 'Acil · Ceza yüksek',
       textColor: '#F87171',
       backgroundColor: 'rgba(248, 113, 113, 0.10)',
       borderColor: 'rgba(248, 113, 113, 0.65)',

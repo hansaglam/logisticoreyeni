@@ -41,6 +41,7 @@ import type {
   Warehouse,
   WarehouseType,
 } from '../types/game';
+import type { AdRewardGrantContext, AdRewardSlotId } from '../types/monetization';
 import { resolveNotificationDismissMs } from '../types/game';
 import { CITIES } from '../data/cities';
 import { PRODUCTS } from '../data/products';
@@ -73,6 +74,7 @@ import {
   updateAllCitiesEconomy,
 } from '../simulation/economy';
 import { randomBetween, randomIntBetween } from '../utils/math';
+import { missionsProgressUnchanged, retentionProgressUnchanged } from '../utils/syncStateGuards';
 import {
   expireOldContracts,
   generateContracts,
@@ -168,6 +170,18 @@ import {
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
 import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import {
+  applyAdRewardGrant,
+  calculateDeliveryBoostProgress,
+  calculateDiscountedRepairCost,
+  canGrantAdReward,
+  consumeMaintenanceDiscountToken,
+  createDefaultMonetizationState,
+  getActiveMaintenanceDiscountToken,
+  normalizeMonetizationState,
+  resetDailyUsageIfNeeded,
+} from '../simulation/adRewardGrants';
+import { showRewardedAd } from '../services/adProvider';
 import {
   cancelMarketAlertNotification,
   getDefaultAlertExpiryTime,
@@ -1161,6 +1175,7 @@ export function createInitialGameState(): StoreGameState {
     worldEvents: [],
     worldEventsVersion: 1,
     lastWorldEventGeneratedDay: 0,
+    monetization: createDefaultMonetizationState(),
   };
 }
 
@@ -1237,7 +1252,11 @@ export interface GameStore extends StoreGameState {
   getDeliverySettlementDebug: () => DeliverySettlementDebugSnapshot;
   /** Oyuncu ekranları: süresi dolmuş teklifleri temizler, yeni sözleşme üretmez */
   refreshMarketSnapshot: () => void;
-  refreshContractsFromMarket: () => void;
+  refreshContractsFromMarket: (options?: { bypassCooldown?: boolean }) => void;
+  applyAdReward: (
+    slotId: AdRewardSlotId,
+    context: Omit<AdRewardGrantContext, 'currentGameTime' | 'playerLevel' | 'hasCompletedOnboarding'>,
+  ) => Promise<{ ok: boolean; reason?: string }>;
   forceGeneratePlayableContracts: () => number;
   getContractRefreshRemainingSeconds: () => number;
   /** Debug: manuel sözleşme üretimi */
@@ -2121,7 +2140,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   syncMissionProgress: () => {
     const state = get();
-    const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
+    const previous = state.missions ?? createDefaultMissionsState();
+    const missions = syncMissionsState(previous, state);
+    if (missionsProgressUnchanged(previous, missions)) {
+      return;
+    }
     set({ missions });
     get().markSaveDirty();
   },
@@ -2234,7 +2257,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   syncRetentionProgress: () => {
     const state = get();
+    const previous = state.retention ?? createDefaultRetentionState();
     const retention = syncRetentionProgressState(state);
+    if (retentionProgressUnchanged(previous, retention)) {
+      return;
+    }
     set({ retention });
   },
 
@@ -2586,6 +2613,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({
         ...saved,
         player: normalizeLoadedPlayer(saved.player),
+        monetization: normalizeMonetizationState(saved.monetization, saved.currentTime ?? 0),
         contractGenerationDebug: createEmptyContractGenerationDebug(saved.currentTime ?? 0),
         deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
         saveError: null,
@@ -3321,12 +3349,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
-  refreshContractsFromMarket: () => {
+  refreshContractsFromMarket: (options?: { bypassCooldown?: boolean }) => {
     const state = get();
     if (!state.player) {
       return;
     }
 
+    const bypassCooldown = options?.bypassCooldown === true;
     const refreshParams = buildContractRefreshParams(state);
     const playerLevel = refreshParams.playerLevel;
     const playableCount = countPlayableContracts(
@@ -3367,7 +3396,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const hoursSinceManual =
       state.currentTime - (state.lastManualContractRefreshTime ?? 0);
-    if (hoursSinceManual < contractGenerationBalance.manualRefreshCooldownHours) {
+    if (
+      !bypassCooldown &&
+      hoursSinceManual < contractGenerationBalance.manualRefreshCooldownHours
+    ) {
       get().refreshMarketSnapshot();
       lastContractMarketRefreshAt = Date.now();
       return;
@@ -5071,16 +5103,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    const repairCost = calculateTruckRepairCost(truck);
-    if (repairCost <= 0) {
+    const baseRepairCost = calculateTruckRepairCost(truck);
+    if (baseRepairCost <= 0) {
       return;
     }
+
+    const monetization = normalizeMonetizationState(state.monetization, state.currentTime);
+    const discountToken = getActiveMaintenanceDiscountToken(
+      monetization,
+      truckId,
+      state.currentTime,
+    );
+    const { finalCost: repairCost, discountAmount } = calculateDiscountedRepairCost(
+      baseRepairCost,
+      discountToken,
+    );
 
     if (!canAffordVoluntaryPurchase(state.player.money, repairCost)) {
       throw new Error('Yetersiz bakiye.');
     }
 
+    const nextMonetization =
+      discountToken && discountAmount > 0
+        ? consumeMaintenanceDiscountToken(monetization, truckId)
+        : monetization;
+
+    const repairMessage =
+      discountAmount > 0
+        ? `${truck.name} tamir edildi. Maliyet: $${repairCost.toFixed(0)} (reklam indirimi -$${discountAmount.toFixed(0)})`
+        : `${truck.name} tamir edildi. Maliyet: $${repairCost.toFixed(0)}`;
+
     set({
+      monetization: nextMonetization,
       player: {
         ...state.player,
         money: state.player.money - repairCost,
@@ -5094,7 +5148,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           time: state.currentTime,
           type: 'fleet',
           title: 'Kamyon bakımı',
-          message: `${truck.name} tamir edildi. Maliyet: $${repairCost.toFixed(0)}`,
+          message: repairMessage,
           importance: 'low',
         },
         state.currentTime,
@@ -5102,6 +5156,140 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     get().autoSave('repair');
     get().applyRetentionEventAndSync({ type: 'truck_maintained', truckId });
+  },
+
+  applyAdReward: async (slotId, context) => {
+    const state = get();
+    if (!state.player) {
+      return { ok: false, reason: 'Oyun yüklenmedi.' };
+    }
+
+    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const hasCompletedOnboarding = state.onboarding?.completed === true;
+    const monetization = resetDailyUsageIfNeeded(
+      normalizeMonetizationState(state.monetization, state.currentTime),
+    );
+
+    const fullContext: AdRewardGrantContext = {
+      currentGameTime: state.currentTime,
+      playerLevel,
+      hasCompletedOnboarding,
+      ...context,
+    };
+
+    const eligibility = canGrantAdReward(monetization, slotId, fullContext);
+    if (!eligibility.ok) {
+      return { ok: false, reason: eligibility.reason };
+    }
+
+    const adResult = await showRewardedAd(slotId);
+    if (adResult !== 'completed') {
+      return {
+        ok: false,
+        reason: adResult === 'skipped' ? 'Reklam izlenmedi.' : 'Reklam yüklenemedi.',
+      };
+    }
+
+    let grantResult;
+    try {
+      grantResult = applyAdRewardGrant(monetization, slotId, fullContext);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : 'Ödül uygulanamadı.',
+      };
+    }
+
+    let nextPlayer = state.player;
+    let nextLedgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | undefined;
+    let nextDeliveries = state.activeDeliveries;
+    let shouldRefreshContracts = false;
+    let boostedDeliveryToComplete: string | null = null;
+
+    for (const effect of grantResult.effects) {
+      switch (effect.type) {
+        case 'cash': {
+          nextPlayer = {
+            ...nextPlayer,
+            money: nextPlayer.money + effect.amount,
+          };
+          nextLedgerPatch = patchFinanceLedger(
+            {
+              financeLedger: nextLedgerPatch?.financeLedger ?? state.financeLedger,
+              financeTotals: nextLedgerPatch?.financeTotals ?? state.financeTotals,
+            },
+            {
+              time: state.currentTime,
+              type: 'income',
+              category: 'ad_reward_daily_ops',
+              amount: effect.amount,
+              description: 'Reklam ödülü · günlük operasyon bonusu',
+            },
+          );
+          break;
+        }
+        case 'contract_refresh_bypass':
+          shouldRefreshContracts = true;
+          break;
+        case 'delivery_boost': {
+          nextDeliveries = nextDeliveries.map((delivery) => {
+            if (delivery.id !== effect.deliveryId) {
+              return delivery;
+            }
+            const boostedProgress = calculateDeliveryBoostProgress(
+              delivery.progress,
+              effect.progressBoost,
+            );
+            if (isDeliveryProgressComplete(boostedProgress)) {
+              boostedDeliveryToComplete = delivery.id;
+            }
+            if (typeof __DEV__ !== 'undefined' && __DEV__ === true) {
+              console.log('[gameStore] delivery_boost applied', {
+                deliveryId: delivery.id,
+                oldProgress: delivery.progress,
+                newProgress: boostedProgress,
+              });
+            }
+            return {
+              ...delivery,
+              progress: boostedProgress,
+            };
+          });
+          break;
+        }
+        case 'market_analysis_unlock':
+        case 'maintenance_discount_token':
+          break;
+        default:
+          break;
+      }
+    }
+
+    set({
+      monetization: grantResult.monetization,
+      player: nextPlayer,
+      activeDeliveries: nextDeliveries,
+      ...(nextLedgerPatch ?? {}),
+    });
+    get().markSaveDirty();
+
+    if (shouldRefreshContracts) {
+      get().refreshContractsFromMarket({ bypassCooldown: true });
+    }
+
+    if (boostedDeliveryToComplete) {
+      const current = get().activeDeliveries.find((d) => d.id === boostedDeliveryToComplete);
+      if (
+        current &&
+        (current.status === 'on_route' || current.status === 'preparing') &&
+        isDeliveryProgressComplete(current.progress)
+      ) {
+        get().completeDeliveryById(boostedDeliveryToComplete);
+      }
+    }
+
+    get().autoSave('manual');
+    return { ok: true };
   },
 
   upgradeTruck: (truckId, upgradeType) => {

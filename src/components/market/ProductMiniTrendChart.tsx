@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { ProductPriceTrend } from '../../utils/productPriceTrend';
@@ -15,9 +15,11 @@ function mapDirection(direction: ProductPriceTrend['direction']): MiniTrendDirec
   return 'stable';
 }
 
-export default function ProductMiniTrendChart({ trend }: ProductMiniTrendChartProps) {
-  const chartData =
-    trend.miniPrices.length >= 2 ? trend.miniPrices : trend.prices.slice(-12);
+function ProductMiniTrendChart({ trend }: ProductMiniTrendChartProps) {
+  const chartData = useMemo(
+    () => (trend.miniPrices.length >= 2 ? trend.miniPrices : trend.prices.slice(-12)),
+    [trend.miniPrices, trend.prices],
+  );
 
   return (
     <View style={styles.container}>
@@ -30,6 +32,8 @@ export default function ProductMiniTrendChart({ trend }: ProductMiniTrendChartPr
     </View>
   );
 }
+
+export default React.memo(ProductMiniTrendChart);
 
 const styles = StyleSheet.create({
   container: {

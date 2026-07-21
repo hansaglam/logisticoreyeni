@@ -44,11 +44,17 @@ export function buildDashboardStatTiles(input: {
   activeDeliveries: number;
   idleDrivers: number;
   warehouseFillRatio: number;
+  idleTruckCitySummary?: string;
 }): DashboardStatTile[] {
+  const idleTruckLabel =
+    input.idleTrucks > 0 && input.idleTruckCitySummary?.trim()
+      ? `Boşta · ${input.idleTruckCitySummary.trim()}`
+      : 'Boşta Kamyon';
+
   return [
     {
       key: 'idle-trucks',
-      label: 'Boşta Kamyon',
+      label: idleTruckLabel,
       value: `${input.idleTrucks}`,
       icon: 'truck',
       color: colors.success,

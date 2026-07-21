@@ -517,6 +517,7 @@ export type FinanceLedgerCategory =
   | 'trade_sale'
   | 'bonus'
   | 'mission_reward'
+  | 'ad_reward_daily_ops'
   | 'other_income'
   | 'fuel'
   | 'maintenance'
@@ -1112,6 +1113,8 @@ export interface StoreGameState {
   worldEventsVersion: number;
   /** Son olay üretiminin yapıldığı oyun günü (1-indexed) */
   lastWorldEventGeneratedDay?: number;
+  /** Monetization M0/M1 — ödüllü reklam kullanımı ve token'lar */
+  monetization: import('./monetization').MonetizationState;
 }
 
 /**

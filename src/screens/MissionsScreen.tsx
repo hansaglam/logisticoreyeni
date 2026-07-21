@@ -3,7 +3,7 @@
  * Retention Pack V1: Görevler · Haftalık · Başarılar
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
@@ -102,7 +102,7 @@ function RetentionStatusBadge({ isClaimed, isReady }: { isClaimed: boolean; isRe
   return <StatusBadge label="Devam Ediyor" variant="blue" size="sm" />;
 }
 
-function TabButton({
+const TabButton = React.memo(function TabButton({
   label,
   active,
   onPress,
@@ -119,9 +119,9 @@ function TabButton({
       <Text style={[styles.tabButtonText, active && styles.tabButtonTextActive]}>{label}</Text>
     </Pressable>
   );
-}
+});
 
-function MissionCard({
+const MissionCard = React.memo(function MissionCard({
   missionId,
   progress,
   missions,
@@ -172,9 +172,9 @@ function MissionCard({
       ) : null}
     </AppCard>
   );
-}
+});
 
-function RetentionObjectiveCard({
+const RetentionObjectiveCard = React.memo(function RetentionObjectiveCard({
   title,
   description,
   progress,
@@ -230,7 +230,7 @@ function RetentionObjectiveCard({
       ) : null}
     </AppCard>
   );
-}
+});
 
 interface MissionsScreenProps {
   onBack: () => void;
@@ -252,8 +252,8 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   useOnboardingScreenVisit('Missions');
   const onboardingHint = useActiveOnboardingHint(['claim_rewards']);
 
-  const seasonKey = getWeeklySeasonKey();
-  const seasonLabel = getWeeklySeasonLabel();
+  const seasonKey = useMemo(() => getWeeklySeasonKey(), []);
+  const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);
 
   useEffect(() => {
     syncMissionProgress();
@@ -311,6 +311,40 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     });
   }, [weeklyObjectives, retention.weeklyObjectives]);
 
+  const missionProgressById = useMemo(() => {
+    const ids = [...starterMissionIds, ...careerMissionIds];
+    const map = new Map<string, MissionProgressResult>();
+    for (const missionId of ids) {
+      map.set(missionId, getMissionProgressValue(missionId));
+    }
+    return map;
+  }, [starterMissionIds, careerMissionIds, getMissionProgressValue]);
+
+  const handleClaimMissionReward = useCallback(
+    (missionId: string) => {
+      claimMissionReward(missionId);
+    },
+    [claimMissionReward],
+  );
+
+  const handleClaimWeeklyObjective = useCallback(
+    (objectiveId: string) => {
+      claimWeeklyObjectiveReward(objectiveId);
+    },
+    [claimWeeklyObjectiveReward],
+  );
+
+  const handleClaimMilestone = useCallback(
+    (milestoneId: string) => {
+      claimMilestoneReward(milestoneId);
+    },
+    [claimMilestoneReward],
+  );
+
+  const handleSelectMissionsTab = useCallback(() => setActiveTab('missions'), []);
+  const handleSelectWeeklyTab = useCallback(() => setActiveTab('weekly'), []);
+  const handleSelectAchievementsTab = useCallback(() => setActiveTab('achievements'), []);
+
   return (
     <ScrollView
       style={styles.root}
@@ -328,17 +362,17 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
         <TabButton
           label="Görevler"
           active={activeTab === 'missions'}
-          onPress={() => setActiveTab('missions')}
+          onPress={handleSelectMissionsTab}
         />
         <TabButton
           label="Haftalık"
           active={activeTab === 'weekly'}
-          onPress={() => setActiveTab('weekly')}
+          onPress={handleSelectWeeklyTab}
         />
         <TabButton
           label="Başarılar"
           active={activeTab === 'achievements'}
-          onPress={() => setActiveTab('achievements')}
+          onPress={handleSelectAchievementsTab}
         />
       </View>
 
@@ -360,9 +394,9 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
             <MissionCard
               key={missionId}
               missionId={missionId}
-              progress={getMissionProgressValue(missionId)}
+              progress={missionProgressById.get(missionId) ?? { current: 0, target: 1, isComplete: false }}
               missions={missions}
-              onClaim={() => claimMissionReward(missionId)}
+              onClaim={() => handleClaimMissionReward(missionId)}
             />
           ))}
 
@@ -371,9 +405,9 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
             <MissionCard
               key={missionId}
               missionId={missionId}
-              progress={getMissionProgressValue(missionId)}
+              progress={missionProgressById.get(missionId) ?? { current: 0, target: 1, isComplete: false }}
               missions={missions}
-              onClaim={() => claimMissionReward(missionId)}
+              onClaim={() => handleClaimMissionReward(missionId)}
             />
           ))}
         </>
@@ -409,7 +443,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
                 isClaimed={entry.isClaimed}
                 isReady={isReady}
                 useMoney={useMoney}
-                onClaim={() => claimWeeklyObjectiveReward(objective.id)}
+                onClaim={() => handleClaimWeeklyObjective(objective.id)}
               />
             );
           })}
@@ -442,7 +476,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
                 isClaimed={entry.isClaimed}
                 isReady={isReady}
                 useMoney={useMoney}
-                onClaim={() => claimMilestoneReward(milestone.id)}
+                onClaim={() => handleClaimMilestone(milestone.id)}
               />
             );
           })}

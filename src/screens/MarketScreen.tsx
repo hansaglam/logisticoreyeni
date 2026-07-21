@@ -4,7 +4,7 @@
  * Premium piyasa analizi: stoklar, fiyatlar ve taşıma fırsatları.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
@@ -442,10 +442,10 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   sellButtonDisabled: boolean;
   eventLabel?: string;
   displayPrice?: number;
-  onBuyPress: () => void;
-  onSellPress: () => void;
-  onAlarmPress: () => void;
-  onPress?: () => void;
+  onBuyPress: (productId: ProductId) => void;
+  onSellPress: (productId: ProductId) => void;
+  onAlarmPress: (productId: ProductId) => void;
+  onPress?: (productId: ProductId) => void;
 }) {
   const stockRatio = calculateStockRatio(market);
   const status = getMarketStatus(stockRatio);
@@ -453,17 +453,29 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   const hint = getOpportunityHint(market);
   const progressValue = Math.min(stockRatio, 2) / 2;
   const shownPrice = displayPrice ?? market.currentPrice;
-  const trend = getProductPriceTrend({
-    cityId,
-    productId: market.productId,
-    currentTime,
-    stockStatus: status,
-    marketState: {
-      currentPrice: market.currentPrice,
-      basePrice: market.basePrice,
-      priceHistory: market.priceHistory,
-    },
-  });
+  const trend = useMemo(
+    () =>
+      getProductPriceTrend({
+        cityId,
+        productId: market.productId,
+        currentTime,
+        stockStatus: status,
+        marketState: {
+          currentPrice: market.currentPrice,
+          basePrice: market.basePrice,
+          priceHistory: market.priceHistory,
+        },
+      }),
+    [
+      cityId,
+      currentTime,
+      market.basePrice,
+      market.currentPrice,
+      market.priceHistory,
+      market.productId,
+      status,
+    ],
+  );
   const priceChangeDisplay = formatTrendChangeDisplay(trend);
   const profitDisplay =
     hasWarehouse && depotQuantity > 0 && estimatedProfit != null
@@ -553,7 +565,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
       <View style={styles.productActions}>
         <ActionButton
           label={buyButtonLabel}
-          onPress={onBuyPress}
+          onPress={() => onBuyPress(market.productId)}
           variant="primary"
           icon="cash"
           iconSize={11}
@@ -564,7 +576,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
         {showSellButton ? (
           <ActionButton
             label={sellButtonLabel}
-            onPress={onSellPress}
+            onPress={() => onSellPress(market.productId)}
             variant="secondary"
             icon="market"
             iconSize={11}
@@ -575,7 +587,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
         ) : null}
         <ActionButton
           label="Alarm"
-          onPress={onAlarmPress}
+          onPress={() => onAlarmPress(market.productId)}
           variant="secondary"
           icon="notification"
           iconSize={11}
@@ -589,7 +601,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   return (
     <AppCard style={styles.productCard} padded={false}>
       {onPress ? (
-        <TouchableOpacity activeOpacity={0.9} onPress={onPress}>
+        <TouchableOpacity activeOpacity={0.9} onPress={() => onPress(market.productId)}>
           {cardMainContent}
         </TouchableOpacity>
       ) : (
@@ -743,6 +755,8 @@ interface MarketScreenProps {
 export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
+  const playerMoney = useGameStore((state) => state.player?.money ?? 0);
+  const playerWarehouses = useGameStore((state) => state.player?.warehouses ?? []);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const routes = useGameStore((state) => state.routes) ?? [];
@@ -803,9 +817,9 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     [worldEvents, currentTime],
   );
 
-  const fuelPrice = applyWorldEventImpactToFuelPrice(
-    getSafeFuelPrice(globalEconomy),
-    activeWorldEvents,
+  const fuelPrice = useMemo(
+    () => applyWorldEventImpactToFuelPrice(getSafeFuelPrice(globalEconomy), activeWorldEvents),
+    [globalEconomy, activeWorldEvents],
   );
 
   useEffect(() => {
@@ -901,10 +915,10 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const selectedCityWarehouses = useMemo(() => {
     if (!selectedCity) return [];
-    return (player?.warehouses ?? [])
+    return playerWarehouses
       .filter((item) => item.cityId === selectedCity.id)
       .map((item) => normalizeWarehouse(item));
-  }, [player?.warehouses, selectedCity]);
+  }, [playerWarehouses, selectedCity]);
 
   const tradeProduct = useMemo(
     () => products.find((item) => item.id === tradeProductId) ?? null,
@@ -973,13 +987,123 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     [marketHighlights.criticalCount, opportunities.length, marketVolatility.avgVolatility],
   );
 
+  const selectedCityProductCards = useMemo(() => {
+    if (!selectedCity || activeTab !== 'products') {
+      return [];
+    }
+
+    const gameDay = gameDayFromTime(currentTime);
+    const hasWarehouse = selectedCityWarehouses.length > 0;
+    const cards: Array<{
+      productId: ProductId;
+      cityId: string;
+      market: NormalizedProductMarket;
+      hasWarehouse: boolean;
+      depotQuantity: number;
+      estimatedProfit: number | null;
+      canSell: boolean;
+      buyButtonLabel: string;
+      buyButtonDisabled: boolean;
+      showSellButton: boolean;
+      sellButtonLabel: string;
+      sellButtonDisabled: boolean;
+      eventLabel?: string;
+      displayPrice?: number;
+    }> = [];
+
+    for (const product of products) {
+      const market = getProductMarket(selectedCity, product.id);
+      if (!market) continue;
+
+      const inventory = cityInventoryByProduct.get(product.id) ?? {
+        quantity: 0,
+        averageBuyPrice: 0,
+        quality: 100,
+        primaryWarehouseId: null,
+      };
+      const priceMultiplier = getProductPriceEventMultiplier(
+        product.id,
+        selectedCity.id,
+        activeWorldEvents,
+        gameDay,
+      );
+      const displayPrice =
+        priceMultiplier !== 1
+          ? Number(Math.max(1, market.currentPrice * priceMultiplier).toFixed(2))
+          : market.currentPrice;
+      const productEvent = getEventsForProduct(
+        activeWorldEvents,
+        product.id,
+        gameDay,
+        selectedCity.id,
+      ).find((event) => event.impact.productPriceMultiplier);
+      const eventLabel = productEvent
+        ? `Etkinlik: ${getPrimaryWorldEventLabel(productEvent)}`
+        : undefined;
+      const estimatedProfit =
+        inventory.quantity > 0
+          ? calculateTradeProfit(
+              displayPrice,
+              inventory.averageBuyPrice,
+              inventory.quantity,
+              inventory.quality,
+            )
+          : null;
+      const canStoreProduct = selectedCityWarehouses.some((warehouse) => {
+        const warehouseType = resolveWarehouseType(warehouse.warehouseType);
+        return evaluateStorageSuitability(product, warehouseType) !== 'blocked';
+      });
+      const buyButton = resolveMarketBuyState({
+        hasWarehouse,
+        marketStock: market.stock,
+        freeCapacity: selectedCityTotalFreeCapacity,
+        playerMoney,
+        unitPrice: displayPrice,
+        canStoreProduct,
+      });
+      const sellButton = resolveMarketSellState({
+        hasWarehouse,
+        inventoryQuantity: inventory.quantity,
+      });
+
+      cards.push({
+        productId: product.id,
+        cityId: selectedCity.id,
+        market,
+        hasWarehouse,
+        depotQuantity: inventory.quantity,
+        estimatedProfit,
+        canSell: sellButton.canSell,
+        buyButtonLabel: buyButton.label,
+        buyButtonDisabled: buyButton.disabled,
+        showSellButton: sellButton.showSellButton,
+        sellButtonLabel: sellButton.label,
+        sellButtonDisabled: sellButton.disabled,
+        eventLabel,
+        displayPrice,
+      });
+    }
+
+    return cards;
+  }, [
+    activeTab,
+    selectedCity,
+    products,
+    selectedCityWarehouses,
+    cityInventoryByProduct,
+    activeWorldEvents,
+    currentTime,
+    selectedCityTotalFreeCapacity,
+    playerMoney,
+  ]);
+
   const closeTradeModal = () => {
     setTradeModalVisible(false);
     setTradeProductId(null);
     setTradeMode('buy');
   };
 
-  const handleBuyProductPress = (productId: ProductId) => {
+  const handleBuyProductPress = useCallback((productId: ProductId) => {
     if (!selectedCity) return;
 
     if (selectedCityWarehouses.length === 0) {
@@ -1002,7 +1126,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       hasWarehouse: true,
       marketStock: market?.stock ?? 0,
       freeCapacity: selectedCityTotalFreeCapacity,
-      playerMoney: player?.money ?? 0,
+      playerMoney,
       unitPrice: market?.currentPrice ?? 0,
       canStoreProduct,
     });
@@ -1014,9 +1138,16 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     setTradeMode('buy');
     setTradeProductId(productId);
     setTradeModalVisible(true);
-  };
+  }, [
+    selectedCity,
+    selectedCityWarehouses,
+    products,
+    selectedCityTotalFreeCapacity,
+    playerMoney,
+    showAlert,
+  ]);
 
-  const handleSellProductPress = (productId: ProductId) => {
+  const handleSellProductPress = useCallback((productId: ProductId) => {
     if (!selectedCity) return;
 
     const inventory = cityInventoryByProduct.get(productId);
@@ -1035,29 +1166,29 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     setTradeMode('sell');
     setTradeProductId(productId);
     setTradeModalVisible(true);
-  };
+  }, [selectedCity, selectedCityWarehouses, cityInventoryByProduct, showAlert]);
 
   const closeAlertModal = () => {
     setAlertModalVisible(false);
     setAlertProductId(null);
   };
 
-  const handleAlarmProductPress = (productId: ProductId) => {
+  const handleAlarmProductPress = useCallback((productId: ProductId) => {
     if (!selectedCity) return;
     setAlertProductId(productId);
     setAlertModalVisible(true);
-  };
+  }, [selectedCity]);
 
-  const handleProductCardPress = (productId: ProductId) => {
+  const handleProductCardPress = useCallback((productId: ProductId) => {
     if (!selectedCity) return;
     setDetailProductId(productId);
     setDetailModalVisible(true);
-  };
+  }, [selectedCity]);
 
-  const closeDetailModal = () => {
+  const closeDetailModal = useCallback(() => {
     setDetailModalVisible(false);
     setDetailProductId(null);
-  };
+  }, []);
 
   const handleConfirmAlert = async (input: {
     condition: MarketPriceAlertCondition;
@@ -1348,97 +1479,42 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                 />
               </TutorialTarget>
 
-              {products.every((product) => !getProductMarket(selectedCity, product.id)) ? (
+              {selectedCityProductCards.length === 0 ? (
                 <EmptyState title="Ürün verisi yok" icon="inventory" />
               ) : (
                 (() => {
                   let firstProductWrapped = false;
-                  return products.map((product) => {
-                    const market = getProductMarket(selectedCity, product.id);
-                    if (!market) return null;
-
-                    const hasWarehouse = selectedCityWarehouses.length > 0;
-                    const inventory = cityInventoryByProduct.get(product.id) ?? {
-                      quantity: 0,
-                      averageBuyPrice: 0,
-                      quality: 100,
-                      primaryWarehouseId: null,
-                    };
-                    const priceMultiplier = getProductPriceEventMultiplier(
-                      product.id,
-                      selectedCity.id,
-                      activeWorldEvents,
-                      gameDayFromTime(currentTime),
-                    );
-                    const displayPrice =
-                      priceMultiplier !== 1
-                        ? Number(Math.max(1, market.currentPrice * priceMultiplier).toFixed(2))
-                        : market.currentPrice;
-                    const productEvent = getEventsForProduct(
-                      activeWorldEvents,
-                      product.id,
-                      gameDayFromTime(currentTime),
-                      selectedCity.id,
-                    ).find((event) => event.impact.productPriceMultiplier);
-                    const eventLabel = productEvent
-                      ? `Etkinlik: ${getPrimaryWorldEventLabel(productEvent)}`
-                      : undefined;
-                    const estimatedProfit =
-                      inventory.quantity > 0
-                        ? calculateTradeProfit(
-                            displayPrice,
-                            inventory.averageBuyPrice,
-                            inventory.quantity,
-                            inventory.quality,
-                          )
-                        : null;
-                    const canStoreProduct = selectedCityWarehouses.some((warehouse) => {
-                      const warehouseType = resolveWarehouseType(warehouse.warehouseType);
-                      return evaluateStorageSuitability(product, warehouseType) !== 'blocked';
-                    });
-                    const buyButton = resolveMarketBuyState({
-                      hasWarehouse,
-                      marketStock: market.stock,
-                      freeCapacity: selectedCityTotalFreeCapacity,
-                      playerMoney: player?.money ?? 0,
-                      unitPrice: displayPrice,
-                      canStoreProduct,
-                    });
-                    const sellButton = resolveMarketSellState({
-                      hasWarehouse,
-                      inventoryQuantity: inventory.quantity,
-                    });
-
+                  return selectedCityProductCards.map((cardData) => {
                     const card = (
                       <ProductMarketCard
-                        cityId={selectedCity.id}
+                        cityId={cardData.cityId}
                         currentTime={currentTime}
-                        market={market}
-                        hasWarehouse={hasWarehouse}
-                        depotQuantity={inventory.quantity}
-                        estimatedProfit={estimatedProfit}
-                        canSell={sellButton.canSell}
-                        buyButtonLabel={buyButton.label}
-                        buyButtonDisabled={buyButton.disabled}
-                        showSellButton={sellButton.showSellButton}
-                        sellButtonLabel={sellButton.label}
-                        sellButtonDisabled={sellButton.disabled}
-                        eventLabel={eventLabel}
-                        displayPrice={displayPrice}
-                        onBuyPress={() => handleBuyProductPress(product.id)}
-                        onSellPress={() => handleSellProductPress(product.id)}
-                        onAlarmPress={() => handleAlarmProductPress(product.id)}
-                        onPress={() => handleProductCardPress(product.id)}
+                        market={cardData.market}
+                        hasWarehouse={cardData.hasWarehouse}
+                        depotQuantity={cardData.depotQuantity}
+                        estimatedProfit={cardData.estimatedProfit}
+                        canSell={cardData.canSell}
+                        buyButtonLabel={cardData.buyButtonLabel}
+                        buyButtonDisabled={cardData.buyButtonDisabled}
+                        showSellButton={cardData.showSellButton}
+                        sellButtonLabel={cardData.sellButtonLabel}
+                        sellButtonDisabled={cardData.sellButtonDisabled}
+                        eventLabel={cardData.eventLabel}
+                        displayPrice={cardData.displayPrice}
+                        onBuyPress={handleBuyProductPress}
+                        onSellPress={handleSellProductPress}
+                        onAlarmPress={handleAlarmProductPress}
+                        onPress={handleProductCardPress}
                       />
                     );
 
                     if (firstProductWrapped) {
-                      return <React.Fragment key={product.id}>{card}</React.Fragment>;
+                      return <React.Fragment key={cardData.productId}>{card}</React.Fragment>;
                     }
 
                     firstProductWrapped = true;
                     return (
-                      <TutorialTarget key={product.id} id="market-first-product">
+                      <TutorialTarget key={cardData.productId} id="market-first-product">
                         {card}
                       </TutorialTarget>
                     );
@@ -1520,15 +1596,17 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         </View>
       ) : null}
 
-      <ProductMarketDetailModal
-        visible={detailModalVisible}
-        cityId={selectedCity?.id ?? null}
-        productId={detailProductId}
-        onClose={closeDetailModal}
-        onBuy={handleBuyProductPress}
-        onSell={handleSellProductPress}
-        onCreateAlert={handleAlarmProductPress}
-      />
+      {detailModalVisible && selectedCity && detailProductId ? (
+        <ProductMarketDetailModal
+          visible={detailModalVisible}
+          cityId={selectedCity.id}
+          productId={detailProductId}
+          onClose={closeDetailModal}
+          onBuy={handleBuyProductPress}
+          onSell={handleSellProductPress}
+          onCreateAlert={handleAlarmProductPress}
+        />
+      ) : null}
 
       <MarketAlertModal
         visible={alertModalVisible}

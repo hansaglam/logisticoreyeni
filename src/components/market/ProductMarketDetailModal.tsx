@@ -22,8 +22,14 @@ import { buildMarketProductViewModel, getProductMarket } from '../../utils/marke
 import { getMarketStatusColorVariant } from '../../utils/marketStatusLabels';
 import { resolveInventoryTradeProfit } from '../../utils/tradeDisplay';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
+import AdRewardButton from '../monetization/AdRewardButton';
 import { ActionButton, IconButton, ProductIcon, StatusBadge } from '../ui';
 import ProductDetailTrendChart from './ProductDetailTrendChart';
+import {
+  formatMarketAnalysisUnlockLabel,
+  getActiveMarketAnalysisUnlock,
+} from '../../simulation/adRewardGrants';
+import { buildDetailedMarketTrendCommentary } from '../../utils/detailedMarketAnalysis';
 
 const OVERLAY_OPACITY = 0.52;
 const SHEET_RADIUS = 24;
@@ -50,12 +56,14 @@ export default function ProductMarketDetailModal({
   const insets = useAppSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
 
-  const player = useGameStore((state) => state.player);
+  const playerMoney = useGameStore((state) => state.player?.money ?? 0);
+  const playerWarehouses = useGameStore((state) => state.player?.warehouses ?? []);
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
   const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
+  const monetization = useGameStore((state) => state.monetization);
   const activeWorldEvents = useMemo(
     () => getActiveWorldEventsValue(),
     [getActiveWorldEventsValue, worldEvents, currentTime],
@@ -67,11 +75,11 @@ export default function ProductMarketDetailModal({
   );
 
   const cityWarehouses = useMemo(() => {
-    if (!city) return [];
-    return (player?.warehouses ?? [])
+    if (!visible || !city) return [];
+    return playerWarehouses
       .filter((item) => item.cityId === city.id)
       .map((item) => normalizeWarehouse(item));
-  }, [player?.warehouses, city]);
+  }, [visible, playerWarehouses, city]);
 
   const totalFreeCapacity = useMemo(
     () => cityWarehouses.reduce((sum, warehouse) => sum + getWarehouseFreeCapacityTon(warehouse), 0),
@@ -79,28 +87,48 @@ export default function ProductMarketDetailModal({
   );
 
   const viewModel = useMemo(() => {
-    if (!cityId || !productId) return null;
+    if (!visible || !cityId || !productId) return null;
     return buildMarketProductViewModel({
       city,
       productId,
       currentTime,
       warehouses: cityWarehouses,
       totalFreeCapacity,
-      playerMoney: player?.money ?? 0,
+      playerMoney,
       products,
       activeWorldEvents,
     });
   }, [
+    visible,
     city,
     cityId,
     productId,
     currentTime,
     cityWarehouses,
     totalFreeCapacity,
-    player?.money,
+    playerMoney,
     products,
     activeWorldEvents,
   ]);
+
+  const marketAnalysisUnlock = useMemo(() => {
+    if (!productId) return null;
+    return getActiveMarketAnalysisUnlock(monetization, productId, currentTime);
+  }, [monetization, productId, currentTime]);
+
+  const detailedTrendCommentary = useMemo(() => {
+    if (!viewModel) return '';
+    return buildDetailedMarketTrendCommentary({
+      productName: viewModel.productName,
+      cityName: viewModel.cityName,
+      trendDirection: viewModel.trendDirection,
+      trendChangeLabel: viewModel.trendChangeLabel,
+      stockStatusLabel: viewModel.stockStatusLabel,
+      stockStatusDescription: viewModel.stockStatusDescription,
+      eventLabel: viewModel.eventLabel,
+      eventImpactLabel: viewModel.eventImpactLabel,
+    });
+  }, [viewModel]);
 
   useEffect(() => {
     if (!visible || !cityId || !productId) return;
@@ -215,6 +243,36 @@ export default function ProductMarketDetailModal({
             </View>
 
             <ProductDetailTrendChart trend={viewModel.trend} />
+
+            <View style={styles.detailedAnalysisCard}>
+              <View style={styles.detailedAnalysisHeader}>
+                <Text style={styles.infoTitle}>Detaylı 24s Trend Yorumu</Text>
+                {marketAnalysisUnlock ? (
+                  <StatusBadge
+                    label={formatMarketAnalysisUnlockLabel(marketAnalysisUnlock, currentTime)}
+                    variant="success"
+                    size="sm"
+                  />
+                ) : null}
+              </View>
+              {marketAnalysisUnlock ? (
+                <Text style={styles.commentaryText}>{detailedTrendCommentary}</Text>
+              ) : (
+                <>
+                  <View style={styles.lockedOverlay}>
+                    <Text style={styles.infoMuted}>
+                      Reklam izleyerek 24 oyun saatliğine detaylı trend yorumunu aç.
+                    </Text>
+                  </View>
+                  <AdRewardButton
+                    slotId="market_analysis"
+                    label="Reklam izle, 24 saatlik detaylı analiz aç"
+                    context={{ selectedProductId: productId }}
+                    variant="secondary"
+                  />
+                </>
+              )}
+            </View>
 
             <View style={styles.commentaryCard}>
               <Text style={styles.infoTitle}>Piyasa Durumu</Text>
@@ -432,6 +490,24 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.sm,
     marginBottom: spacing.xs,
+  },
+  detailedAnalysisCard: {
+    backgroundColor: colors.cardSoft,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.25)',
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.xs,
+  },
+  detailedAnalysisHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  lockedOverlay: {
+    paddingVertical: 4,
   },
   infoTitle: {
     ...typography.caption,

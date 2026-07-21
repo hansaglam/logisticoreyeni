@@ -25,10 +25,12 @@ import {
 } from '../components/dashboard';
 import { AppScreen, GameIcon } from '../components/ui';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
+import DashboardDailyOpsBonusCard from '../components/monetization/DashboardDailyOpsBonusCard';
 import { createDefaultMissionsState } from '../config/missions';
 import { createDefaultRetentionState } from '../simulation/retentionProgress';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { countPlayableContracts } from '../simulation/contracts';
+import { getIdleTruckOriginCityIds } from '../simulation/delivery';
 import { getSafeFuelPrice } from '../simulation/economy';
 import {
   applyWorldEventImpactToFuelPrice,
@@ -51,6 +53,7 @@ import {
   resolveOnboardingDashboardAction,
 } from '../onboarding/onboardingProgress';
 import { colors, formatMoney, spacing, typography } from '../theme';
+import { getCityName } from '../utils/entityLookup';
 import type { Player } from '../types/game';
 import { shouldShowPostDeliveryLocationHint } from '../utils/truckLocationUx';
 
@@ -115,6 +118,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
   const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
+  const addNotification = useGameStore((state) => state.addNotification);
   const { scrollBottomPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Dashboard');
@@ -171,7 +175,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     missions?.flags?.marketOpened,
     missions?.flags?.tradePurchased,
     cities.length,
-    currentTime,
   ]);
 
   React.useEffect(() => {
@@ -304,6 +307,13 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     [runningDeliveries.length, playableContractCount, fleetSnapshot.idleTrucks, missions, getMissionProgressValue],
   );
 
+  const idleTruckCitySummary = useMemo(() => {
+    if (!player) return undefined;
+    const cityIds = getIdleTruckOriginCityIds(player.trucks ?? [], player.homeCityId);
+    if (cityIds.length === 0) return undefined;
+    return cityIds.map((cityId) => getCityName(cityId)).join(', ');
+  }, [player]);
+
   const statTiles = useMemo(() => {
     if (!player) return [];
     return buildDashboardStatTiles({
@@ -311,8 +321,9 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       activeDeliveries: runningDeliveries.length,
       idleDrivers: fleetSnapshot.idleDrivers,
       warehouseFillRatio,
+      idleTruckCitySummary,
     });
-  }, [player, fleetSnapshot, runningDeliveries.length, warehouseFillRatio]);
+  }, [player, fleetSnapshot, runningDeliveries.length, warehouseFillRatio, idleTruckCitySummary]);
 
   if (!player) {
     return (
@@ -331,6 +342,16 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(player.completedContracts ?? 0);
+  const onboardingCompleted = onboarding?.completed === true;
+  const handleDailyOpsBonusSuccess = (amount: number) => {
+    addNotification({
+      time: currentTime,
+      type: 'success',
+      title: 'Operasyon desteği',
+      message: `${formatMoney(amount)} nakit eklendi.`,
+      autoDismissMs: 2800,
+    });
+  };
 
   const handleNavigate = (tab: TabKey) => {
     try {
@@ -445,6 +466,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       />
 
       {showTruckLocationHint ? <TruckLocationHintRow style={styles.truckLocationHint} /> : null}
+
+      <DashboardDailyOpsBonusCard
+        playerLevel={levelProgress.level}
+        onboardingCompleted={onboardingCompleted}
+        onSuccess={handleDailyOpsBonusSuccess}
+      />
 
       <DashboardStatGrid tiles={statTiles} />
 

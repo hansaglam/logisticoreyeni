@@ -106,3 +106,42 @@ export function findUndefinedPaths(
 
   return paths;
 }
+
+/** Save payload optional alanları — undefined olması normal; uyarı spam'ini önler. */
+const OPTIONAL_UNDEFINED_FIELD_SUFFIXES = new Set([
+  'specialty',
+  'requiredReputation',
+  'recommendedTruckCondition',
+  'requiredDriverLevel',
+  'completedAt',
+  'contractType',
+  'riskLevel',
+  'bonusMultiplier',
+  'penaltyMultiplier',
+  'requiredLevel',
+  'selectionScoreBasis',
+  'failureReason',
+  'settledAt',
+  'driverId',
+  'triggeredAt',
+  'targetPrice',
+  'targetPercent',
+]);
+
+function getPathLeafKey(path: string): string {
+  const lastSegment = path.split('.').pop() ?? path;
+  return lastSegment.replace(/\[\d+\]$/, '');
+}
+
+export function isKnownOptionalUndefinedPath(path: string): boolean {
+  return OPTIONAL_UNDEFINED_FIELD_SUFFIXES.has(getPathLeafKey(path));
+}
+
+export function findUnexpectedUndefinedPaths(
+  value: unknown,
+  basePath = 'root',
+): string[] {
+  return findUndefinedPaths(value, basePath).filter(
+    (path) => !isKnownOptionalUndefinedPath(path),
+  );
+}

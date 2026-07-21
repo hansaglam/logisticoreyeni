@@ -14,8 +14,14 @@ type NavigationBarModule = {
   setHidden?: (hidden: boolean) => Promise<void>;
 };
 
+type EdgeToEdgeModule = {
+  isEdgeToEdge?: () => boolean;
+};
+
 let NavigationBar: NavigationBarModule | null = null;
 let missingModuleWarned = false;
+let edgeToEdgeChecked = false;
+let edgeToEdgeEnabled = false;
 
 function warnMissingModule(): void {
   if (missingModuleWarned) return;
@@ -23,6 +29,29 @@ function warnMissingModule(): void {
   console.warn(
     '[system-bars] ExpoNavigationBar native module missing — run: npx expo run:android',
   );
+}
+
+function isAndroidEdgeToEdgeEnabled(): boolean {
+  if (Platform.OS !== 'android') {
+    return false;
+  }
+
+  if (edgeToEdgeChecked) {
+    return edgeToEdgeEnabled;
+  }
+
+  edgeToEdgeChecked = true;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const edgeModule = require('react-native-is-edge-to-edge') as EdgeToEdgeModule;
+    edgeToEdgeEnabled = edgeModule.isEdgeToEdge?.() === true;
+  } catch {
+    // Project gradle.properties enables edge-to-edge; Android 15+ defaults to edge-to-edge.
+    edgeToEdgeEnabled = Number(Platform.Version) >= 35;
+  }
+
+  return edgeToEdgeEnabled;
 }
 
 function getNavigationBarModule(): NavigationBarModule | null {
@@ -57,11 +86,14 @@ export async function enableImmersiveGameMode(): Promise<void> {
   }
 
   try {
-    if (typeof navBar.setBehaviorAsync === 'function') {
+    const edgeToEdge = isAndroidEdgeToEdgeEnabled();
+
+    // Edge-to-edge aktifken behavior/background API'leri desteklenmiyor; plugin config yeterli.
+    if (!edgeToEdge && typeof navBar.setBehaviorAsync === 'function') {
       await navBar.setBehaviorAsync('overlay-swipe');
     }
 
-    if (typeof navBar.setBackgroundColorAsync === 'function') {
+    if (!edgeToEdge && typeof navBar.setBackgroundColorAsync === 'function') {
       await navBar.setBackgroundColorAsync(NAV_BAR_COLOR);
     }
 
@@ -72,10 +104,10 @@ export async function enableImmersiveGameMode(): Promise<void> {
     if (typeof navBar.setHidden === 'function') {
       await navBar.setHidden(true);
     }
-
-    console.log('[system-bars] immersive mode enabled');
   } catch (error) {
-    console.warn('[system-bars] failed to enable immersive mode', error);
+    if (__DEV__) {
+      console.warn('[system-bars] failed to enable immersive mode', error);
+    }
   }
 }
 

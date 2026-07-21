@@ -10,7 +10,7 @@ interface MarketWorldEventsStripProps {
   events: WorldEvent[];
 }
 
-export default function MarketWorldEventsStrip({ events }: MarketWorldEventsStripProps) {
+function MarketWorldEventsStrip({ events }: MarketWorldEventsStripProps) {
   if (events.length === 0) {
     return (
       <AppCard variant="soft" style={styles.calmCard} padded>
@@ -39,6 +39,8 @@ export default function MarketWorldEventsStrip({ events }: MarketWorldEventsStri
     </ScrollView>
   );
 }
+
+export default React.memo(MarketWorldEventsStrip);
 
 const styles = StyleSheet.create({
   row: {

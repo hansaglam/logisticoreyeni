@@ -45,7 +45,7 @@ interface ModuleItem {
   placeholder?: boolean;
 }
 
-const MODULE_ITEMS: ModuleItem[] = [
+const PRODUCTION_MODULE_ITEMS: ModuleItem[] = [
   {
     key: 'finance',
     label: 'Finans',
@@ -61,7 +61,7 @@ const MODULE_ITEMS: ModuleItem[] = [
   {
     key: 'missions',
     label: 'Görevler',
-    subtitle: 'Başlangıç hedeflerini ve ödülleri takip et',
+    subtitle: 'Hedeflerini ve ödüllerini takip et',
     icon: 'contract',
   },
   {
@@ -70,6 +70,9 @@ const MODULE_ITEMS: ModuleItem[] = [
     subtitle: 'Haftalık şirket puanı sıralaması',
     icon: 'company',
   },
+];
+
+const DEV_MODULE_ITEMS: ModuleItem[] = [
   {
     key: 'stats',
     label: 'Şirket İstatistikleri',
@@ -103,17 +106,11 @@ const MODULE_ITEMS: ModuleItem[] = [
   },
 ];
 
-const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
+const VISIBLE_MODULE_ITEMS = __DEV__
+  ? [...PRODUCTION_MODULE_ITEMS, ...DEV_MODULE_ITEMS]
+  : PRODUCTION_MODULE_ITEMS;
 
-const VISIBLE_MODULE_ITEMS = MODULE_ITEMS.filter((item) => {
-  if (item.key === 'debug') {
-    return __DEV__;
-  }
-  if (item.placeholder) {
-    return __DEV__;
-  }
-  return true;
-});
+const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
 
 function getCityName(cityId: string | undefined): string {
   if (!cityId) return 'Bilinmeyen şehir';
@@ -332,23 +329,25 @@ export default function MoreScreen() {
 
       <SectionTitle title="Yönetim Modülleri" compact />
 
-      {VISIBLE_MODULE_ITEMS.map((item) => (
-        <ListRowCard
-          key={item.key}
-          title={item.label}
-          subtitle={item.subtitle}
-          icon={item.icon}
-          onPress={() => handleModulePress(item)}
-          right={
-            <View style={styles.moduleRight}>
-              {item.badge ? (
-                <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
-              ) : null}
-              <ModuleChevron />
-            </View>
-          }
-        />
-      ))}
+      <View style={styles.moduleList}>
+        {VISIBLE_MODULE_ITEMS.map((item) => (
+          <ListRowCard
+            key={item.key}
+            title={item.label}
+            subtitle={item.subtitle}
+            icon={item.icon}
+            onPress={() => handleModulePress(item)}
+            right={
+              <View style={styles.moduleRight}>
+                {__DEV__ && item.badge ? (
+                  <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
+                ) : null}
+                <ModuleChevron />
+              </View>
+            }
+          />
+        ))}
+      </View>
 
       {__DEV__ && ENABLE_SPOTLIGHT_TUTORIAL ? (
         <AppCard variant="soft" style={styles.debugNoteCard} padded>
@@ -576,6 +575,10 @@ const styles = StyleSheet.create({
     marginLeft: spacing.sm,
   },
 
+  moduleList: {
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
   moduleRight: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Platform,
   StyleSheet,
@@ -82,14 +82,14 @@ function useTabBadges(): Partial<Record<TabKey, number>> {
   }, [contracts, trucks, drivers, playerLevel, marketAlerts]);
 }
 
-function TabBadge({ count }: { count: number }) {
+const TabBadge = React.memo(function TabBadge({ count }: { count: number }) {
   const label = count > 99 ? '99+' : String(count);
   return (
     <View style={styles.badge}>
       <Text style={styles.badgeText}>{label}</Text>
     </View>
   );
-}
+});
 
 interface SideTabButtonProps {
   tab: TabDefinition;
@@ -98,7 +98,7 @@ interface SideTabButtonProps {
   onPress: () => void;
 }
 
-function SideTabButton({ tab, isActive, badgeCount, onPress }: SideTabButtonProps) {
+const SideTabButton = React.memo(function SideTabButton({ tab, isActive, badgeCount, onPress }: SideTabButtonProps) {
   const targetId = TAB_TARGET_IDS[tab.key];
 
   const button = (
@@ -138,7 +138,7 @@ function SideTabButton({ tab, isActive, badgeCount, onPress }: SideTabButtonProp
       {button}
     </TutorialTarget>
   );
-}
+});
 
 interface GameTabBarContentProps extends GameTabBarProps {
   bottomInset: number;
@@ -165,10 +165,29 @@ function GameTabBarContent({
   const quickAccessPanelOffset = tabBarHeight + GAME_CENTER_BUTTON_LIFT + 8;
   const highlightedTab = isMainTabKey(activeTab) ? activeTab : null;
 
-  const handleTabPress = (tab: TabKey) => {
+  const handleTabPress = useCallback(
+    (tab: TabKey) => {
+      setQuickAccessOpen(false);
+      onTabPress(tab);
+    },
+    [onTabPress],
+  );
+
+  const handleQuickAccessToggle = useCallback(() => {
+    setQuickAccessOpen((open) => !open);
+  }, []);
+
+  const handleQuickAccessClose = useCallback(() => {
     setQuickAccessOpen(false);
-    onTabPress(tab);
-  };
+  }, []);
+
+  const handleQuickAccessAction = useCallback(
+    (action: QuickAccessAction) => {
+      setQuickAccessOpen(false);
+      onQuickAccess(action);
+    },
+    [onQuickAccess],
+  );
 
   return (
     <>
@@ -200,7 +219,7 @@ function GameTabBarContent({
             <TouchableOpacity
               style={[styles.centerButton, quickAccessOpen && styles.centerButtonOpen]}
               activeOpacity={0.88}
-              onPress={() => setQuickAccessOpen((open) => !open)}
+              onPress={handleQuickAccessToggle}
             >
               <View style={[styles.centerButtonInner, quickAccessOpen && styles.centerButtonInnerOpen]}>
                 <GameIcon name="quickAccess" size={22} color={colors.textPrimary} />
@@ -225,11 +244,8 @@ function GameTabBarContent({
       <QuickAccessMenu
         visible={quickAccessOpen}
         bottomOffset={quickAccessPanelOffset}
-        onClose={() => setQuickAccessOpen(false)}
-        onQuickAccess={(action) => {
-          setQuickAccessOpen(false);
-          onQuickAccess(action);
-        }}
+        onClose={handleQuickAccessClose}
+        onQuickAccess={handleQuickAccessAction}
       />
     </>
   );

@@ -90,7 +90,8 @@ export function buildContractAvailabilityMessage(
     case 'NO_TRUCK_AT_ORIGIN':
       return (
         `Bu iş ${fromCityName} çıkışlı. Bu şehirde boşta kamyonun yok. ` +
-        `${TRUCK_STAYS_AT_DESTINATION_NOTE} Kamyonunun bulunduğu şehirden çıkan işleri seçebilirsin.`
+        `${TRUCK_STAYS_AT_DESTINATION_NOTE} Kamyonunun bulunduğu şehirden çıkan işleri seçebilirsin. ` +
+        'Filo ekranından kamyonu Yönlendir ile bu şehre taşıyabilirsin.'
       );
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
       return (

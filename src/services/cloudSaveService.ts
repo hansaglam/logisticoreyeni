@@ -28,7 +28,7 @@ import {
   buildCloudSaveSummaryFromPayload,
   type CloudSaveSummary,
 } from '../utils/cloudSaveSummary';
-import { findUndefinedPaths, sanitizeForFirestore } from '../utils/sanitizeForFirestore';
+import { findUnexpectedUndefinedPaths, sanitizeForFirestore } from '../utils/sanitizeForFirestore';
 import { getWeeklySeasonDocId } from '../utils/leaderboardSeason';
 import { getFirestoreSafe, isFirebaseEnabled, resetFirebaseFirestoreCache } from './firebase';
 
@@ -36,6 +36,30 @@ function devCloudLog(message: string, ...args: unknown[]): void {
   if (__DEV__) {
     console.log(message, ...args);
   }
+}
+
+let lastUndefinedWarnAt = 0;
+let lastUndefinedWarnKey = '';
+
+function warnUnexpectedUndefinedPaths(paths: string[]): void {
+  if (paths.length === 0) {
+    return;
+  }
+
+  const debugEnabled = __DEV__ && process.env.EXPO_PUBLIC_DEBUG_CLOUD_SAVE === '1';
+  if (!debugEnabled) {
+    return;
+  }
+
+  const warnKey = paths.slice(0, 5).join('|');
+  const now = Date.now();
+  if (warnKey === lastUndefinedWarnKey && now - lastUndefinedWarnAt < 60_000) {
+    return;
+  }
+
+  lastUndefinedWarnKey = warnKey;
+  lastUndefinedWarnAt = now;
+  console.warn('[cloud-save] unexpected undefined paths before sanitize', paths.slice(0, 20));
 }
 
 export type { CloudSaveSummary };
@@ -308,13 +332,8 @@ export async function saveGameToCloud(
     return { ok: false, error: 'firestore-unavailable' };
   }
 
-  const undefinedPaths = findUndefinedPaths(savePayload);
-  if (undefinedPaths.length > 0) {
-    console.warn(
-      '[cloud-save] undefined paths before sanitize',
-      undefinedPaths.slice(0, 20),
-    );
-  }
+  const unexpectedUndefinedPaths = findUnexpectedUndefinedPaths(savePayload);
+  warnUnexpectedUndefinedPaths(unexpectedUndefinedPaths);
 
   const summary = buildCloudSaveSummaryFromPayload(savePayload);
   const sanitizedGameState = sanitizeForFirestore(savePayload);

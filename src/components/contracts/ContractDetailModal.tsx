@@ -15,6 +15,11 @@ import {
 import type { ContractPreview } from '../../simulation/contractPreview';
 import { getContractCargoWeight } from '../../simulation/delivery';
 import { getContractAvailabilityLabel } from '../../utils/contractAvailabilityDisplay';
+import {
+  formatDeadlineRiskNote,
+  formatLatePenaltyHint,
+  hasDeadlineRisk,
+} from '../../utils/deadlineUx';
 import { getCityName, getProductName } from '../../utils/entityLookup';
 import { colors, formatMoney, formatRatioPercent, radius, shadows, spacing, typography } from '../../theme';
 import type { Contract } from '../../types/game';
@@ -131,6 +136,13 @@ export default function ContractDetailModal({
 
   const urgencyLabel = preview.isUrgent ? 'Acil' : 'Normal';
   const profitTone = preview.estimatedOperationalProfit >= 0 ? 'success' : 'danger';
+  const deadlineRisk = hasDeadlineRisk(contract.deadlineHours ?? 0, preview.estimatedTravelHours);
+  const deadlineRiskNote = formatDeadlineRiskNote(preview.isUrgent, deadlineRisk);
+  const latePenaltyHint = formatLatePenaltyHint(
+    preview.isUrgent,
+    preview.contractTypePenaltyMultiplier,
+  );
+  const originCityName = getCityName(contract.originCityId);
 
   return (
     <Modal
@@ -163,7 +175,21 @@ export default function ContractDetailModal({
             <DetailRow label="Rota" value={routeLine} />
             <DetailRow label="Ürün" value={getProductName(contract.productId)} />
             <DetailRow label="Yük" value={`${cargoWeight.toFixed(1)} t`} />
-            <DetailRow label="Kalan süre" value={formatTimeLeft(contract.deadlineHours)} />
+            <DetailRow label="Çıkış şehri" value={originCityName} />
+            <DetailRow label="Teslim süresi" value={formatTimeLeft(contract.deadlineHours)} />
+            {preview.estimatedTravelHours > 0 ? (
+              <DetailRow
+                label="Tahmini yol süresi"
+                value={formatTimeLeft(preview.estimatedTravelHours)}
+                tone={deadlineRisk ? 'warning' : 'default'}
+              />
+            ) : null}
+            {deadlineRiskNote ? (
+              <DetailRow label="Süre uyarısı" value={deadlineRiskNote} tone="danger" />
+            ) : null}
+            {latePenaltyHint ? (
+              <DetailRow label="Geç teslim" value={latePenaltyHint} tone="warning" />
+            ) : null}
             <DetailRow label="Ödeme" value={formatMoney(preview.estimatedGrossPayment)} tone="success" />
             {preview.contractTypePaymentBonus != null &&
             preview.contractTypePaymentBonus !== 0 ? (

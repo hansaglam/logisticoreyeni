@@ -58,6 +58,17 @@ module.exports = () => {
           iosUrlScheme: 'com.googleusercontent.apps.363783837598-tvbeuhmirctkrpdam51lsqm5uj8nac3l',
         },
       ],
+      // AdMob — Expo Go desteklemez; development build / EAS gerekir.
+      // TODO(production-iOS): ATT + UMP consent akışı release öncesi eklenmeli.
+      [
+        'react-native-google-mobile-ads',
+        {
+          androidAppId: 'ca-app-pub-8214453687597896~5560651696',
+          iosAppId: 'ca-app-pub-8214453687597896~4247570027',
+          userTrackingUsageDescription:
+            'Bu tanımlayıcı size daha uygun reklamlar sunmak için kullanılır.',
+        },
+      ],
     ],
     extra: {
       ...(expo.extra ?? {}),
@@ -72,6 +83,9 @@ module.exports = () => {
       google: {
         webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '',
         iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '',
+      },
+      ads: {
+        mode: process.env.EXPO_PUBLIC_ADS_MODE ?? '',
       },
     },
   };

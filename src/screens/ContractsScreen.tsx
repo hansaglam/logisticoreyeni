@@ -17,6 +17,14 @@ import {
 import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import ContractQuickActionSheet from '../components/contracts/ContractQuickActionSheet';
+import AdRewardButton from '../components/monetization/AdRewardButton';
+import { contractGenerationBalance } from '../config/balance';
+import {
+  canGrantAdReward,
+  isDeliveryBoosted,
+  resetDailyUsageIfNeeded,
+} from '../simulation/adRewardGrants';
+import { isAdProviderAvailable } from '../services/adProvider';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import {
@@ -82,6 +90,8 @@ const COLORS = {
 
 type FilterKey = 'all' | 'bestPayment' | 'shortDistance' | 'urgent' | 'lowRisk';
 type SegmentKey = 'available' | 'active' | 'completed';
+
+const EMPTY_CONTRACT_PREVIEW_MAP = new Map<string, ContractPreview>();
 
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
 
@@ -530,7 +540,7 @@ const ContractCard = React.memo(function ContractCard({
             numberOfLines={1}
             ellipsizeMode="tail"
           >
-            {formatTonsCompact(cargoWeight)} · {formatTimeLeft(contract.deadlineHours)}
+            {formatTonsCompact(cargoWeight)} · Teslim {formatTimeLeft(contract.deadlineHours)}
           </Text>
         </View>
 
@@ -552,10 +562,10 @@ const ContractCard = React.memo(function ContractCard({
         </View>
       </View>
 
-      {footerBadges.length > 0 || worldEventLabel ? (
+      {footerBadges.length > 0 || (worldEventLabel && footerBadges.length < 2) ? (
         <View style={styles.cardFooter}>
           <View style={styles.cardBadgeRow}>
-            {worldEventLabel ? (
+            {worldEventLabel && footerBadges.length < 2 ? (
               <View style={[styles.miniBadge, styles.miniBadgeSoft, styles.eventBadge]}>
                 <Text style={[styles.miniBadgeText, styles.eventBadgeText]} numberOfLines={1}>
                   Olay · {worldEventLabel}
@@ -597,11 +607,45 @@ interface ActiveDeliveryCardProps {
   delivery: Delivery;
   trucks: Truck[];
   drivers: Driver[];
-  currentTime: number;
+  onBoostSuccess?: () => void;
 }
 
-function ActiveDeliveryCard({ delivery, trucks, drivers, currentTime }: ActiveDeliveryCardProps) {
-  const hoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
+const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
+  delivery,
+  trucks,
+  drivers,
+  onBoostSuccess,
+}: ActiveDeliveryCardProps) {
+  const currentTime = useGameStore((state) => state.currentTime);
+  const monetization = useGameStore((state) => state.monetization);
+  const playerLevel = useGameStore(
+    (state) => Math.max(1, state.player?.level ?? state.player?.companyLevel ?? 1),
+  );
+  const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
+  const deadlineHoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
+  const etaHoursLeft = Math.max(0, delivery.estimatedArrivalTime - currentTime);
+  const isLateRisk = delivery.estimatedArrivalTime > delivery.deadlineTime;
+  const alreadyBoosted = isDeliveryBoosted(monetization, delivery.id);
+  const boostContext = useMemo(
+    () => ({ selectedDeliveryId: delivery.id }),
+    [delivery.id],
+  );
+  const boostEligibility = useMemo(
+    () =>
+      canGrantAdReward(resetDailyUsageIfNeeded(monetization), 'delivery_boost', {
+        currentGameTime: currentTime,
+        playerLevel,
+        hasCompletedOnboarding,
+        ...boostContext,
+      }),
+    [boostContext, currentTime, hasCompletedOnboarding, monetization, playerLevel],
+  );
+  const canShowBoost =
+    isAdProviderAvailable() &&
+    (delivery.status === 'on_route' || delivery.status === 'preparing') &&
+    delivery.progress < 1 &&
+    !alreadyBoosted &&
+    boostEligibility.ok;
   const truck = (trucks ?? []).find((item) => item.id === delivery.truckId);
   const driver = (drivers ?? []).find((item) => item.id === delivery.driverId);
 
@@ -627,9 +671,14 @@ function ActiveDeliveryCard({ delivery, trucks, drivers, currentTime }: ActiveDe
             {formatMoney(delivery.estimatedProfit)}
           </Text>
           <View style={styles.cardMetricTimeRow}>
-            <GameIcon name="time" size={11} color={COLORS.muted} />
-            <Text style={styles.cardMetaValue} numberOfLines={1} ellipsizeMode="tail">
-              {formatTimeLeft(hoursLeft)}
+            <GameIcon name="time" size={11} color={isLateRisk ? COLORS.red : COLORS.muted} />
+            <Text
+              style={[styles.cardMetaValue, isLateRisk && styles.cardMetaLateRisk]}
+              numberOfLines={2}
+              ellipsizeMode="tail"
+            >
+              {isLateRisk ? 'Deadline riski · ' : ''}
+              Teslim {formatTimeLeft(deadlineHoursLeft)} · Varış ~{formatTimeLeft(etaHoursLeft)}
             </Text>
           </View>
         </View>
@@ -638,9 +687,21 @@ function ActiveDeliveryCard({ delivery, trucks, drivers, currentTime }: ActiveDe
         <ProgressBar progress={delivery.progress} color={COLORS.cyan} height={3} />
         <Text style={styles.activeProgressText}>{formatPercent(delivery.progress)}</Text>
       </View>
+      {canShowBoost ? (
+        <View style={styles.deliveryBoostRow} collapsable={false}>
+          <AdRewardButton
+            slotId="delivery_boost"
+            label="Reklam izle, teslimatı hızlandır"
+            description="İlerleme +18% · aynı teslimat bir kez"
+            context={boostContext}
+            onSuccess={onBoostSuccess}
+            variant="secondary"
+          />
+        </View>
+      ) : null}
     </View>
   );
-}
+});
 
 interface CompletedContractCardProps {
   contract: Contract;
@@ -695,6 +756,7 @@ function CompletedContractCard({
 export default function ContractsScreen() {
   const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
+  const monetization = useGameStore((state) => state.monetization);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
@@ -709,6 +771,9 @@ export default function ContractsScreen() {
   const clearMarketContractFilter = useGameStore((state) => state.clearMarketContractFilter);
   const setHighlightedContractId = useGameStore((state) => state.setHighlightedContractId);
   const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
+  const lastManualContractRefreshTime = useGameStore(
+    (state) => state.lastManualContractRefreshTime ?? 0,
+  );
   const notifyContractsScreenOpened = useGameStore((state) => state.notifyContractsScreenOpened);
   const notifyContractAssignmentOpened = useGameStore((state) => state.notifyContractAssignmentOpened);
   const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
@@ -742,9 +807,12 @@ export default function ContractsScreen() {
   const completedDeliveryCount = player?.completedContracts ?? 0;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(completedDeliveryCount);
 
+  const needsContractPreviews =
+    activeSegment === 'available' || activeSegment === 'completed';
+
   const activeWorldEvents = useMemo(
-    () => getActiveWorldEventsValue(),
-    [getActiveWorldEventsValue, worldEvents, currentTime],
+    () => (needsContractPreviews ? getActiveWorldEventsValue() : []),
+    [getActiveWorldEventsValue, worldEvents, currentTime, needsContractPreviews],
   );
 
   const availableContracts = useMemo(
@@ -772,8 +840,8 @@ export default function ContractsScreen() {
   }, [availableContracts]);
 
   const contractPreviewById = useMemo(() => {
-    if (!globalEconomy) {
-      return new Map<string, ContractPreview>();
+    if (activeSegment !== 'available' || !globalEconomy) {
+      return EMPTY_CONTRACT_PREVIEW_MAP;
     }
 
     const previews = new Map<string, ContractPreview>();
@@ -793,7 +861,7 @@ export default function ContractsScreen() {
       );
     }
     return previews;
-  }, [availableContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
+  }, [activeSegment, availableContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
 
   const playableContractCount = useMemo(
     () =>
@@ -865,8 +933,8 @@ export default function ContractsScreen() {
   }, []);
 
   const completedPreviewById = useMemo(() => {
-    if (!globalEconomy) {
-      return new Map<string, ContractPreview>();
+    if (activeSegment !== 'completed' || !globalEconomy) {
+      return EMPTY_CONTRACT_PREVIEW_MAP;
     }
 
     const previews = new Map<string, ContractPreview>();
@@ -886,7 +954,7 @@ export default function ContractsScreen() {
       );
     }
     return previews;
-  }, [completedContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
+  }, [activeSegment, completedContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
 
   const tabSegments = useMemo<TabSegment[]>(
     () => [
@@ -957,11 +1025,11 @@ export default function ContractsScreen() {
     notifyContractAssignmentOpened();
   };
 
-  const openQuickSheet = (contract: Contract) => {
+  const openQuickSheet = useCallback((contract: Contract) => {
     setQuickSheetContract(contract);
     setQuickSheetVisible(true);
     notifyContractAssignmentOpened();
-  };
+  }, [notifyContractAssignmentOpened]);
 
   const closeQuickSheet = () => {
     setQuickSheetVisible(false);
@@ -1072,6 +1140,19 @@ export default function ContractsScreen() {
     setStatusMessage({ type: 'success', text: 'Piyasa güncellendi' });
   };
 
+  const isRefreshOnCooldown = useMemo(() => {
+    const hoursSinceManual = currentTime - lastManualContractRefreshTime;
+    return hoursSinceManual < contractGenerationBalance.manualRefreshCooldownHours;
+  }, [currentTime, lastManualContractRefreshTime]);
+
+  const handleAdRefreshSuccess = () => {
+    setStatusMessage({ type: 'success', text: 'Reklam sonrası piyasa yenilendi' });
+  };
+
+  const handleDeliveryBoostSuccess = useCallback(() => {
+    setStatusMessage({ type: 'success', text: 'Teslimat hızlandırıldı' });
+  }, []);
+
   const marketFilterLine = isRouteContractFilter(marketContractFilter)
     ? `${marketContractFilter.fromCityName} → ${marketContractFilter.toCityName} · ${marketContractFilter.productName}`
     : '';
@@ -1137,7 +1218,7 @@ export default function ContractsScreen() {
             delivery={item.delivery}
             trucks={player.trucks ?? []}
             drivers={player.drivers ?? []}
-            currentTime={currentTime}
+            onBoostSuccess={handleDeliveryBoostSuccess}
           />
         );
       }
@@ -1157,12 +1238,24 @@ export default function ContractsScreen() {
       highlightedContractId,
       firstTutorialContractId,
       scrollTutorialContractIntoView,
-      currentTime,
       activeDeliveries,
       completedPreviewById,
       openQuickSheet,
+      handleDeliveryBoostSuccess,
     ],
   );
+
+  const listExtraData = useMemo(() => {
+    if (activeSegment === 'active') {
+      return activeDeliveries
+        .map((delivery) => `${delivery.id}:${Math.floor(delivery.progress * 100)}:${delivery.status}`)
+        .join('|');
+    }
+    if (activeSegment === 'available') {
+      return `${highlightedContractId ?? ''}:${monetization.totalRewardedAdsToday}`;
+    }
+    return activeSegment;
+  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday]);
 
   const listHeader = useMemo(() => {
     if (activeSegment !== 'available') {
@@ -1317,6 +1410,23 @@ export default function ContractsScreen() {
           <TruckLocationHintRow style={styles.truckLocationHint} />
         ) : null}
 
+        {isRefreshOnCooldown ? (
+          <View style={styles.adRewardStrip}>
+            <AdRewardButton
+              slotId="contract_refresh"
+              label="Reklam izle, piyasayı şimdi yenile"
+              description="Manuel yenileme bekleme süresini atla."
+              context={{
+                manualRefreshCooldownRemaining:
+                  contractGenerationBalance.manualRefreshCooldownHours -
+                  (currentTime - lastManualContractRefreshTime),
+              }}
+              onSuccess={handleAdRefreshSuccess}
+              variant="secondary"
+            />
+          </View>
+        ) : null}
+
         <ContractsTabBar
           segments={tabSegments}
           activeKey={activeSegment}
@@ -1328,6 +1438,7 @@ export default function ContractsScreen() {
           data={listItems}
           keyExtractor={(item) => item.key}
           renderItem={renderContractListItem}
+          extraData={listExtraData}
           ListHeaderComponent={listHeader}
           ListEmptyComponent={listEmpty}
           style={styles.listScroll}
@@ -1336,6 +1447,7 @@ export default function ContractsScreen() {
             { paddingBottom: scrollBottomPadding },
           ]}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
           initialNumToRender={8}
           maxToRenderPerBatch={12}
           windowSize={8}
@@ -1467,6 +1579,10 @@ const styles = StyleSheet.create({
   },
   truckLocationHint: {
     marginBottom: spacing.sm,
+  },
+  adRewardStrip: {
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.sm,
   },
   nextRouteHint: {
     marginBottom: spacing.sm,
@@ -1839,6 +1955,9 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontWeight: '700',
   },
+  cardMetaLateRisk: {
+    color: COLORS.red,
+  },
   cardFooter: {
     marginTop: 6,
     gap: 4,
@@ -1963,5 +2082,8 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     minWidth: 30,
     textAlign: 'right',
+  },
+  deliveryBoostRow: {
+    marginTop: spacing.sm,
   },
 });

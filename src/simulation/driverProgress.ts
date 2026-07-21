@@ -18,7 +18,7 @@ export const DRIVER_LEVEL_XP_THRESHOLDS: Record<number, number> = {
   2: 100,
   3: 250,
   4: 500,
-  5: 900,
+  5: 1150,
 };
 
 const SPECIALTY_BY_TYPE: Partial<Record<ContractType, DriverSpecialty>> = {

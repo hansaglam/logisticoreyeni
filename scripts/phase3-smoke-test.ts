@@ -789,7 +789,8 @@ assert(urgentShare <= 0.45, 'urgent aşırı sık değil (harness)', `share=${ur
 assert(avgProfit > -5000 && avgProfit < 50000, 'ortalama net kâr mantıklı', `avg=${avgProfit.toFixed(0)}`);
 
 const fastLevel = computeDriverLevelFromXp(900);
-assert(fastLevel === 5, '900 XP → level 5 cap');
+assert(fastLevel === 4, '900 XP → level 4');
+assert(computeDriverLevelFromXp(1150) === 5, '1150 XP → level 5 cap');
 assert(getTruckUpgradeCost(STARTER_TRUCK, 'engine') >= 3000, 'upgrade pahalı (>=3000)');
 
 // ---------------------------------------------------------------------------

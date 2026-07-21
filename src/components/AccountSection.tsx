@@ -1,21 +1,17 @@
 /**
- * Şirket ekranı — Hesap bölümü (oyuncu yüzü).
+ * Şirket ekranı — Hesap / bulut kaydı (oyuncu yüzü).
  *
  * Cloud save arka planda otomatik çalışır.
  * Teknik sync / UID yalnızca __DEV__ panelinde görünür.
- *
- * App Store: iOS’ta Google veya başka 3. taraf login sunulursa
- * Apple ile Giriş de sunulmalıdır (Guideline 4.8).
- *
- * NOT: Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AuthCredential } from 'firebase/auth';
 
 import { useAppDialog } from './AppDialogProvider';
-import { ActionButton, AppCard, SectionTitle, StatusBadge } from './ui';
+import { ActionButton, AppCard, GameIcon, StatusBadge } from './ui';
+import type { StatusBadgeVariant } from './ui';
 import {
   DEFAULT_ACCOUNT_STATUS,
   getAccountStatus,
@@ -55,7 +51,7 @@ import { colors, spacing, typography } from '../theme';
 
 function getStatusBadgeVariant(
   status: CloudSaveStatusState['status'],
-): 'success' | 'amber' | 'danger' | 'muted' | 'blue' {
+): StatusBadgeVariant {
   switch (status) {
     case 'success':
       return 'success';
@@ -67,6 +63,49 @@ function getStatusBadgeVariant(
     default:
       return 'muted';
   }
+}
+
+function formatLastSaveLabel(timestamp: number | null): string {
+  if (!timestamp) {
+    return 'Henüz kaydedilmedi';
+  }
+
+  const date = new Date(timestamp);
+  const now = new Date();
+  const time = date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+  if (date.toDateString() === now.toDateString()) {
+    return `Bugün ${time}`;
+  }
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `Dün ${time}`;
+  }
+
+  return date.toLocaleDateString('tr-TR', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getCloudSaveUserStatus(status: CloudSaveStatusState): {
+  label: string;
+  variant: StatusBadgeVariant;
+} {
+  if (!status.firebaseEnabled || !status.uid) {
+    return { label: 'Yerel kayıt', variant: 'muted' };
+  }
+  if (status.status === 'failed') {
+    return { label: 'Yeniden denenecek', variant: 'amber' };
+  }
+  if (status.status === 'syncing' || status.status === 'pending') {
+    return { label: 'Kaydediliyor', variant: 'blue' };
+  }
+  return { label: 'Güvende', variant: 'success' };
 }
 
 function linkErrorMessage(error: string | undefined): string | null {
@@ -96,6 +135,23 @@ function linkErrorMessage(error: string | undefined): string | null {
   return getAccountLinkGeneralErrorMessage();
 }
 
+function AccountStatusRow({
+  label,
+  value,
+  badgeVariant = 'muted',
+}: {
+  label: string;
+  value: string;
+  badgeVariant?: StatusBadgeVariant;
+}) {
+  return (
+    <View style={styles.statusRow}>
+      <Text style={styles.statusRowLabel}>{label}</Text>
+      <StatusBadge label={value} variant={badgeVariant} size="sm" />
+    </View>
+  );
+}
+
 function DeveloperCloudStatus({
   status,
   onManualSync,
@@ -119,7 +175,7 @@ function DeveloperCloudStatus({
           size="sm"
         />
       </View>
-      <Text style={styles.subtitle}>{getCloudSaveStatusSubtitle(status)}</Text>
+      <Text style={styles.devSubtitle}>{getCloudSaveStatusSubtitle(status)}</Text>
       {status.uidShort ? <Text style={styles.metaText}>UID: {status.uidShort}</Text> : null}
       <View style={styles.buttonRow}>
         <ActionButton
@@ -151,6 +207,7 @@ export default function AccountSection() {
   const [isChecking, setIsChecking] = useState(false);
   const [isLinking, setIsLinking] = useState<'google' | 'apple' | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [dangerExpanded, setDangerExpanded] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(() => isGoogleSignInConfigured());
   const [appleAvailable, setAppleAvailable] = useState(false);
   const deleteAccountAndCloudData = useGameStore((state) => state.deleteAccountAndCloudData);
@@ -166,9 +223,6 @@ export default function AccountSection() {
   }, []);
 
   const refreshCloudStatus = useCallback(() => {
-    if (!__DEV__) {
-      return;
-    }
     setCloudStatus(getCloudSaveStatus());
   }, []);
 
@@ -203,9 +257,6 @@ export default function AccountSection() {
   }, []);
 
   useEffect(() => {
-    if (!__DEV__) {
-      return undefined;
-    }
     refreshCloudStatus();
     return subscribeCloudSaveStatus(refreshCloudStatus);
   }, [refreshCloudStatus]);
@@ -235,7 +286,7 @@ export default function AccountSection() {
     try {
       const candidate = await checkCloudSaveMeta(useGameStore.getState());
       refreshCloudStatus();
-      if (candidate.hasCandidate && candidate.cloudSummary) {
+      if (__DEV__ && candidate.hasCandidate && candidate.cloudSummary) {
         console.log('[cloud-save] restore candidate', candidate.cloudSummary);
       }
     } finally {
@@ -429,7 +480,7 @@ export default function AccountSection() {
     showDialog({
       title: isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Sil',
       message: isGuest
-        ? 'Bu cihazdaki oyun ilerlemen ve misafir bulut kaydın silinir. Bu işlem geri alınamaz.'
+        ? 'Bu işlem yerel ilerlemeni silebilir. Devam etmek istiyor musun?'
         : 'Oyun verilerin, bulut kaydın ve hesap bağlantın silinir. Bu işlem geri alınamaz.',
       variant: 'danger',
       confirmLabel: 'Kalıcı Olarak Sil',
@@ -471,102 +522,272 @@ export default function AccountSection() {
     safeAccountStatus.isAnonymous || safeAccountStatus.provider === 'guest';
   const showApple = Platform.OS === 'ios' && appleAvailable;
   const showGoogle = Platform.OS === 'ios' || Platform.OS === 'android';
-
-  const linkedTitle =
-    safeAccountStatus.provider === 'google'
-      ? 'Google hesabı bağlı'
-      : safeAccountStatus.provider === 'apple'
-        ? 'Apple hesabı bağlı'
-        : 'Bağlı hesap';
+  const cloudUserStatus = getCloudSaveUserStatus(cloudStatus);
+  const cardVariant = isGuest ? 'guest' : 'linked';
 
   return (
-    <AppCard style={styles.card} padded>
-      <SectionTitle title="Hesap" compact />
-
-      {!safeAccountStatus.isReady ? (
-        <>
-          <Text style={styles.statusTitle}>Hesap kontrol ediliyor...</Text>
-          <Text style={styles.subtitle}>Oturum bilgisi yükleniyor.</Text>
-        </>
-      ) : isGuest ? (
-        <>
-          <Text style={styles.statusTitle}>Misafir olarak oynuyorsun.</Text>
-          <Text style={styles.subtitle}>
-            İlerlemeni farklı cihazlarda korumak için hesabını bağlayabilirsin.
-          </Text>
-        </>
-      ) : (
-        <>
-          <Text style={styles.statusTitle}>{linkedTitle}</Text>
-          <Text style={styles.subtitle}>İlerlemen hesabınla korunuyor.</Text>
-        </>
-      )}
-
-      {safeAccountStatus.isReady && isGuest ? (
-        <View style={styles.linkButtons}>
-          {showApple ? (
-            <ActionButton
-              label={isLinking === 'apple' ? 'Bağlanıyor...' : 'Apple ile Bağlan'}
-              onPress={() => void handleLink('apple')}
-              variant="secondary"
-              compact
-              disabled={Boolean(isLinking)}
+    <AppCard
+      style={[styles.card, cardVariant === 'linked' ? styles.cardLinked : styles.cardGuest]}
+      padded={false}
+    >
+      <View style={styles.cardInner}>
+        <View style={styles.heroRow}>
+          <View
+            style={[
+              styles.heroIconWrap,
+              cardVariant === 'linked' ? styles.heroIconWrapLinked : styles.heroIconWrapGuest,
+            ]}
+          >
+            <GameIcon
+              name={cardVariant === 'linked' ? 'success' : 'warning'}
+              size={22}
+              color={cardVariant === 'linked' ? colors.success : colors.accentAmber}
             />
-          ) : null}
-          {showGoogle ? (
-            <ActionButton
-              label={isLinking === 'google' ? 'Bağlanıyor...' : 'Google ile Bağlan'}
-              onPress={() => void handleLink('google')}
-              variant="secondary"
-              compact
-              disabled={Boolean(isLinking)}
-            />
-          ) : null}
-          {!googleConfigured && showGoogle ? (
-            <Text style={styles.hintText}>
-              {Platform.OS === 'ios'
-                ? 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID veya Google yapılandırmasını kontrol et.'
-                : 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID eksik. .env sonrası: npx expo start -c'}
-            </Text>
+          </View>
+          <View style={styles.heroMain}>
+            {!safeAccountStatus.isReady ? (
+              <>
+                <Text style={styles.heroTitle}>Hesap kontrol ediliyor...</Text>
+                <Text style={styles.heroSubtitle}>Oturum bilgisi yükleniyor.</Text>
+              </>
+            ) : isGuest ? (
+              <>
+                <Text style={styles.heroTitle}>Hesabını Güvenceye Al</Text>
+                <Text style={styles.heroSubtitle}>
+                  Misafir modunda oynuyorsun. İlerlemeni kaybetmemek ve liderlik tablosuna
+                  katılmak için hesabını bağla.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.heroTitle}>Hesap Bağlı</Text>
+                <Text style={styles.heroSubtitle}>
+                  İlerlemen bulut kaydıyla korunuyor.
+                </Text>
+              </>
+            )}
+          </View>
+          {safeAccountStatus.isReady && !isGuest ? (
+            <StatusBadge label="Bağlı" variant="success" size="sm" />
           ) : null}
         </View>
-      ) : null}
 
-      <View style={styles.dataManagement}>
-        <Text style={styles.dataManagementTitle}>Veri Yönetimi</Text>
-        <ActionButton
-          label={
-            isDeleting
-              ? 'Siliniyor...'
-              : isGuest
-                ? 'Misafir Kaydını Sil'
-                : 'Hesabı Sil'
-          }
-          onPress={handleDeleteAccount}
-          variant="danger"
-          compact
-          disabled={isDeleting || !safeAccountStatus.isReady}
-          style={styles.deleteButton}
-        />
+        {safeAccountStatus.isReady ? (
+          <View style={styles.statusPanel}>
+            <AccountStatusRow
+              label="Bulut Kaydı"
+              value={cloudUserStatus.label}
+              badgeVariant={cloudUserStatus.variant}
+            />
+            <AccountStatusRow
+              label="Son kayıt"
+              value={formatLastSaveLabel(cloudStatus.lastSyncAt)}
+              badgeVariant="muted"
+            />
+            <AccountStatusRow
+              label="Liderlik Tablosu"
+              value={isGuest ? 'Hesap bağlanınca aktif' : 'Aktif'}
+              badgeVariant={isGuest ? 'muted' : 'success'}
+            />
+          </View>
+        ) : null}
+
+        {safeAccountStatus.isReady && isGuest ? (
+          <View style={styles.linkButtons}>
+            {showGoogle ? (
+              <ActionButton
+                label={isLinking === 'google' ? 'Bağlanıyor...' : 'Google ile Devam Et'}
+                onPress={() => void handleLink('google')}
+                variant="primary"
+                compact
+                disabled={Boolean(isLinking)}
+                style={styles.primaryLinkButton}
+              />
+            ) : null}
+            {showApple ? (
+              <ActionButton
+                label={isLinking === 'apple' ? 'Bağlanıyor...' : 'Apple ile Devam Et'}
+                onPress={() => void handleLink('apple')}
+                variant="secondary"
+                compact
+                disabled={Boolean(isLinking)}
+              />
+            ) : null}
+            {__DEV__ && !googleConfigured && showGoogle ? (
+              <Text style={styles.devHintText}>
+                {Platform.OS === 'ios'
+                  ? 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID veya Google yapılandırmasını kontrol et.'
+                  : 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID eksik. .env sonrası: npx expo start -c'}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {safeAccountStatus.isReady && !isGuest ? (
+          <Text style={styles.secureFootnote}>Hesabın güvende · Bulut kaydı aktif</Text>
+        ) : null}
+
+        <View style={styles.dangerZone}>
+          <Pressable
+            style={styles.dangerToggle}
+            onPress={() => setDangerExpanded((open) => !open)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: dangerExpanded }}
+          >
+            <Text style={styles.dangerTitle}>Tehlikeli İşlemler</Text>
+            <Text style={styles.dangerChevron}>{dangerExpanded ? '▾' : '▸'}</Text>
+          </Pressable>
+          {dangerExpanded ? (
+            <ActionButton
+              label={
+                isDeleting
+                  ? 'Siliniyor...'
+                  : isGuest
+                    ? 'Misafir Kaydını Sil'
+                    : 'Hesabı Sil'
+              }
+              onPress={handleDeleteAccount}
+              variant="danger"
+              compact
+              disabled={isDeleting || !safeAccountStatus.isReady}
+              style={styles.dangerButton}
+            />
+          ) : null}
+        </View>
+
+        {__DEV__ ? (
+          <DeveloperCloudStatus
+            status={cloudStatus}
+            onManualSync={() => void handleManualSync()}
+            onCheckCloud={() => void handleCheckCloud()}
+            isManualSyncing={isManualSyncing}
+            isChecking={isChecking}
+          />
+        ) : null}
       </View>
-
-      {__DEV__ ? (
-        <DeveloperCloudStatus
-          status={cloudStatus}
-          onManualSync={() => void handleManualSync()}
-          onCheckCloud={() => void handleCheckCloud()}
-          isManualSyncing={isManualSyncing}
-          isChecking={isChecking}
-        />
-      ) : null}
     </AppCard>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  cardGuest: {
+    borderColor: 'rgba(245, 158, 11, 0.28)',
+    backgroundColor: 'rgba(15, 23, 42, 0.98)',
+  },
+  cardLinked: {
+    borderColor: 'rgba(34, 197, 94, 0.28)',
+    backgroundColor: 'rgba(11, 18, 32, 0.98)',
+  },
+  cardInner: {
+    padding: spacing.md,
     gap: spacing.sm,
+  },
+  heroRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  heroIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroIconWrapGuest: {
+    backgroundColor: colors.warningSoft,
+  },
+  heroIconWrapLinked: {
+    backgroundColor: colors.successSoft,
+  },
+  heroMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  heroTitle: {
+    ...typography.cardTitle,
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  heroSubtitle: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    lineHeight: 19,
+  },
+  statusPanel: {
+    backgroundColor: colors.cardSoft,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: 2,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingVertical: 6,
+  },
+  statusRowLabel: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    flex: 1,
+  },
+  linkButtons: {
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  primaryLinkButton: {
+    alignSelf: 'stretch',
+  },
+  secureFootnote: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  dangerZone: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  dangerToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+  },
+  dangerTitle: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+  },
+  dangerChevron: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  dangerButton: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.xs,
+  },
+  devHintText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    lineHeight: 16,
   },
   headerRow: {
     flexDirection: 'row',
@@ -574,45 +795,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  statusTitle: {
-    ...typography.bodySmall,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  subtitle: {
+  devSubtitle: {
     ...typography.caption,
     color: colors.textSecondary,
     lineHeight: 16,
-  },
-  linkButtons: {
-    gap: spacing.sm,
-    marginTop: spacing.xs,
-  },
-  hintText: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  dataManagement: {
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    gap: spacing.sm,
-  },
-  dataManagementTitle: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  deleteButton: {
-    alignSelf: 'flex-start',
-  },
-  metaText: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontFamily: 'monospace',
   },
   buttonRow: {
     flexDirection: 'row',
@@ -635,5 +821,10 @@ const styles = StyleSheet.create({
     ...typography.caption,
     fontWeight: '700',
     color: colors.accentAmber,
+  },
+  metaText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontFamily: 'monospace',
   },
 });

@@ -246,7 +246,7 @@ export async function syncLocalSaveToCloud(
   const now = Date.now();
 
   if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < MIN_SYNC_INTERVAL_MS) {
-    if (cloudSaveStatus !== 'failed') {
+    if (cloudSaveStatus !== 'failed' && cloudSaveStatus !== 'pending' && cloudSaveStatus !== 'syncing') {
       setCloudSaveStatus('pending');
     }
     return false;

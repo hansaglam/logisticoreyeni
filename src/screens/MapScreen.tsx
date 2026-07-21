@@ -22,6 +22,7 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { getContractAvailability } from '../simulation/delivery';
+import { isDeliveryLateRisk } from '../utils/deadlineUx';
 import { findMarketOpportunities } from '../simulation/contracts';
 import {
   getRecommendedContractById,
@@ -227,7 +228,12 @@ function TruckTrackCard({ truck, delivery, transfer, homeCityId, currentTime }: 
   if (truck.status === 'on_route' && delivery) {
     routeLine = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
     progress = safeProgress(delivery.progress);
-    metaLine = `Teslimat · ${formatRemainingShort(currentTime, delivery.estimatedArrivalTime)}`;
+    const isLateRisk = isDeliveryLateRisk(delivery.estimatedArrivalTime, delivery.deadlineTime);
+    const etaText = formatRemainingShort(currentTime, delivery.estimatedArrivalTime);
+    const deadlineText = formatRemainingShort(currentTime, delivery.deadlineTime);
+    metaLine = isLateRisk
+      ? `Deadline riski · Varış ${etaText}`
+      : `Varış ${etaText} · Teslim ${deadlineText}`;
   } else if (truck.status === 'transferring' && transfer) {
     routeLine = `${getCityName(transfer.fromCityId)} → ${getCityName(transfer.toCityId)}`;
     progress = safeProgress(transfer.progress);
@@ -639,7 +645,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
       return;
     }
 
-    if (__DEV__) {
+    if (__DEV__ && process.env.EXPO_PUBLIC_DEBUG_MAP === '1') {
       console.log('Map recommended contract opened', recommendedContract.id);
     }
     openContractsForMapContract(recommendedContract);

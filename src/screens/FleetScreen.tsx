@@ -4,7 +4,7 @@
  * Premium kompakt filo yönetimi — kamyonlar, şoförler ve mağaza.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
@@ -64,9 +64,15 @@ import {
   type TruckSellCheck,
 } from '../simulation/fleetManagement';
 import TruckTransferModal from '../components/TruckTransferModal';
+import AdRewardButton from '../components/monetization/AdRewardButton';
+import {
+  calculateDiscountedRepairCost,
+  getActiveMaintenanceDiscountToken,
+} from '../simulation/adRewardGrants';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatDisplayPercent, formatCityLocative, formatIdleTruckReadyHint, formatMoney, formatRatioPercent, spacing, typography } from '../theme';
 import type { Delivery, DeliveryStatus, Driver, Truck, TruckTransfer } from '../types/game';
+import type { MonetizationState } from '../types/monetization';
 
 const CONDITION_GOOD_THRESHOLD = 70;
 const CONDITION_FAIR_THRESHOLD = 40;
@@ -222,7 +228,7 @@ interface FleetMetricStripProps {
   averageCondition: number;
 }
 
-function FleetMetricStrip({
+const FleetMetricStrip = React.memo(function FleetMetricStrip({
   truckCount,
   driverCount,
   idleTrucks,
@@ -249,7 +255,7 @@ function FleetMetricStrip({
       />
     </ScrollView>
   );
-}
+});
 
 interface OwnedTruckCardProps {
   truck: Truck;
@@ -258,7 +264,7 @@ interface OwnedTruckCardProps {
   transfer?: TruckTransfer;
   drivers: Driver[];
   homeCityId?: string;
-  currentTime: number;
+  monetization: MonetizationState;
   sellCheck: TruckSellCheck;
   onRepair: (truck: Truck) => void;
   onUpgrade: (truck: Truck, upgradeType: TruckUpgradeType) => void;
@@ -279,14 +285,14 @@ function formatLeaseRemainingDays(
   return `${days} gün`;
 }
 
-function OwnedTruckCard({
+const OwnedTruckCard = React.memo(function OwnedTruckCard({
   truck,
   playerMoney,
   delivery,
   transfer,
   drivers,
   homeCityId,
-  currentTime,
+  monetization,
   sellCheck,
   onRepair,
   onUpgrade,
@@ -294,13 +300,15 @@ function OwnedTruckCard({
   onSell,
   onShowSellBlocked,
 }: OwnedTruckCardProps) {
-  const truckCondition = truck.condition ?? 100;
-  const conditionColor = getConditionColor(truckCondition);
-  const repairCost = calculateTruckRepairCost(truck);
   const isOnRoute = truck.status === 'on_route';
   const isTransferring = truck.status === 'transferring';
   const isIdle = truck.status === 'idle';
-  const canAfford = playerMoney >= repairCost;
+  const isLeased = isActiveLeasedTruck(truck);
+  const needsLiveTime = isOnRoute || isTransferring || isLeased;
+  const currentTime = useGameStore((state) => (needsLiveTime ? state.currentTime : 0));
+  const truckCondition = truck.condition ?? 100;
+  const conditionColor = getConditionColor(truckCondition);
+  const repairCost = calculateTruckRepairCost(truck);
   const statusBadge = getTruckStatusBadge(truck.status);
   const maintenanceBadge = getMaintenanceBadge(truckCondition);
   const showRepairButton = isIdle && truckCondition < 100 && truckCondition < REPAIR_HIDE_THRESHOLD;
@@ -314,7 +322,6 @@ function OwnedTruckCard({
   const hasIdleDriver = !!selectDriverForTransfer(truck.id, drivers);
   const canTransfer = isIdle && hasIdleDriver;
   const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
-  const isLeased = isActiveLeasedTruck(truck);
   const isLeaseExpired =
     (truck.ownershipType ?? 'owned') === 'leased' && !isLeased;
   const weeklyLeaseCost = getTruckWeeklyLeaseCost(truck);
@@ -329,6 +336,19 @@ function OwnedTruckCard({
   );
   const nextUpgradeCost = nextUpgradeType ? getTruckUpgradeCost(truck, nextUpgradeType) : 0;
   const canUpgrade = isIdle && !isLeased && !!nextUpgradeType && playerMoney >= nextUpgradeCost;
+  const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
+    monetization,
+    truck.id,
+    currentTime,
+  );
+  const { finalCost: discountedRepairCost } = calculateDiscountedRepairCost(
+    repairCost,
+    maintenanceDiscountToken,
+  );
+  const effectiveRepairCost = maintenanceDiscountToken ? discountedRepairCost : repairCost;
+  const canAffordEffectiveRepair = playerMoney >= effectiveRepairCost;
+  const showMaintenanceAdOffer =
+    showRepairButton && repairCost > 300 && !maintenanceDiscountToken;
 
   const handleSellPress = () => {
     if (!sellCheck.canSell) {
@@ -457,11 +477,29 @@ function OwnedTruckCard({
       ) : null}
 
       <View style={styles.cardFooter}>
+        {showMaintenanceAdOffer ? (
+          <AdRewardButton
+            slotId="maintenance_discount"
+            label="Reklam izle, bakım %30 indirimli"
+            description="Sonraki bakımda en fazla $500 indirim uygulanır."
+            context={{
+              selectedTruckId: truck.id,
+              currentRepairCost: repairCost,
+            }}
+            variant="secondary"
+          />
+        ) : null}
         {showRepairButton ? (
           <ActionButton
-            label={canAfford ? `Bakım Yap (${formatMoney(repairCost)})` : 'Yetersiz nakit'}
+            label={
+              canAffordEffectiveRepair
+                ? maintenanceDiscountToken
+                  ? `Bakım Yap (${formatMoney(effectiveRepairCost)} indirimli)`
+                  : `Bakım Yap (${formatMoney(repairCost)})`
+                : 'Yetersiz nakit'
+            }
             onPress={() => onRepair(truck)}
-            disabled={!canAfford}
+            disabled={!canAffordEffectiveRepair}
             variant="secondary"
             icon="repair"
             iconSize={13}
@@ -552,32 +590,31 @@ function OwnedTruckCard({
       </View>
     </AppCard>
   );
-}
+});
 
 interface OwnedDriverCardProps {
   driver: Driver;
   trucks: Truck[];
-  activeDeliveries: Delivery[];
-  currentTime: number;
+  activeDelivery?: Delivery;
   playerMoney: number;
   fireCheck: DriverFireCheck;
   onFire: (driver: Driver) => void;
   onShowFireBlocked: (reason: string) => void;
 }
 
-function OwnedDriverCard({
+const OwnedDriverCard = React.memo(function OwnedDriverCard({
   driver,
   trucks,
-  activeDeliveries,
-  currentTime,
+  activeDelivery,
   playerMoney,
   fireCheck,
   onFire,
   onShowFireBlocked,
 }: OwnedDriverCardProps) {
+  const needsLiveTime = driver.status === 'driving';
+  const currentTime = useGameStore((state) => (needsLiveTime ? state.currentTime : 0));
   const statusBadge = getDriverStatusBadge(driver.status);
   const trait = getDriverTrait(driver);
-  const activeDelivery = findActiveDeliveryForDriver(driver.id, activeDeliveries);
   const assignedTruck =
     trucks.find((t) => t.id === driver.assignedTruckId) ??
     (activeDelivery ? trucks.find((t) => t.id === activeDelivery.truckId) : undefined);
@@ -697,7 +734,7 @@ function OwnedDriverCard({
       </View>
     </AppCard>
   );
-}
+});
 
 interface ShopTruckCardProps {
   template: TruckMarketItem;
@@ -710,7 +747,7 @@ interface ShopTruckCardProps {
   onLease: (catalogId: string) => void;
 }
 
-function ShopTruckCard({
+const ShopTruckCard = React.memo(function ShopTruckCard({
   template,
   playerMoney,
   playerLevel,
@@ -819,7 +856,7 @@ function ShopTruckCard({
       </View>
     </AppCard>
   );
-}
+});
 
 interface ShopDriverCardProps {
   template: DriverMarketItem;
@@ -830,7 +867,7 @@ interface ShopDriverCardProps {
   onHire: (poolId: string) => void;
 }
 
-function ShopDriverCard({
+const ShopDriverCard = React.memo(function ShopDriverCard({
   template,
   playerMoney,
   playerLevel,
@@ -909,14 +946,14 @@ function ShopDriverCard({
       />
     </AppCard>
   );
-}
+});
 
 export default function FleetScreen() {
   const { showDialog, alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
-  const currentTime = useGameStore((state) => state.currentTime);
+  const monetization = useGameStore((state) => state.monetization);
   const buyTruck = useGameStore((state) => state.buyTruck);
   const leaseTruck = useGameStore((state) => state.leaseTruck);
   const hireDriver = useGameStore((state) => state.hireDriver);
@@ -952,8 +989,8 @@ export default function FleetScreen() {
     return () => clearTimeout(timeout);
   }, [statusMessage]);
 
-  const trucks = useMemo(() => player?.trucks ?? [], [player]);
-  const drivers = useMemo(() => player?.drivers ?? [], [player]);
+  const trucks = useMemo(() => player?.trucks ?? [], [player?.trucks]);
+  const drivers = useMemo(() => player?.drivers ?? [], [player?.drivers]);
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const playerMoney = player?.money ?? 0;
 
@@ -993,7 +1030,61 @@ export default function FleetScreen() {
     [trucks, drivers, playerMoney, activeDeliveries, activeTransfers],
   );
 
-  const handleUpgrade = (truck: Truck, upgradeType: TruckUpgradeType) => {
+  const deliveryByTruckId = useMemo(() => {
+    const map = new Map<string, Delivery>();
+    for (const delivery of activeDeliveries) {
+      if (ACTIVE_DELIVERY_STATUSES.includes(delivery.status)) {
+        map.set(delivery.truckId, delivery);
+      }
+    }
+    return map;
+  }, [activeDeliveries]);
+
+  const transferByTruckId = useMemo(() => {
+    const map = new Map<string, TruckTransfer>();
+    for (const transfer of activeTransfers) {
+      if (transfer.status === 'active') {
+        map.set(transfer.truckId, transfer);
+      }
+    }
+    return map;
+  }, [activeTransfers]);
+
+  const deliveryByDriverId = useMemo(() => {
+    const map = new Map<string, Delivery>();
+    for (const delivery of activeDeliveries) {
+      if (ACTIVE_DELIVERY_STATUSES.includes(delivery.status)) {
+        map.set(delivery.driverId, delivery);
+      }
+    }
+    return map;
+  }, [activeDeliveries]);
+
+  const sellCheckByTruckId = useMemo(() => {
+    const map = new Map<string, TruckSellCheck>();
+    for (const truck of trucks) {
+      map.set(truck.id, canSellTruck(truck.id, fleetManagementState));
+    }
+    return map;
+  }, [trucks, fleetManagementState]);
+
+  const fireCheckByDriverId = useMemo(() => {
+    const map = new Map<string, DriverFireCheck>();
+    for (const driver of drivers) {
+      map.set(driver.id, canFireDriver(driver.id, fleetManagementState));
+    }
+    return map;
+  }, [drivers, fleetManagementState]);
+
+  const ownedTruckCountByCatalog = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const template of sortedTruckMarket) {
+      map.set(template.id, countOwnedTrucksOfCatalog(trucks, template.id));
+    }
+    return map;
+  }, [sortedTruckMarket, trucks]);
+
+  const handleUpgrade = useCallback((truck: Truck, upgradeType: TruckUpgradeType) => {
     if (typeof upgradeTruck !== 'function') {
       setStatusMessage({ type: 'error', text: 'Geliştirme henüz kullanılamıyor' });
       return;
@@ -1004,9 +1095,9 @@ export default function FleetScreen() {
     } catch (error) {
       setStatusMessage({ type: 'error', text: translateErrorMessage(error, 'Yetersiz nakit') });
     }
-  };
+  }, [upgradeTruck]);
 
-  const handleRepair = (truck: Truck) => {
+  const handleRepair = useCallback((truck: Truck) => {
     if (typeof repairTruck !== 'function') {
       setStatusMessage({ type: 'error', text: 'Tamir henüz kullanılamıyor' });
       return;
@@ -1017,9 +1108,9 @@ export default function FleetScreen() {
     } catch (error) {
       setStatusMessage({ type: 'error', text: translateErrorMessage(error, 'Nakit yetersiz') });
     }
-  };
+  }, [repairTruck]);
 
-  const handleBuyTruck = (catalogId: string) => {
+  const handleBuyTruck = useCallback((catalogId: string) => {
     if (typeof buyTruck !== 'function') {
       setStatusMessage({ type: 'error', text: 'Yakında' });
       return;
@@ -1030,9 +1121,9 @@ export default function FleetScreen() {
       return;
     }
     setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon satın alındı' });
-  };
+  }, [buyTruck]);
 
-  const handleLeaseTruck = (catalogId: string) => {
+  const handleLeaseTruck = useCallback((catalogId: string) => {
     if (typeof leaseTruck !== 'function') {
       setStatusMessage({ type: 'error', text: 'Kiralama henüz kullanılamıyor' });
       return;
@@ -1043,9 +1134,9 @@ export default function FleetScreen() {
       return;
     }
     setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon kiralandı' });
-  };
+  }, [leaseTruck]);
 
-  const handleHireDriver = (poolId: string) => {
+  const handleHireDriver = useCallback((poolId: string) => {
     if (typeof hireDriver !== 'function') {
       setStatusMessage({ type: 'error', text: 'Yakında' });
       return;
@@ -1056,9 +1147,9 @@ export default function FleetScreen() {
       return;
     }
     setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işe alındı' });
-  };
+  }, [hireDriver]);
 
-  const handleSellTruck = (truck: Truck) => {
+  const handleSellTruck = useCallback((truck: Truck) => {
     const sellCheck = canSellTruck(truck.id, fleetManagementState);
     if (!sellCheck.canSell) {
       showAlert('Kamyon satılamaz', sellCheck.reason ?? 'Bu kamyon şu anda satılamaz.');
@@ -1094,13 +1185,13 @@ export default function FleetScreen() {
         setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon satıldı' });
       },
     });
-  };
+  }, [fleetManagementState, showAlert, showDialog, sellTruck]);
 
-  const handleShowSellBlocked = (reason: string) => {
+  const handleShowSellBlocked = useCallback((reason: string) => {
     showAlert('Kamyon satılamaz', reason);
-  };
+  }, [showAlert]);
 
-  const handleFireDriver = (driver: Driver) => {
+  const handleFireDriver = useCallback((driver: Driver) => {
     const fireCheck = canFireDriver(driver.id, fleetManagementState);
     if (!fireCheck.canFire) {
       showAlert('Şoför işten çıkarılamaz', fireCheck.reason ?? 'Bu şoför şu anda çıkarılamaz.');
@@ -1136,20 +1227,20 @@ export default function FleetScreen() {
         setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işten çıkarıldı' });
       },
     });
-  };
+  }, [fleetManagementState, showAlert, showDialog, fireDriver]);
 
-  const handleShowFireBlocked = (reason: string) => {
+  const handleShowFireBlocked = useCallback((reason: string) => {
     showAlert('Şoför işten çıkarılamaz', reason);
-  };
+  }, [showAlert]);
 
-  const handleOpenTransfer = (truck: Truck, targetCityId?: string) => {
+  const handleOpenTransfer = useCallback((truck: Truck, targetCityId?: string) => {
     if (!selectDriverForTransfer(truck.id, drivers)) {
       setStatusMessage({ type: 'error', text: 'Yönlendirme için boşta şoför gerekiyor.' });
       return;
     }
     setTransferTargetCityId(targetCityId);
     setTransferModalTruck(truck);
-  };
+  }, [drivers]);
 
   if (!player) {
     return (
@@ -1209,7 +1300,11 @@ export default function FleetScreen() {
 
       {activeTab === 'trucks' ? (
         <View style={styles.tabContent}>
-          <SectionTitle title="Kamyonlar" subtitle="Filondaki tüm kamyonlar" compact />
+          <SectionTitle
+            title="Kamyonlar"
+            subtitle="Teslimat sonrası kamyon varış şehrinde kalır · Yönlendir ile taşıyabilirsin"
+            compact
+          />
 
           {trucks.length === 0 ? (
             <EmptyState
@@ -1226,12 +1321,12 @@ export default function FleetScreen() {
                   key={truck.id}
                   truck={truck}
                   playerMoney={playerMoney}
-                  delivery={findActiveDeliveryForTruck(truck.id, activeDeliveries)}
-                  transfer={findActiveTransferForTruckLocal(truck.id, activeTransfers)}
+                  delivery={deliveryByTruckId.get(truck.id)}
+                  transfer={transferByTruckId.get(truck.id)}
                   drivers={drivers}
                   homeCityId={player.homeCityId}
-                  currentTime={currentTime}
-                  sellCheck={canSellTruck(truck.id, fleetManagementState)}
+                  monetization={monetization}
+                  sellCheck={sellCheckByTruckId.get(truck.id) ?? { canSell: false }}
                   onRepair={handleRepair}
                   onUpgrade={handleUpgrade}
                   onTransfer={handleOpenTransfer}
@@ -1274,10 +1369,9 @@ export default function FleetScreen() {
                 key={driver.id}
                 driver={driver}
                 trucks={trucks}
-                activeDeliveries={activeDeliveries}
-                currentTime={currentTime}
+                activeDelivery={deliveryByDriverId.get(driver.id)}
                 playerMoney={playerMoney}
-                fireCheck={canFireDriver(driver.id, fleetManagementState)}
+                fireCheck={fireCheckByDriverId.get(driver.id) ?? { canFire: false }}
                 onFire={handleFireDriver}
                 onShowFireBlocked={handleShowFireBlocked}
               />
@@ -1298,7 +1392,7 @@ export default function FleetScreen() {
                 template={template}
                 playerMoney={playerMoney}
                 playerLevel={playerLevel}
-                ownedCount={countOwnedTrucksOfCatalog(trucks, template.id)}
+                ownedCount={ownedTruckCountByCatalog.get(template.id) ?? 0}
                 canBuy={typeof buyTruck === 'function'}
                 canLease={typeof leaseTruck === 'function'}
                 onBuy={handleBuyTruck}

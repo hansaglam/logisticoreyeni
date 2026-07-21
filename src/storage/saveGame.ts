@@ -31,6 +31,11 @@ import {
 import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
 import { normalizeCitiesPriceHistory, seedProductPriceHistory } from '../utils/productPriceHistory';
 import { normalizeMarketAlerts } from '../utils/marketAlerts';
+import type { MonetizationState } from '../types/monetization';
+import {
+  createDefaultMonetizationState,
+  normalizeMonetizationState,
+} from '../simulation/adRewardGrants';
 import { migratePlayerTruckNames } from '../utils/truckDisplayNames';
 import type {
   City,
@@ -122,6 +127,7 @@ export interface SaveGamePayload {
   worldEvents?: WorldEvent[];
   worldEventsVersion?: number;
   lastWorldEventGeneratedDay?: number;
+  monetization?: MonetizationState;
 }
 
 export interface SaveBackupStatus {
@@ -427,6 +433,10 @@ export function createDefaultSaveFallbacks(
       payload.worldEventsVersion,
       payload.lastWorldEventGeneratedDay,
     ),
+    monetization: normalizeMonetizationState(
+      isRecord(payload.monetization) ? (payload.monetization as Partial<MonetizationState>) : undefined,
+      currentTime,
+    ),
     meta: {
       savedAt: safeNumber(metaRecord.savedAt, Date.now()),
       currentTime: safeNumber(metaRecord.currentTime, currentTime),
@@ -526,6 +536,12 @@ export function normalizeSavePayload(
       gameDayFromTime(currentTime),
       withFallbacks.worldEventsVersion,
       withFallbacks.lastWorldEventGeneratedDay,
+    ),
+    monetization: normalizeMonetizationState(
+      isRecord(withFallbacks.monetization)
+        ? (withFallbacks.monetization as Partial<MonetizationState>)
+        : undefined,
+      currentTime,
     ),
   };
 }
@@ -881,6 +897,9 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     worldEvents: structuredClone(state.worldEvents ?? []),
     worldEventsVersion: state.worldEventsVersion ?? 1,
     lastWorldEventGeneratedDay: state.lastWorldEventGeneratedDay ?? 0,
+    monetization: structuredClone(
+      normalizeMonetizationState(state.monetization, state.currentTime),
+    ),
   };
 }
 
@@ -940,6 +959,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       payload.worldEventsVersion,
       payload.lastWorldEventGeneratedDay,
     ),
+    monetization: normalizeMonetizationState(payload.monetization, safeCurrentTime),
   };
 }
 

@@ -11,6 +11,9 @@ export interface ContractAvailabilityMessageContext {
   bestAvailableTruckCapacity?: number;
   requiredLevel?: number;
   playerLevel?: number;
+  requiredReputation?: number;
+  playerReputation?: number;
+  requiredDriverLevel?: number;
 }
 
 function formatTonCapacity(tons: number): string {
@@ -37,7 +40,11 @@ export function getContractAvailabilityLabel(
     case 'CAPACITY_INSUFFICIENT':
       return 'Tonaj yetersiz';
     case 'TRUCK_CONDITION_TOO_LOW':
-      return 'Kondisyon düşük';
+      return 'Kamyon kondisyonu düşük';
+    case 'REPUTATION_TOO_LOW':
+      return 'İtibar yetersiz';
+    case 'DRIVER_LEVEL_TOO_LOW':
+      return 'Şoför seviyesi yetersiz';
     case 'CONTRACT_EXPIRED':
       return 'Süresi doldu';
     case 'LEASE_EXPIRED':
@@ -106,6 +113,14 @@ export function buildContractAvailabilityMessage(
       );
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Bu iş için uygun kamyonun var ancak kondisyonu düşük. Bakım yaptırarak bu sözleşmeyi alabilirsin.';
+    case 'REPUTATION_TOO_LOW': {
+      const requiredRep = context.requiredReputation ?? 70;
+      return `Bu prestijli iş için en az ${requiredRep} itibar gerekir. Mevcut itibarın: ${Math.round(context.playerReputation ?? 0)}.`;
+    }
+    case 'DRIVER_LEVEL_TOO_LOW': {
+      const reqDriver = context.requiredDriverLevel ?? 2;
+      return `Bu iş için en az seviye ${reqDriver} şoför gerekir. Filo ekranından şoförlerini geliştirebilirsin.`;
+    }
     case 'CONTRACT_EXPIRED':
       return 'İşin süresi doldu.';
     case 'LEASE_EXPIRED':

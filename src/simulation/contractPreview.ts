@@ -15,11 +15,24 @@ import type {
   Product,
   Route,
   Truck,
+  WorldEvent,
 } from '../types/game';
 import { getSafeGlobalEconomy } from './economy';
 import {
+  applyWorldEventImpactToContract,
+  applyWorldEventImpactToFuelPrice,
+} from './worldEvents';
+import {
   estimateContractTripCostBreakdown,
 } from './contractEconomics';
+import {
+  CONTRACT_TYPE_LABELS,
+  getContractTypeDescription,
+  getContractTypePaymentMultiplier,
+  getContractTypePenaltyMultiplier,
+  normalizeContractType,
+} from './contractTypes';
+import { getEffectiveTruckCapacity, isTruckSuitableForRiskyContract } from './truckUpgrades';
 import {
   calculateExpectedContractCashFlow,
   calculateFuelCost,
@@ -73,6 +86,18 @@ export interface ContractPreview {
   suggestedTruck?: Truck;
   suggestedDriver?: Driver;
   route?: Route;
+  /** Olay etkisi — baz ödeme (sözleşme tabanı) */
+  baseGrossPayment?: number;
+  worldEventPaymentBonus?: number;
+  worldEventDurationBonusHours?: number;
+  worldEventLabels?: string[];
+  /** Sözleşme tipi etkisi */
+  contractType?: import('../types/game').ContractType;
+  contractTypeLabel?: string;
+  contractTypeDescription?: string;
+  contractTypePaymentBonus?: number;
+  contractTypePenaltyMultiplier?: number;
+  contractTypeWarning?: string;
 }
 
 export interface BuildContractPreviewInput {
@@ -86,6 +111,8 @@ export interface BuildContractPreviewInput {
   currentTime?: number;
   truck?: Truck;
   driver?: Driver;
+  activeWorldEvents?: WorldEvent[];
+  playerReputation?: number;
 }
 
 function resolveRoute(contract: Contract, route?: Route): Route | undefined {
@@ -243,6 +270,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     drivers,
     companyLevel,
     currentTime,
+    input.playerReputation ?? 0,
   );
   const { truck, driver } = selectPreviewTruckAndDriver(
     contract,
@@ -260,7 +288,15 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
 
   if (truck && driver && route && product) {
     estimatedTravelHours = calculateTravelHours(contract, truck, driver, route, product);
-    estimatedFuelCost = calculateFuelCost(contract, truck, driver, route, product, safeEconomy);
+    const effectiveFuelPrice = applyWorldEventImpactToFuelPrice(
+      getSafeGlobalEconomy(input.globalEconomy).fuelPrice ?? 1,
+      input.activeWorldEvents ?? [],
+    );
+    const economyForFuel = {
+      ...safeEconomy,
+      fuelPrice: effectiveFuelPrice,
+    };
+    estimatedFuelCost = calculateFuelCost(contract, truck, driver, route, product, economyForFuel);
     estimatedMaintenanceCost = calculateMaintenanceCost(truck, route, contract, product);
   } else {
     estimatedTravelHours = estimateTravelHoursFallback(contract);
@@ -268,15 +304,48 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     estimatedMaintenanceCost = estimateMaintenanceCostFallback(contract, route, safeEconomy);
   }
 
-  const cashFlow = calculateExpectedContractCashFlow(
+  const contractType = normalizeContractType(contract);
+  const typePaymentMult = getContractTypePaymentMultiplier(contract);
+  const basePaymentBeforeType = typePaymentMult > 0 ? payment / typePaymentMult : payment;
+  const contractTypePaymentBonus = payment - basePaymentBeforeType;
+
+  const activeWorldEvents = input.activeWorldEvents ?? [];
+  const worldEventAdjustment = applyWorldEventImpactToContract(
     contract,
+    activeWorldEvents,
+    payment,
+    estimatedTravelHours,
+  );
+  estimatedTravelHours *= worldEventAdjustment.durationMultiplier;
+  estimatedMaintenanceCost *= worldEventAdjustment.maintenanceMultiplier;
+  const adjustedPayment = payment * worldEventAdjustment.paymentMultiplier;
+
+  let contractTypeWarning: string | undefined;
+  if (truck && contract.recommendedTruckCondition != null) {
+    const suitability = isTruckSuitableForRiskyContract(truck, contract.recommendedTruckCondition);
+    if (suitability.warning) {
+      contractTypeWarning = `Kamyon kondisyonu önerilen ${contract.recommendedTruckCondition}+ seviyesinin altında — risk artabilir.`;
+    }
+  }
+
+  if (contractType === 'bulk' && truck) {
+    const effectiveCap = getEffectiveTruckCapacity(truck);
+    const cargoWeight = contract.cargoWeight ?? contract.amount ?? 0;
+    if (cargoWeight > effectiveCap * 0.95) {
+      estimatedMaintenanceCost = Math.round(estimatedMaintenanceCost * 1.08);
+      estimatedFuelCost = Math.round(estimatedFuelCost * 1.05);
+    }
+  }
+
+  const cashFlow = calculateExpectedContractCashFlow(
+    { ...contract, payment: adjustedPayment },
     estimatedFuelCost,
     estimatedMaintenanceCost,
     0,
   );
   const estimatedTripCost = cashFlow.fuelCost + cashFlow.maintenanceCost;
   const estimatedOperationalProfit = cashFlow.estimatedNetProfit;
-  const estimatedMarginPercent = payment > 0 ? estimatedOperationalProfit / payment : 0;
+  const estimatedMarginPercent = adjustedPayment > 0 ? estimatedOperationalProfit / adjustedPayment : 0;
 
   const { riskLevel, riskLabel } = calculateContractRiskLevel(contract, route, product);
   const isUrgent = isUrgentContractPreview(contract, estimatedTravelHours);
@@ -286,7 +355,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     estimatedFuelCost,
     estimatedMaintenanceCost,
     estimatedTripCost,
-    estimatedGrossPayment: payment,
+    estimatedGrossPayment: adjustedPayment,
     estimatedOperationalProfit,
     excludesDailyFixedCosts: true,
     estimatedTotalCost: estimatedTripCost,
@@ -299,5 +368,15 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     suggestedTruck: input.truck ? undefined : truck,
     suggestedDriver: input.driver ? undefined : driver,
     route,
+    baseGrossPayment: basePaymentBeforeType,
+    worldEventPaymentBonus: worldEventAdjustment.paymentBonus,
+    worldEventDurationBonusHours: worldEventAdjustment.durationBonusHours,
+    worldEventLabels: worldEventAdjustment.labels,
+    contractType,
+    contractTypeLabel: CONTRACT_TYPE_LABELS[contractType],
+    contractTypeDescription: getContractTypeDescription(contract),
+    contractTypePaymentBonus,
+    contractTypePenaltyMultiplier: getContractTypePenaltyMultiplier(contract),
+    contractTypeWarning,
   };
 }

@@ -54,6 +54,12 @@ export default function ProductMarketDetailModal({
   const cities = useGameStore((state) => state.cities) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const currentTime = useGameStore((state) => state.currentTime);
+  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
+  const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
+  const activeWorldEvents = useMemo(
+    () => getActiveWorldEventsValue(),
+    [getActiveWorldEventsValue, worldEvents, currentTime],
+  );
 
   const city = useMemo(
     () => (cityId ? cities.find((item) => item.id === cityId) ?? null : null),
@@ -82,6 +88,7 @@ export default function ProductMarketDetailModal({
       totalFreeCapacity,
       playerMoney: player?.money ?? 0,
       products,
+      activeWorldEvents,
     });
   }, [
     city,
@@ -92,6 +99,7 @@ export default function ProductMarketDetailModal({
     totalFreeCapacity,
     player?.money,
     products,
+    activeWorldEvents,
   ]);
 
   useEffect(() => {
@@ -112,7 +120,7 @@ export default function ProductMarketDetailModal({
   const inventoryTrade =
     viewModel.warehouseQuantity > 0
       ? resolveInventoryTradeProfit(
-          viewModel.currentPrice,
+          viewModel.displayPrice,
           viewModel.averageBuyPrice,
           viewModel.warehouseQuantity,
           viewModel.warehouseQuality,
@@ -173,9 +181,23 @@ export default function ProductMarketDetailModal({
             bounces={false}
           >
             <View style={styles.priceSection}>
-              <Text style={styles.bigPrice}>{formatMoney(viewModel.currentPrice)}</Text>
+              <Text style={styles.bigPrice}>{formatMoney(viewModel.displayPrice)}</Text>
               <Text style={styles.priceUnit}>/ ton</Text>
             </View>
+
+            {viewModel.eventLabel ? (
+              <View style={styles.eventCard}>
+                <Text style={styles.eventTitle}>{viewModel.eventLabel}</Text>
+                {viewModel.eventImpactLabel ? (
+                  <Text style={styles.eventImpact}>
+                    {viewModel.eventImpactLabel} fiyat etkisi
+                  </Text>
+                ) : null}
+                {viewModel.eventDescription ? (
+                  <Text style={styles.eventDescription}>{viewModel.eventDescription}</Text>
+                ) : null}
+              </View>
+            ) : null}
 
             <Text
               style={[styles.trendLine, { color: viewModel.trendColor }]}
@@ -361,6 +383,29 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textMuted,
     fontWeight: '600',
+  },
+  eventCard: {
+    backgroundColor: colors.warningSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: 2,
+  },
+  eventTitle: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.accentAmber,
+  },
+  eventImpact: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '600',
+  },
+  eventDescription: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
   trendLine: {
     ...typography.bodySmall,

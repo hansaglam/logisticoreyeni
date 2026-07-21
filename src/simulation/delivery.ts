@@ -22,6 +22,7 @@ import type {
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
 import { getSafeFuelPrice } from './economy';
 import { getCargoWeightCostMultiplier } from './contractEconomics';
+import { meetsDriverLevelRequirement } from './driverProgress';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
 import { getCityName, getProductByIdSafe } from '../utils/entityLookup';
 import {
@@ -387,6 +388,7 @@ export function getContractAvailability(
   drivers: Driver[] | undefined,
   playerLevel: number = 1,
   currentTime = 0,
+  playerReputation = 0,
 ): ContractAvailability {
   const safePlayerLevel = Math.max(1, playerLevel);
   const requiredLevel = contract.requiredLevel ?? 1;
@@ -412,6 +414,16 @@ export function getContractAvailability(
     return buildUnavailableContractAvailability('LEVEL_INSUFFICIENT', {
       ...baseContext,
       requiredCapacity,
+    });
+  }
+
+  const requiredReputation = contract.requiredReputation;
+  if (requiredReputation != null && playerReputation < requiredReputation) {
+    return buildUnavailableContractAvailability('REPUTATION_TOO_LOW', {
+      ...baseContext,
+      requiredCapacity,
+      requiredReputation,
+      playerReputation,
     });
   }
 
@@ -541,6 +553,22 @@ export function getContractAvailability(
       maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
       debug: buildOriginDebug('NO_IDLE_DRIVERS'),
     });
+  }
+
+  const requiredDriverLevel = contract.requiredDriverLevel;
+  if (requiredDriverLevel != null && requiredDriverLevel > 1) {
+    const qualifiedDrivers = idleDrivers.filter((driver) =>
+      meetsDriverLevelRequirement(driver, requiredDriverLevel),
+    );
+    if (qualifiedDrivers.length === 0) {
+      return buildUnavailableContractAvailability('DRIVER_LEVEL_TOO_LOW', {
+        ...originContext,
+        requiredCapacity,
+        maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+        requiredDriverLevel,
+        debug: buildOriginDebug('DRIVER_LEVEL_TOO_LOW'),
+      });
+    }
   }
 
   return {

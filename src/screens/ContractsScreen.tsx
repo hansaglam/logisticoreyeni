@@ -469,9 +469,12 @@ const ContractCard = React.memo(function ContractCard({
     urgent: preview.isUrgent,
     riskLevel: preview.riskLevel,
     riskLabel: preview.riskLabel ?? '',
+    contractType: preview.contractType,
+    contractTypeLabel: preview.contractTypeLabel,
   });
-  const payment = contract.payment ?? 0;
+  const payment = preview.estimatedGrossPayment ?? contract.payment ?? 0;
   const estimatedProfit = preview.estimatedOperationalProfit ?? 0;
+  const worldEventLabel = preview.worldEventLabels?.[0];
   const profitColor =
     estimatedProfit >= 0
       ? isMuted
@@ -549,9 +552,16 @@ const ContractCard = React.memo(function ContractCard({
         </View>
       </View>
 
-      {footerBadges.length > 0 ? (
+      {footerBadges.length > 0 || worldEventLabel ? (
         <View style={styles.cardFooter}>
           <View style={styles.cardBadgeRow}>
+            {worldEventLabel ? (
+              <View style={[styles.miniBadge, styles.miniBadgeSoft, styles.eventBadge]}>
+                <Text style={[styles.miniBadgeText, styles.eventBadgeText]} numberOfLines={1}>
+                  Olay · {worldEventLabel}
+                </Text>
+              </View>
+            ) : null}
             {footerBadges.map((badge: ContractCardBadge) => (
               <View
                 key={badge.key}
@@ -689,6 +699,8 @@ export default function ContractsScreen() {
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
+  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
+  const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
 
   const startDelivery = useGameStore((state) => state.startDelivery);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
@@ -724,10 +736,16 @@ export default function ContractsScreen() {
   }, [statusMessage]);
 
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const playerReputation = player?.reputation ?? 0;
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
   const completedDeliveryCount = player?.completedContracts ?? 0;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(completedDeliveryCount);
+
+  const activeWorldEvents = useMemo(
+    () => getActiveWorldEventsValue(),
+    [getActiveWorldEventsValue, worldEvents, currentTime],
+  );
 
   const availableContracts = useMemo(
     () => dedupeAvailableContracts(contracts.filter((c) => c.status === 'available')),
@@ -769,11 +787,13 @@ export default function ContractsScreen() {
           drivers,
           companyLevel: playerLevel,
           currentTime,
+          activeWorldEvents,
+          playerReputation,
         }),
       );
     }
     return previews;
-  }, [availableContracts, trucks, drivers, globalEconomy, playerLevel, currentTime]);
+  }, [availableContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
 
   const playableContractCount = useMemo(
     () =>
@@ -860,11 +880,13 @@ export default function ContractsScreen() {
           drivers,
           companyLevel: playerLevel,
           currentTime,
+          activeWorldEvents,
+          playerReputation,
         }),
       );
     }
     return previews;
-  }, [completedContracts, trucks, drivers, globalEconomy, playerLevel]);
+  }, [completedContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
 
   const tabSegments = useMemo<TabSegment[]>(
     () => [
@@ -967,6 +989,8 @@ export default function ContractsScreen() {
       driver,
       route: findRoute(quickSheetContract.originCityId, quickSheetContract.destinationCityId),
       product: getProductByIdSafe(quickSheetContract.productId) ?? undefined,
+      activeWorldEvents,
+      playerReputation,
     });
 
     if (player.money < preview.estimatedFuelCost) {
@@ -1008,6 +1032,8 @@ export default function ContractsScreen() {
       driver,
       route: findRoute(assignmentContract.originCityId, assignmentContract.destinationCityId),
       product: getProductByIdSafe(assignmentContract.productId) ?? undefined,
+      activeWorldEvents,
+      playerReputation,
     });
 
     if (player.money < preview.estimatedFuelCost) {
@@ -1855,6 +1881,13 @@ const styles = StyleSheet.create({
   miniBadgeSoft: {
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  eventBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  eventBadgeText: {
+    color: colors.accentAmber,
   },
   miniBadgeText: {
     fontSize: 11,

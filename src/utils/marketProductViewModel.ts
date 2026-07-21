@@ -5,8 +5,15 @@ import {
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
 import { formatMoney } from '../theme';
-import type { City, CityProductState, Product, ProductId, Warehouse } from '../types/game';
+import type { City, CityProductState, Product, ProductId, Warehouse, WorldEvent } from '../types/game';
 import { getCityName, getProductName } from './entityLookup';
+import {
+  formatWorldEventImpactPercent,
+  gameDayFromTime,
+  getEventsForProduct,
+  getPrimaryWorldEventLabel,
+  getProductPriceEventMultiplier,
+} from '../simulation/worldEvents';
 import {
   getMarketStatusDescription,
   getMarketStatusLabel,
@@ -74,6 +81,10 @@ export interface MarketProductViewModel {
   sellButtonLabel: string;
   sellButtonDisabled: boolean;
   hasWarehouse: boolean;
+  eventLabel?: string;
+  eventImpactLabel?: string;
+  eventDescription?: string;
+  displayPrice: number;
 }
 
 export function getProductMarket(
@@ -215,6 +226,7 @@ export interface BuildMarketProductViewModelInput {
   totalFreeCapacity: number;
   playerMoney: number;
   products?: Product[];
+  activeWorldEvents?: WorldEvent[];
 }
 
 export function buildMarketProductViewModel(
@@ -238,6 +250,28 @@ export function buildMarketProductViewModel(
   const inventory = getCityProductInventorySummary(warehouses, productId);
   const stockRatio = calculateStockRatio(market);
   const stockStatus = getMarketStatus(stockRatio);
+  const currentDay = gameDayFromTime(currentTime);
+  const productEvents = getEventsForProduct(
+    input.activeWorldEvents ?? [],
+    productId,
+    currentDay,
+    city.id,
+  ).filter((event) => event.impact.productPriceMultiplier);
+  const priceMultiplier = getProductPriceEventMultiplier(
+    productId,
+    city.id,
+    input.activeWorldEvents ?? [],
+    currentDay,
+  );
+  const displayPrice =
+    priceMultiplier !== 1
+      ? Number(Math.max(1, market.currentPrice * priceMultiplier).toFixed(2))
+      : market.currentPrice;
+  const primaryEvent = productEvents[0];
+  const eventLabel = primaryEvent ? getPrimaryWorldEventLabel(primaryEvent) : undefined;
+  const eventImpactLabel =
+    priceMultiplier !== 1 ? formatWorldEventImpactPercent(priceMultiplier) : undefined;
+  const eventDescription = primaryEvent?.description;
 
   const trend = getProductPriceTrend({
     cityId: city.id,
@@ -259,7 +293,7 @@ export function buildMarketProductViewModel(
   const inventoryTrade =
     inventory.quantity > 0
       ? resolveInventoryTradeProfit(
-          market.currentPrice,
+          displayPrice,
           inventory.averageBuyPrice,
           inventory.quantity,
           inventory.quality,
@@ -267,7 +301,7 @@ export function buildMarketProductViewModel(
       : null;
   const profitLoss = inventoryTrade?.breakdown.netProfit ?? null;
 
-  const currentValue = inventory.quantity > 0 ? inventory.quantity * market.currentPrice : 0;
+  const currentValue = inventory.quantity > 0 ? inventory.quantity * displayPrice : 0;
 
   const productDef = input.products?.find((item) => item.id === productId);
   const canStoreProduct = canStoreProductInCity(warehouses, productDef);
@@ -277,7 +311,7 @@ export function buildMarketProductViewModel(
     marketStock: market.stock,
     freeCapacity: totalFreeCapacity,
     playerMoney,
-    unitPrice: market.currentPrice,
+    unitPrice: displayPrice,
     canStoreProduct,
   });
 
@@ -290,7 +324,8 @@ export function buildMarketProductViewModel(
     productName,
     cityName,
     currentPrice: market.currentPrice,
-    pricePerTonLabel: `${formatMoney(market.currentPrice)} / ton`,
+    displayPrice,
+    pricePerTonLabel: `${formatMoney(displayPrice)} / ton`,
     changePercent: trend.changePercent,
     trendDirection: trend.direction,
     trendLabel: trend.label,
@@ -321,5 +356,8 @@ export function buildMarketProductViewModel(
     sellButtonLabel: sellState.label,
     sellButtonDisabled: sellState.disabled,
     hasWarehouse,
+    eventLabel: eventLabel ? `Etkinlik: ${eventLabel}` : undefined,
+    eventImpactLabel,
+    eventDescription,
   };
 }

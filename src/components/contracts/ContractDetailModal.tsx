@@ -164,7 +164,31 @@ export default function ContractDetailModal({
             <DetailRow label="Ürün" value={getProductName(contract.productId)} />
             <DetailRow label="Yük" value={`${cargoWeight.toFixed(1)} t`} />
             <DetailRow label="Kalan süre" value={formatTimeLeft(contract.deadlineHours)} />
-            <DetailRow label="Ödeme" value={formatMoney(contract.payment)} tone="success" />
+            <DetailRow label="Ödeme" value={formatMoney(preview.estimatedGrossPayment)} tone="success" />
+            {preview.contractTypePaymentBonus != null &&
+            preview.contractTypePaymentBonus !== 0 ? (
+              <DetailRow
+                label="Sözleşme tipi bonusu"
+                value={formatMoney(preview.contractTypePaymentBonus)}
+                tone="success"
+              />
+            ) : null}
+            {preview.baseGrossPayment != null &&
+            preview.worldEventPaymentBonus != null &&
+            preview.worldEventPaymentBonus !== 0 ? (
+              <>
+                <DetailRow
+                  label="Baz ödeme"
+                  value={formatMoney(preview.baseGrossPayment)}
+                  tone="muted"
+                />
+                <DetailRow
+                  label="Olay bonusu"
+                  value={formatMoney(preview.worldEventPaymentBonus)}
+                  tone={preview.worldEventPaymentBonus >= 0 ? 'success' : 'warning'}
+                />
+              </>
+            ) : null}
             <DetailRow label="İş gideri" value={formatMoney(preview.estimatedTripCost)} tone="muted" />
             <DetailRow
               label="İş kârı"
@@ -173,6 +197,36 @@ export default function ContractDetailModal({
             />
             <DetailRow label="Marj" value={formatRatioPercent(preview.estimatedMarginPercent)} />
             <DetailRow label="Risk" value={preview.riskLabel} />
+            {preview.contractTypeLabel ? (
+              <DetailRow label="Sözleşme tipi" value={preview.contractTypeLabel} />
+            ) : null}
+            {preview.contractTypeDescription ? (
+              <DetailRow label="Tip açıklaması" value={preview.contractTypeDescription} tone="muted" />
+            ) : null}
+            {contract.requiredReputation != null ? (
+              <DetailRow label="Gerekli itibar" value={`${contract.requiredReputation}+`} />
+            ) : null}
+            {contract.requiredDriverLevel != null && contract.requiredDriverLevel > 1 ? (
+              <DetailRow label="Gerekli şoför seviyesi" value={`Seviye ${contract.requiredDriverLevel}`} />
+            ) : null}
+            {contract.recommendedTruckCondition != null ? (
+              <DetailRow
+                label="Önerilen kondisyon"
+                value={`${contract.recommendedTruckCondition}+`}
+                tone="warning"
+              />
+            ) : null}
+            {preview.contractTypePenaltyMultiplier != null &&
+            preview.contractTypePenaltyMultiplier > 1 ? (
+              <DetailRow
+                label="Ceza çarpanı"
+                value={`×${preview.contractTypePenaltyMultiplier.toFixed(2)}`}
+                tone="warning"
+              />
+            ) : null}
+            {preview.contractTypeWarning ? (
+              <DetailRow label="Uyarı" value={preview.contractTypeWarning} tone="warning" />
+            ) : null}
             <DetailRow label="Aciliyet" value={urgencyLabel} tone={preview.isUrgent ? 'danger' : 'default'} />
             <DetailRow label="Tahmini yakıt gideri" value={formatMoney(preview.estimatedFuelCost)} tone="muted" />
             <DetailRow

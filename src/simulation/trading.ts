@@ -43,6 +43,8 @@ export function getCityProductMarketPrice(city: City | undefined, productId: Pro
   return toProductMarket(city.products[productId]).currentPrice;
 }
 
+export { applyWorldEventImpactToProductPrice } from './worldEvents';
+
 export function getCityProductStock(city: City | undefined, productId: ProductId): number {
   return city?.products?.[productId]?.stock ?? 0;
 }

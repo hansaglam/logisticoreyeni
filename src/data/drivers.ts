@@ -6,6 +6,7 @@
 
 import { getDriverTierRequiredLevel } from '../config/levelConfig';
 import { operatingCostBalance } from '../config/balance';
+import { normalizeDriverProgress } from '../simulation/driverProgress';
 import type { Driver, DriverTier } from '../types/game';
 
 /** İşe alınabilir şoför şablonu — id, atama ve durum hariç */
@@ -196,7 +197,7 @@ export function normalizeDriver(driver: Driver): Driver {
   const tier = driver.tier ?? 'rookie';
   const dailySalary =
     driver.dailySalary ?? driver.salaryPerDay ?? operatingCostBalance.fallbackDriverDailySalary;
-  return {
+  return normalizeDriverProgress({
     ...driver,
     tier,
     requiredLevel: driver.requiredLevel ?? getDriverTierRequiredLevel(tier),
@@ -206,7 +207,7 @@ export function normalizeDriver(driver: Driver): Driver {
     hireCost: typeof driver.hireCost === 'number' && Number.isFinite(driver.hireCost)
       ? driver.hireCost
       : 0,
-  };
+  });
 }
 
 export function isDriverPoolItemHired(

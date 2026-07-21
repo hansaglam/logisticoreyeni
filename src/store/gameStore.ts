@@ -186,6 +186,44 @@ import {
   normalizeMarketAlerts,
 } from '../utils/marketAlerts';
 import { createDefaultMissionsState } from '../config/missions';
+import { getMilestoneById } from '../data/milestones';
+import { getWeeklyObjectiveById } from '../data/weeklyObjectives';
+import {
+  applyRetentionEvent,
+  claimMilestoneRewardState,
+  claimWeeklyObjectiveRewardState,
+  createDefaultRetentionState,
+  getRetentionSummary,
+  syncRetentionProgressState,
+  type RetentionEvent,
+} from '../simulation/retentionProgress';
+import {
+  shouldGrantHighReputationBonus,
+  getContractTypePenaltyMultiplier,
+  normalizeContractType,
+} from '../simulation/contractTypes';
+import {
+  applyDriverXp,
+  calculateDriverDeliveryXp,
+  recordDriverDeliveryStats,
+} from '../simulation/driverProgress';
+import {
+  applyTruckUpgrade,
+  canUpgradeTruck,
+  getTruckUpgradeCost,
+  type TruckUpgradeType,
+} from '../simulation/truckUpgrades';
+import { HIGH_REPUTATION_SUCCESS_BONUS } from '../config/contractTypes';
+import {
+  applyWorldEventImpactToFuelPrice,
+  applyWorldEventImpactToProductPrice,
+  gameDayFromTime,
+  getActiveWorldEvents,
+  processWorldEventsForDayRange,
+  forceCreateWorldEvent,
+} from '../simulation/worldEvents';
+import type { WorldEventType } from '../types/game';
+import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
 import { getMissionById } from '../config/missions';
 import { createDefaultTutorialState } from '../config/tutorial';
 import {
@@ -298,6 +336,25 @@ let gameInitPromise: Promise<void> | null = null;
 const completedDeliveryNotificationIds = new Set<string>();
 const completedTransferNotificationIds = new Set<string>();
 
+function getEffectiveTradeUnitPrice(
+  state: Pick<StoreGameState, 'worldEvents' | 'currentTime'>,
+  city: { id: string },
+  productId: import('../types/game').ProductId,
+): number {
+  const basePrice = getCityProductMarketPrice(city as import('../types/game').City, productId);
+  const activeEvents = getActiveWorldEvents(
+    state.worldEvents ?? [],
+    gameDayFromTime(state.currentTime),
+  );
+  return applyWorldEventImpactToProductPrice(
+    basePrice,
+    productId,
+    city.id,
+    activeEvents,
+    gameDayFromTime(state.currentTime),
+  );
+}
+
 let saveLoadFailureToastShown = false;
 let saveWriteFailureToastShown = false;
 
@@ -370,6 +427,7 @@ export type AutoSaveReason =
   | 'purchase'
   | 'level_up'
   | 'repair'
+  | 'upgrade'
   | 'reset'
   | 'new_game'
   | 'economy_tick'
@@ -542,6 +600,11 @@ function buildContractRefreshParams(state: StoreGameState) {
     homeCityId,
     idleTruckOriginCityIds,
   });
+  const activeWorldEvents = getActiveWorldEvents(
+    state.worldEvents ?? [],
+    gameDayFromTime(state.currentTime),
+  );
+  const playerReputation = state.player.reputation ?? 0;
 
   return {
     cities: citiesToRecord(state.cities),
@@ -561,6 +624,8 @@ function buildContractRefreshParams(state: StoreGameState) {
     trucks,
     drivers,
     homeCityId,
+    activeWorldEvents,
+    playerReputation,
   };
 }
 
@@ -1089,9 +1154,13 @@ export function createInitialGameState(): StoreGameState {
     financeTotals: createEmptyFinanceTotals(),
     tutorial: createDefaultTutorialState(),
     missions: createDefaultMissionsState(),
+    retention: createDefaultRetentionState(),
     onboarding: createDefaultOnboardingState(),
     spotlightTutorial: createDefaultSpotlightTutorialState(),
     marketAlerts: [],
+    worldEvents: [],
+    worldEventsVersion: 1,
+    lastWorldEventGeneratedDay: 0,
   };
 }
 
@@ -1190,6 +1259,7 @@ export interface GameStore extends StoreGameState {
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => void;
   processExpiredLeases: () => void;
   repairTruck: (truckId: string) => void;
+  upgradeTruck: (truckId: string, upgradeType: TruckUpgradeType) => void;
   refuelOrUpdateFuelPrice: () => void;
   addMarketNews: (news: Omit<MarketNews, 'id'> & { id?: string }) => void;
   clearOldMarketNews: () => void;
@@ -1239,9 +1309,21 @@ export interface GameStore extends StoreGameState {
   openMarketFromAlert: (focus: MarketFocusRequest) => void;
   clearPendingMarketFocus: () => void;
   clearAllMarketAlerts: () => Promise<void>;
+  forceGenerateWorldEvent: (type: WorldEventType) => void;
+  clearWorldEvents: () => void;
+  forceGenerateSpecialContracts: () => number;
+  addDriverXp: (driverId: string, amount: number) => void;
+  resetDriverProgress: (driverId: string) => void;
+  addTruckUpgrade: (truckId: string, upgradeType: TruckUpgradeType) => void;
+  getActiveWorldEventsValue: () => import('../types/game').WorldEvent[];
   syncMissionProgress: () => void;
   getMissionProgressValue: (missionId: string) => MissionProgressResult;
   claimMissionReward: (missionId: string) => { success: boolean; message?: string };
+  syncRetentionProgress: () => void;
+  applyRetentionEventAndSync: (event: RetentionEvent) => void;
+  claimMilestoneReward: (milestoneId: string) => { success: boolean; message?: string };
+  claimWeeklyObjectiveReward: (objectiveId: string) => { success: boolean; message?: string };
+  getRetentionSummaryValue: () => ReturnType<typeof getRetentionSummary>;
   markOnboardingScreenVisited: (screenId: OnboardingScreenId) => void;
   dismissOnboardingHint: (hintId: string) => void;
   dismissOnboardingGuide: () => void;
@@ -1914,6 +1996,129 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().markSaveDirty();
   },
 
+  forceGenerateWorldEvent: (type) => {
+    if (!__DEV__) {
+      return;
+    }
+    const state = get();
+    const currentDay = gameDayFromTime(state.lastEconomyTickTime || state.currentTime);
+    const forced = forceCreateWorldEvent(type, currentDay);
+    if (!forced) {
+      return;
+    }
+    set({
+      worldEvents: [...(state.worldEvents ?? []), forced].slice(-12),
+    });
+    get().markSaveDirty();
+  },
+
+  clearWorldEvents: () => {
+    if (!__DEV__) {
+      return;
+    }
+    set({
+      worldEvents: [],
+      lastWorldEventGeneratedDay: gameDayFromTime(get().currentTime),
+    });
+    get().markSaveDirty();
+  },
+
+  forceGenerateSpecialContracts: () => {
+    if (!__DEV__) {
+      return 0;
+    }
+    const state = get();
+    const params = buildContractRefreshParams(state);
+    const specialContracts = generateContracts(
+      params.cities,
+      state.routes,
+      state.products,
+      state.globalEconomy,
+      state.contracts,
+      {
+        currentTime: state.currentTime,
+        maxNewContracts: 6,
+        playerLevel: Math.max(4, params.playerLevel),
+        playerReputation: Math.max(70, params.playerReputation ?? 0),
+        ownedMaxTruckCapacity: params.ownedMaxTruckCapacity,
+        idleMaxTruckCapacity: params.idleMaxTruckCapacity,
+        idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+        activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+        busyTruckOriginCityIds: params.busyTruckOriginCityIds,
+        fleetCityContext: params.fleetCityContext,
+        activeWorldEvents: params.activeWorldEvents,
+      },
+    ).filter((c) => (c.contractType ?? 'standard') !== 'standard');
+    if (specialContracts.length === 0) {
+      return 0;
+    }
+    const merged = mergeContractsWithDedupe(state.contracts, specialContracts);
+    set({ contracts: merged });
+    get().markSaveDirty();
+    return specialContracts.length;
+  },
+
+  addDriverXp: (driverId, amount) => {
+    if (!__DEV__) {
+      return;
+    }
+    const state = get();
+    const drivers = state.player.drivers.map((driver) => {
+      if (driver.id !== driverId) {
+        return driver;
+      }
+      return applyDriverXp(driver, amount).driver;
+    });
+    set({ player: { ...state.player, drivers } });
+    get().markSaveDirty();
+  },
+
+  resetDriverProgress: (driverId) => {
+    if (!__DEV__) {
+      return;
+    }
+    const state = get();
+    const drivers = state.player.drivers.map((driver) =>
+      driver.id === driverId
+        ? {
+            ...driver,
+            xp: 0,
+            level: 1,
+            completedDeliveries: 0,
+            onTimeDeliveries: 0,
+            specialty: undefined,
+          }
+        : driver,
+    );
+    set({ player: { ...state.player, drivers } });
+    get().markSaveDirty();
+  },
+
+  addTruckUpgrade: (truckId, upgradeType) => {
+    if (!__DEV__) {
+      return;
+    }
+    const state = get();
+    const truck = state.player.trucks.find((t) => t.id === truckId);
+    if (!truck || !canUpgradeTruck(truck, upgradeType)) {
+      return;
+    }
+    const upgraded = applyTruckUpgrade(truck, upgradeType);
+    set({
+      player: {
+        ...state.player,
+        trucks: state.player.trucks.map((t) => (t.id === truckId ? upgraded : t)),
+      },
+    });
+    get().applyRetentionEventAndSync({ type: 'truck_upgraded', truckId });
+    get().markSaveDirty();
+  },
+
+  getActiveWorldEventsValue: () => {
+    const state = get();
+    return getActiveWorldEvents(state.worldEvents ?? [], gameDayFromTime(state.currentTime));
+  },
+
   syncMissionProgress: () => {
     const state = get();
     const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
@@ -2024,6 +2229,166 @@ export const useGameStore = create<GameStore>((set, get) => ({
       .then(() => {
         void syncLocalSaveToCloud('mission_claim', { force: true, state: get() });
       });
+    return { success: true };
+  },
+
+  syncRetentionProgress: () => {
+    const state = get();
+    const retention = syncRetentionProgressState(state);
+    set({ retention });
+  },
+
+  applyRetentionEventAndSync: (event) => {
+    const state = get();
+    const withEvent = applyRetentionEvent(state.retention ?? createDefaultRetentionState(), event);
+    const retention = syncRetentionProgressState({ ...state, retention: withEvent });
+    set({ retention });
+  },
+
+  getRetentionSummaryValue: () => {
+    const state = get();
+    return getRetentionSummary(state.retention ?? createDefaultRetentionState());
+  },
+
+  claimMilestoneReward: (milestoneId) => {
+    const state = get();
+    const synced = syncRetentionProgressState(state);
+    const claimResult = claimMilestoneRewardState(synced, milestoneId, state.currentTime);
+    if (!claimResult.ok) {
+      if (claimResult.error === 'already-claimed') {
+        return { success: false, message: 'Ödül zaten alındı.' };
+      }
+      if (claimResult.error === 'not-complete') {
+        return { success: false, message: 'Başarı henüz tamamlanmadı.' };
+      }
+      return { success: false, message: 'Başarı bulunamadı.' };
+    }
+
+    const milestone = getMilestoneById(milestoneId);
+    if (!milestone) {
+      return { success: false, message: 'Başarı bulunamadı.' };
+    }
+
+    const moneyReward = milestone.reward.cash ?? 0;
+    const xpReward = milestone.reward.xp ?? 0;
+    const diamondReward = milestone.reward.diamonds ?? 0;
+    const reputationReward = milestone.reward.reputation ?? 0;
+
+    const ledgerPatch =
+      moneyReward > 0
+        ? patchFinanceLedger(state, {
+            time: state.currentTime,
+            type: 'income',
+            category: 'mission_reward',
+            amount: moneyReward,
+            title: 'Başarı Ödülü',
+            description: milestone.title,
+          })
+        : null;
+
+    set({
+      player: {
+        ...state.player,
+        money: (state.player.money ?? 0) + moneyReward,
+        diamonds: (state.player.diamonds ?? 0) + diamondReward,
+        reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
+      },
+      retention: claimResult.retention,
+      financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
+      financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title: 'Başarı tamamlandı',
+          message: `${milestone.title} ödülü alındı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    if (xpReward > 0) {
+      get().addCompanyXp(xpReward, 'milestone_reward');
+    }
+
+    get().markSaveDirty();
+    get().syncRetentionProgress();
+    return { success: true };
+  },
+
+  claimWeeklyObjectiveReward: (objectiveId) => {
+    const state = get();
+    const seasonKey = getWeeklySeasonKey();
+    const synced = syncRetentionProgressState(state);
+    const claimResult = claimWeeklyObjectiveRewardState(
+      synced,
+      objectiveId,
+      seasonKey,
+      state.currentTime,
+    );
+    if (!claimResult.ok) {
+      if (claimResult.error === 'already-claimed') {
+        return { success: false, message: 'Ödül zaten alındı.' };
+      }
+      if (claimResult.error === 'not-complete') {
+        return { success: false, message: 'Haftalık görev henüz tamamlanmadı.' };
+      }
+      return { success: false, message: 'Haftalık görev bulunamadı.' };
+    }
+
+    const objective = getWeeklyObjectiveById(seasonKey, objectiveId);
+    if (!objective) {
+      return { success: false, message: 'Haftalık görev bulunamadı.' };
+    }
+
+    const moneyReward = objective.reward.cash ?? 0;
+    const xpReward = objective.reward.xp ?? 0;
+    const diamondReward = objective.reward.diamonds ?? 0;
+    const reputationReward = objective.reward.reputation ?? 0;
+
+    const ledgerPatch =
+      moneyReward > 0
+        ? patchFinanceLedger(state, {
+            time: state.currentTime,
+            type: 'income',
+            category: 'mission_reward',
+            amount: moneyReward,
+            title: 'Haftalık Görev Ödülü',
+            description: objective.title,
+          })
+        : null;
+
+    set({
+      player: {
+        ...state.player,
+        money: (state.player.money ?? 0) + moneyReward,
+        diamonds: (state.player.diamonds ?? 0) + diamondReward,
+        reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
+      },
+      retention: claimResult.retention,
+      financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
+      financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title: 'Haftalık görev tamamlandı',
+          message: `${objective.title} ödülü alındı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    if (xpReward > 0) {
+      get().addCompanyXp(xpReward, 'weekly_objective_reward');
+    }
+
+    get().markSaveDirty();
+    get().syncRetentionProgress();
     return { success: true };
   },
 
@@ -2268,6 +2633,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       get().checkMarketPriceAlerts({ sendLocal: false });
       get().advanceOnboardingProgress();
+      get().syncRetentionProgress();
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Kayıt yüklenemedi.';
@@ -2795,6 +3161,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const safeEconomy = normalizeGlobalEconomy(state.globalEconomy);
     const previousFuelPrice = getSafeFuelPrice(safeEconomy);
     const previousCities = citiesToRecord(state.cities);
+    const tickDay = gameDayFromTime(state.lastEconomyTickTime || state.currentTime);
+
+    const lastGeneratedDay = state.lastWorldEventGeneratedDay ?? 0;
+    const worldEventResult =
+      tickDay > lastGeneratedDay
+        ? processWorldEventsForDayRange({
+            worldEvents: state.worldEvents ?? [],
+            fromDay: lastGeneratedDay + 1,
+            toDay: tickDay,
+            seedKey: state.player.companyName,
+          })
+        : {
+            worldEvents: getActiveWorldEvents(state.worldEvents ?? [], tickDay),
+            lastWorldEventGeneratedDay: lastGeneratedDay,
+          };
+
+    const activeWorldEvents = getActiveWorldEvents(worldEventResult.worldEvents, tickDay);
 
     // Şehir ekonomilerini güncelle
     const updatedCitiesRecord = updateAllCitiesEconomy(
@@ -2804,7 +3187,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     // Yakıt fiyatını küçük rastgele değişimle güncelle
     const fuelChange = randomBetween(-0.06, 0.08);
-    const newFuelPrice = Math.max(0.8, previousFuelPrice * (1 + fuelChange));
+    let newFuelPrice = Math.max(0.8, previousFuelPrice * (1 + fuelChange));
+    newFuelPrice = applyWorldEventImpactToFuelPrice(newFuelPrice, activeWorldEvents);
     const globalEconomy = normalizeGlobalEconomy({
       ...safeEconomy,
       fuelPrice: Number(newFuelPrice.toFixed(2)),
@@ -2841,6 +3225,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
         title: fuelTitle,
         message: fuelMessage,
         importance: fuelImportance,
+      });
+    }
+
+    const newActiveEvents = activeWorldEvents.filter(
+      (event) => event.startsAtDay === tickDay,
+    );
+    for (const worldEvent of newActiveEvents) {
+      news.push({
+        id: createNewsId(state.currentTime, `we_${worldEvent.id}`),
+        time: state.currentTime,
+        type: 'economy',
+        title: worldEvent.title,
+        message: worldEvent.description,
+        cityId: worldEvent.cityId,
+        productId: worldEvent.productId,
+        importance: worldEvent.severity === 'high' ? 'high' : 'medium',
+      });
+      gameEvents.push({
+        time: state.currentTime,
+        type: 'market',
+        title: worldEvent.title,
+        message: worldEvent.description,
+        importance: worldEvent.severity === 'high' ? 'high' : 'medium',
       });
     }
 
@@ -2894,6 +3301,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       contracts: balancedContracts,
       marketNews: [...news, ...state.marketNews].slice(0, MARKET_NEWS_MAX_COUNT),
       eventLog: prependGameEvents(state.eventLog, gameEvents, state.currentTime),
+      worldEvents: worldEventResult.worldEvents,
+      worldEventsVersion: state.worldEventsVersion ?? 1,
+      lastWorldEventGeneratedDay: worldEventResult.lastWorldEventGeneratedDay,
     });
     get().markSaveDirty();
     get().autoSave('economy_tick');
@@ -3133,6 +3543,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
             activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
             busyTruckOriginCityIds: params.busyTruckOriginCityIds,
             fleetCityContext: params.fleetCityContext,
+            activeWorldEvents: params.activeWorldEvents,
           };
         })(),
       },
@@ -3913,6 +4324,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
           product,
         )
       : 0;
+    const typePenaltyMult = getContractTypePenaltyMultiplier(contract);
+    let adjustedPenaltyCost = Math.round(penaltyCost * typePenaltyMult);
+    const completedTruckBefore = simState.trucks.find((t) => t.id === delivery.truckId);
+    if (
+      normalizeContractType(contract) === 'fragile' &&
+      completedTruckBefore &&
+      (completedTruckBefore.condition ?? 100) < (contract.recommendedTruckCondition ?? 70)
+    ) {
+      adjustedPenaltyCost += Math.round((contract.payment ?? 0) * 0.05);
+    }
 
     // Deadline aşıldı ama kritik eşik geçilmedi → teslimat tamamlanır,
     // para cezası uygulanır, itibar kazanılmaz ve geç teslimat sayılır.
@@ -3922,7 +4343,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       contractPayment: contract.payment ?? 0,
       fuelCost: delivery.fuelCost ?? 0,
       maintenanceCost: delivery.maintenanceCost ?? 0,
-      penaltyCost,
+      penaltyCost: adjustedPenaltyCost,
       fuelAlreadyPaid: true,
     });
 
@@ -3937,11 +4358,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const notificationMessage = `${locationToastMessage} Net kâr: ${formatNotificationMoney(netProfit)}`;
     const eventMessage = `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
     const completedTruck = newSimState.trucks.find((t) => t.id === delivery.truckId);
+    const driverXpGain = calculateDriverDeliveryXp({
+      contract,
+      distanceKm,
+      onTime: !isLateDelivery,
+      success: true,
+    });
+    const reputationBonus =
+      !isLateDelivery && shouldGrantHighReputationBonus(contract)
+        ? HIGH_REPUTATION_SUCCESS_BONUS
+        : 0;
     const truckArrivalMessage = completedTruck
       ? `${completedTruck.name} ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`
       : `Kamyon ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`;
 
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterComplete);
+    const updatedDrivers = (merged.player?.drivers ?? state.player.drivers).map((driver) => {
+      if (driver.id !== delivery.driverId) {
+        return driver;
+      }
+      const nextDriver = recordDriverDeliveryStats(driver, !isLateDelivery);
+      const xpResult = applyDriverXp(nextDriver, driverXpGain, contract);
+      if (xpResult.leveledUp) {
+        queueMicrotask(() => {
+          get().applyRetentionEventAndSync({
+            type: 'driver_level_up',
+            driverId: driver.id,
+            newLevel: xpResult.newLevel,
+          });
+        });
+      }
+      return xpResult.driver;
+    });
     const settledAt = state.currentTime;
     const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
       item.id === deliveryId ? { ...item, settledAt } : item,
@@ -3972,7 +4420,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       player: {
         ...state.player,
         trucks: merged.player!.trucks,
-        drivers: merged.player!.drivers,
+        drivers: updatedDrivers,
         warehouses: merged.player!.warehouses,
         money: moneyAfterComplete,
         completedContracts: state.player.completedContracts + 1,
@@ -3981,7 +4429,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           : (state.player.lateDeliveries ?? 0),
         reputation: isLateDelivery
           ? state.player.reputation
-          : Math.min(100, state.player.reputation + REPUTATION_GAIN),
+          : Math.min(100, state.player.reputation + REPUTATION_GAIN + reputationBonus),
       },
       marketNews: [
         {
@@ -4025,6 +4473,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().addCompanyXp(xpGain, 'delivery_completed');
     get().notifyFirstDeliveryCompleted();
     get().syncMissionProgress();
+    get().applyRetentionEventAndSync({
+      type: 'contract_completed',
+      originCityId: delivery.originCityId,
+      destinationCityId: delivery.destinationCityId,
+      onTime: !isLateDelivery,
+      contractType: normalizeContractType(contract),
+    });
+    const contractType = normalizeContractType(contract);
+    if (contractType === 'urgent') {
+      get().applyRetentionEventAndSync({ type: 'urgent_contract_completed' });
+    } else if (contractType === 'fragile') {
+      get().applyRetentionEventAndSync({ type: 'fragile_contract_completed' });
+    } else if (contractType === 'high_reputation') {
+      get().applyRetentionEventAndSync({ type: 'high_reputation_contract_completed' });
+    }
 
     const postState = get();
     if (postState.player) {
@@ -4226,6 +4689,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     get().addCompanyXp(levelBalance.xpRewards.truckPurchase, 'truck_purchase');
     get().autoSave('purchase');
+    get().syncRetentionProgress();
     return {
       success: true,
       message: `${template.name} satın alındı.`,
@@ -4637,6 +5101,49 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ),
     });
     get().autoSave('repair');
+    get().applyRetentionEventAndSync({ type: 'truck_maintained', truckId });
+  },
+
+  upgradeTruck: (truckId, upgradeType) => {
+    const state = get();
+    const truck = state.player.trucks.find((t) => t.id === truckId);
+    if (!truck) {
+      throw new Error('Kamyon bulunamadı.');
+    }
+    if ((truck.ownershipType ?? 'owned') === 'leased') {
+      throw new Error('Kiralık kamyon geliştirilemez.');
+    }
+    if (truck.status !== 'idle') {
+      throw new Error('Yalnızca boştaki kamyon geliştirilebilir.');
+    }
+    if (!canUpgradeTruck(truck, upgradeType)) {
+      throw new Error('Bu geliştirme maksimum seviyede.');
+    }
+    const cost = getTruckUpgradeCost(truck, upgradeType);
+    if (!canAffordVoluntaryPurchase(state.player.money, cost)) {
+      throw new Error('Yetersiz nakit.');
+    }
+    const upgraded = applyTruckUpgrade(truck, upgradeType);
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - cost,
+        trucks: state.player.trucks.map((t) => (t.id === truckId ? upgraded : t)),
+      },
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Kamyon geliştirildi',
+          message: `${truck.name} — ${upgradeType} yükseltildi. Maliyet: $${cost.toFixed(0)}`,
+          importance: 'low',
+        },
+        state.currentTime,
+      ),
+    });
+    get().applyRetentionEventAndSync({ type: 'truck_upgraded', truckId });
+    get().autoSave('upgrade');
   },
 
   openWarehouse: (cityId: string, warehouseType: WarehouseType = 'standard'): TradeActionResult => {
@@ -4926,7 +5433,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    const unitPrice = getCityProductMarketPrice(city, productId);
+    const unitPrice = getEffectiveTradeUnitPrice(state, city, productId);
     const cityStock = getCityProductStock(city, productId);
     const normalizedWarehouse = normalizeWarehouse(warehouse, state.currentTime);
     const freeCapacity = getWarehouseFreeCapacityTon(normalizedWarehouse);
@@ -4994,6 +5501,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         category: 'trade_purchase',
         amount: totalCost,
         description: `${cityName} · ${quantity.toFixed(1)} ton ${productName} (işlem gideri dahil)`,
+        meta: { productId },
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -5037,6 +5545,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ),
     });
     get().advanceOnboardingProgress();
+    get().applyRetentionEventAndSync({
+      type: 'trade_completed',
+      profit: 0,
+      productId,
+      side: 'buy',
+    });
+    get().applyRetentionEventAndSync({
+      type: 'warehouse_stock_changed',
+      totalStockTons: usedCapacityTon,
+    });
     return {
       success: true,
       message: `${quantity.toFixed(1)} ton ${productName} depoya eklendi.`,
@@ -5097,7 +5615,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    const unitPrice = getCityProductMarketPrice(city, productId);
+    const unitPrice = getEffectiveTradeUnitPrice(state, city, productId);
     const averageBuyPrice = inventoryItem.averageBuyPrice ?? unitPrice;
     const itemQuality = inventoryItem.quality ?? 100;
     const revenue = calculateTradeSellRevenue(unitPrice, quantity, itemQuality);
@@ -5137,6 +5655,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         category: 'trade_sale',
         amount: revenue,
         description: `${productName} · Net kâr: ${formatNotificationMoney(profit)} (işlem gideri dahil)`,
+        meta: { productId, profit: Math.max(0, profit) },
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -5169,6 +5688,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     get().addCompanyXp(xpGain, 'trade_sale');
+
+    get().applyRetentionEventAndSync({
+      type: 'trade_completed',
+      profit: Math.max(0, profit),
+      productId,
+      side: 'sell',
+    });
+    get().applyRetentionEventAndSync({
+      type: 'warehouse_stock_changed',
+      totalStockTons: usedCapacityTon,
+    });
 
     get().markSaveDirty();
     get().autoSave('warehouse');

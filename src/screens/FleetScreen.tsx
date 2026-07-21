@@ -43,6 +43,17 @@ import {
   isActiveLeasedTruck,
 } from '../simulation/dailyOperatingCosts';
 import { calculateTruckRepairCost, resolveTruckCityId } from '../simulation/delivery';
+import {
+  getDriverOnTimeRate,
+  getDriverXpProgress,
+} from '../simulation/driverProgress';
+import {
+  getTruckUpgradeCost,
+  getTruckUpgradeSummary,
+  canUpgradeTruck,
+  TRUCK_UPGRADE_LABELS,
+  type TruckUpgradeType,
+} from '../simulation/truckUpgrades';
 import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
 import {
   calculateDriverSeveranceCost,
@@ -250,6 +261,7 @@ interface OwnedTruckCardProps {
   currentTime: number;
   sellCheck: TruckSellCheck;
   onRepair: (truck: Truck) => void;
+  onUpgrade: (truck: Truck, upgradeType: TruckUpgradeType) => void;
   onTransfer: (truck: Truck, targetCityId?: string) => void;
   onSell: (truck: Truck) => void;
   onShowSellBlocked: (reason: string) => void;
@@ -277,6 +289,7 @@ function OwnedTruckCard({
   currentTime,
   sellCheck,
   onRepair,
+  onUpgrade,
   onTransfer,
   onSell,
   onShowSellBlocked,
@@ -309,6 +322,13 @@ function OwnedTruckCard({
   const resaleValue = isLeased ? 0 : calculateTruckResaleValue(truck);
   const showSellInfo = !isLeased && resaleValue > 0;
   const showSellButton = !isLeased && (sellCheck.canSell || sellCheck.reason);
+  const upgradeBadges = getTruckUpgradeSummary(truck);
+  const upgradeLevel = truck.upgradeLevel ?? 0;
+  const nextUpgradeType = (['engine', 'fuelEfficiency', 'cargo', 'durability'] as TruckUpgradeType[]).find(
+    (type) => canUpgradeTruck(truck, type),
+  );
+  const nextUpgradeCost = nextUpgradeType ? getTruckUpgradeCost(truck, nextUpgradeType) : 0;
+  const canUpgrade = isIdle && !isLeased && !!nextUpgradeType && playerMoney >= nextUpgradeCost;
 
   const handleSellPress = () => {
     if (!sellCheck.canSell) {
@@ -346,7 +366,14 @@ function OwnedTruckCard({
       <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
         {isIdle ? null : `Konum: ${truckCityName} · `}
         {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
+        {upgradeLevel > 0 ? ` · Geliştirme +${upgradeLevel}` : ''}
       </Text>
+
+      {upgradeBadges.length > 0 ? (
+        <Text style={styles.footerMuted} numberOfLines={2}>
+          {upgradeBadges.join(' · ')}
+        </Text>
+      ) : null}
 
       {isLeaseExpired ? (
         <View style={styles.leaseInfoBlock}>
@@ -432,7 +459,7 @@ function OwnedTruckCard({
       <View style={styles.cardFooter}>
         {showRepairButton ? (
           <ActionButton
-            label={canAfford ? `Tamir et (${formatMoney(repairCost)})` : 'Nakit yetersiz'}
+            label={canAfford ? `Bakım Yap (${formatMoney(repairCost)})` : 'Yetersiz nakit'}
             onPress={() => onRepair(truck)}
             disabled={!canAfford}
             variant="secondary"
@@ -441,7 +468,23 @@ function OwnedTruckCard({
             compact
             style={styles.compactAction}
           />
-        ) : isOnRoute ? (
+        ) : null}
+        {isIdle && !isLeased && nextUpgradeType ? (
+          <ActionButton
+            label={
+              canUpgrade
+                ? `Yükselt (${TRUCK_UPGRADE_LABELS[nextUpgradeType]})`
+                : 'Yetersiz nakit'
+            }
+            onPress={() => onUpgrade(truck, nextUpgradeType)}
+            disabled={!canUpgrade}
+            variant="secondary"
+            iconSize={13}
+            compact
+            style={styles.compactAction}
+          />
+        ) : null}
+        {isOnRoute ? (
           <Text style={styles.footerMuted}>Teslimat sürüyor</Text>
         ) : isTransferring ? (
           <Text style={styles.footerMuted}>Boş transfer sürüyor</Text>
@@ -540,6 +583,10 @@ function OwnedDriverCard({
     (activeDelivery ? trucks.find((t) => t.id === activeDelivery.truckId) : undefined);
   const attention = Math.round(driver.attention ?? 0);
   const experience = Math.round(driver.experience ?? 0);
+  const driverLevel = driver.level ?? 1;
+  const driverXp = getDriverXpProgress(driver);
+  const onTimeRate = getDriverOnTimeRate(driver);
+  const completedCount = driver.completedDeliveries ?? 0;
   const isDriving = driver.status === 'driving';
   const isIdle = driver.status === 'idle';
   const severanceCost = fireCheck.severanceCost ?? calculateDriverSeveranceCost(driver);
@@ -576,8 +623,18 @@ function OwnedDriverCard({
       </View>
 
       <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        Deneyim {experience} · Dikkat {attention} · Maaş {formatMoney(driver.salaryPerDay ?? 0)}/gün
+        Seviye {driverLevel} · XP {driverXp.xp}
+        {driverLevel < 5 ? ` / ${driverXp.xpForNextLevel}` : ''} · Deneyim {experience} · Dikkat {attention}
       </Text>
+      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
+        Teslimat {completedCount}
+        {completedCount > 0 ? ` · Zamanında %${Math.round(onTimeRate * 100)}` : ''}
+        {driver.specialty ? ` · Uzmanlık: ${driver.specialty}` : ''}
+        {' · '}Maaş {formatMoney(driver.salaryPerDay ?? 0)}/gün
+      </Text>
+      {driverLevel < 5 ? (
+        <ProgressBar progress={driverXp.progressRatio} color={colors.accentBlue} height={3} />
+      ) : null}
 
       {isDriving && activeDelivery ? (
         <View style={styles.inlineRouteBlock}>
@@ -866,6 +923,7 @@ export default function FleetScreen() {
   const sellTruck = useGameStore((state) => state.sellTruck);
   const fireDriver = useGameStore((state) => state.fireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
+  const upgradeTruck = useGameStore((state) => state.upgradeTruck);
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
 
@@ -934,6 +992,19 @@ export default function FleetScreen() {
     }),
     [trucks, drivers, playerMoney, activeDeliveries, activeTransfers],
   );
+
+  const handleUpgrade = (truck: Truck, upgradeType: TruckUpgradeType) => {
+    if (typeof upgradeTruck !== 'function') {
+      setStatusMessage({ type: 'error', text: 'Geliştirme henüz kullanılamıyor' });
+      return;
+    }
+    try {
+      upgradeTruck(truck.id, upgradeType);
+      setStatusMessage({ type: 'success', text: `${truck.name} geliştirildi` });
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: translateErrorMessage(error, 'Yetersiz nakit') });
+    }
+  };
 
   const handleRepair = (truck: Truck) => {
     if (typeof repairTruck !== 'function') {
@@ -1162,6 +1233,7 @@ export default function FleetScreen() {
                   currentTime={currentTime}
                   sellCheck={canSellTruck(truck.id, fleetManagementState)}
                   onRepair={handleRepair}
+                  onUpgrade={handleUpgrade}
                   onTransfer={handleOpenTransfer}
                   onSell={handleSellTruck}
                   onShowSellBlocked={handleShowSellBlocked}

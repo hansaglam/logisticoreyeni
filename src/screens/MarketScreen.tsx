@@ -10,6 +10,7 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { useAppDialog } from '../components/AppDialogProvider';
 import MarketAlertModal from '../components/market/MarketAlertModal';
 import ActiveMarketAlertsSection from '../components/market/ActiveMarketAlertsSection';
+import MarketWorldEventsStrip from '../components/market/MarketWorldEventsStrip';
 import ProductMarketDetailModal from '../components/market/ProductMarketDetailModal';
 import ProductMiniTrendChart from '../components/market/ProductMiniTrendChart';
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
@@ -36,6 +37,14 @@ import type { StatusBadgeVariant } from '../components/ui';
 import { findMarketOpportunities } from '../simulation/contracts';
 import { countMarketContractMatches } from '../utils/marketContractMatch';
 import { getSafeFuelPrice } from '../simulation/economy';
+import {
+  applyWorldEventImpactToFuelPrice,
+  gameDayFromTime,
+  getActiveWorldEvents,
+  getEventsForProduct,
+  getPrimaryWorldEventLabel,
+  getProductPriceEventMultiplier,
+} from '../simulation/worldEvents';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import {
   calculateStockRatio,
@@ -412,6 +421,8 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   showSellButton,
   sellButtonLabel,
   sellButtonDisabled,
+  eventLabel,
+  displayPrice,
   onBuyPress,
   onSellPress,
   onAlarmPress,
@@ -429,6 +440,8 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   showSellButton: boolean;
   sellButtonLabel: string;
   sellButtonDisabled: boolean;
+  eventLabel?: string;
+  displayPrice?: number;
   onBuyPress: () => void;
   onSellPress: () => void;
   onAlarmPress: () => void;
@@ -439,6 +452,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   const statusVariant = getMarketStatusColorVariant(status);
   const hint = getOpportunityHint(market);
   const progressValue = Math.min(stockRatio, 2) / 2;
+  const shownPrice = displayPrice ?? market.currentPrice;
   const trend = getProductPriceTrend({
     cityId,
     productId: market.productId,
@@ -471,7 +485,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
 
         <View style={styles.cardRight}>
           <Text style={styles.productPrice} numberOfLines={1}>
-            {formatMoney(market.currentPrice)}
+            {formatMoney(shownPrice)}
           </Text>
           <Text style={styles.productPriceUnit} numberOfLines={1}>
             / ton
@@ -495,6 +509,12 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
           {trend.label}
         </Text>
       </View>
+
+      {eventLabel ? (
+        <Text style={styles.eventLabel} numberOfLines={1}>
+          {eventLabel}
+        </Text>
+      ) : null}
 
       <View style={styles.chartRow}>
         <ProductMiniTrendChart trend={trend} />
@@ -738,6 +758,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
   const notifyMarketScreenOpened = useGameStore((state) => state.notifyMarketScreenOpened);
   const marketAlerts = useGameStore((state) => state.marketAlerts) ?? [];
+  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const createMarketPriceAlert = useGameStore((state) => state.createMarketPriceAlert);
   const deleteMarketPriceAlert = useGameStore((state) => state.deleteMarketPriceAlert);
   const pendingMarketFocus = useGameStore((state) => state.pendingMarketFocus);
@@ -777,7 +798,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     [products, alertProductId],
   );
 
-  const fuelPrice = getSafeFuelPrice(globalEconomy);
+  const activeWorldEvents = useMemo(
+    () => getActiveWorldEvents(worldEvents, gameDayFromTime(currentTime)),
+    [worldEvents, currentTime],
+  );
+
+  const fuelPrice = applyWorldEventImpactToFuelPrice(
+    getSafeFuelPrice(globalEconomy),
+    activeWorldEvents,
+  );
 
   useEffect(() => {
     notifyMarketScreenOpened();
@@ -1262,6 +1291,8 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         compact={isOnboardingMarket}
       />
 
+      <MarketWorldEventsStrip events={activeWorldEvents} />
+
       <SegmentedControl
         options={MARKET_TABS}
         activeKey={activeTab}
@@ -1333,10 +1364,29 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                       quality: 100,
                       primaryWarehouseId: null,
                     };
+                    const priceMultiplier = getProductPriceEventMultiplier(
+                      product.id,
+                      selectedCity.id,
+                      activeWorldEvents,
+                      gameDayFromTime(currentTime),
+                    );
+                    const displayPrice =
+                      priceMultiplier !== 1
+                        ? Number(Math.max(1, market.currentPrice * priceMultiplier).toFixed(2))
+                        : market.currentPrice;
+                    const productEvent = getEventsForProduct(
+                      activeWorldEvents,
+                      product.id,
+                      gameDayFromTime(currentTime),
+                      selectedCity.id,
+                    ).find((event) => event.impact.productPriceMultiplier);
+                    const eventLabel = productEvent
+                      ? `Etkinlik: ${getPrimaryWorldEventLabel(productEvent)}`
+                      : undefined;
                     const estimatedProfit =
                       inventory.quantity > 0
                         ? calculateTradeProfit(
-                            market.currentPrice,
+                            displayPrice,
                             inventory.averageBuyPrice,
                             inventory.quantity,
                             inventory.quality,
@@ -1351,7 +1401,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                       marketStock: market.stock,
                       freeCapacity: selectedCityTotalFreeCapacity,
                       playerMoney: player?.money ?? 0,
-                      unitPrice: market.currentPrice,
+                      unitPrice: displayPrice,
                       canStoreProduct,
                     });
                     const sellButton = resolveMarketSellState({
@@ -1373,6 +1423,8 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                         showSellButton={sellButton.showSellButton}
                         sellButtonLabel={sellButton.label}
                         sellButtonDisabled={sellButton.disabled}
+                        eventLabel={eventLabel}
+                        displayPrice={displayPrice}
                         onBuyPress={() => handleBuyProductPress(product.id)}
                         onSellPress={() => handleSellProductPress(product.id)}
                         onAlarmPress={() => handleAlarmProductPress(product.id)}
@@ -1707,6 +1759,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flexShrink: 1,
     textAlign: 'right',
+  },
+  eventLabel: {
+    ...typography.caption,
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.accentAmber,
+    marginTop: 2,
   },
   chartRow: {
     width: '100%',

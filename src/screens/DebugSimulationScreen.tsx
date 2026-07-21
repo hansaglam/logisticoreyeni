@@ -507,6 +507,10 @@ export default function DebugSimulationScreen() {
   const marketAlerts = useGameStore((state) => state.marketAlerts) ?? [];
   const checkMarketPriceAlerts = useGameStore((state) => state.checkMarketPriceAlerts);
   const clearAllMarketAlerts = useGameStore((state) => state.clearAllMarketAlerts);
+  const forceGenerateWorldEvent = useGameStore((state) => state.forceGenerateWorldEvent);
+  const clearWorldEvents = useGameStore((state) => state.clearWorldEvents);
+  const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
+  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const saveStatus = useGameStore((state) => state.saveStatus);
   const saveError = useGameStore((state) => state.saveError);
   const refreshSaveStatus = useGameStore((state) => state.refreshSaveStatus);
@@ -1036,6 +1040,47 @@ export default function DebugSimulationScreen() {
             <DebugButton label="Force Check Alerts" onPress={handleCheckMarketAlerts} variant="primary" />
             <DebugButton label="Clear All Alerts" onPress={handleClearMarketAlerts} variant="danger" />
             <DebugButton label="Test Local Notification" onPress={handleTestMarketNotification} />
+          </View>
+        </Section>
+
+        <Section title="Piyasa Olayları (Debug)">
+          <View style={styles.levelDebugPanel}>
+            <Text style={styles.levelDebugLine}>
+              active events: {getActiveWorldEventsValue().length}
+            </Text>
+            <Text style={styles.levelDebugLine}>stored events: {worldEvents.length}</Text>
+          </View>
+          <View style={styles.buttonGrid}>
+            <DebugButton
+              label="Fuel Crisis"
+              onPress={() => {
+                forceGenerateWorldEvent('fuel_crisis');
+                setInfo('Yakıt krizi olayı eklendi');
+              }}
+            />
+            <DebugButton
+              label="Electronics Boom"
+              onPress={() => {
+                forceGenerateWorldEvent('electronics_boom');
+                setInfo('Elektronik patlaması eklendi');
+              }}
+              variant="primary"
+            />
+            <DebugButton
+              label="Harvest Surplus"
+              onPress={() => {
+                forceGenerateWorldEvent('harvest_surplus');
+                setInfo('Meyve bolluğu eklendi');
+              }}
+            />
+            <DebugButton
+              label="Clear World Events"
+              onPress={() => {
+                clearWorldEvents();
+                setInfo('Piyasa olayları temizlendi');
+              }}
+              variant="danger"
+            />
           </View>
         </Section>
 

@@ -1,4 +1,4 @@
-package com.anonymous.logisticore
+package com.ethemsincar.logisticore
 
 import android.os.Build
 import android.os.Bundle

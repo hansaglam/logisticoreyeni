@@ -5,4 +5,6 @@ export { default as DashboardStatGrid, buildDashboardStatTiles } from './Dashboa
 export { default as DashboardModuleGrid } from './DashboardModuleGrid';
 export { default as DashboardOpportunitiesSection } from './DashboardOpportunitiesSection';
 export { default as DashboardMarketOpportunitiesSection } from './DashboardMarketOpportunitiesSection';
+export { default as DashboardRetentionCard } from './DashboardRetentionCard';
+export { default as DashboardWorldEventsCard } from './DashboardWorldEventsCard';
 export { resolveNextAction } from './dashboardHubLogic';

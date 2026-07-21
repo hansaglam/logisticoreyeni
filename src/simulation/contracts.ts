@@ -19,8 +19,11 @@ import type {
   ProductMarket,
   Route,
   Truck,
+  WorldEvent,
 } from '../types/game';
 import { contractBalance, contractExpiryBalance, contractGenerationBalance, contractLevelBalance } from '../config/balance';
+import { getContractSpawnWeightMultiplier } from './worldEvents';
+import { applyContractTypeToContract, getContractSelectionScoreInputs } from './contractTypes';
 import {
   applyCapacityProfileToTonnageRange,
   getMaxAllowedContractRequiredLevel,
@@ -122,6 +125,8 @@ export interface GenerateContractForProductParams {
   sequence?: number;
   /** Piyasa fırsatı rotası — marj bonusu uygulanır */
   isMarketOpportunity?: boolean;
+  playerLevel?: number;
+  playerReputation?: number;
 }
 
 export interface PlayerFleetCityContext {
@@ -137,6 +142,7 @@ export interface GenerateContractsOptions {
   ownedMaxTruckCapacity?: number;
   idleMaxTruckCapacity?: number;
   playerLevel?: number;
+  playerReputation?: number;
   currentTime: number;
   /** Boşta kamyonların bulunduğu şehirler — bu çıkışlardan iş üretimine öncelik */
   idleTruckOriginCityIds?: string[];
@@ -146,6 +152,8 @@ export interface GenerateContractsOptions {
   busyTruckOriginCityIds?: string[];
   /** Birleşik filo şehir bağlamı — verilirse diğer şehir listeleri yerine kullanılır */
   fleetCityContext?: PlayerFleetCityContext;
+  /** Aktif piyasa olayları — sözleşme aday skoruna spawn ağırlığı uygular */
+  activeWorldEvents?: WorldEvent[];
 }
 
 /** Dahili: aday sözleşme skoru — en kârlı rotalar önce seçilir */
@@ -803,7 +811,7 @@ export function generateContractForProduct(
 
   const deadlineHours = calculateDeadlineHours({ route, product, urgency });
 
-  return {
+  const baseContract: Contract = {
     id: createContractId(originCity.id, destinationCity.id, productId, currentTime, sequence),
     originCityId: originCity.id,
     destinationCityId: destinationCity.id,
@@ -818,7 +826,17 @@ export function generateContractForProduct(
     createdAt: currentTime,
     expiresAt: calculateContractExpiresAt(currentTime, deadlineHours, urgency),
     requiredLevel,
+    contractType: 'standard',
+    riskLevel: 'low',
   };
+
+  return applyContractTypeToContract({
+    contract: baseContract,
+    product,
+    playerLevel: params.playerLevel ?? 1,
+    playerReputation: params.playerReputation ?? 0,
+    sequence,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -841,6 +859,7 @@ export function generateContracts(
 ): Contract[] {
   const maxNewContracts = options.maxNewContracts ?? contractBalance.maxContractsPerTick;
   const playerLevel = Math.max(1, options.playerLevel ?? 1);
+  const playerReputation = Math.max(0, options.playerReputation ?? 0);
   const ownedMaxCapacity =
     options.ownedMaxTruckCapacity ??
     options.maxTruckCapacity ??
@@ -943,6 +962,8 @@ export function generateContracts(
           maxTonnage: tonnageBounds.maxTonnage,
           sequence: sequenceCounter,
           isMarketOpportunity,
+          playerLevel,
+          playerReputation,
         });
 
         if (!contract) {
@@ -977,15 +998,23 @@ export function generateContracts(
           ? contractGenerationBalance.originCityWeights.marketOpportunityCity
           : 0;
         const originWeightBonus = getOriginCityWeightBonus(originCity.id, fleetContext);
-        const score =
+        const scoreInputs = getContractSelectionScoreInputs(finalContract);
+        const baseScore =
           calculateContractScore(
-            finalContract.payment,
-            finalContract.urgency,
-            finalContract.amount,
+            scoreInputs.payment,
+            scoreInputs.urgency,
+            scoreInputs.amount,
             priceDiffRatio,
           ) +
           originWeightBonus +
           routeMarketBonus;
+        const spawnWeight = getContractSpawnWeightMultiplier(
+          originCity.id,
+          destinationCity.id,
+          product.id,
+          options.activeWorldEvents ?? [],
+        );
+        const score = baseScore * spawnWeight;
 
         candidates.push({ score, contract: finalContract });
       }
@@ -1372,6 +1401,7 @@ export interface ReplenishContractsParams {
   ownedMaxTruckCapacity?: number;
   idleMaxTruckCapacity?: number;
   playerLevel?: number;
+  playerReputation?: number;
   idleTruckOriginCityIds?: string[];
   activeDeliveryDestinationCityIds?: string[];
   busyTruckOriginCityIds?: string[];
@@ -1379,6 +1409,7 @@ export interface ReplenishContractsParams {
   trucks?: Truck[];
   drivers?: Driver[];
   homeCityId?: string;
+  activeWorldEvents?: WorldEvent[];
 }
 
 export interface EnsurePlayableContractsParams extends ReplenishContractsParams {
@@ -1544,10 +1575,12 @@ function runContractGenerationTick(
       ownedMaxTruckCapacity: ownedMaxCapacity,
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
+      playerReputation: params.playerReputation,
       idleTruckOriginCityIds: params.idleTruckOriginCityIds,
       activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
       busyTruckOriginCityIds: params.busyTruckOriginCityIds,
       fleetCityContext: params.fleetCityContext,
+      activeWorldEvents: params.activeWorldEvents,
     },
   );
 
@@ -1724,7 +1757,9 @@ export function processContractGenerationSchedule(
     ownedMaxTruckCapacity: params.ownedMaxTruckCapacity,
     idleMaxTruckCapacity: params.idleMaxTruckCapacity,
     playerLevel: params.playerLevel,
+    playerReputation: params.playerReputation,
     idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+    activeWorldEvents: params.activeWorldEvents,
   };
 
   const elapsedDailyTicks = computeElapsedTicks(
@@ -1890,10 +1925,12 @@ export function replenishAvailableContracts(params: ReplenishContractsParams): R
       ownedMaxTruckCapacity: ownedMaxCapacity,
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
+      playerReputation: params.playerReputation,
       idleTruckOriginCityIds: params.idleTruckOriginCityIds,
       activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
       busyTruckOriginCityIds: params.busyTruckOriginCityIds,
       fleetCityContext: params.fleetCityContext,
+      activeWorldEvents: params.activeWorldEvents,
     },
   );
 
@@ -1989,10 +2026,12 @@ export function refreshContractsFromMarket(
       ownedMaxTruckCapacity: ownedMaxCapacity,
       idleMaxTruckCapacity: params.idleMaxTruckCapacity,
       playerLevel,
+      playerReputation: params.playerReputation,
       idleTruckOriginCityIds: params.idleTruckOriginCityIds,
       activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
       busyTruckOriginCityIds: params.busyTruckOriginCityIds,
       fleetCityContext: params.fleetCityContext,
+      activeWorldEvents: params.activeWorldEvents,
     },
   );
 

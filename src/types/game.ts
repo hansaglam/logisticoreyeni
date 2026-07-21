@@ -218,6 +218,18 @@ export interface Truck {
   /** Ana üs / satın alındığı şehir — eski kayıtlarda yoksa currentCityId kullanılır */
   homeCityId?: string;
   status: TruckStatus;
+  /** Toplam geliştirme seviyesi (0–3) */
+  upgradeLevel?: number;
+  /** Parça bazlı geliştirme seviyeleri (0–3) */
+  upgrades?: TruckUpgrades;
+}
+
+/** Kamyon geliştirme parçaları */
+export interface TruckUpgrades {
+  engine: number;
+  fuelEfficiency: number;
+  cargo: number;
+  durability: number;
 }
 
 /** Şoför kalite kademesi — levelConfig.driverUnlocks ile eşleşir */
@@ -265,7 +277,25 @@ export interface Driver {
   /** Atandığı kamyon; boştaysa null */
   assignedTruckId: string | null;
   status: DriverStatus;
+  /** Şoför XP — teslimatlarla kazanılır */
+  xp?: number;
+  /** Şoför seviyesi (1–5) */
+  level?: number;
+  /** Tamamlanan teslimat sayısı */
+  completedDeliveries?: number;
+  /** Zamanında teslim sayısı */
+  onTimeDeliveries?: number;
+  /** Uzmanlık alanı — seviye 5'te atanabilir */
+  specialty?: DriverSpecialty;
 }
+
+/** Şoför uzmanlık alanları */
+export type DriverSpecialty =
+  | 'urgent'
+  | 'fragile'
+  | 'bulk'
+  | 'long_route'
+  | 'fuel_saver';
 
 // ---------------------------------------------------------------------------
 // Sözleşme
@@ -278,6 +308,18 @@ export type ContractStatus =
   | 'completed'
   | 'expired'
   | 'failed';
+
+/** Sözleşme tipi — risk/ödül çeşitliliği */
+export type ContractType =
+  | 'standard'
+  | 'urgent'
+  | 'fragile'
+  | 'high_reputation'
+  | 'bulk'
+  | 'refrigerated';
+
+/** Sözleşme risk seviyesi */
+export type ContractRiskTier = 'low' | 'medium' | 'high';
 
 /**
  * Dinamik olarak oluşan taşıma sözleşmesi.
@@ -310,6 +352,28 @@ export interface Contract {
   expiresAt: number;
   /** Bu sözleşmeyi almak için gereken şirket seviyesi */
   requiredLevel?: number;
+  /** Sözleşme tipi — eski kayıtlarda standard kabul edilir */
+  contractType?: ContractType;
+  /** Risk seviyesi */
+  riskLevel?: ContractRiskTier;
+  /** Gerekli itibar (prestijli işler) */
+  requiredReputation?: number;
+  /** Önerilen minimum kamyon kondisyonu */
+  recommendedTruckCondition?: number;
+  /** Gerekli şoför seviyesi */
+  requiredDriverLevel?: number;
+  /** Ödeme bonus çarpanı (tip etkisi) */
+  bonusMultiplier?: number;
+  /** Ceza çarpanı (gecikme/hasar) */
+  penaltyMultiplier?: number;
+  /** Özel kurallar — UI açıklaması */
+  specialRules?: string[];
+  /** Aday seçim skoru için baz ekonomi — tip bonusu/tonaj şişmesi yansıtılmaz */
+  selectionScoreBasis?: {
+    payment: number;
+    amount: number;
+    urgency: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -506,6 +570,11 @@ export interface FinanceLedgerEntry {
   breakdown?: FinanceLedgerBreakdown;
   /** Teslimat tamamlama gibi ilişkili kayıtların çift yazılmasını önlemek için */
   relatedDeliveryId?: string;
+  /** Ticaret vb. ilişkili meta — retention milestone hesapları için */
+  meta?: {
+    productId?: string;
+    profit?: number;
+  };
 }
 
 /** Ticaret işlemi sonucu */
@@ -795,6 +864,50 @@ export interface MarketNews {
   importance: MarketNewsImportance;
 }
 
+/** Piyasa olayı türleri — Retention Pack V1 Phase 2 */
+export type WorldEventType =
+  | 'fuel_crisis'
+  | 'city_demand_boom'
+  | 'city_supply_shortage'
+  | 'port_congestion'
+  | 'road_work'
+  | 'industrial_support'
+  | 'cold_chain_demand'
+  | 'electronics_boom'
+  | 'harvest_surplus'
+  | 'maintenance_campaign';
+
+export type WorldEventSeverity = 'low' | 'medium' | 'high';
+
+/** Piyasa olayı çarpan etkileri */
+export interface WorldEventImpact {
+  fuelPriceMultiplier?: number;
+  contractPaymentMultiplier?: number;
+  deliveryDurationMultiplier?: number;
+  productPriceMultiplier?: number;
+  productDemandMultiplier?: number;
+  maintenanceCostMultiplier?: number;
+  contractSpawnWeightMultiplier?: number;
+}
+
+/** Aktif veya geçmiş dünya/piyasa olayı */
+export interface WorldEvent {
+  id: string;
+  type: WorldEventType;
+  title: string;
+  description: string;
+  cityId?: string;
+  productId?: ProductId;
+  /** Oyun günü (1-indexed) */
+  startsAtDay: number;
+  /** Oyun günü (dahil) */
+  endsAtDay: number;
+  durationDays: number;
+  impact: WorldEventImpact;
+  severity: WorldEventSeverity;
+  isActive: boolean;
+}
+
 export type TutorialStepId =
   | 'open_contracts'
   | 'select_contract'
@@ -827,6 +940,80 @@ export interface MissionsState {
     deliveryStarted: boolean;
     tradePurchased: boolean;
   };
+}
+
+/** Retention Pack V1 — ödül tanımı */
+export interface RetentionReward {
+  cash?: number;
+  xp?: number;
+  reputation?: number;
+  diamonds?: number;
+  badgeId?: string;
+}
+
+export type RetentionMilestoneCategory =
+  | 'contracts'
+  | 'trading'
+  | 'fleet'
+  | 'warehouse'
+  | 'reputation'
+  | 'city'
+  | 'economy'
+  | 'season';
+
+export type RetentionWeeklyCategory =
+  | 'contracts'
+  | 'trading'
+  | 'warehouse'
+  | 'reputation'
+  | 'season';
+
+/** Milestone ilerleme kaydı (save) */
+export interface RetentionMilestoneProgress {
+  progress: number;
+  isClaimed: boolean;
+  completedAt?: number;
+}
+
+/** Haftalık sezon görevi ilerleme kaydı (save) */
+export interface WeeklySeasonObjectiveProgress {
+  progress: number;
+  isClaimed: boolean;
+  completedAt?: number;
+}
+
+/** Haftalık sayaçlar — season değişince sıfırlanır */
+export interface RetentionWeeklyStats {
+  deliveriesCompleted: number;
+  tradeProfit: number;
+  stockStoredTons: number;
+  onTimeDeliveries: number;
+  citiesOperated: string[];
+  tradeBuyCount: number;
+  tradeSellCount: number;
+}
+
+/** Kariyer boyu retention sayaçları */
+export interface RetentionLifetimeStats {
+  cityDeliveryCounts: Record<string, number>;
+  /** Phase 3 — özel sözleşme tamamlama sayaçları */
+  urgentContractsCompleted?: number;
+  fragileContractsCompleted?: number;
+  highReputationContractsCompleted?: number;
+  maintenanceCount?: number;
+  truckUpgradeCount?: number;
+  maxDriverLevel?: number;
+}
+
+/** Retention Pack V1 — save state */
+export interface RetentionState {
+  retentionVersion: number;
+  milestones: Record<string, RetentionMilestoneProgress>;
+  weeklyObjectives: Record<string, WeeklySeasonObjectiveProgress>;
+  claimedBadges: string[];
+  currentWeeklySeasonKey: string;
+  weeklyStats: RetentionWeeklyStats;
+  lifetimeStats: RetentionLifetimeStats;
 }
 
 export type OnboardingStepId =
@@ -914,10 +1101,17 @@ export interface StoreGameState {
   spotlightTutorial: SpotlightTutorialPersistence;
   /** Başlangıç görevleri */
   missions: MissionsState;
+  /** Retention Pack V1 — milestone ve haftalık sezon görevleri */
+  retention: RetentionState;
   /** Başlangıç rehberi (Onboarding Guide V1) */
   onboarding: OnboardingState;
   /** Oyuncu tanımlı piyasa fiyat alarmları */
   marketAlerts: MarketPriceAlert[];
+  /** Aktif piyasa/şehir olayları — Retention Pack V1 Phase 2 */
+  worldEvents: WorldEvent[];
+  worldEventsVersion: number;
+  /** Son olay üretiminin yapıldığı oyun günü (1-indexed) */
+  lastWorldEventGeneratedDay?: number;
 }
 
 /**
@@ -967,6 +1161,8 @@ export type ContractAvailabilityReason =
   | 'NO_TRUCK_WITH_CAPACITY'
   | 'CAPACITY_INSUFFICIENT'
   | 'TRUCK_CONDITION_TOO_LOW'
+  | 'REPUTATION_TOO_LOW'
+  | 'DRIVER_LEVEL_TOO_LOW'
   | 'CONTRACT_EXPIRED'
   | 'LEASE_EXPIRED'
   | 'INSUFFICIENT_FUNDS'

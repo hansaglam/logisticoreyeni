@@ -87,9 +87,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.anonymous.logisticore'
+    namespace 'com.ethemsincar.logisticore'
     defaultConfig {
-        applicationId 'com.anonymous.logisticore'
+        applicationId 'com.ethemsincar.logisticore'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

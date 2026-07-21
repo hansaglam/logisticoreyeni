@@ -15,11 +15,15 @@ import { ROUTES } from '../data/routes';
 import { STARTER_TRUCK } from '../data/trucks';
 import { normalizeGlobalEconomy } from '../simulation/economy';
 import { normalizeTruckCity } from '../simulation/delivery';
+import { normalizeContract } from '../simulation/contractTypes';
+import { normalizeTruckUpgrades } from '../simulation/truckUpgrades';
 import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/leveling';
 import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals } from '../utils/financeLedger';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
+import { normalizeRetentionState } from '../simulation/retentionProgress';
+import { gameDayFromTime, normalizeWorldEventsState } from '../simulation/worldEvents';
 import {
   inferLegacyOnboardingFromSave,
   normalizeOnboardingState,
@@ -38,6 +42,8 @@ import type {
   GlobalEconomy,
   MarketNews,
   MissionsState,
+  RetentionState,
+  WorldEvent,
   OnboardingState,
   MarketPriceAlert,
   Player,
@@ -109,9 +115,13 @@ export interface SaveGamePayload {
   lastManualContractRefreshTime?: number;
   tutorial?: TutorialState;
   missions?: MissionsState;
+  retention?: RetentionState;
   onboarding?: OnboardingState;
   spotlightTutorial?: SpotlightTutorialPersistence;
   marketAlerts?: MarketPriceAlert[];
+  worldEvents?: WorldEvent[];
+  worldEventsVersion?: number;
+  lastWorldEventGeneratedDay?: number;
 }
 
 export interface SaveBackupStatus {
@@ -265,7 +275,13 @@ function recoverStarterFleetIfMissing(
 
 function normalizePlayerTrucks(trucks: Player['trucks'], homeCityId: string): Player['trucks'] {
   const fallbackHome = homeCityId || 'izmir';
-  return (trucks ?? []).map((truck) => normalizeTruckCity(truck, fallbackHome));
+  return (trucks ?? []).map((truck) =>
+    normalizeTruckUpgrades(normalizeTruckCity(truck, fallbackHome)),
+  );
+}
+
+function normalizeLoadedContracts(contracts: Contract[] | undefined): Contract[] {
+  return (contracts ?? []).map((contract) => normalizeContract(contract));
 }
 
 export function normalizeLoadedPlayer(player: Player): Player {
@@ -340,7 +356,9 @@ export function createDefaultSaveFallbacks(
     routes: isArray(payload.routes) && payload.routes.length > 0
       ? (payload.routes as Route[])
       : structuredClone(ROUTES),
-    contracts: isArray(payload.contracts) ? (payload.contracts as Contract[]) : [],
+    contracts: normalizeLoadedContracts(
+      isArray(payload.contracts) ? (payload.contracts as Contract[]) : [],
+    ),
     activeDeliveries: isArray(payload.activeDeliveries)
       ? (payload.activeDeliveries as Delivery[])
       : [],
@@ -378,6 +396,9 @@ export function createDefaultSaveFallbacks(
     missions: normalizeMissionsState(
       isRecord(payload.missions) ? (payload.missions as Partial<MissionsState>) : undefined,
     ),
+    retention: normalizeRetentionState(
+      isRecord(payload.retention) ? (payload.retention as Partial<RetentionState>) : undefined,
+    ),
     onboarding: isRecord(payload.onboarding)
       ? normalizeOnboardingState(payload.onboarding as Partial<OnboardingState>)
       : inferLegacyOnboardingFromSave({
@@ -399,6 +420,12 @@ export function createDefaultSaveFallbacks(
     ),
     marketAlerts: normalizeMarketAlerts(
       isArray(payload.marketAlerts) ? (payload.marketAlerts as MarketPriceAlert[]) : undefined,
+    ),
+    ...normalizeWorldEventsState(
+      isArray(payload.worldEvents) ? payload.worldEvents : undefined,
+      gameDayFromTime(currentTime),
+      payload.worldEventsVersion,
+      payload.lastWorldEventGeneratedDay,
     ),
     meta: {
       savedAt: safeNumber(metaRecord.savedAt, Date.now()),
@@ -494,6 +521,12 @@ export function normalizeSavePayload(
     onboarding: withFallbacks.onboarding as OnboardingState,
     spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
     marketAlerts: normalizeMarketAlerts(withFallbacks.marketAlerts as MarketPriceAlert[] | undefined),
+    ...normalizeWorldEventsState(
+      withFallbacks.worldEvents,
+      gameDayFromTime(currentTime),
+      withFallbacks.worldEventsVersion,
+      withFallbacks.lastWorldEventGeneratedDay,
+    ),
   };
 }
 
@@ -841,9 +874,13 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastManualContractRefreshTime: state.lastManualContractRefreshTime,
     tutorial: structuredClone(state.tutorial),
     missions: structuredClone(state.missions),
+    retention: structuredClone(state.retention),
     onboarding: structuredClone(state.onboarding),
     spotlightTutorial: structuredClone(state.spotlightTutorial),
     marketAlerts: structuredClone(state.marketAlerts ?? []),
+    worldEvents: structuredClone(state.worldEvents ?? []),
+    worldEventsVersion: state.worldEventsVersion ?? 1,
+    lastWorldEventGeneratedDay: state.lastWorldEventGeneratedDay ?? 0,
   };
 }
 
@@ -875,7 +912,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     cities: payload.cities,
     products: payload.products,
     routes: payload.routes,
-    contracts: payload.contracts,
+    contracts: normalizeLoadedContracts(payload.contracts ?? []),
     activeDeliveries: payload.activeDeliveries,
     activeTransfers: payload.activeTransfers ?? [],
     completedTransfers: payload.completedTransfers ?? [],
@@ -886,6 +923,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
     tutorial: normalizeTutorialState(payload.tutorial),
     missions: normalizeMissionsState(payload.missions),
+    retention: normalizeRetentionState(payload.retention),
     onboarding: payload.onboarding
       ? normalizeOnboardingState(payload.onboarding)
       : inferLegacyOnboardingFromSave({
@@ -896,6 +934,12 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
         }),
     spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
     marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
+    ...normalizeWorldEventsState(
+      payload.worldEvents,
+      gameDayFromTime(safeCurrentTime),
+      payload.worldEventsVersion,
+      payload.lastWorldEventGeneratedDay,
+    ),
   };
 }
 

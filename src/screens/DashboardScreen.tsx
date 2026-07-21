@@ -17,16 +17,23 @@ import {
   DashboardMarketOpportunitiesSection,
   DashboardNextActionCard,
   DashboardOpportunitiesSection,
+  DashboardRetentionCard,
   DashboardResourceBar,
   DashboardStatGrid,
+  DashboardWorldEventsCard,
   resolveNextAction,
 } from '../components/dashboard';
 import { AppScreen, GameIcon } from '../components/ui';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import { createDefaultMissionsState } from '../config/missions';
+import { createDefaultRetentionState } from '../simulation/retentionProgress';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { countPlayableContracts } from '../simulation/contracts';
 import { getSafeFuelPrice } from '../simulation/economy';
+import {
+  applyWorldEventImpactToFuelPrice,
+  getWorldEventSummary,
+} from '../simulation/worldEvents';
 import { getLevelProgress } from '../simulation/leveling';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -99,7 +106,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const resumeGame = useGameStore((state) => state.resumeGame);
   const notifyActiveDeliverySeen = useGameStore((state) => state.notifyActiveDeliverySeen);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
+  const syncRetentionProgress = useGameStore((state) => state.syncRetentionProgress);
+  const getRetentionSummaryValue = useGameStore((state) => state.getRetentionSummaryValue);
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
+  const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
+  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
+  const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
   const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
@@ -144,8 +156,10 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   React.useEffect(() => {
     syncMissionProgress();
+    syncRetentionProgress();
   }, [
     syncMissionProgress,
+    syncRetentionProgress,
     player?.completedContracts,
     financeLedger.length,
     activeDeliveries.length,
@@ -224,6 +238,21 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     [player, cities, products, financeLedger, currentTime],
   );
 
+  const retentionSummary = useMemo(
+    () => getRetentionSummaryValue(),
+    [getRetentionSummaryValue, retention],
+  );
+
+  const activeWorldEvents = useMemo(
+    () => getActiveWorldEventsValue(),
+    [getActiveWorldEventsValue, worldEvents, currentTime],
+  );
+
+  const worldEventSummary = useMemo(
+    () => getWorldEventSummary(activeWorldEvents),
+    [activeWorldEvents],
+  );
+
   React.useEffect(() => {
     advanceOnboardingProgress();
   }, [
@@ -295,7 +324,10 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   }
 
   const levelProgress = getLevelProgress(player);
-  const fuelPrice = getSafeFuelPrice(globalEconomy);
+  const fuelPrice = applyWorldEventImpactToFuelPrice(
+    getSafeFuelPrice(globalEconomy),
+    activeWorldEvents,
+  );
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(player.completedContracts ?? 0);
@@ -320,6 +352,10 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       navigationRequest: { tab: 'more' },
       pendingMoreSubRoute: 'warehouse',
     });
+  };
+
+  const handleOpenMarket = () => {
+    handleNavigate('market');
   };
 
   const handleNextActionPress = () => {
@@ -378,6 +414,20 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       />
 
       {showCashWarning ? <CashWarningBanner cash={player.money} /> : null}
+
+      <DashboardWorldEventsCard
+        headline={worldEventSummary.headline}
+        isCalm={worldEventSummary.isCalm}
+        topEvents={worldEventSummary.topEvents}
+        onPress={handleOpenMarket}
+      />
+
+      <DashboardRetentionCard
+        readyRewards={retentionSummary.readyRewards}
+        weeklyInProgress={retentionSummary.weeklyInProgress}
+        weeklyTotal={retentionSummary.weeklyTotal}
+        onPress={handleOpenMissions}
+      />
 
       <DashboardNextActionCard
         title={onboardingAction?.title ?? nextAction.title}

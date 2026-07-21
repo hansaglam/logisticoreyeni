@@ -55,6 +55,9 @@ function getAvailabilityBadgeStyle(
       return GRAY;
     case 'TRUCK_CONDITION_TOO_LOW':
       return RED;
+    case 'REPUTATION_TOO_LOW':
+    case 'DRIVER_LEVEL_TOO_LOW':
+      return GRAY;
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
       return AMBER_MUTED;
     case 'NO_TRUCK_AT_ORIGIN':
@@ -117,15 +120,17 @@ function getRiskBadge(riskLevel: ContractRiskLevel, riskLabel: string): Contract
   };
 }
 
-/** Kart üzerinde en fazla 2 badge: önce uygunluk, sonra acil veya risk. */
+/** Kart üzerinde en fazla 2 badge: önce uygunluk, sonra tip veya acil/risk. */
 export function buildContractCardBadges(params: {
   availability: ContractAvailability;
   playerLevel: number;
   urgent: boolean;
   riskLevel: ContractRiskLevel;
   riskLabel: string;
+  contractType?: import('../types/game').ContractType;
+  contractTypeLabel?: string;
 }): ContractCardBadge[] {
-  const { availability, urgent, riskLevel, riskLabel } = params;
+  const { availability, urgent, riskLevel, riskLabel, contractType, contractTypeLabel } = params;
   const badges: ContractCardBadge[] = [];
 
   const availabilityBadge = getAvailabilityBadge(availability);
@@ -133,7 +138,23 @@ export function buildContractCardBadges(params: {
     badges.push(availabilityBadge);
   }
 
-  if (urgent) {
+  if (contractType && contractType !== 'standard' && contractTypeLabel) {
+    const typeStyle =
+      contractType === 'urgent'
+        ? RED
+        : contractType === 'fragile'
+          ? AMBER
+          : contractType === 'high_reputation'
+            ? { textColor: '#A78BFA', backgroundColor: 'rgba(167, 139, 250, 0.12)', borderColor: 'rgba(167, 139, 250, 0.6)' }
+            : contractType === 'bulk'
+              ? GRAY
+              : AMBER_MUTED;
+    badges.push({
+      key: `type-${contractType}`,
+      label: contractTypeLabel,
+      ...typeStyle,
+    });
+  } else if (urgent) {
     badges.push({
       key: 'urgent',
       label: 'Acil',

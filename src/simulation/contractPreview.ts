@@ -113,6 +113,7 @@ export interface BuildContractPreviewInput {
   driver?: Driver;
   activeWorldEvents?: WorldEvent[];
   playerReputation?: number;
+  homeCityId?: string;
 }
 
 function resolveRoute(contract: Contract, route?: Route): Route | undefined {
@@ -137,6 +138,7 @@ function selectPreviewTruckAndDriver(
   explicitTruck?: Truck,
   explicitDriver?: Driver,
   currentTime = 0,
+  fallbackHomeCityId?: string,
 ): { truck?: Truck; driver?: Driver } {
   if (explicitTruck && explicitDriver) {
     return { truck: explicitTruck, driver: explicitDriver };
@@ -145,7 +147,7 @@ function selectPreviewTruckAndDriver(
   const truck =
     explicitTruck ??
     (trucks.length > 0
-      ? selectIdleTruckForContract(trucks, contract, product, currentTime)
+      ? selectIdleTruckForContract(trucks, contract, product, currentTime, fallbackHomeCityId)
       : undefined);
   const driver = explicitDriver ?? getIdleDrivers(drivers)[0];
 
@@ -271,6 +273,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     companyLevel,
     currentTime,
     input.playerReputation ?? 0,
+    input.homeCityId,
   );
   const { truck, driver } = selectPreviewTruckAndDriver(
     contract,
@@ -280,6 +283,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     input.truck,
     input.driver,
     currentTime,
+    input.homeCityId,
   );
 
   let estimatedTravelHours = 0;

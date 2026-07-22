@@ -41,10 +41,13 @@ import {
   getContractAvailability,
   getIdleDrivers,
   getIdleTruckOriginCityIds,
+  getIdleTrucksAtOrigin,
   getMaxIdleTruckCapacityAtOrigin,
   isContractOfferExpired,
-  selectIdleTruckForContract,
+  isTruckAvailableForAssignment,
+  canTruckCarryContract,
 } from './delivery';
+import { meetsDriverLevelRequirement } from './driverProgress';
 import { getRoute as findRoute } from '../data/routes';
 import { getProductByIdSafe } from '../utils/entityLookup';
 import { canAffordVoluntaryPurchase } from '../utils/cashPolicy';
@@ -655,6 +658,58 @@ function getOriginCityWeightBonus(
 export interface PlayableContractContext {
   playerMoney?: number;
   globalEconomy?: GlobalEconomy;
+  playerReputation?: number;
+  homeCityId?: string;
+}
+
+const MIN_TRUCK_CONDITION_FOR_PLAYABLE = 30;
+
+function hasAffordableContractAssignment(
+  contract: Contract,
+  trucks: Truck[] | undefined,
+  drivers: Driver[] | undefined,
+  currentTime: number,
+  context: PlayableContractContext,
+): boolean {
+  const product = getProductByIdSafe(contract.productId);
+  const route = findRoute(contract.originCityId, contract.destinationCityId);
+  if (!product || !route || context.playerMoney == null || context.globalEconomy == null) {
+    return false;
+  }
+
+  const economy = getSafeGlobalEconomy(context.globalEconomy);
+  const idleDrivers = getIdleDrivers(drivers);
+  const requiredDriverLevel = contract.requiredDriverLevel ?? 1;
+  const qualifiedDrivers =
+    requiredDriverLevel > 1
+      ? idleDrivers.filter((driver) => meetsDriverLevelRequirement(driver, requiredDriverLevel))
+      : idleDrivers;
+
+  if (qualifiedDrivers.length === 0) {
+    return false;
+  }
+
+  const assignableTrucks = getIdleTrucksAtOrigin(
+    trucks,
+    contract.originCityId,
+    context.homeCityId,
+  ).filter(
+    (truck) =>
+      isTruckAvailableForAssignment(truck, currentTime) &&
+      canTruckCarryContract(truck, contract, product) &&
+      (truck.condition ?? 100) >= MIN_TRUCK_CONDITION_FOR_PLAYABLE,
+  );
+
+  for (const truck of assignableTrucks) {
+    for (const driver of qualifiedDrivers) {
+      const fuelCost = calculateFuelCost(contract, truck, driver, route, product, economy);
+      if (canAffordVoluntaryPurchase(context.playerMoney, fuelCost)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 export function isPlayableContract(
@@ -678,6 +733,8 @@ export function isPlayableContract(
       drivers,
       playerLevel,
       currentTime,
+      context?.playerReputation ?? 0,
+      context?.homeCityId,
     ).canStart
   ) {
     return false;
@@ -687,29 +744,13 @@ export function isPlayableContract(
     return true;
   }
 
-  const product = getProductByIdSafe(contract.productId);
-  const route = findRoute(contract.originCityId, contract.destinationCityId);
-  const truck = selectIdleTruckForContract(
+  return hasAffordableContractAssignment(
+    contract,
     trucks,
-    contract,
-    product ?? undefined,
+    drivers,
     currentTime,
+    context,
   );
-  const driver = getIdleDrivers(drivers)[0];
-
-  if (!truck || !driver || !route || !product) {
-    return false;
-  }
-
-  const fuelCost = calculateFuelCost(
-    contract,
-    truck,
-    driver,
-    route,
-    product,
-    getSafeGlobalEconomy(context.globalEconomy),
-  );
-  return canAffordVoluntaryPurchase(context.playerMoney, fuelCost);
 }
 
 export function countPlayableContracts(

@@ -17,6 +17,7 @@ import {
 import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import ContractQuickActionSheet from '../components/contracts/ContractQuickActionSheet';
+import DeliveryIncidentCard from '../components/delivery/DeliveryIncidentCard';
 import AdRewardButton from '../components/monetization/AdRewardButton';
 import { contractGenerationBalance } from '../config/balance';
 import {
@@ -140,6 +141,7 @@ function compareContractsForDisplay(
   previewById: Map<string, ContractPreview>,
   marketFilter?: MarketContractFilter | null,
   activeDeliveries: Delivery[] = [],
+  fallbackHomeCityId?: string,
 ): number {
   const smartDiff = compareContractsBySmartScore(a, b, {
     trucks,
@@ -148,6 +150,7 @@ function compareContractsForDisplay(
     activeDeliveries,
     previewById,
     marketFilter,
+    fallbackHomeCityId,
   });
   if (smartDiff !== 0) {
     return smartDiff;
@@ -195,6 +198,7 @@ function sortContractsForDisplay(
   previewById: Map<string, ContractPreview>,
   marketFilter?: MarketContractFilter | null,
   activeDeliveries: Delivery[] = [],
+  fallbackHomeCityId?: string,
 ): Contract[] {
   const list = [...items];
 
@@ -210,6 +214,7 @@ function sortContractsForDisplay(
         previewById,
         marketFilter,
         activeDeliveries,
+        fallbackHomeCityId,
       ),
     );
   }
@@ -228,6 +233,7 @@ function sortContractsForDisplay(
           previewById,
           marketFilter,
           activeDeliveries,
+          fallbackHomeCityId,
         ),
       );
   }
@@ -246,6 +252,7 @@ function sortContractsForDisplay(
           previewById,
           marketFilter,
           activeDeliveries,
+          fallbackHomeCityId,
         ),
       );
   }
@@ -261,6 +268,7 @@ function sortContractsForDisplay(
       previewById,
       marketFilter,
       activeDeliveries,
+      fallbackHomeCityId,
     ),
   );
 }
@@ -431,8 +439,8 @@ function NextRouteHintCard({ deliveries }: NextRouteHintCardProps) {
 
   const message =
     destinationIds.length === 1
-      ? `Kamyonun ${getCityName(destinationIds[0])}'ya gidiyor. ${getCityName(destinationIds[0])} çıkışlı işler öne çıkarılıyor.`
-      : 'Kamyonlarının varış şehirlerinden çıkan işler öne çıkarılıyor.';
+      ? `Sıradaki rota önerileri: ${getCityName(destinationIds[0])}'a varacak kamyon için ${getCityName(destinationIds[0])} çıkışlı işler ayrıca öne çıkarılır.`
+      : 'Sıradaki rota önerileri: Kamyonlarının varış şehirlerinden çıkan işler ayrıca öne çıkarılır.';
 
   return (
     <View style={styles.nextRouteHint}>
@@ -687,6 +695,9 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
         <ProgressBar progress={delivery.progress} color={COLORS.cyan} height={3} />
         <Text style={styles.activeProgressText}>{formatPercent(delivery.progress)}</Text>
       </View>
+      {delivery.incident || delivery.incidentResolved ? (
+        <DeliveryIncidentCard delivery={delivery} />
+      ) : null}
       {canShowBoost ? (
         <View style={styles.deliveryBoostRow} collapsable={false}>
           <AdRewardButton
@@ -857,6 +868,7 @@ export default function ContractsScreen() {
           currentTime,
           activeWorldEvents,
           playerReputation,
+          homeCityId: player?.homeCityId,
         }),
       );
     }
@@ -871,9 +883,24 @@ export default function ContractsScreen() {
         drivers,
         playerLevel,
         currentTime,
-        { playerMoney: player?.money, globalEconomy },
+        {
+          playerMoney: player?.money,
+          globalEconomy,
+          playerReputation,
+          homeCityId: player?.homeCityId,
+        },
       ),
-    [availableContracts, trucks, drivers, playerLevel, currentTime, player?.money, globalEconomy],
+    [
+      availableContracts,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+      player?.money,
+      player?.homeCityId,
+      globalEconomy,
+      playerReputation,
+    ],
   );
 
   const filteredContracts = useMemo(() => {
@@ -887,6 +914,7 @@ export default function ContractsScreen() {
       contractPreviewById,
       marketContractFilter,
       runningDeliveries,
+      player?.homeCityId,
     );
   }, [
     availableContracts,
@@ -897,6 +925,7 @@ export default function ContractsScreen() {
     contractPreviewById,
     marketContractFilter,
     runningDeliveries,
+    player?.homeCityId,
   ]);
 
   const firstTutorialContractId = useMemo(() => {
@@ -950,6 +979,7 @@ export default function ContractsScreen() {
           currentTime,
           activeWorldEvents,
           playerReputation,
+          homeCityId: player?.homeCityId,
         }),
       );
     }
@@ -1059,6 +1089,7 @@ export default function ContractsScreen() {
       product: getProductByIdSafe(quickSheetContract.productId) ?? undefined,
       activeWorldEvents,
       playerReputation,
+      homeCityId: player?.homeCityId,
     });
 
     if (player.money < preview.estimatedFuelCost) {
@@ -1102,6 +1133,7 @@ export default function ContractsScreen() {
       product: getProductByIdSafe(assignmentContract.productId) ?? undefined,
       activeWorldEvents,
       playerReputation,
+      homeCityId: player?.homeCityId,
     });
 
     if (player.money < preview.estimatedFuelCost) {

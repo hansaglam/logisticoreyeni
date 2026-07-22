@@ -13,6 +13,7 @@ import type {
   Contract,
   Delivery,
   DeliveryFailureReason,
+  DeliveryIncidentType,
   Driver,
   GameEvent,
   GlobalEconomy,
@@ -121,6 +122,11 @@ import {
   type DeliverySettlementDebugSnapshot,
   type DeliverySettlementResult,
 } from '../simulation/delivery';
+import {
+  maybeRollDeliveryIncident,
+  createDebugDeliveryIncident,
+  resolveDeliveryIncident as resolveDeliveryIncidentSim,
+} from '../simulation/deliveryIncidents';
 import {
   createTruckTransfer,
   resolveTransferRoute,
@@ -451,7 +457,8 @@ export type AutoSaveReason =
   | 'background'
   | 'manual'
   | 'debug_cash_change'
-  | 'time_tick';
+  | 'time_tick'
+  | 'delivery_incident';
 
 const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'critical',
@@ -804,6 +811,7 @@ function createFreshGameStorePatch(): Partial<GameStore> {
     notifications: [],
     navigationRequest: null,
     pendingMoreSubRoute: null,
+    pendingUpgradeTruckId: null,
     pendingFleetSubTab: null,
     marketContractFilter: null,
     highlightedContractId: null,
@@ -1187,7 +1195,8 @@ export interface GameStore extends StoreGameState {
   /** Geçici UI bildirimleri — save'e yazılmaz */
   notifications: GameNotification[];
   navigationRequest: NavigationRequest | null;
-  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | 'leaderboard' | null;
+  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | 'leaderboard' | 'upgrades' | null;
+  pendingUpgradeTruckId: string | null;
   pendingFleetSubTab: FleetSubTab | null;
   marketContractFilter: MarketContractFilter | null;
   highlightedContractId: string | null;
@@ -1204,6 +1213,8 @@ export interface GameStore extends StoreGameState {
   requestNavigationFromNotification: (target: GameNotificationActionTarget) => void;
   clearNavigationRequest: () => void;
   clearPendingMoreSubRoute: () => void;
+  openUpgradesScreen: (truckId?: string) => void;
+  clearPendingUpgradeTruckId: () => void;
   requestNavigationToFleet: (subTab?: FleetSubTab) => void;
   clearPendingFleetSubTab: () => void;
   setMarketContractFilter: (filter: MarketContractFilter | null) => void;
@@ -1256,6 +1267,10 @@ export interface GameStore extends StoreGameState {
   applyAdReward: (
     slotId: AdRewardSlotId,
     context: Omit<AdRewardGrantContext, 'currentGameTime' | 'playerLevel' | 'hasCompletedOnboarding'>,
+  ) => Promise<{ ok: boolean; reason?: string }>;
+  resolveDeliveryIncident: (
+    deliveryId: string,
+    choiceId: string,
   ) => Promise<{ ok: boolean; reason?: string }>;
   forceGeneratePlayableContracts: () => number;
   getContractRefreshRemainingSeconds: () => number;
@@ -1361,6 +1376,9 @@ export interface GameStore extends StoreGameState {
   debugProcessDailyCosts: () => void;
   debugExpireLeaseTruck: () => void;
   debugGetEconomyBalanceSummary: () => string;
+  debugInjectDeliveryIncident: (
+    incidentType?: DeliveryIncidentType,
+  ) => { ok: boolean; reason?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -1372,6 +1390,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   notifications: [],
   navigationRequest: null,
   pendingMoreSubRoute: null,
+  pendingUpgradeTruckId: null,
   pendingFleetSubTab: null,
   marketContractFilter: null,
   highlightedContractId: null,
@@ -1443,6 +1462,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   clearPendingMoreSubRoute: () => {
     set({ pendingMoreSubRoute: null });
+  },
+
+  openUpgradesScreen: (truckId) => {
+    set({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: 'upgrades',
+      pendingUpgradeTruckId: truckId ?? null,
+    });
+  },
+
+  clearPendingUpgradeTruckId: () => {
+    set({ pendingUpgradeTruckId: null });
   },
 
   requestNavigationToFleet: (subTab = 'shop') => {
@@ -2498,6 +2529,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           notifications: [],
           navigationRequest: null,
           pendingMoreSubRoute: null,
+          pendingUpgradeTruckId: null,
           pendingFleetSubTab: null,
           marketContractFilter: null,
           highlightedContractId: null,
@@ -2524,6 +2556,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           notifications: [],
           navigationRequest: null,
           pendingMoreSubRoute: null,
+          pendingUpgradeTruckId: null,
           pendingFleetSubTab: null,
           marketContractFilter: null,
           highlightedContractId: null,
@@ -2549,6 +2582,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       notifications: [],
       navigationRequest: null,
       pendingMoreSubRoute: null,
+      pendingUpgradeTruckId: null,
       pendingFleetSubTab: null,
       marketContractFilter: null,
       highlightedContractId: null,
@@ -2628,6 +2662,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         notifications: [],
         navigationRequest: null,
         pendingMoreSubRoute: null,
+        pendingUpgradeTruckId: null,
         pendingFleetSubTab: null,
         marketContractFilter: null,
         highlightedContractId: null,
@@ -3880,6 +3915,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.player.drivers,
       Math.max(1, state.player.level ?? state.player.companyLevel ?? 1),
       state.currentTime,
+      state.player.reputation ?? 0,
+      state.player.homeCityId,
     );
 
     if (!availability.canStart) {
@@ -3904,6 +3941,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       contract,
       product,
       state.currentTime,
+      state.player.homeCityId,
     );
     const driver = (state.player.drivers ?? []).find((candidate) => candidate.status === 'idle');
 
@@ -3946,6 +3984,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const deliveriesToComplete: string[] = [];
     const deliveriesToFail: { id: string; reason: DeliveryFailureReason }[] = [];
     const failedThisTick = new Set<string>();
+    const contractById = new Map(state.contracts.map((contract) => [contract.id, contract]));
 
     const updatedDeliveries = state.activeDeliveries.map((delivery) => {
       if (delivery.status !== 'on_route' && delivery.status !== 'preparing') {
@@ -3969,7 +4008,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return delivery;
       }
 
-      const updated = updateDeliveryProgress(delivery, hoursPassed);
+      let updated = updateDeliveryProgress(delivery, hoursPassed);
+
+      if (
+        !updated.incidentGenerated &&
+        updated.progress >= 0.2 &&
+        updated.progress <= 0.85 &&
+        state.player
+      ) {
+        const contract = contractById.get(updated.contractId);
+        updated = maybeRollDeliveryIncident(
+          updated,
+          contract,
+          state.player,
+          state.currentTime,
+        );
+      }
 
       if (isDeliveryProgressComplete(updated.progress)) {
         deliveriesToComplete.push(updated.id);
@@ -5292,6 +5346,100 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return { ok: true };
   },
 
+  resolveDeliveryIncident: async (deliveryId, choiceId) => {
+    const state = get();
+    const delivery = state.activeDeliveries.find((item) => item.id === deliveryId);
+    if (!delivery) {
+      return { ok: false, reason: 'Teslimat bulunamadı.' };
+    }
+
+    const result = resolveDeliveryIncidentSim(delivery, choiceId, state.currentTime);
+    if (!result.ok || !result.delivery || !result.effects) {
+      return { ok: false, reason: result.reason ?? 'Operasyon kararı uygulanamadı.' };
+    }
+
+    const contract = state.contracts.find((item) => item.id === delivery.contractId);
+    const incidentTitle = result.delivery.incident?.title ?? 'Teslimat';
+    const cashDelta = result.effects.cashDelta + result.effects.fuelCostDelta;
+    let nextPlayer = state.player;
+    let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | undefined;
+
+    if (cashDelta !== 0) {
+      nextPlayer = {
+        ...nextPlayer,
+        money: nextPlayer.money + cashDelta,
+      };
+      ledgerPatch = patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: cashDelta >= 0 ? 'income' : 'expense',
+        category:
+          result.effects.fuelCostDelta !== 0 && result.effects.cashDelta === 0
+            ? 'fuel'
+            : 'other_expense',
+        amount: Math.abs(cashDelta),
+        description: `Operasyon kararı · ${incidentTitle}`,
+        relatedDeliveryId: deliveryId,
+      });
+    }
+
+    if (result.effects.truckConditionDelta !== 0) {
+      nextPlayer = {
+        ...nextPlayer,
+        trucks: nextPlayer.trucks.map((truck) => {
+          if (truck.id !== delivery.truckId) {
+            return truck;
+          }
+          return {
+            ...truck,
+            condition: Math.min(
+              100,
+              Math.max(0, truck.condition + result.effects!.truckConditionDelta),
+            ),
+          };
+        }),
+      };
+    }
+
+    if (result.effects.driverXpDelta > 0) {
+      nextPlayer = {
+        ...nextPlayer,
+        drivers: nextPlayer.drivers.map((driver) => {
+          if (driver.id !== delivery.driverId) {
+            return driver;
+          }
+          return applyDriverXp(driver, result.effects!.driverXpDelta, contract).driver;
+        }),
+      };
+    }
+
+    const nextDeliveries = state.activeDeliveries.map((item) =>
+      item.id === deliveryId ? result.delivery! : item,
+    );
+
+    set({
+      player: nextPlayer,
+      activeDeliveries: nextDeliveries,
+      ...(ledgerPatch ?? {}),
+    });
+
+    get().applyRetentionEventAndSync({ type: 'delivery_incident_resolved' });
+    get().addNotification({
+      time: state.currentTime,
+      type: 'info',
+      title: 'Operasyon kararı uygulandı',
+      message: incidentTitle,
+      autoDismissMs: 3500,
+    });
+    get().markSaveDirty();
+    get().autoSave('delivery_incident');
+
+    if (isDeliveryProgressComplete(result.delivery.progress)) {
+      get().completeDeliveryById(deliveryId);
+    }
+
+    return { ok: true };
+  },
+
   upgradeTruck: (truckId, upgradeType) => {
     const state = get();
     const truck = state.player.trucks.find((t) => t.id === truckId);
@@ -6078,6 +6226,58 @@ export const useGameStore = create<GameStore>((set, get) => ({
       `Aktif kiralık kamyon: ${leasedCount}`,
       `Nakit: $${state.player.money}`,
     ].join('\n');
+  },
+
+  debugInjectDeliveryIncident: (incidentType) => {
+    if (!__DEV__) {
+      return { ok: false, reason: 'Production build.' };
+    }
+
+    const state = get();
+    const activeDelivery = state.activeDeliveries.find(
+      (delivery) => delivery.status === 'on_route' || delivery.status === 'preparing',
+    );
+
+    if (!activeDelivery) {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'warning',
+        title: 'Aktif teslimat yok',
+        message: 'Hızlı müdahale testi için önce bir teslimat başlat.',
+        autoDismissMs: 3500,
+      });
+      return { ok: false, reason: 'Aktif teslimat yok' };
+    }
+
+    const incident = createDebugDeliveryIncident(
+      activeDelivery,
+      state.currentTime,
+      incidentType,
+    );
+
+    const nextDeliveries = state.activeDeliveries.map((delivery) =>
+      delivery.id === activeDelivery.id
+        ? {
+            ...delivery,
+            incident,
+            incidentGenerated: true,
+            incidentResolved: false,
+          }
+        : delivery,
+    );
+
+    set({ activeDeliveries: nextDeliveries });
+    get().markSaveDirty();
+
+    get().addNotification({
+      time: state.currentTime,
+      type: 'info',
+      title: 'Debug incident eklendi',
+      message: `${incident.title} · ${getCityName(activeDelivery.originCityId)} → ${getCityName(activeDelivery.destinationCityId)}`,
+      autoDismissMs: 3000,
+    });
+
+    return { ok: true };
   },
 
   addMarketNews: (news) => {

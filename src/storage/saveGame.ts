@@ -15,6 +15,7 @@ import { ROUTES } from '../data/routes';
 import { STARTER_TRUCK } from '../data/trucks';
 import { normalizeGlobalEconomy } from '../simulation/economy';
 import { normalizeTruckCity } from '../simulation/delivery';
+import { normalizeDelivery } from '../simulation/deliveryIncidents';
 import { normalizeContract } from '../simulation/contractTypes';
 import { normalizeTruckUpgrades } from '../simulation/truckUpgrades';
 import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/leveling';
@@ -290,6 +291,10 @@ function normalizeLoadedContracts(contracts: Contract[] | undefined): Contract[]
   return (contracts ?? []).map((contract) => normalizeContract(contract));
 }
 
+function normalizeActiveDeliveries(deliveries: Delivery[] | undefined): Delivery[] {
+  return (deliveries ?? []).map((delivery) => normalizeDelivery(delivery));
+}
+
 export function normalizeLoadedPlayer(player: Player): Player {
   const homeCityId = player.homeCityId ?? 'izmir';
   const normalized = normalizePlayerProgress({
@@ -506,7 +511,7 @@ export function normalizeSavePayload(
     products: withFallbacks.products as Product[],
     routes: withFallbacks.routes as Route[],
     contracts: withFallbacks.contracts as Contract[],
-    activeDeliveries: withFallbacks.activeDeliveries as Delivery[],
+    activeDeliveries: normalizeActiveDeliveries(withFallbacks.activeDeliveries as Delivery[]),
     activeTransfers: withFallbacks.activeTransfers as TruckTransfer[],
     completedTransfers: withFallbacks.completedTransfers as TruckTransfer[],
     globalEconomy: normalizeGlobalEconomy(withFallbacks.globalEconomy, { logFallback: true }),
@@ -932,7 +937,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     products: payload.products,
     routes: payload.routes,
     contracts: normalizeLoadedContracts(payload.contracts ?? []),
-    activeDeliveries: payload.activeDeliveries,
+    activeDeliveries: normalizeActiveDeliveries(payload.activeDeliveries),
     activeTransfers: payload.activeTransfers ?? [],
     completedTransfers: payload.completedTransfers ?? [],
     globalEconomy: normalizeGlobalEconomy(payload.globalEconomy),

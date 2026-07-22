@@ -15,7 +15,18 @@ export interface ContractSortContext {
   activeDeliveries: Delivery[];
   previewById: Map<string, ContractPreview>;
   marketFilter?: MarketContractFilter | null;
+  fallbackHomeCityId?: string;
 }
+
+/** 1 = şimdi alınabilir, 2 = boşta kamyon var ama kilitli, 3 = varış şehri önerisi, 4 = diğer */
+export type ContractSortTier = 1 | 2 | 3 | 4;
+
+const TIER_BASE_SCORE: Record<ContractSortTier, number> = {
+  1: 40_000,
+  2: 30_000,
+  3: 20_000,
+  4: 10_000,
+};
 
 export function isMarketOpportunityFilter(
   filter: MarketContractFilter | null | undefined,
@@ -54,6 +65,31 @@ function getLockPenalty(availability: ContractPreview['availability'], requiredL
   return 800;
 }
 
+export function getContractSortTier(contract: Contract, ctx: ContractSortContext): ContractSortTier {
+  const preview = ctx.previewById.get(contract.id);
+  if (!preview) {
+    return 4;
+  }
+
+  const originId = contract.originCityId;
+  const hasIdleAtOrigin =
+    !!originId && hasIdleTruckAtOrigin(ctx.trucks, originId, ctx.fallbackHomeCityId);
+
+  if (hasIdleAtOrigin && preview.availability.canStart) {
+    return 1;
+  }
+  if (hasIdleAtOrigin && !preview.availability.canStart) {
+    return 2;
+  }
+
+  const destinationIds = getActiveDeliveryDestinationCityIds(ctx.activeDeliveries);
+  if (originId && destinationIds.has(originId)) {
+    return 3;
+  }
+
+  return 4;
+}
+
 export function getContractSmartSortScore(contract: Contract, ctx: ContractSortContext): number {
   const preview = ctx.previewById.get(contract.id);
   if (!preview) {
@@ -63,10 +99,11 @@ export function getContractSmartSortScore(contract: Contract, ctx: ContractSortC
   const safePlayerLevel = Math.max(1, ctx.playerLevel ?? 1);
   const originId = contract.originCityId;
   const { availability } = preview;
-  let score = 0;
+  const tier = getContractSortTier(contract, ctx);
+  let score = TIER_BASE_SCORE[tier];
 
   if (ctx.marketFilter?.contractId && contract.id === ctx.marketFilter.contractId) {
-    score += 50000;
+    score += 50_000;
   }
 
   if (ctx.marketFilter?.source === 'map' && isRouteContractFilter(ctx.marketFilter)) {
@@ -77,20 +114,17 @@ export function getContractSmartSortScore(contract: Contract, ctx: ContractSortC
     score += getContractMarketSortScore(contract, ctx.marketFilter) * 100;
   }
 
-  if (originId && hasIdleTruckAtOrigin(ctx.trucks, originId) && availability.canStart) {
-    score += 10000;
+  if (tier === 3 && availability.canStart) {
+    score += 500;
   }
 
-  const destinationIds = getActiveDeliveryDestinationCityIds(ctx.activeDeliveries);
-  if (originId && destinationIds.has(originId)) {
-    score += 8000;
-    if (availability.canStart) {
-      score += 2000;
-    }
-  }
-
-  if (originId && hasTruckAtOrigin(ctx.trucks, originId) && !hasIdleTruckAtOrigin(ctx.trucks, originId)) {
-    score += 5000;
+  if (
+    tier === 4 &&
+    originId &&
+    hasTruckAtOrigin(ctx.trucks, originId, ctx.fallbackHomeCityId) &&
+    !hasIdleTruckAtOrigin(ctx.trucks, originId, ctx.fallbackHomeCityId)
+  ) {
+    score += 500;
   }
 
   const profitRatio = contract.payment > 0 ? preview.estimatedOperationalProfit / contract.payment : 0;

@@ -54,6 +54,7 @@ import type {
   ContractStatus,
   Delivery,
   DeliveryFailureReason,
+  DeliveryIncidentType,
   Driver,
   GameEvent,
   GameEventImportance,
@@ -531,6 +532,7 @@ export default function DebugSimulationScreen() {
   const lastDailyOperatingCostTime = useGameStore((state) => state.lastDailyOperatingCostTime);
   const debugExpireLeaseTruck = useGameStore((state) => state.debugExpireLeaseTruck);
   const debugGetEconomyBalanceSummary = useGameStore((state) => state.debugGetEconomyBalanceSummary);
+  const debugInjectDeliveryIncident = useGameStore((state) => state.debugInjectDeliveryIncident);
   const contractGenerationDebug = useGameStore((state) => state.contractGenerationDebug);
   const deliverySettlementDebug = useGameStore((state) => state.deliverySettlementDebug);
 
@@ -850,6 +852,30 @@ export default function DebugSimulationScreen() {
       setError(error instanceof Error ? error.message : 'Fail delivery failed');
     }
   };
+
+  const handleInjectDeliveryIncident = (incidentType?: DeliveryIncidentType) => {
+    if (!__DEV__) {
+      return;
+    }
+    const result = debugInjectDeliveryIncident(incidentType);
+    if (!result.ok) {
+      setError(result.reason ?? 'Incident enjekte edilemedi');
+      return;
+    }
+    setSuccess(
+      incidentType
+        ? `Debug incident eklendi (${incidentType})`
+        : 'Debug incident eklendi (rastgele tip)',
+    );
+  };
+
+  const runningDeliveries = useMemo(
+    () =>
+      activeDeliveries.filter(
+        (delivery) => delivery.status === 'on_route' || delivery.status === 'preparing',
+      ),
+    [activeDeliveries],
+  );
 
   const handleSaveNow = async () => {
     try {
@@ -1863,6 +1889,43 @@ export default function DebugSimulationScreen() {
 
         {/* Active Delivery Test Panel */}
         <Section title={`Active Delivery Test Panel (${activeDeliveries.length})`}>
+          {__DEV__ ? (
+            <View style={styles.buttonGrid}>
+              <DebugButton
+                label="Teslimata Hızlı Müdahale Olayı Ekle"
+                onPress={() => handleInjectDeliveryIncident()}
+                variant="primary"
+              />
+              <DebugButton
+                label="traffic"
+                onPress={() => handleInjectDeliveryIncident('traffic')}
+              />
+              <DebugButton
+                label="driver_break"
+                onPress={() => handleInjectDeliveryIncident('driver_break')}
+              />
+              <DebugButton
+                label="tire_pressure"
+                onPress={() => handleInjectDeliveryIncident('tire_pressure')}
+              />
+              <DebugButton
+                label="fuel_deviation"
+                onPress={() => handleInjectDeliveryIncident('fuel_deviation')}
+              />
+              <DebugButton
+                label="checkpoint"
+                onPress={() => handleInjectDeliveryIncident('checkpoint')}
+              />
+            </View>
+          ) : null}
+          {__DEV__ ? (
+            <Text style={styles.levelDebugLine}>
+              running deliveries: {runningDeliveries.length}
+              {runningDeliveries[0]?.incident?.status
+                ? ` · incident: ${runningDeliveries[0].incident?.title} (${runningDeliveries[0].incident?.status})`
+                : ''}
+            </Text>
+          ) : null}
           {activeDeliveries.length === 0 ? (
             <Text style={styles.emptyText}>No active deliveries.</Text>
           ) : (

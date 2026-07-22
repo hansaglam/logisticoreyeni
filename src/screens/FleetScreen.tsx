@@ -48,11 +48,7 @@ import {
   getDriverXpProgress,
 } from '../simulation/driverProgress';
 import {
-  getTruckUpgradeCost,
   getTruckUpgradeSummary,
-  canUpgradeTruck,
-  TRUCK_UPGRADE_LABELS,
-  type TruckUpgradeType,
 } from '../simulation/truckUpgrades';
 import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
 import {
@@ -64,6 +60,7 @@ import {
   type TruckSellCheck,
 } from '../simulation/fleetManagement';
 import TruckTransferModal from '../components/TruckTransferModal';
+import UpgradesScreen from './UpgradesScreen';
 import AdRewardButton from '../components/monetization/AdRewardButton';
 import {
   calculateDiscountedRepairCost,
@@ -267,7 +264,7 @@ interface OwnedTruckCardProps {
   monetization: MonetizationState;
   sellCheck: TruckSellCheck;
   onRepair: (truck: Truck) => void;
-  onUpgrade: (truck: Truck, upgradeType: TruckUpgradeType) => void;
+  onManageUpgrades: (truck: Truck) => void;
   onTransfer: (truck: Truck, targetCityId?: string) => void;
   onSell: (truck: Truck) => void;
   onShowSellBlocked: (reason: string) => void;
@@ -295,7 +292,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   monetization,
   sellCheck,
   onRepair,
-  onUpgrade,
+  onManageUpgrades,
   onTransfer,
   onSell,
   onShowSellBlocked,
@@ -331,11 +328,6 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const showSellButton = !isLeased && (sellCheck.canSell || sellCheck.reason);
   const upgradeBadges = getTruckUpgradeSummary(truck);
   const upgradeLevel = truck.upgradeLevel ?? 0;
-  const nextUpgradeType = (['engine', 'fuelEfficiency', 'cargo', 'durability'] as TruckUpgradeType[]).find(
-    (type) => canUpgradeTruck(truck, type),
-  );
-  const nextUpgradeCost = nextUpgradeType ? getTruckUpgradeCost(truck, nextUpgradeType) : 0;
-  const canUpgrade = isIdle && !isLeased && !!nextUpgradeType && playerMoney >= nextUpgradeCost;
   const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
     monetization,
     truck.id,
@@ -507,20 +499,19 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
             style={styles.compactAction}
           />
         ) : null}
-        {isIdle && !isLeased && nextUpgradeType ? (
-          <ActionButton
-            label={
-              canUpgrade
-                ? `Yükselt (${TRUCK_UPGRADE_LABELS[nextUpgradeType]})`
-                : 'Yetersiz nakit'
-            }
-            onPress={() => onUpgrade(truck, nextUpgradeType)}
-            disabled={!canUpgrade}
-            variant="secondary"
-            iconSize={13}
-            compact
-            style={styles.compactAction}
-          />
+        {!isLeased ? (
+          <View style={styles.upgradeManageBlock}>
+            <ActionButton
+              label="Geliştirmeleri Yönet"
+              onPress={() => onManageUpgrades(truck)}
+              variant="secondary"
+              icon="upgrade"
+              iconSize={13}
+              compact
+              style={styles.compactAction}
+            />
+            <Text style={styles.upgradeManageHint}>Motor, yakıt, kapasite ve dayanıklılık</Text>
+          </View>
         ) : null}
         {isOnRoute ? (
           <Text style={styles.footerMuted}>Teslimat sürüyor</Text>
@@ -960,7 +951,6 @@ export default function FleetScreen() {
   const sellTruck = useGameStore((state) => state.sellTruck);
   const fireDriver = useGameStore((state) => state.fireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
-  const upgradeTruck = useGameStore((state) => state.upgradeTruck);
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
 
@@ -968,6 +958,7 @@ export default function FleetScreen() {
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [transferModalTruck, setTransferModalTruck] = useState<Truck | null>(null);
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
+  const [managingUpgradesTruckId, setManagingUpgradesTruckId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!pendingFleetSubTab) return;
@@ -1084,18 +1075,9 @@ export default function FleetScreen() {
     return map;
   }, [sortedTruckMarket, trucks]);
 
-  const handleUpgrade = useCallback((truck: Truck, upgradeType: TruckUpgradeType) => {
-    if (typeof upgradeTruck !== 'function') {
-      setStatusMessage({ type: 'error', text: 'Geliştirme henüz kullanılamıyor' });
-      return;
-    }
-    try {
-      upgradeTruck(truck.id, upgradeType);
-      setStatusMessage({ type: 'success', text: `${truck.name} geliştirildi` });
-    } catch (error) {
-      setStatusMessage({ type: 'error', text: translateErrorMessage(error, 'Yetersiz nakit') });
-    }
-  }, [upgradeTruck]);
+  const handleManageUpgrades = useCallback((truck: Truck) => {
+    setManagingUpgradesTruckId(truck.id);
+  }, []);
 
   const handleRepair = useCallback((truck: Truck) => {
     if (typeof repairTruck !== 'function') {
@@ -1252,6 +1234,16 @@ export default function FleetScreen() {
     );
   }
 
+  if (managingUpgradesTruckId) {
+    return (
+      <UpgradesScreen
+        truckId={managingUpgradesTruckId}
+        onBack={() => setManagingUpgradesTruckId(null)}
+        backLabel="‹ Filo"
+      />
+    );
+  }
+
   return (
     <AppScreen scroll>
       <ScreenHeader
@@ -1328,7 +1320,7 @@ export default function FleetScreen() {
                   monetization={monetization}
                   sellCheck={sellCheckByTruckId.get(truck.id) ?? { canSell: false }}
                   onRepair={handleRepair}
-                  onUpgrade={handleUpgrade}
+                  onManageUpgrades={handleManageUpgrades}
                   onTransfer={handleOpenTransfer}
                   onSell={handleSellTruck}
                   onShowSellBlocked={handleShowSellBlocked}
@@ -1577,6 +1569,16 @@ const styles = StyleSheet.create({
   },
   compactAction: {
     minHeight: 34,
+  },
+  upgradeManageBlock: {
+    gap: 4,
+    marginTop: 2,
+  },
+  upgradeManageHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 13,
   },
   footerMuted: {
     ...typography.caption,

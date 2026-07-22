@@ -709,8 +709,11 @@ console.log('\n7. Fleet UI (static)');
 const fleetSrc = readFileSync('src/screens/FleetScreen.tsx', 'utf8');
 assert(fleetSrc.includes('Kondisyon'), 'truck kondisyon gösterimi');
 assert(fleetSrc.includes('Bakım Yap'), 'Bakım Yap butonu');
-assert(fleetSrc.includes('Yükselt'), 'Yükselt butonu');
-assert(fleetSrc.includes('Yetersiz nakit'), 'yetersiz nakit disabled');
+assert(fleetSrc.includes('Geliştirmeleri Yönet'), 'Geliştirmeleri Yönet butonu');
+assert(fleetSrc.includes('UpgradesScreen'), 'Filo UpgradesScreen yönlendirmesi');
+assert(readFileSync('src/screens/UpgradesScreen.tsx', 'utf8').includes('upgradeTruck'), 'UpgradesScreen mevcut upgrade action');
+assert(readFileSync('src/screens/UpgradesScreen.tsx', 'utf8').includes('Kamyon Değiştir'), 'UpgradesScreen kamyon değiştir strip');
+assert(readFileSync('src/screens/MoreScreen.tsx', 'utf8').includes("key: 'upgrades'"), 'More Geliştirmeler modülü aktif');
 assert(fleetSrc.includes('getDriverXpProgress'), 'driver XP progress');
 assert(fleetSrc.includes('onTimeRate'), 'on-time oranı');
 

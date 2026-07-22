@@ -16,6 +16,73 @@ export const TRUCK_UPGRADE_LABELS: Record<TruckUpgradeType, string> = {
   durability: 'Dayanıklılık',
 };
 
+export const TRUCK_UPGRADE_DISPLAY_NAMES: Record<TruckUpgradeType, string> = {
+  engine: 'Motor',
+  fuelEfficiency: 'Yakıt Verimliliği',
+  cargo: 'Kargo Kapasitesi',
+  durability: 'Dayanıklılık',
+};
+
+export const TRUCK_UPGRADE_BENEFITS: Record<TruckUpgradeType, string> = {
+  engine: 'Teslimat süresini azaltır',
+  fuelEfficiency: 'Yakıt tüketimini azaltır',
+  cargo: 'Taşıma kapasitesini artırır',
+  durability: 'Kondisyon kaybını azaltır',
+};
+
+export const TRUCK_UPGRADE_ACTION_LABELS: Record<TruckUpgradeType, string> = {
+  engine: 'Motoru Yükselt',
+  fuelEfficiency: 'Yakıt Verimliliğini Yükselt',
+  cargo: 'Kargo Kapasitesini Yükselt',
+  durability: 'Dayanıklılığı Yükselt',
+};
+
+export const TRUCK_UPGRADE_TYPES: TruckUpgradeType[] = [
+  'engine',
+  'fuelEfficiency',
+  'cargo',
+  'durability',
+];
+
+export function formatTruckUpgradeCurrentEffect(
+  truck: Truck,
+  upgradeType: TruckUpgradeType,
+): string {
+  const normalized = normalizeTruckUpgrades(truck);
+  const level = normalized.upgrades?.[upgradeType] ?? 0;
+  if (level <= 0) {
+    return 'Henüz etki yok';
+  }
+
+  switch (upgradeType) {
+    case 'engine':
+      return `Süre -%${Math.round(getEngineDurationReduction(normalized) * 100)}`;
+    case 'fuelEfficiency':
+      return `Yakıt -%${Math.round(getFuelEfficiencyReduction(normalized) * 100)}`;
+    case 'cargo':
+      return `+${getCargoCapacityBonus(normalized).toFixed(1)} t kapasite`;
+    case 'durability':
+      return `Kondisyon kaybı -%${Math.round(getDurabilityConditionLossReduction(normalized) * 100)}`;
+    default:
+      return '—';
+  }
+}
+
+export function formatTruckUpgradeSuccessToast(upgradeType: TruckUpgradeType): string {
+  switch (upgradeType) {
+    case 'engine':
+      return 'Motor yükseltildi';
+    case 'fuelEfficiency':
+      return 'Yakıt verimliliği yükseltildi';
+    case 'cargo':
+      return 'Kargo kapasitesi yükseltildi';
+    case 'durability':
+      return 'Dayanıklılık yükseltildi';
+    default:
+      return 'Yükseltme tamamlandı';
+  }
+}
+
 export const DEFAULT_TRUCK_UPGRADES: TruckUpgrades = {
   engine: 0,
   fuelEfficiency: 0,

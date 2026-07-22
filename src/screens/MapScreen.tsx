@@ -16,6 +16,7 @@ import {
 
 import { debugConfig } from '../config/debug';
 import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
+import DeliveryIncidentCard from '../components/delivery/DeliveryIncidentCard';
 import { AppCard, GameIcon, ProgressBar, StatusBadge, type StatusBadgeVariant } from '../components/ui';
 import { normalizeCityId } from '../data/networkPositions';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -268,6 +269,9 @@ function TruckTrackCard({ truck, delivery, transfer, homeCityId, currentTime }: 
             <View style={styles.trackProgress}>
               <ProgressBar progress={progress} color={COLORS.cyan} height={3} />
             </View>
+          ) : null}
+          {delivery && (delivery.incident || delivery.incidentResolved) ? (
+            <DeliveryIncidentCard delivery={delivery} compact />
           ) : null}
         </View>
       </View>

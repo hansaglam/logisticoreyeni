@@ -396,6 +396,49 @@ export type DeliveryFailureReason =
   | 'cancelled'
   | 'capacity_exceeded';
 
+/** Teslimat sırasında nadir operasyon olayı tipi */
+export type DeliveryIncidentType =
+  | 'traffic'
+  | 'driver_break'
+  | 'tire_pressure'
+  | 'fuel_deviation'
+  | 'checkpoint';
+
+export type DeliveryIncidentStatus = 'pending' | 'resolved' | 'expired';
+
+export interface DeliveryIncidentEffects {
+  cashDelta?: number;
+  deliveryTimeDeltaHours?: number;
+  progressDelta?: number;
+  truckConditionDelta?: number;
+  driverXpDelta?: number;
+  fuelCostDelta?: number;
+  riskDelta?: number;
+}
+
+export interface DeliveryIncidentChoice {
+  id: string;
+  label: string;
+  description: string;
+  effects: DeliveryIncidentEffects;
+  /** UI kısa etki özeti */
+  effectSummary?: string;
+}
+
+export interface DeliveryIncident {
+  id: string;
+  deliveryId: string;
+  type: DeliveryIncidentType;
+  title: string;
+  description: string;
+  createdAtGameTime: number;
+  triggerProgress: number;
+  status: DeliveryIncidentStatus;
+  choices: DeliveryIncidentChoice[];
+  resolvedChoiceId?: string;
+  resolvedAtGameTime?: number;
+}
+
 /** Aktif veya tamamlanmış bir taşıma görevi */
 export interface Delivery {
   id: string;
@@ -436,6 +479,12 @@ export interface Delivery {
   failureReason?: DeliveryFailureReason;
   /** Finansal settlement uygulandı (çift ödeme koruması) */
   settledAt?: number;
+  /** Aktif operasyon olayı */
+  incident?: DeliveryIncident;
+  /** Bu teslimat için olay roll'ü yapıldı mı (max 1) */
+  incidentGenerated?: boolean;
+  /** Olay kararı verildi mi */
+  incidentResolved?: boolean;
 }
 
 // ---------------------------------------------------------------------------

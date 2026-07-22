@@ -311,6 +311,7 @@ export function selectIdleTruckForContract(
   contract: Contract,
   product?: Product,
   currentTime = 0,
+  fallbackHomeCityId?: string,
 ): Truck | undefined {
   const resolved = product ?? getProductByIdSafe(contract.productId);
   if (!resolved) return undefined;
@@ -319,7 +320,7 @@ export function selectIdleTruckForContract(
     .filter(
       (truck) =>
         isTruckAvailableForAssignment(truck, currentTime) &&
-        isTruckAtContractOrigin(truck, contract) &&
+        isTruckAtContractOrigin(truck, contract, fallbackHomeCityId) &&
         canTruckCarryContract(truck, contract, resolved),
     )
     .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0))[0];
@@ -389,6 +390,7 @@ export function getContractAvailability(
   playerLevel: number = 1,
   currentTime = 0,
   playerReputation = 0,
+  fallbackHomeCityId?: string,
 ): ContractAvailability {
   const safePlayerLevel = Math.max(1, playerLevel);
   const requiredLevel = contract.requiredLevel ?? 1;
@@ -448,8 +450,8 @@ export function getContractAvailability(
     fromCityName,
   };
 
-  const trucksAtOrigin = getTrucksAtOrigin(truckList, originCityId);
-  const idleTrucksAtOrigin = getIdleTrucksAtOrigin(truckList, originCityId);
+  const trucksAtOrigin = getTrucksAtOrigin(truckList, originCityId, fallbackHomeCityId);
+  const idleTrucksAtOrigin = getIdleTrucksAtOrigin(truckList, originCityId, fallbackHomeCityId);
   const maxIdleTruckCapacityAtOrigin =
     idleTrucksAtOrigin.length > 0
       ? Math.max(...idleTrucksAtOrigin.map((truck) => truck.capacity ?? 0))

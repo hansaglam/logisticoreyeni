@@ -37,7 +37,8 @@ export type RetentionEvent =
   | { type: 'truck_purchased' }
   | { type: 'reputation_changed' }
   | { type: 'cash_changed' }
-  | { type: 'company_score_changed' };
+  | { type: 'company_score_changed' }
+  | { type: 'delivery_incident_resolved' };
 
 export type RetentionProgressState = Pick<
   StoreGameState,

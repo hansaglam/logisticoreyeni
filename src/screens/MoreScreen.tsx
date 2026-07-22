@@ -32,9 +32,10 @@ import FinanceScreen from './FinanceScreen';
 import LeaderboardScreen from './LeaderboardScreen';
 import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
+import UpgradesScreen from './UpgradesScreen';
 import AccountSection from '../components/AccountSection';
 
-type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions' | 'leaderboard';
+type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions' | 'leaderboard' | 'upgrades';
 
 interface ModuleItem {
   key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
@@ -70,6 +71,12 @@ const PRODUCTION_MODULE_ITEMS: ModuleItem[] = [
     subtitle: 'Haftalık şirket puanı sıralaması',
     icon: 'company',
   },
+  {
+    key: 'upgrades',
+    label: 'Geliştirmeler',
+    subtitle: 'Filo ve şirket yükseltmeleri',
+    icon: 'upgrade',
+  },
 ];
 
 const DEV_MODULE_ITEMS: ModuleItem[] = [
@@ -78,14 +85,6 @@ const DEV_MODULE_ITEMS: ModuleItem[] = [
     label: 'Şirket İstatistikleri',
     subtitle: 'Performans ve kariyer özetini incele',
     icon: 'profit',
-    placeholder: true,
-    badge: { label: 'Yakında', variant: 'muted' },
-  },
-  {
-    key: 'upgrades',
-    label: 'Geliştirmeler',
-    subtitle: 'Şirket ve filo yükseltmeleri',
-    icon: 'upgrade',
     placeholder: true,
     badge: { label: 'Yakında', variant: 'muted' },
   },
@@ -215,6 +214,9 @@ export default function MoreScreen() {
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
   const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
 
+  const pendingUpgradeTruckId = useGameStore((state) => state.pendingUpgradeTruckId);
+  const clearPendingUpgradeTruckId = useGameStore((state) => state.clearPendingUpgradeTruckId);
+
   useEffect(() => {
     if (!pendingMoreSubRoute) return;
     setRoute(pendingMoreSubRoute);
@@ -264,6 +266,21 @@ export default function MoreScreen() {
     return (
       <View style={styles.embeddedRoot}>
         <LeaderboardScreen onBack={() => setRoute('menu')} />
+      </View>
+    );
+  }
+
+  if (route === 'upgrades') {
+    return (
+      <View style={styles.embeddedRoot}>
+        <UpgradesScreen
+          truckId={pendingUpgradeTruckId}
+          onBack={() => {
+            clearPendingUpgradeTruckId();
+            setRoute('menu');
+          }}
+          backLabel="‹ Şirket"
+        />
       </View>
     );
   }

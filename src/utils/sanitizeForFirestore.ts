@@ -126,6 +126,12 @@ const OPTIONAL_UNDEFINED_FIELD_SUFFIXES = new Set([
   'triggeredAt',
   'targetPrice',
   'targetPercent',
+  'resolvedChoiceId',
+  'resolvedAtGameTime',
+  'triggerProgress',
+  'effectSummary',
+  'incidentGenerated',
+  'incidentResolved',
 ]);
 
 function getPathLeafKey(path: string): string {

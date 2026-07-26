@@ -16,6 +16,7 @@ import { STARTER_TRUCK } from '../data/trucks';
 import { normalizeGlobalEconomy } from '../simulation/economy';
 import { normalizeTruckCity } from '../simulation/delivery';
 import { normalizeDelivery } from '../simulation/deliveryIncidents';
+import { normalizePlayerTrailers } from '../simulation/trailerOps';
 import { normalizeContract } from '../simulation/contractTypes';
 import { normalizeTruckUpgrades } from '../simulation/truckUpgrades';
 import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/leveling';
@@ -65,7 +66,7 @@ import type {
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
 export const SAVE_BACKUP_INVALID_KEY = 'logisticore_save_backup_invalid';
 export const SAVE_BACKUP_MIGRATED_KEY = 'logisticore_save_backup_migrated';
-export const SAVE_GAME_VERSION = 2;
+export const SAVE_GAME_VERSION = 3;
 
 const APP_VERSION = '1.0.0';
 
@@ -129,6 +130,11 @@ export interface SaveGamePayload {
   worldEventsVersion?: number;
   lastWorldEventGeneratedDay?: number;
   monetization?: MonetizationState;
+  lastSeenRealTimeMs?: number;
+  lastSimulatedRealTimeMs?: number;
+  lastOfflineProgressAppliedAt?: number;
+  offlineProgressVersion?: number;
+  lastSimulationGameSpeed?: number;
 }
 
 export interface SaveBackupStatus {
@@ -297,11 +303,13 @@ function normalizeActiveDeliveries(deliveries: Delivery[] | undefined): Delivery
 
 export function normalizeLoadedPlayer(player: Player): Player {
   const homeCityId = player.homeCityId ?? 'izmir';
+  const trucks = normalizePlayerTrucks(player.trucks, homeCityId);
   const normalized = normalizePlayerProgress({
     ...player,
     homeCityId,
     warehouses: normalizePlayerWarehouses(player.warehouses ?? []),
-    trucks: normalizePlayerTrucks(player.trucks, homeCityId),
+    trucks,
+    trailers: normalizePlayerTrailers(player.trailers, homeCityId, trucks),
     drivers: (player.drivers ?? []).map((driver) => normalizeDriver(driver)),
   });
   return migratePlayerTruckNames(normalized);
@@ -345,6 +353,7 @@ export function createDefaultSaveFallbacks(
     lateDeliveries: safeNumber(playerRecord.lateDeliveries, 0),
     diamonds: safeNumber(playerRecord.diamonds, 0),
     trucks: isArray(playerRecord.trucks) ? (playerRecord.trucks as Player['trucks']) : [],
+    trailers: isArray(playerRecord.trailers) ? (playerRecord.trailers as Player['trailers']) : [],
     drivers: isArray(playerRecord.drivers) ? (playerRecord.drivers as Player['drivers']) : [],
     warehouses: isArray(playerRecord.warehouses)
       ? (playerRecord.warehouses as Warehouse[])
@@ -422,6 +431,10 @@ export function createDefaultSaveFallbacks(
             : false,
           tradePurchased: isRecord(payload.missions)
             ? (payload.missions as Partial<MissionsState>).flags?.tradePurchased === true
+            : false,
+          playerLevel: player.level ?? 1,
+          tutorialCompleted: isRecord(payload.tutorial)
+            ? (payload.tutorial as Partial<TutorialState>).isCompleted === true
             : false,
         }),
     spotlightTutorial: normalizeSpotlightTutorialState(
@@ -905,6 +918,12 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     monetization: structuredClone(
       normalizeMonetizationState(state.monetization, state.currentTime),
     ),
+    lastSeenRealTimeMs: state.lastSeenRealTimeMs ?? state.lastSimulatedRealTimeMs ?? Date.now(),
+    lastSimulatedRealTimeMs:
+      state.lastSimulatedRealTimeMs ?? state.lastSeenRealTimeMs ?? Date.now(),
+    lastOfflineProgressAppliedAt: state.lastOfflineProgressAppliedAt,
+    offlineProgressVersion: state.offlineProgressVersion ?? 1,
+    lastSimulationGameSpeed: state.lastSimulationGameSpeed ?? state.gameSpeed ?? 1,
   };
 }
 
@@ -955,6 +974,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
           activeDeliveryCount: payload.activeDeliveries?.length ?? 0,
           deliveryStarted: payload.missions?.flags?.deliveryStarted === true,
           tradePurchased: payload.missions?.flags?.tradePurchased === true,
+          playerLevel: player.level ?? 1,
+          tutorialCompleted: payload.tutorial?.isCompleted === true,
         }),
     spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
     marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
@@ -965,6 +986,32 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       payload.lastWorldEventGeneratedDay,
     ),
     monetization: normalizeMonetizationState(payload.monetization, safeCurrentTime),
+    lastSeenRealTimeMs:
+      payload.lastSeenRealTimeMs != null && Number.isFinite(payload.lastSeenRealTimeMs)
+        ? payload.lastSeenRealTimeMs
+        : payload.lastSimulatedRealTimeMs != null &&
+            Number.isFinite(payload.lastSimulatedRealTimeMs)
+          ? payload.lastSimulatedRealTimeMs
+          : undefined,
+    lastSimulatedRealTimeMs:
+      payload.lastSimulatedRealTimeMs != null &&
+      Number.isFinite(payload.lastSimulatedRealTimeMs)
+        ? payload.lastSimulatedRealTimeMs
+        : payload.lastSeenRealTimeMs != null && Number.isFinite(payload.lastSeenRealTimeMs)
+          ? payload.lastSeenRealTimeMs
+          : undefined,
+    lastOfflineProgressAppliedAt:
+      payload.lastOfflineProgressAppliedAt != null &&
+      Number.isFinite(payload.lastOfflineProgressAppliedAt)
+        ? payload.lastOfflineProgressAppliedAt
+        : undefined,
+    offlineProgressVersion: payload.offlineProgressVersion ?? 1,
+    lastSimulationGameSpeed:
+      payload.lastSimulationGameSpeed != null &&
+      Number.isFinite(payload.lastSimulationGameSpeed) &&
+      payload.lastSimulationGameSpeed > 0
+        ? payload.lastSimulationGameSpeed
+        : payload.gameSpeed ?? 1,
   };
 }
 

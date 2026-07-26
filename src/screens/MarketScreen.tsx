@@ -5,7 +5,15 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import MarketAlertModal from '../components/market/MarketAlertModal';
@@ -13,27 +21,40 @@ import ActiveMarketAlertsSection from '../components/market/ActiveMarketAlertsSe
 import MarketWorldEventsStrip from '../components/market/MarketWorldEventsStrip';
 import ProductMarketDetailModal from '../components/market/ProductMarketDetailModal';
 import ProductMiniTrendChart from '../components/market/ProductMiniTrendChart';
+import {
+  getMarketProductColumnWidths,
+  getProductAccentColor,
+  MARKET_CARD_BG,
+  MARKET_CARD_BORDER,
+  MARKET_HEADER_HEIGHT,
+  MARKET_METRIC_HEIGHT,
+  MARKET_PRODUCT_CARD_HEIGHT,
+  MARKET_PRODUCT_CARD_HEIGHT_NARROW,
+  MARKET_REFRESH_BG,
+  MARKET_REFRESH_BORDER,
+  MARKET_SCROLL_BOTTOM_EXTRA,
+  MARKET_SECTION_GAP,
+  MARKET_SECTION_GAP_TIGHT,
+  MARKET_SEGMENT_BG,
+  MARKET_SEGMENT_BORDER,
+  MARKET_SUMMARY_STRIP_HEIGHT,
+  marketCityChipActive,
+  marketCityChipInactive,
+} from '../components/market/marketTheme';
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
-import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
-import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import {
   ActionButton,
   AppCard,
   AppScreen,
   EmptyState,
-  FilterChip,
   GameIcon,
-  IconButton,
   ProductIcon,
-  ProgressBar,
-  ScreenHeader,
-  SectionTitle,
-  SegmentedControl,
-  SmallStatPill,
   StatusBadge,
 } from '../components/ui';
 import type { StatusBadgeVariant } from '../components/ui';
+import type { GameIconName } from '../theme/icons';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { findMarketOpportunities } from '../simulation/contracts';
 import { countMarketContractMatches } from '../utils/marketContractMatch';
 import { getSafeFuelPrice } from '../simulation/economy';
@@ -123,7 +144,7 @@ type MarketMood = 'Sakin' | 'Hareketli' | 'Fırsatlı' | 'Kriz';
 
 const MARKET_TABS = [
   { key: 'products' as const, label: 'Ürünler', icon: 'inventory' as const },
-  { key: 'opportunities' as const, label: 'Fırsatlar', icon: 'route' as const },
+  { key: 'opportunities' as const, label: 'Fırsatlar', icon: 'reputation' as const },
 ];
 
 interface MarketHighlight {
@@ -174,13 +195,6 @@ function getOpportunityPotential(normalizedScore: number): {
     return { label: 'Orta', variant: 'warning' };
   }
   return { label: 'Zayıf', variant: 'muted' };
-}
-
-function getStockBarColor(stockRatio: number): string {
-  if (stockRatio < 0.3) return colors.danger;
-  if (stockRatio < 0.7) return colors.accentAmber;
-  if (stockRatio <= 1.2) return colors.info;
-  return colors.success;
 }
 
 function getPriceChangePercent(market: NormalizedProductMarket): number {
@@ -256,20 +270,50 @@ function MarketStatusSummary({
   mood,
   criticalCount,
   opportunityCount,
-  compact = false,
 }: {
   mood: MarketMood;
   criticalCount: number;
   opportunityCount: number;
-  compact?: boolean;
 }) {
   return (
-    <Text
-      style={[styles.marketStatusSummary, compact && styles.marketStatusSummaryCompact]}
-      numberOfLines={1}
-    >
-      Piyasa durumu: {mood} · {criticalCount} talep · {opportunityCount} fırsat
-    </Text>
+    <View style={styles.worldStatusRow}>
+      <GameIcon name="map" size={13} color={colors.textMuted} />
+      <Text style={styles.worldStatusText} numberOfLines={1}>
+        <Text style={styles.worldStatusLabel}>Dünya Durumu</Text>
+        {'  '}
+        {mood} · {criticalCount} talep · {opportunityCount} fırsat
+      </Text>
+    </View>
+  );
+}
+
+interface MarketMetricTileProps {
+  label: string;
+  value: string;
+  icon: GameIconName;
+  accentColor: string;
+}
+
+function MarketMetricTile({ label, value, icon, accentColor }: MarketMetricTileProps) {
+  return (
+    <View style={styles.metricTile}>
+      <View style={[styles.metricIconWrap, { backgroundColor: `${accentColor}18` }]}>
+        <GameIcon name={icon} size={16} color={accentColor} />
+      </View>
+      <View style={styles.metricTextBlock}>
+        <Text style={styles.metricLabel} numberOfLines={1}>
+          {label}
+        </Text>
+        <Text
+          style={[styles.metricValue, { color: accentColor }]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.78}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
   );
 }
 
@@ -278,7 +322,6 @@ interface MarketMetricStripProps {
   currentTime: number;
   criticalCount: number;
   opportunityCount: number;
-  compact?: boolean;
 }
 
 function MarketMetricStrip({
@@ -286,47 +329,34 @@ function MarketMetricStrip({
   currentTime,
   criticalCount,
   opportunityCount,
-  compact = false,
 }: MarketMetricStripProps) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={[styles.metricStrip, compact && styles.metricStripCompact]}
-    >
-      <SmallStatPill
-        label="Yakıt fiyatı"
+    <View style={styles.metricStrip}>
+      <MarketMetricTile
+        label="Yakıt Fiyatı"
         value={formatUnitPrice(fuelPrice, '/L')}
         icon="fuel"
         accentColor={isFuelExpensiveForDisplay(fuelPrice) ? colors.danger : colors.accentAmber}
-        layout="chip"
-        dense
       />
-      <SmallStatPill
+      <MarketMetricTile
         label="Zaman"
         value={formatGameTimeCompact(currentTime)}
         icon="time"
         accentColor={colors.info}
-        layout="chip"
-        dense
       />
-      <SmallStatPill
+      <MarketMetricTile
         label="Hareket"
         value={String(criticalCount)}
         icon="warning"
         accentColor={criticalCount > 0 ? colors.danger : colors.success}
-        layout="chip"
-        dense
       />
-      <SmallStatPill
-        label="Fırsat"
-        value={`${opportunityCount}`}
+      <MarketMetricTile
+        label="Fırsatlar"
+        value={String(opportunityCount)}
         icon="contract"
-        accentColor={colors.accentBlue}
-        layout="chip"
-        dense
+        accentColor="#A78BFA"
       />
-    </ScrollView>
+    </View>
   );
 }
 
@@ -342,27 +372,98 @@ function CompactCitySummary({
   avgPrice: number;
 }) {
   return (
-    <View style={styles.citySummaryRow}>
-      <View style={styles.citySummaryItem}>
+    <View style={styles.citySummaryStrip}>
+      <View style={styles.citySummaryMetric}>
         <Text style={[styles.citySummaryValue, { color: colors.danger }]}>{shortages}</Text>
-        <Text style={styles.citySummaryLabel}>
-          {getMarketStatusShortLabel('Kıtlık')}
-        </Text>
+        <Text style={styles.citySummaryLabel}>{getMarketStatusShortLabel('Kıtlık')}</Text>
       </View>
-      <View style={styles.citySummaryItem}>
+      <View style={styles.citySummaryDivider} />
+      <View style={styles.citySummaryMetric}>
         <Text style={[styles.citySummaryValue, { color: colors.success }]}>{surpluses}</Text>
         <Text style={styles.citySummaryLabel}>Stok Fazla</Text>
       </View>
-      <View style={styles.citySummaryItem}>
+      <View style={styles.citySummaryDivider} />
+      <View style={styles.citySummaryMetric}>
         <Text style={[styles.citySummaryValue, { color: colors.accentAmber }]}>
           {formatMoney(avgPrice)}
         </Text>
         <Text style={styles.citySummaryLabel}>Ort. fiyat</Text>
       </View>
-      <Text style={styles.citySummaryName} numberOfLines={1}>
-        {cityName}
-      </Text>
+      <View style={styles.citySummaryTrendSlot}>
+        <GameIcon name="market" size={16} color={colors.info} />
+        <Text style={styles.citySummaryName} numberOfLines={1}>
+          {cityName}
+        </Text>
+      </View>
     </View>
+  );
+}
+
+function MarketTabSegment({
+  activeTab,
+  onChange,
+}: {
+  activeTab: MarketTab;
+  onChange: (tab: MarketTab) => void;
+}) {
+  return (
+    <View style={styles.segmentContainer}>
+      {MARKET_TABS.map((tab) => {
+        const isActive = tab.key === activeTab;
+        return (
+          <Pressable
+            key={tab.key}
+            style={[styles.segmentTab, isActive && styles.segmentTabActive]}
+            onPress={() => onChange(tab.key)}
+          >
+            {tab.icon ? (
+              <GameIcon
+                name={tab.icon}
+                size={15}
+                color={isActive ? colors.accentBlue : colors.textMuted}
+              />
+            ) : null}
+            <Text style={[styles.segmentLabel, isActive && styles.segmentLabelActive]} numberOfLines={1}>
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function MarketCityChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const palette = selected ? marketCityChipActive : marketCityChipInactive;
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.cityChip,
+        {
+          backgroundColor: palette.backgroundColor,
+          borderColor: palette.borderColor,
+        },
+      ]}
+    >
+      <Text
+        style={[
+          styles.cityChipLabel,
+          { color: palette.textColor, fontWeight: selected ? '700' : '600' },
+        ]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -427,6 +528,11 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   onSellPress,
   onAlarmPress,
   onPress,
+  leftColWidth,
+  actionColWidth,
+  chartMinWidth,
+  cardHeight,
+  narrowScreen,
 }: {
   cityId: string;
   currentTime: number;
@@ -446,13 +552,18 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   onSellPress: (productId: ProductId) => void;
   onAlarmPress: (productId: ProductId) => void;
   onPress?: (productId: ProductId) => void;
+  leftColWidth: number;
+  actionColWidth: number;
+  chartMinWidth: number;
+  cardHeight: number;
+  narrowScreen: boolean;
 }) {
   const stockRatio = calculateStockRatio(market);
   const status = getMarketStatus(stockRatio);
   const statusVariant = getMarketStatusColorVariant(status);
   const hint = getOpportunityHint(market);
-  const progressValue = Math.min(stockRatio, 2) / 2;
   const shownPrice = displayPrice ?? market.currentPrice;
+  const accentColor = getProductAccentColor(market.productId);
   const trend = useMemo(
     () =>
       getProductPriceTrend({
@@ -482,133 +593,101 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
       ? formatTradeProfitDisplay(estimatedProfit)
       : null;
 
-  const cardMainContent = (
-    <>
-      <View style={styles.cardTopRow}>
-        <View style={styles.productIconBox}>
-          <ProductIcon productId={market.productId} size={15} color={colors.info} />
-        </View>
+  const stockMeta = !hasWarehouse
+    ? 'Depo yok'
+    : depotQuantity > 0
+      ? `Stok: ${depotQuantity.toFixed(0)} t`
+      : 'Depoda yok';
 
-        <View style={styles.cardMain}>
+  const cardBody = (
+    <View style={[styles.productCardInner, { height: cardHeight }]}>
+      <View style={[styles.productLeftCol, { width: leftColWidth }]}>
+        <View style={styles.productTitleRow}>
+          <View style={[styles.productIconBox, { borderColor: `${accentColor}44` }]}>
+            <ProductIcon productId={market.productId} size={narrowScreen ? 14 : 15} color={accentColor} />
+          </View>
           <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">
             {getProductName(market.productId)}
           </Text>
         </View>
-
-        <View style={styles.cardRight}>
-          <Text style={styles.productPrice} numberOfLines={1}>
-            {formatMoney(shownPrice)}
-          </Text>
-          <Text style={styles.productPriceUnit} numberOfLines={1}>
-            / ton
-          </Text>
-          <Text
-            style={[styles.priceChangeText, { color: priceChangeDisplay.color }]}
-            numberOfLines={1}
-          >
-            {priceChangeDisplay.label}
-          </Text>
+        <Text style={styles.productPrice} numberOfLines={1}>
+          {formatMoney(shownPrice)}
+          <Text style={styles.productPriceUnit}> / ton</Text>
+        </Text>
+        <Text
+          style={[styles.priceChangeText, { color: priceChangeDisplay.color }]}
+          numberOfLines={1}
+        >
+          {priceChangeDisplay.label}
+        </Text>
+        <View style={styles.productBadgeRow}>
+          <StatusBadge label={getMarketStatusLabel(status)} variant={statusVariant} size="sm" />
         </View>
-      </View>
-
-      <View style={styles.productMetaRow}>
-        <StatusBadge
-          label={getMarketStatusLabel(status)}
-          variant={statusVariant}
-          size="sm"
-        />
-        <Text style={[styles.trendLabel, { color: trend.color }]} numberOfLines={1}>
-          {trend.label}
-        </Text>
-      </View>
-
-      {eventLabel ? (
-        <Text style={styles.eventLabel} numberOfLines={1}>
-          {eventLabel}
-        </Text>
-      ) : null}
-
-      <View style={styles.chartRow}>
-        <ProductMiniTrendChart trend={trend} />
-      </View>
-
-      {hasWarehouse ? (
-        depotQuantity > 0 ? (
-          <Text style={styles.depotText} numberOfLines={1}>
-            Depoda: {depotQuantity.toFixed(1)} t
-            {profitDisplay ? (
-              <Text style={{ color: profitDisplay.color }}> · {profitDisplay.label}</Text>
-            ) : null}
+        {eventLabel ? (
+          <Text style={styles.eventLabel} numberOfLines={1}>
+            {eventLabel}
           </Text>
-        ) : (
-          <Text style={styles.depotMutedText} numberOfLines={1}>
-            Depoda stok yok
-          </Text>
-        )
-      ) : (
-        <Text style={styles.depotMutedText} numberOfLines={1}>
-          Bu şehirde depo yok
-        </Text>
-      )}
-
-      <Text style={styles.productHint} numberOfLines={1}>
-        {hint}
-      </Text>
-    </>
-  );
-
-  const cardFooter = (
-    <View style={styles.productFooterRow}>
-      <View style={styles.productProgress}>
-        <ProgressBar progress={progressValue} color={getStockBarColor(stockRatio)} height={2} />
-      </View>
-      <View style={styles.productActions}>
-        <ActionButton
-          label={buyButtonLabel}
-          onPress={() => onBuyPress(market.productId)}
-          variant="primary"
-          icon="cash"
-          iconSize={11}
-          compact
-          disabled={buyButtonDisabled}
-          style={styles.productAction}
-        />
-        {showSellButton ? (
-          <ActionButton
-            label={sellButtonLabel}
-            onPress={() => onSellPress(market.productId)}
-            variant="secondary"
-            icon="market"
-            iconSize={11}
-            compact
-            disabled={sellButtonDisabled}
-            style={styles.productAction}
-          />
         ) : null}
-        <ActionButton
-          label="Alarm"
-          onPress={() => onAlarmPress(market.productId)}
-          variant="secondary"
-          icon="notification"
-          iconSize={11}
-          compact
-          style={styles.productActionAlarm}
-        />
+      </View>
+
+      <View style={[styles.productChartCol, { minWidth: chartMinWidth }]}>
+        <ProductMiniTrendChart trend={trend} />
+        <Text style={styles.productHint} numberOfLines={2}>
+          {hint}
+        </Text>
+        <Text style={styles.stockMeta} numberOfLines={1}>
+          {stockMeta}
+          {profitDisplay ? (
+            <Text style={{ color: profitDisplay.color }}> · {profitDisplay.label}</Text>
+          ) : null}
+        </Text>
+      </View>
+
+      <View style={[styles.productActionsCol, { width: actionColWidth }]}>
+        <Pressable
+          style={[styles.productBuyBtn, buyButtonDisabled && styles.productBtnDisabled]}
+          onPress={() => onBuyPress(market.productId)}
+          disabled={buyButtonDisabled}
+        >
+          <GameIcon name="cash" size={narrowScreen ? 12 : 13} color="#FFFFFF" />
+          <Text style={styles.productBuyBtnText} numberOfLines={1}>
+            {buyButtonLabel}
+          </Text>
+        </Pressable>
+        {showSellButton ? (
+          <Pressable
+            style={[styles.productSellBtn, sellButtonDisabled && styles.productBtnDisabled]}
+            onPress={() => onSellPress(market.productId)}
+            disabled={sellButtonDisabled}
+          >
+            <GameIcon name="market" size={12} color={colors.textSecondary} />
+            <Text style={styles.productSellBtnText} numberOfLines={1}>
+              {sellButtonLabel}
+            </Text>
+          </Pressable>
+        ) : null}
+        <Pressable style={styles.productAlarmBtn} onPress={() => onAlarmPress(market.productId)}>
+          <GameIcon name="notification" size={narrowScreen ? 12 : 13} color={colors.textSecondary} />
+          {!narrowScreen ? (
+            <Text style={styles.productAlarmBtnText} numberOfLines={1}>
+              Alarm
+            </Text>
+          ) : null}
+        </Pressable>
       </View>
     </View>
   );
 
   return (
-    <AppCard style={styles.productCard} padded={false}>
+    <View style={styles.productCard}>
       {onPress ? (
         <TouchableOpacity activeOpacity={0.9} onPress={() => onPress(market.productId)}>
-          {cardMainContent}
+          {cardBody}
         </TouchableOpacity>
       ) : (
-        cardMainContent
+        cardBody
       )}
-      {cardFooter}
-    </AppCard>
+    </View>
   );
 });
 
@@ -754,6 +833,14 @@ interface MarketScreenProps {
 
 export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const { alert: showAlert } = useAppDialog();
+  const { width: screenWidth } = useWindowDimensions();
+  const { tabBarHeight } = useTabBarLayout();
+  const marketScrollBottomPadding = tabBarHeight + MARKET_SCROLL_BOTTOM_EXTRA;
+  const productLayout = useMemo(() => getMarketProductColumnWidths(screenWidth), [screenWidth]);
+  const narrowScreen = screenWidth < 360;
+  const productCardHeight = narrowScreen
+    ? MARKET_PRODUCT_CARD_HEIGHT_NARROW
+    : MARKET_PRODUCT_CARD_HEIGHT;
   const player = useGameStore((state) => state.player);
   const playerMoney = useGameStore((state) => state.player?.money ?? 0);
   const playerWarehouses = useGameStore((state) => state.player?.warehouses ?? []);
@@ -778,9 +865,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const pendingMarketFocus = useGameStore((state) => state.pendingMarketFocus);
   const clearPendingMarketFocus = useGameStore((state) => state.clearPendingMarketFocus);
 
-  useOnboardingScreenVisit('Market');
-  const onboardingHint = useActiveOnboardingHint(['market_intro', 'first_trade']);
-  const isOnboardingMarket = !!onboardingHint;
+  const isOnboardingMarket = false;
 
   const [activeTab, setActiveTab] = useState<MarketTab>('products');
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
@@ -1370,169 +1455,157 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   }
 
   return (
-    <AppScreen scroll>
-      <ScreenHeader
-        title="Piyasa"
-        subtitle="Fiyatları izle, al veya sat"
-        rightAction={
-          <IconButton icon="refresh" onPress={handleRefreshMarket} size={20} color={colors.textSecondary} />
-        }
-      />
-
-      {onboardingHint ? (
-        <OnboardingHintCard
-          title={onboardingHint.title}
-          description={onboardingHint.description}
-          icon={onboardingHint.icon}
-          badgeLabel={onboardingHint.badgeLabel}
-          accentVariant={onboardingHint.accentVariant}
-          onDismiss={onboardingHint.onDismiss}
-          style={styles.onboardingHint}
-        />
-      ) : null}
-
-      {statusMessage ? (
-        <AppCard variant="success" style={styles.statusBanner} padded>
-          <View style={styles.statusBannerRow}>
-            <GameIcon name="success" size={14} color={colors.success} />
-            <Text style={styles.statusBannerText}>{statusMessage}</Text>
+    <AppScreen scroll scrollBottomPadding={marketScrollBottomPadding}>
+      <View style={styles.screenStack}>
+        <View style={styles.marketHeader}>
+          <View style={styles.marketHeaderText}>
+            <Text style={styles.marketTitle}>Piyasa</Text>
+            <Text style={styles.marketSubtitle}>Fiyatları izle, al veya sat</Text>
           </View>
-        </AppCard>
-      ) : null}
-
-      <View style={[styles.ruleBanner, isOnboardingMarket && styles.ruleBannerCompact]}>
-        <GameIcon name="alert" size={11} color={colors.info} />
-        <Text style={[styles.ruleBannerText, isOnboardingMarket && styles.ruleBannerTextCompact]}>
-          {WAREHOUSE_SELL_SAME_CITY_RULE}
-        </Text>
-      </View>
-
-      <MarketMetricStrip
-        fuelPrice={fuelPrice}
-        currentTime={currentTime}
-        criticalCount={marketHighlights.criticalCount}
-        opportunityCount={opportunities.length}
-        compact={isOnboardingMarket}
-      />
-
-      <MarketStatusSummary
-        mood={marketMood}
-        criticalCount={marketHighlights.criticalCount}
-        opportunityCount={opportunities.length}
-        compact={isOnboardingMarket}
-      />
-
-      <MarketWorldEventsStrip events={activeWorldEvents} />
-
-      <SegmentedControl
-        options={MARKET_TABS}
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        accentColor={colors.accentBlue}
-        compact
-      />
-
-      {activeTab === 'products' ? (
-        <View style={styles.tabContent}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            nestedScrollEnabled
-            contentContainerStyle={styles.cityChipRow}
-          >
-            {cities.map((city) => (
-              <FilterChip
-                key={city.id}
-                label={city.name}
-                selected={city.id === selectedCityId}
-                onPress={() => setSelectedCityId(city.id)}
-                accentColor={colors.accentAmber}
-                compact
-              />
-            ))}
-          </ScrollView>
-
-          <ActiveMarketAlertsSection
-            alerts={activeMarketAlerts}
-            selectedCityId={selectedCityId}
-            onPressAlert={handlePressMarketAlert}
-            onDeleteAlert={(alertId) => void handleDeleteMarketAlert(alertId)}
-            hideEmptyHint={isOnboardingMarket}
-          />
-
-          {!selectedCity ? (
-            <EmptyState title="Şehir seç" message="Ürün fiyatlarını görmek için bir şehir seç." icon="city" />
-          ) : (
-            <>
-              <CompactCitySummary
-                cityName={selectedCity.name}
-                shortages={selectedCityOverview.shortages}
-                surpluses={selectedCityOverview.surpluses}
-                avgPrice={selectedCityOverview.avgPrice}
-              />
-
-              <TutorialTarget id="market-products-section">
-                <SectionTitle
-                  title="Ürün Piyasası"
-                  subtitle={`${selectedCity.name} · alım ve satım`}
-                  compact
-                />
-              </TutorialTarget>
-
-              {selectedCityProductCards.length === 0 ? (
-                <EmptyState title="Ürün verisi yok" icon="inventory" />
-              ) : (
-                (() => {
-                  let firstProductWrapped = false;
-                  return selectedCityProductCards.map((cardData) => {
-                    const card = (
-                      <ProductMarketCard
-                        cityId={cardData.cityId}
-                        currentTime={currentTime}
-                        market={cardData.market}
-                        hasWarehouse={cardData.hasWarehouse}
-                        depotQuantity={cardData.depotQuantity}
-                        estimatedProfit={cardData.estimatedProfit}
-                        canSell={cardData.canSell}
-                        buyButtonLabel={cardData.buyButtonLabel}
-                        buyButtonDisabled={cardData.buyButtonDisabled}
-                        showSellButton={cardData.showSellButton}
-                        sellButtonLabel={cardData.sellButtonLabel}
-                        sellButtonDisabled={cardData.sellButtonDisabled}
-                        eventLabel={cardData.eventLabel}
-                        displayPrice={cardData.displayPrice}
-                        onBuyPress={handleBuyProductPress}
-                        onSellPress={handleSellProductPress}
-                        onAlarmPress={handleAlarmProductPress}
-                        onPress={handleProductCardPress}
-                      />
-                    );
-
-                    if (firstProductWrapped) {
-                      return <React.Fragment key={cardData.productId}>{card}</React.Fragment>;
-                    }
-
-                    firstProductWrapped = true;
-                    return (
-                      <TutorialTarget key={cardData.productId} id="market-first-product">
-                        {card}
-                      </TutorialTarget>
-                    );
-                  });
-                })()
-              )}
-            </>
-          )}
+          <Pressable style={styles.refreshButton} onPress={handleRefreshMarket}>
+            <GameIcon name="refresh" size={19} color={colors.info} />
+          </Pressable>
         </View>
-      ) : null}
 
-      {activeTab === 'opportunities' ? (
-        <View style={styles.tabContent}>
-          <SectionTitle
-            title="Depo Ticaret Fırsatları"
-            subtitle="Alım, satış ve takip önerileri — net kâr fee sonrası hesaplanır."
-            compact
-          />
+        {statusMessage ? (
+          <AppCard variant="success" style={styles.statusBanner} padded>
+            <View style={styles.statusBannerRow}>
+              <GameIcon name="success" size={14} color={colors.success} />
+              <Text style={styles.statusBannerText}>{statusMessage}</Text>
+            </View>
+          </AppCard>
+        ) : null}
+
+        <View style={styles.ruleBanner}>
+          <GameIcon name="alert" size={13} color={colors.info} />
+          <Text style={styles.ruleBannerText} numberOfLines={1}>
+            {WAREHOUSE_SELL_SAME_CITY_RULE}
+          </Text>
+        </View>
+
+        <MarketMetricStrip
+          fuelPrice={fuelPrice}
+          currentTime={currentTime}
+          criticalCount={marketHighlights.criticalCount}
+          opportunityCount={opportunities.length}
+        />
+
+        <MarketStatusSummary
+          mood={marketMood}
+          criticalCount={marketHighlights.criticalCount}
+          opportunityCount={opportunities.length}
+        />
+
+        <MarketWorldEventsStrip events={activeWorldEvents} />
+
+        <MarketTabSegment activeTab={activeTab} onChange={setActiveTab} />
+
+        {activeTab === 'products' ? (
+          <View style={styles.tabContent}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              nestedScrollEnabled
+              contentContainerStyle={styles.cityChipRow}
+            >
+              {cities.map((city) => (
+                <MarketCityChip
+                  key={city.id}
+                  label={city.name}
+                  selected={city.id === selectedCityId}
+                  onPress={() => setSelectedCityId(city.id)}
+                />
+              ))}
+            </ScrollView>
+
+            <ActiveMarketAlertsSection
+              alerts={activeMarketAlerts}
+              selectedCityId={selectedCityId}
+              onPressAlert={handlePressMarketAlert}
+              onDeleteAlert={(alertId) => void handleDeleteMarketAlert(alertId)}
+              hideEmptyHint={isOnboardingMarket}
+            />
+
+            {!selectedCity ? (
+              <EmptyState title="Şehir seç" message="Ürün fiyatlarını görmek için bir şehir seç." icon="city" />
+            ) : (
+              <>
+                <CompactCitySummary
+                  cityName={selectedCity.name}
+                  shortages={selectedCityOverview.shortages}
+                  surpluses={selectedCityOverview.surpluses}
+                  avgPrice={selectedCityOverview.avgPrice}
+                />
+
+                <TutorialTarget id="market-products-section">
+                  <View style={styles.productsSectionHeader}>
+                    <Text style={styles.productsSectionTitle}>Ürün Piyasası</Text>
+                    <Text style={styles.productsSectionSubtitle}>
+                      {selectedCity.name} · alım ve satım
+                    </Text>
+                  </View>
+                </TutorialTarget>
+
+                {selectedCityProductCards.length === 0 ? (
+                  <EmptyState title="Ürün verisi yok" icon="inventory" />
+                ) : (
+                  (() => {
+                    let firstProductWrapped = false;
+                    return selectedCityProductCards.map((cardData) => {
+                      const card = (
+                        <ProductMarketCard
+                          cityId={cardData.cityId}
+                          currentTime={currentTime}
+                          market={cardData.market}
+                          hasWarehouse={cardData.hasWarehouse}
+                          depotQuantity={cardData.depotQuantity}
+                          estimatedProfit={cardData.estimatedProfit}
+                          canSell={cardData.canSell}
+                          buyButtonLabel={cardData.buyButtonLabel}
+                          buyButtonDisabled={cardData.buyButtonDisabled}
+                          showSellButton={cardData.showSellButton}
+                          sellButtonLabel={cardData.sellButtonLabel}
+                          sellButtonDisabled={cardData.sellButtonDisabled}
+                          eventLabel={cardData.eventLabel}
+                          displayPrice={cardData.displayPrice}
+                          onBuyPress={handleBuyProductPress}
+                          onSellPress={handleSellProductPress}
+                          onAlarmPress={handleAlarmProductPress}
+                          onPress={handleProductCardPress}
+                          leftColWidth={productLayout.leftCol}
+                          actionColWidth={productLayout.actionCol}
+                          chartMinWidth={productLayout.chartMinWidth}
+                          cardHeight={productCardHeight}
+                          narrowScreen={narrowScreen}
+                        />
+                      );
+
+                      if (firstProductWrapped) {
+                        return <React.Fragment key={cardData.productId}>{card}</React.Fragment>;
+                      }
+
+                      firstProductWrapped = true;
+                      return (
+                        <TutorialTarget key={cardData.productId} id="market-first-product">
+                          {card}
+                        </TutorialTarget>
+                      );
+                    });
+                  })()
+                )}
+              </>
+            )}
+          </View>
+        ) : null}
+
+        {activeTab === 'opportunities' ? (
+          <View style={styles.tabContent}>
+            <View style={styles.productsSectionHeader}>
+              <Text style={styles.productsSectionTitle}>Depo Ticaret Fırsatları</Text>
+              <Text style={styles.productsSectionSubtitle}>
+                Alım, satış ve takip önerileri — net kâr fee sonrası hesaplanır.
+              </Text>
+            </View>
 
           {tradeOpportunities.length === 0 ? (
             <EmptyState
@@ -1554,11 +1627,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
             ))
           )}
 
-          <SectionTitle
-            title="Taşıma Fırsatları"
-            subtitle="Şehirler arası fiyat farklarına göre olası sözleşme rotaları."
-            compact
-          />
+          <View style={[styles.productsSectionHeader, styles.productsSectionHeaderSpaced]}>
+            <Text style={styles.productsSectionTitle}>Taşıma Fırsatları</Text>
+            <Text style={styles.productsSectionSubtitle}>
+              Şehirler arası fiyat farklarına göre olası sözleşme rotaları.
+            </Text>
+          </View>
 
           {opportunities.length === 0 ? (
             <EmptyState
@@ -1595,6 +1669,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           )}
         </View>
       ) : null}
+      </View>
 
       {detailModalVisible && selectedCity && detailProductId ? (
         <ProductMarketDetailModal
@@ -1669,7 +1744,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   statusBanner: {
-    marginBottom: spacing.sm,
+    marginBottom: 0,
   },
   statusBannerRow: {
     flexDirection: 'row',
@@ -1682,106 +1757,335 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flex: 1,
   },
+  screenStack: {
+    gap: MARKET_SECTION_GAP,
+  },
+  marketHeader: {
+    height: MARKET_HEADER_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 8,
+  },
+  marketHeaderText: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
+  },
+  marketTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#F3F7FF',
+    lineHeight: 28,
+  },
+  marketSubtitle: {
+    fontSize: 11.5,
+    color: '#A9B6CC',
+    marginTop: 2,
+    lineHeight: 14,
+  },
+  refreshButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: MARKET_REFRESH_BG,
+    borderWidth: 1,
+    borderColor: MARKET_REFRESH_BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   ruleBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs + 2,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: 10,
-    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    gap: 8,
+    height: 36,
+    paddingHorizontal: 11,
+    borderRadius: 12,
+    backgroundColor: 'rgba(35,136,255,0.055)',
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.2)',
-    marginBottom: spacing.sm,
-  },
-  ruleBannerCompact: {
-    paddingVertical: 7,
-    paddingHorizontal: spacing.sm + 2,
-    marginTop: -2,
-    marginBottom: 6,
-    backgroundColor: 'rgba(56, 189, 248, 0.05)',
-    borderColor: 'rgba(56, 189, 248, 0.14)',
+    borderColor: 'rgba(35,136,255,0.24)',
   },
   ruleBannerText: {
-    ...typography.caption,
     flex: 1,
+    fontSize: 10,
+    lineHeight: 13,
     color: colors.textSecondary,
-    lineHeight: 16,
-  },
-  ruleBannerTextCompact: {
-    fontSize: 11,
-    lineHeight: 14,
-    color: colors.textMuted,
-  },
-  onboardingHint: {
-    marginBottom: 6,
   },
   metricStrip: {
-    gap: spacing.xs,
-    paddingBottom: spacing.xs,
-    paddingRight: spacing.sm,
-  },
-  metricStripCompact: {
-    paddingBottom: 2,
-  },
-  marketStatusSummary: {
-    ...typography.caption,
-    fontSize: 11,
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
-    paddingHorizontal: 2,
-  },
-  marketStatusSummaryCompact: {
-    fontSize: 10,
-    marginBottom: 6,
-    color: colors.textMuted,
-  },
-  citySummaryRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.cardSoft,
-    borderRadius: 10,
+    gap: 7,
+  },
+  metricTile: {
+    flex: 1,
+    minWidth: 0,
+    height: MARKET_METRIC_HEIGHT,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    marginBottom: spacing.sm,
-    gap: spacing.sm,
-  },
-  citySummaryItem: {
+    backgroundColor: colors.cardSoft,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
+    flexDirection: 'row',
     alignItems: 'center',
-    minWidth: 52,
+    gap: 6,
   },
-  citySummaryValue: {
-    fontSize: 13,
+  metricIconWrap: {
+    width: 29,
+    height: 29,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  metricTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  metricLabel: {
+    fontSize: 8.5,
+    lineHeight: 10,
+    color: colors.textMuted,
+    marginBottom: 2,
+  },
+  metricValue: {
+    fontSize: 12,
+    lineHeight: 14,
     fontWeight: '800',
   },
+  worldStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 26,
+    paddingHorizontal: 2,
+  },
+  worldStatusText: {
+    flex: 1,
+    fontSize: 10,
+    lineHeight: 13,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  worldStatusLabel: {
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  segmentContainer: {
+    height: 42,
+    borderRadius: 14,
+    padding: 3,
+    backgroundColor: MARKET_SEGMENT_BG,
+    borderWidth: 1,
+    borderColor: MARKET_SEGMENT_BORDER,
+    flexDirection: 'row',
+    gap: 3,
+  },
+  segmentTab: {
+    flex: 1,
+    height: 36,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 6,
+  },
+  segmentTabActive: {
+    backgroundColor: 'rgba(35,136,255,0.13)',
+    borderColor: colors.accentBlue,
+  },
+  segmentLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
+  segmentLabelActive: {
+    color: colors.accentBlue,
+    fontWeight: '700',
+  },
+  citySummaryStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: MARKET_SUMMARY_STRIP_HEIGHT,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardSoft,
+    paddingHorizontal: 11,
+  },
+  citySummaryMetric: {
+    flex: 1,
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  citySummaryDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: 'rgba(70,120,190,0.22)',
+  },
+  citySummaryValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
   citySummaryLabel: {
-    ...typography.caption,
+    fontSize: 8.5,
+    color: colors.textMuted,
+    marginTop: 2,
+    lineHeight: 10,
+  },
+  citySummaryTrendSlot: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: 6,
+    minWidth: 44,
+    maxWidth: 56,
+  },
+  citySummaryName: {
+    fontSize: 8.5,
+    fontWeight: '700',
+    color: colors.textMuted,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  tabContent: {
+    gap: MARKET_SECTION_GAP_TIGHT,
+  },
+  cityChipRow: {
+    flexDirection: 'row',
+    gap: 7,
+    paddingVertical: 2,
+  },
+  cityChip: {
+    height: 34,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  cityChipLabel: {
+    fontSize: 10.5,
+  },
+  productsSectionHeader: {
+    gap: 2,
+    marginBottom: 2,
+  },
+  productsSectionHeaderSpaced: {
+    marginTop: 4,
+  },
+  productsSectionTitle: {
+    fontSize: 16.5,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    lineHeight: 20,
+  },
+  productsSectionSubtitle: {
+    fontSize: 10,
+    color: colors.textMuted,
+    lineHeight: 13,
+  },
+  productCard: {
+    marginBottom: 9,
+    borderRadius: 17,
+    backgroundColor: MARKET_CARD_BG,
+    borderWidth: 1,
+    borderColor: MARKET_CARD_BORDER,
+    overflow: 'hidden',
+  },
+  productCardInner: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  productLeftCol: {
+    flexShrink: 0,
+    justifyContent: 'space-between',
+    gap: 1,
+  },
+  productTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minWidth: 0,
+  },
+  productChartCol: {
+    flex: 1,
+    minWidth: 68,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  productActionsCol: {
+    flexShrink: 0,
+    justifyContent: 'center',
+    gap: 6,
+  },
+  productBadgeRow: {
+    marginTop: 2,
+    alignSelf: 'flex-start',
+  },
+  stockMeta: {
     fontSize: 9,
+    lineHeight: 11,
     color: colors.textMuted,
     marginTop: 1,
   },
-  citySummaryName: {
-    ...typography.caption,
+  productBuyBtn: {
+    height: 40,
+    borderRadius: 11,
+    backgroundColor: colors.accentBlue,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+  },
+  productSellBtn: {
+    height: 34,
+    borderRadius: 11,
+    backgroundColor: 'rgba(12,24,48,0.65)',
+    borderWidth: 1,
+    borderColor: 'rgba(90,135,195,0.35)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 5,
+  },
+  productAlarmBtn: {
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: 'rgba(90,135,195,0.40)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 5,
+  },
+  productBtnDisabled: {
+    opacity: 0.45,
+  },
+  productBuyBtnText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  productSellBtnText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  productAlarmBtnText: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.textMuted,
-    flex: 1,
-    textAlign: 'right',
-    minWidth: 0,
-  },
-  tabContent: {
-    marginTop: spacing.sm,
-  },
-  cityChipRow: {
-    paddingBottom: spacing.sm,
-    paddingRight: spacing.sm,
-  },
-  productCard: {
-    marginBottom: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    color: colors.textSecondary,
   },
   opportunityCard: {
     marginBottom: 9,
@@ -1800,117 +2104,53 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   productIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    backgroundColor: colors.accentBlueSoft,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: 'rgba(35,136,255,0.10)',
     borderWidth: 1,
-    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   cardMain: {
     flex: 1,
     minWidth: 0,
   },
-  cardRight: {
-    alignItems: 'flex-end',
-    minWidth: 78,
-    gap: 1,
-  },
   productName: {
-    ...typography.cardTitle,
-    fontSize: 13,
+    flex: 1,
+    fontSize: 13.5,
     fontWeight: '800',
+    color: colors.textPrimary,
     minWidth: 0,
   },
-  productMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: 4,
-  },
-  trendLabel: {
-    ...typography.caption,
-    fontSize: 10,
-    fontWeight: '700',
-    flexShrink: 1,
-    textAlign: 'right',
-  },
   eventLabel: {
-    ...typography.caption,
-    fontSize: 10,
+    fontSize: 8.5,
     fontWeight: '700',
     color: colors.accentAmber,
-    marginTop: 2,
-  },
-  chartRow: {
-    width: '100%',
-    marginTop: 2,
-    marginBottom: 2,
+    marginTop: 1,
   },
   productPrice: {
-    ...typography.bodySmall,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '800',
     color: colors.accentAmber,
+    marginTop: 2,
   },
   productPriceUnit: {
-    ...typography.caption,
-    fontSize: 10,
+    fontSize: 9,
+    fontWeight: '600',
     color: colors.textMuted,
   },
   priceChangeText: {
-    ...typography.caption,
     fontSize: 10,
-    fontWeight: '800',
-    marginTop: 2,
+    fontWeight: '700',
+    marginTop: 1,
   },
   productHint: {
-    ...typography.caption,
-    fontSize: 10,
+    fontSize: 8.5,
+    lineHeight: 10.5,
     color: colors.textMuted,
-    marginTop: 2,
-  },
-  depotText: {
-    ...typography.caption,
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  depotMutedText: {
-    ...typography.caption,
-    fontSize: 10,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  productFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: 6,
-  },
-  productProgress: {
-    flex: 1,
-    minWidth: 0,
-  },
-  productActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  productAction: {
-    minHeight: 32,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-  },
-  productActionAlarm: {
-    minHeight: 32,
-    minWidth: 58,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
+    marginTop: 3,
   },
   opportunityRoute: {
     ...typography.bodySmall,

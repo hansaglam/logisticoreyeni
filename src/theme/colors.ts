@@ -1,38 +1,61 @@
 export const colors = {
-  background: '#050A12',
+  background: '#040A14',
   background2: '#07111F',
-  surface: '#0B1220',
-  surface2: '#0F172A',
-  card: '#111827',
-  cardSoft: '#162033',
-  border: 'rgba(148, 163, 184, 0.16)',
-  borderStrong: 'rgba(148, 163, 184, 0.28)',
+  surface: '#091423',
+  surface2: '#0C1830',
+  surface3: '#10203C',
+  card: '#091423',
+  cardSoft: '#0C1830',
+  border: '#18365E',
+  borderStrong: '#20497B',
 
-  textPrimary: '#F8FAFC',
-  textSecondary: '#CBD5E1',
-  textMuted: '#94A3B8',
-  textDisabled: '#94A3B8',
+  textPrimary: '#F3F7FF',
+  textSecondary: '#A9B6CC',
+  textMuted: '#74839B',
+  textDisabled: '#74839B',
 
-  accentBlue: '#3B82F6',
-  accentBlueSoft: 'rgba(59, 130, 246, 0.16)',
+  /** Primary brand blue */
+  primary: '#2388FF',
+  primaryLight: '#39A0FF',
+  primaryLighter: '#4AA8FF',
+  primaryDeep: '#186FD9',
+  primarySoft: '#102D55',
+  primaryGlow: 'rgba(35, 136, 255, 0.28)',
+  accentBlue: '#2388FF',
+  accentBlueSoft: 'rgba(35, 136, 255, 0.14)',
+  buttonGradientTop: '#369CFF',
+  buttonGradientBottom: '#2388FF',
 
-  accentAmber: '#F59E0B',
-  accentAmberSoft: 'rgba(245, 158, 11, 0.16)',
+  /** Amber / level / warning accent */
+  amber: '#FFAA00',
+  amberMid: '#F2A000',
+  amberDeep: '#C47A00',
+  amberSoft: '#352308',
+  amberGlow: 'rgba(255, 170, 0, 0.22)',
+  accentAmber: '#FFAA00',
+  accentAmberSoft: 'rgba(255, 170, 0, 0.14)',
 
-  success: '#22C55E',
-  successSoft: 'rgba(34, 197, 94, 0.16)',
+  success: '#12D66B',
+  successDeep: '#11C96B',
+  successSoft: 'rgba(18, 214, 107, 0.14)',
 
-  warning: '#F59E0B',
-  warningSoft: 'rgba(245, 158, 11, 0.16)',
+  warning: '#FFAA00',
+  warningSoft: 'rgba(255, 170, 0, 0.14)',
 
-  danger: '#EF4444',
-  dangerSoft: 'rgba(239, 68, 68, 0.16)',
+  danger: '#FF5A59',
+  dangerSoft: 'rgba(255, 90, 89, 0.14)',
+
+  purple: '#8C6BFF',
+  purpleDeep: '#7A5CF4',
+  purpleSoft: 'rgba(140, 107, 255, 0.14)',
 
   info: '#38BDF8',
-  infoSoft: 'rgba(56, 189, 248, 0.16)',
+  infoSoft: 'rgba(56, 189, 248, 0.14)',
 
-  tabBarBg: '#0B1220',
-  tabBarBorder: 'rgba(148, 163, 184, 0.16)',
+  divider: 'rgba(120, 160, 220, 0.16)',
+
+  tabBarBg: '#091423',
+  tabBarBorder: '#18365E',
 } as const;
 
 export type ColorToken = keyof typeof colors;

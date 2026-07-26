@@ -527,6 +527,7 @@ export default function DebugSimulationScreen() {
   const debugSetCash = useGameStore((state) => state.debugSetCash);
   const debugAdvanceOneDay = useGameStore((state) => state.debugAdvanceOneDay);
   const debugAdvanceOfflineDays = useGameStore((state) => state.debugAdvanceOfflineDays);
+  const debugSimulateOfflineRealMinutes = useGameStore((state) => state.debugSimulateOfflineRealMinutes);
   const debugProcessDailyCosts = useGameStore((state) => state.debugProcessDailyCosts);
   const dailyOperatingCostDebug = useGameStore((state) => state.dailyOperatingCostDebug);
   const lastDailyOperatingCostTime = useGameStore((state) => state.lastDailyOperatingCostTime);
@@ -1161,6 +1162,20 @@ export default function DebugSimulationScreen() {
                 try {
                   debugAdvanceOfflineDays(10);
                   setSuccess('10 oyun günü offline simülasyonu çalıştırıldı');
+                } catch (error) {
+                  setError(error instanceof Error ? error.message : 'Offline simülasyon başarısız');
+                }
+              }}
+              variant="primary"
+            />
+            <DebugButton
+              label="Offline 30 dk simüle et"
+              onPress={() => {
+                try {
+                  const result = debugSimulateOfflineRealMinutes(30);
+                  setSuccess(
+                    `Gerçek süre: ${result.realMinutes} dk · Oyun zamanı: ${result.gameHours.toFixed(1)} saat · Hız: ${result.gameSpeed.toFixed(2)}x`,
+                  );
                 } catch (error) {
                   setError(error instanceof Error ? error.message : 'Offline simülasyon başarısız');
                 }

@@ -1,15 +1,21 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { GameIcon, StatusBadge } from '../ui';
-import { colors, formatMoney, spacing, typography } from '../../theme';
+import { GameIcon } from '../ui';
+import { colors, formatMoney, radius } from '../../theme';
+import {
+  DASHBOARD_RESOURCE_BAR_HEIGHT,
+  DASHBOARD_RESOURCE_BAR_RADIUS,
+  DASHBOARD_TOP_BAR_BG,
+  DASHBOARD_TOP_BAR_BORDER,
+  getDashboardMoneyColor,
+} from './dashboardTheme';
 
 interface DashboardResourceBarProps {
   money: number;
   diamonds: number;
   level: number;
   xpProgress: number;
-  activeDeliveries: number;
   isPaused: boolean;
   onTogglePause: () => void;
 }
@@ -19,59 +25,51 @@ export default function DashboardResourceBar({
   diamonds,
   level,
   xpProgress,
-  activeDeliveries,
   isPaused,
   onTogglePause,
 }: DashboardResourceBarProps) {
   const xpPercent = Math.round(Math.min(1, Math.max(0, xpProgress)) * 100);
+  const moneyColor = getDashboardMoneyColor(money);
 
   return (
     <View style={styles.bar}>
-      <View style={styles.resourceGroup}>
-        <View style={styles.resourceItem}>
-          <GameIcon name="cash" size={13} color={colors.success} />
-          <Text style={styles.cashText} numberOfLines={1}>
-            {formatMoney(money)}
-          </Text>
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.resourceItem}>
-          <Text style={styles.diamondIcon}>💎</Text>
-          <Text style={styles.diamondText}>{diamonds.toLocaleString('en-US')}</Text>
-        </View>
+      <View style={styles.resourceItem}>
+        <GameIcon name="cash" size={14} color={moneyColor} />
+        <Text style={[styles.cashText, { color: moneyColor }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+          {formatMoney(money)}
+        </Text>
       </View>
 
-      <View style={styles.centerGroup}>
-        <View style={styles.levelPill}>
-          <Text style={styles.levelText}>Lv.{level}</Text>
-        </View>
-        <View style={styles.xpTrack}>
-          <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
-        </View>
+      <View style={styles.divider} />
+
+      <View style={styles.resourceItem}>
+        <GameIcon name="diamond" size={13} color={colors.primaryLight} />
+        <Text style={styles.diamondText} numberOfLines={1}>
+          {diamonds.toLocaleString('en-US')}
+        </Text>
       </View>
 
-      <View style={styles.rightGroup}>
-        {activeDeliveries > 0 ? (
-          <StatusBadge
-            label={`${activeDeliveries} teslimat`}
-            variant="blue"
-            size="sm"
-          />
-        ) : null}
-        <TouchableOpacity
-          style={[styles.pauseBtn, isPaused ? styles.pauseBtnActive : null]}
-          onPress={onTogglePause}
-          accessibilityRole="button"
-          accessibilityLabel={isPaused ? 'Devam et' : 'Duraklat'}
-          activeOpacity={0.8}
-        >
-          <GameIcon
-            name={isPaused ? 'play' : 'pause'}
-            size={13}
-            color={isPaused ? colors.success : colors.textPrimary}
-          />
-        </TouchableOpacity>
+      <View style={styles.levelPill}>
+        <Text style={styles.levelText}>Lv.{level}</Text>
       </View>
+
+      <View style={styles.xpTrack}>
+        <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
+      </View>
+
+      <TouchableOpacity
+        style={[styles.pauseBtn, isPaused ? styles.pauseBtnActive : null]}
+        onPress={onTogglePause}
+        accessibilityRole="button"
+        accessibilityLabel={isPaused ? 'Devam et' : 'Duraklat'}
+        activeOpacity={0.8}
+      >
+        <GameIcon
+          name={isPaused ? 'play' : 'pause'}
+          size={14}
+          color={isPaused ? colors.success : colors.textPrimary}
+        />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -80,100 +78,93 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    minHeight: 40,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.sm + 2,
-    borderRadius: 12,
-    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    gap: 6,
+    height: DASHBOARD_RESOURCE_BAR_HEIGHT,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: DASHBOARD_RESOURCE_BAR_RADIUS,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.2)',
-  },
-  resourceGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    flexShrink: 1,
-    minWidth: 0,
+    borderColor: DASHBOARD_TOP_BAR_BORDER,
+    backgroundColor: DASHBOARD_TOP_BAR_BG,
+    ...Platform.select({
+      android: { elevation: 1 },
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.12,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
+      },
+    }),
   },
   resourceItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
+    flexShrink: 1,
+    minWidth: 0,
   },
   divider: {
     width: 1,
-    height: 14,
-    backgroundColor: colors.border,
+    height: 12,
+    backgroundColor: colors.divider,
+    flexShrink: 0,
   },
   cashText: {
-    ...typography.caption,
-    fontWeight: '800',
-    color: colors.success,
-    fontSize: 11,
-  },
-  diamondIcon: {
-    fontSize: 10,
+    fontWeight: '700',
+    fontSize: 14,
+    flexShrink: 1,
   },
   diamondText: {
-    ...typography.caption,
     fontWeight: '700',
-    color: colors.accentBlue,
-    fontSize: 11,
-  },
-  centerGroup: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    maxWidth: 130,
+    color: colors.primaryLight,
+    fontSize: 12,
+    flexShrink: 0,
   },
   levelPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    backgroundColor: colors.accentAmberSoft,
+    height: 29,
+    paddingHorizontal: 11,
+    borderRadius: 11,
+    backgroundColor: colors.amberSoft,
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.4)',
+    borderColor: colors.amber,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   levelText: {
-    ...typography.caption,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
-    color: colors.accentAmber,
+    color: colors.amber,
   },
   xpTrack: {
-    flex: 1,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: colors.cardSoft,
+    width: 82,
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface3,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexShrink: 0,
   },
   xpFill: {
     height: '100%',
-    borderRadius: 3,
-    backgroundColor: colors.accentAmber,
-  },
-  rightGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexShrink: 0,
+    borderRadius: radius.pill,
+    backgroundColor: colors.amber,
   },
   pauseBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
+    width: 35,
+    height: 35,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.cardSoft,
+    backgroundColor: colors.surface3,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.24)',
+    borderColor: colors.border,
+    flexShrink: 0,
+    marginLeft: 'auto',
   },
   pauseBtnActive: {
     backgroundColor: colors.successSoft,
-    borderColor: 'rgba(74, 222, 128, 0.4)',
+    borderColor: colors.success,
   },
 });

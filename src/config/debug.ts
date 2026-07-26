@@ -5,11 +5,10 @@
 
 export const debugConfig = {
   /**
-   * Harita koordinat kalibrasyonu — açıkken haritaya tıklayınca xPct/yPct loglanır.
-   * Enable this temporarily to calibrate map city positions.
-   * Tap on the map and copy xPct/yPct values into worldMapPositions.ts.
+   * Harita koordinat kalibrasyonu — açıkken haritaya tıklayınca x/y (0–1) loglanır.
+   * Tap on the map and copy x/y values into worldMapPositions.ts.
    */
-  mapCalibrationEnabled: false,
+  mapCalibrationEnabled: true,
 } as const;
 
 export type DebugConfig = typeof debugConfig;

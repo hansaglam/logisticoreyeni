@@ -23,6 +23,7 @@ const TAB_TARGET_IDS: Record<TabKey, TutorialTargetId> = {
   map: 'tab-map',
   contracts: 'tab-contracts',
   fleet: 'tab-fleet',
+  shop: 'tab-fleet',
   market: 'tab-market',
   more: 'tab-more',
 };

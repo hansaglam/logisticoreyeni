@@ -106,6 +106,7 @@ export interface BuildContractPreviewInput {
   product?: Product;
   globalEconomy?: GlobalEconomy;
   trucks?: Truck[];
+  trailers?: import('../types/game').Trailer[];
   drivers?: Driver[];
   companyLevel?: number;
   currentTime?: number;
@@ -274,6 +275,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     currentTime,
     input.playerReputation ?? 0,
     input.homeCityId,
+    input.trailers,
   );
   const { truck, driver } = selectPreviewTruckAndDriver(
     contract,

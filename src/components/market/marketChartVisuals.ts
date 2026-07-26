@@ -4,7 +4,7 @@ export type MarketChartTrend = 'up' | 'down' | 'stable';
 export type MarketChartVariant = 'mini' | 'detail';
 
 export const MARKET_DETAIL_CHART_HEIGHT = 152;
-export const MARKET_MINI_CHART_HEIGHT = 40;
+export const MARKET_MINI_CHART_HEIGHT = 42;
 export const MARKET_DETAIL_VIEW_WIDTH = 320;
 
 const Y_PAD_RATIO = 0.14;
@@ -268,5 +268,5 @@ export function getMarketChartGradientStops(variant: MarketChartVariant): {
   if (variant === 'detail') {
     return { top: 0.32, mid: 0.1, bottom: 0.01 };
   }
-  return { top: 0.3, mid: 0.1, bottom: 0.015 };
+  return { top: 0.18, mid: 0.06, bottom: 0.008 };
 }

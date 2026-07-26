@@ -1,11 +1,11 @@
 import { Platform } from 'react-native';
 
-/** Oyun tarzı tab bar gövde yüksekliği (safe area hariç) */
-export const GAME_TAB_BAR_HEIGHT = 80;
+/** Oyun tarzı tab bar gövde yüksekliği (safe area hariç, min alt padding dahil) */
+export const GAME_TAB_BAR_HEIGHT = 72;
 /** @deprecated use GAME_TAB_BAR_HEIGHT */
 export const BASE_TAB_HEIGHT = GAME_TAB_BAR_HEIGHT;
 export const TAB_BAR_TOP_PADDING = 8;
-export const GAME_CENTER_BUTTON_SIZE = 64;
+export const GAME_CENTER_BUTTON_SIZE = 58;
 export const GAME_CENTER_BUTTON_LIFT = 12;
 /** Scroll içeriği ile tab bar arası ekstra boşluk */
 export const SCROLL_BOTTOM_EXTRA = 24;

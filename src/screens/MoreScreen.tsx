@@ -413,7 +413,7 @@ export default function MoreScreen() {
               showAlert('Rehber sıfırlandı', 'Başlangıç rehberi yeniden başlatıldı.');
             }}
           >
-            <Text style={styles.tutorialResetAll}>Başlangıç rehberini sıfırla</Text>
+            <Text style={styles.tutorialResetAll}>Onboarding&apos;i Sıfırla</Text>
           </TouchableOpacity>
         </AppCard>
       ) : null}

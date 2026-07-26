@@ -7,6 +7,7 @@ import MiniTrendChart, { type MiniTrendDirection } from './MiniTrendChart';
 
 interface ProductMiniTrendChartProps {
   trend: ProductPriceTrend;
+  height?: number;
 }
 
 function mapDirection(direction: ProductPriceTrend['direction']): MiniTrendDirection {
@@ -15,7 +16,7 @@ function mapDirection(direction: ProductPriceTrend['direction']): MiniTrendDirec
   return 'stable';
 }
 
-function ProductMiniTrendChart({ trend }: ProductMiniTrendChartProps) {
+function ProductMiniTrendChart({ trend, height = MARKET_MINI_CHART_HEIGHT }: ProductMiniTrendChartProps) {
   const chartData = useMemo(
     () => (trend.miniPrices.length >= 2 ? trend.miniPrices : trend.prices.slice(-12)),
     [trend.miniPrices, trend.prices],
@@ -27,7 +28,7 @@ function ProductMiniTrendChart({ trend }: ProductMiniTrendChartProps) {
         data={chartData}
         trend={mapDirection(trend.direction)}
         variant="mini"
-        height={MARKET_MINI_CHART_HEIGHT}
+        height={height}
       />
     </View>
   );
@@ -38,7 +39,7 @@ export default React.memo(ProductMiniTrendChart);
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    marginTop: 6,
-    marginBottom: 4,
+    height: MARKET_MINI_CHART_HEIGHT,
+    justifyContent: 'center',
   },
 });

@@ -489,6 +489,7 @@ const ContractCard = React.memo(function ContractCard({
     riskLabel: preview.riskLabel ?? '',
     contractType: preview.contractType,
     contractTypeLabel: preview.contractTypeLabel,
+    cargoWeightTons: cargoWeight,
   });
   const payment = preview.estimatedGrossPayment ?? contract.payment ?? 0;
   const estimatedProfit = preview.estimatedOperationalProfit ?? 0;
@@ -790,7 +791,7 @@ export default function ContractsScreen() {
   const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Contracts');
-  const onboardingHint = useActiveOnboardingHint(['first_contract']);
+  const onboardingHint = useActiveOnboardingHint(['choose_first_contract', 'assign_team']);
 
   const scrollRef = useRef<FlatListType<ContractsListItem>>(null);
 

@@ -5,7 +5,7 @@
  * TODO V2: Unlock Europe/global network after company expansion
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -15,15 +15,24 @@ import {
 } from 'react-native';
 
 import { debugConfig } from '../config/debug';
-import WorldMapCanvas, { type NetworkFilterKey } from '../components/map/WorldMapCanvas';
-import DeliveryIncidentCard from '../components/delivery/DeliveryIncidentCard';
-import { AppCard, GameIcon, ProgressBar, StatusBadge, type StatusBadgeVariant } from '../components/ui';
+import WorldMapCanvas, {
+  type NetworkFilterKey,
+  type WorldMapCanvasHandle,
+} from '../components/map/WorldMapCanvas';
+import MapFilterTabs from '../components/map/MapFilterTabs';
+import MapHeader from '../components/map/MapHeader';
+import MapStatsStrip from '../components/map/MapStatsStrip';
+import MapTruckTrackingSection from '../components/map/MapTruckTrackingSection';
+import SelectedCityPanel from '../components/map/SelectedCityPanel';
+import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
+import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
+import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
+import { GameIcon } from '../components/ui';
 import { normalizeCityId } from '../data/networkPositions';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { getContractAvailability } from '../simulation/delivery';
-import { isDeliveryLateRisk } from '../utils/deadlineUx';
 import { findMarketOpportunities } from '../simulation/contracts';
 import {
   getRecommendedContractById,
@@ -38,11 +47,9 @@ import type {
   DeliveryStatus,
   Driver,
   Player,
+  ProductId,
   Truck,
-  TruckTransfer,
 } from '../types/game';
-
-const DEFAULT_TRUCK_CITY_ID = 'izmir';
 
 function isTruckIdle(status: string): boolean {
   return status === 'idle' || status === 'available' || status === 'BOŞTA';
@@ -52,9 +59,7 @@ function resolveMapTruckCityId(
   truck: Pick<Truck, 'currentCityId' | 'homeCityId'>,
   playerHomeCityId?: string,
 ): string {
-  return normalizeCityId(
-    truck.currentCityId ?? truck.homeCityId ?? playerHomeCityId ?? DEFAULT_TRUCK_CITY_ID,
-  );
+  return resolveTruckPersistentCityId(truck, playerHomeCityId);
 }
 
 function buildIdleTruckCountByCity(
@@ -72,10 +77,9 @@ function buildIdleTruckCountByCity(
 
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
-const MAX_TRUCK_TRACK_PREVIEW = 3;
 
 const COLORS = {
-  background: '#050A12',
+  background: MAP_BG,
   card: '#0F172A',
   card2: '#111827',
   border: '#1E293B',
@@ -87,57 +91,7 @@ const COLORS = {
   text: '#F9FAFB',
 };
 
-const MAP_FILTERS: { key: NetworkFilterKey; label: string }[] = [
-  { key: 'all', label: 'Tümü' },
-  { key: 'trucks', label: 'Kamyonlar' },
-  { key: 'depots', label: 'Depolar' },
-  { key: 'routes', label: 'Rotalar' },
-  { key: 'opportunities', label: 'Fırsatlar' },
-];
 
-function safeProgress(value: number | undefined): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value ?? 0));
-}
-
-function formatRemainingShort(currentTime: number, estimatedArrivalTime: number | undefined): string {
-  if (!Number.isFinite(estimatedArrivalTime)) return '—';
-  const remaining = Math.max(0, (estimatedArrivalTime ?? 0) - currentTime);
-  const hrs = Math.floor(remaining);
-  const mins = Math.round((remaining - hrs) * 60);
-  if (hrs > 0 && mins <= 0) return `${hrs}s kaldı`;
-  if (hrs > 0) return `${hrs}s ${mins}dk kaldı`;
-  if (mins > 0) return `${mins}dk kaldı`;
-  return '—';
-}
-
-function getTruckTrackBadge(status: Truck['status']): { label: string; variant: StatusBadgeVariant } {
-  switch (status) {
-    case 'on_route':
-      return { label: 'TESLİMATTA', variant: 'blue' };
-    case 'transferring':
-      return { label: 'YÖNLENDİRİLİYOR', variant: 'info' };
-    case 'maintenance':
-      return { label: 'BAKIMDA', variant: 'danger' };
-    default:
-      return { label: 'BOŞTA', variant: 'success' };
-  }
-}
-
-function truckTrackSortPriority(status: Truck['status']): number {
-  switch (status) {
-    case 'on_route':
-      return 0;
-    case 'transferring':
-      return 1;
-    case 'idle':
-      return 2;
-    case 'maintenance':
-      return 3;
-    default:
-      return 4;
-  }
-}
 
 function buildMapRecommendationSubtitle(params: {
   availableContracts: Contract[];
@@ -198,180 +152,6 @@ function buildMapRecommendationSubtitle(params: {
   return `Boştaki kamyon şehirlerinde ${total} uygun iş var.`;
 }
 
-function findDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery | undefined {
-  return deliveries.find(
-    (delivery) =>
-      delivery.truckId === truckId && ACTIVE_DELIVERY_STATUSES.includes(delivery.status),
-  );
-}
-
-function findTransferForTruck(truckId: string, transfers: TruckTransfer[]): TruckTransfer | undefined {
-  return transfers.find((transfer) => transfer.truckId === truckId && transfer.status === 'active');
-}
-
-interface TruckTrackCardProps {
-  truck: Truck;
-  delivery?: Delivery;
-  transfer?: TruckTransfer;
-  homeCityId?: string;
-  currentTime: number;
-}
-
-function TruckTrackCard({ truck, delivery, transfer, homeCityId, currentTime }: TruckTrackCardProps) {
-  const badge = getTruckTrackBadge(truck.status);
-  const cityId = resolveMapTruckCityId(truck, homeCityId);
-  const cityName = getCityName(cityId);
-
-  let routeLine = `Konum: ${cityName}`;
-  let metaLine: string | undefined = 'Yeni iş için hazır';
-  let progress: number | undefined;
-
-  if (truck.status === 'on_route' && delivery) {
-    routeLine = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
-    progress = safeProgress(delivery.progress);
-    const isLateRisk = isDeliveryLateRisk(delivery.estimatedArrivalTime, delivery.deadlineTime);
-    const etaText = formatRemainingShort(currentTime, delivery.estimatedArrivalTime);
-    const deadlineText = formatRemainingShort(currentTime, delivery.deadlineTime);
-    metaLine = isLateRisk
-      ? `Deadline riski · Varış ${etaText}`
-      : `Varış ${etaText} · Teslim ${deadlineText}`;
-  } else if (truck.status === 'transferring' && transfer) {
-    routeLine = `${getCityName(transfer.fromCityId)} → ${getCityName(transfer.toCityId)}`;
-    progress = safeProgress(transfer.progress);
-    metaLine = `Boş transfer · ${formatRemainingShort(currentTime, transfer.estimatedArrivalAt)}`;
-  } else if (truck.status === 'maintenance') {
-    routeLine = `Konum: ${cityName}`;
-    metaLine = 'Tamir tamamlanana kadar işe çıkamaz';
-  }
-
-  return (
-    <AppCard style={styles.trackCard} padded>
-      <View style={styles.trackCardRow}>
-        <View style={styles.trackIconBox}>
-          <GameIcon name="truck" size={16} color={COLORS.cyan} />
-        </View>
-        <View style={styles.trackCardMain}>
-          <View style={styles.trackCardHeader}>
-            <Text style={styles.trackCardTitle} numberOfLines={1}>
-              {truck.name}
-            </Text>
-            <StatusBadge label={badge.label} variant={badge.variant} size="sm" />
-          </View>
-          <Text style={styles.trackRouteLine} numberOfLines={1}>
-            {routeLine}
-          </Text>
-          {metaLine ? (
-            <Text style={styles.trackMetaLine} numberOfLines={2}>
-              {metaLine}
-            </Text>
-          ) : null}
-          {progress != null ? (
-            <View style={styles.trackProgress}>
-              <ProgressBar progress={progress} color={COLORS.cyan} height={3} />
-            </View>
-          ) : null}
-          {delivery && (delivery.incident || delivery.incidentResolved) ? (
-            <DeliveryIncidentCard delivery={delivery} compact />
-          ) : null}
-        </View>
-      </View>
-    </AppCard>
-  );
-}
-
-interface TruckTrackingSectionProps {
-  trucks: Truck[];
-  deliveries: Delivery[];
-  transfers: TruckTransfer[];
-  idleTruckCountByCity: Record<string, number>;
-  homeCityId?: string;
-  currentTime: number;
-  onOpenFleet: () => void;
-}
-
-function TruckTrackingSection({
-  trucks,
-  deliveries,
-  transfers,
-  idleTruckCountByCity,
-  homeCityId,
-  currentTime,
-  onOpenFleet,
-}: TruckTrackingSectionProps) {
-  const sortedTrucks = useMemo(
-    () =>
-      [...trucks].sort(
-        (a, b) => truckTrackSortPriority(a.status) - truckTrackSortPriority(b.status),
-      ),
-    [trucks],
-  );
-
-  const previewTrucks = sortedTrucks.slice(0, MAX_TRUCK_TRACK_PREVIEW);
-  const extraTruckCount = Math.max(0, sortedTrucks.length - previewTrucks.length);
-
-  const idleCityChips = useMemo(
-    () =>
-      Object.entries(idleTruckCountByCity)
-        .filter(([, count]) => count > 0)
-        .sort((a, b) => b[1] - a[1])
-        .map(([cityId, count]) => ({
-          cityId,
-          label: `${getCityName(cityId)} ${count}`,
-        })),
-    [idleTruckCountByCity],
-  );
-
-  if (trucks.length === 0) {
-    return null;
-  }
-
-  return (
-    <View style={styles.trackingSection}>
-      <View style={styles.trackingHeader}>
-        <Text style={styles.trackingTitle}>Kamyon Takip</Text>
-        <Text style={styles.trackingSubtitle}>Boşta, transferde ve teslimattaki araçlarını izle</Text>
-      </View>
-
-      {idleCityChips.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.cityChipScroll}
-          contentContainerStyle={styles.cityChipRow}
-        >
-          {idleCityChips.map((chip) => (
-            <View key={chip.cityId} style={styles.cityChip}>
-              <Text style={styles.cityChipText}>{chip.label}</Text>
-            </View>
-          ))}
-        </ScrollView>
-      ) : (
-        <Text style={styles.noIdleChipText}>Boşta kamyon yok</Text>
-      )}
-
-      {previewTrucks.map((truck) => (
-        <TruckTrackCard
-          key={truck.id}
-          truck={truck}
-          delivery={findDeliveryForTruck(truck.id, deliveries)}
-          transfer={findTransferForTruck(truck.id, transfers)}
-          homeCityId={homeCityId}
-          currentTime={currentTime}
-        />
-      ))}
-
-      {extraTruckCount > 0 ? (
-        <Text style={styles.moreTrucksHint}>+{extraTruckCount} araç daha</Text>
-      ) : null}
-
-      <TouchableOpacity style={styles.fleetLinkButton} onPress={onOpenFleet} activeOpacity={0.85}>
-        <Text style={styles.fleetLinkText}>Tüm Filoyu Gör</Text>
-        <Text style={styles.fleetLinkChevron}>›</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
 interface CompactRecommendedActionRowProps {
   subtitle: string;
   onPress: () => void;
@@ -416,6 +196,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
+  const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
   const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
 
@@ -427,6 +208,9 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
   const [selectedMapFilter, setSelectedMapFilter] = useState<NetworkFilterKey>('all');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [mapGestureActive, setMapGestureActive] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const mapRef = useRef<WorldMapCanvasHandle>(null);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -548,6 +332,29 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
 
   const trucks = player?.trucks ?? [];
+
+  const selectedCityPanelData = useMemo(() => {
+    if (!selectedCityId) return null;
+    const cityNorm = normalizeCityId(selectedCityId);
+    const cityName = getCityName(selectedCityId);
+    const truckCount = trucks.filter(
+      (truck) => normalizeCityId(resolveMapTruckCityId(truck, player?.homeCityId)) === cityNorm,
+    ).length;
+    const depotCount = depotCityIds.filter((id) => normalizeCityId(id) === cityNorm).length;
+    const jobCount = availableContracts.filter(
+      (contract) => normalizeCityId(contract.originCityId) === cityNorm,
+    ).length;
+    const city = cities.find((item) => normalizeCityId(item.id) === cityNorm);
+    const firstProductId = city ? Object.keys(city.products)[0] : undefined;
+    return { cityName, truckCount, depotCount, jobCount, firstProductId };
+  }, [
+    availableContracts,
+    cities,
+    depotCityIds,
+    player?.homeCityId,
+    selectedCityId,
+    trucks,
+  ]);
   const drivers = player?.drivers ?? [];
 
   const hasStartableContracts = useMemo(
@@ -633,6 +440,26 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     setSelectedCityId(cityId);
   };
 
+  const handleMapBackgroundPress = () => {
+    setSelectedCityId(null);
+  };
+
+  const handleFocusSelectedCity = () => {
+    mapRef.current?.resetToOperational();
+  };
+
+  const handleViewCityJobs = () => {
+    onOpenContracts?.();
+  };
+
+  const handleOpenCityDepot = () => {
+    if (!selectedCityId || !selectedCityPanelData?.firstProductId) return;
+    openMarketFromAlert({
+      cityId: selectedCityId,
+      productId: selectedCityPanelData.firstProductId as ProductId,
+    });
+  };
+
   const handleContractPress = (contractId: string) => {
     setSelectedContractId(contractId);
     setSelectedMapFilter('opportunities');
@@ -680,26 +507,15 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   return (
     <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
       <ScrollView
+        ref={scrollRef}
+        scrollEnabled={!mapGestureActive}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: scrollBottomPadding },
         ]}
       >
-        <View style={styles.header}>
-          <View style={styles.headerSideSlot} />
-
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>Türkiye Lojistik Ağı</Text>
-            <Text style={styles.headerSubtitle}>Şehirler, rotalar ve aktif teslimatlar</Text>
-          </View>
-
-          <View style={styles.headerSideSlot}>
-            <TouchableOpacity style={styles.headerIconButton} onPress={handleRefreshMarket} activeOpacity={0.8}>
-              <Text style={styles.headerIconText}>⟳</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <MapHeader onRefresh={handleRefreshMarket} />
 
         {onboardingHint ? (
           <OnboardingHintCard
@@ -712,40 +528,18 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           />
         ) : null}
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.filterScroll}
-          contentContainerStyle={styles.filterRow}
-        >
-          {MAP_FILTERS.map((filter) => {
-            const isActive = filter.key === selectedMapFilter;
-            return (
-              <TouchableOpacity
-                key={filter.key}
-                style={[styles.filterChip, isActive && styles.filterChipActive]}
-                onPress={() => setSelectedMapFilter(filter.key)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
-                  {filter.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        <MapFilterTabs
+          selectedFilter={selectedMapFilter}
+          onChange={setSelectedMapFilter}
+        />
 
-        <View style={styles.statsPill}>
-          <Text style={styles.statsPillText}>Şehir: {mapCities.length}</Text>
-          <Text style={styles.statsPillDivider}>·</Text>
-          <Text style={styles.statsPillText}>Rota: {routeCount}</Text>
-          <Text style={styles.statsPillDivider}>·</Text>
-          <Text style={styles.statsPillText}>İş: {availableContracts.length}</Text>
-          <Text style={styles.statsPillDivider}>·</Text>
-          <Text style={styles.statsPillText}>Aktif: {runningDeliveries.length}</Text>
-          <Text style={styles.statsPillDivider}>·</Text>
-          <Text style={styles.statsPillText}>Boşta: {idleTrucks.length}</Text>
-        </View>
+        <MapStatsStrip
+          cityCount={mapCities.length}
+          routeCount={routeCount}
+          jobCount={availableContracts.length}
+          activeCount={runningDeliveries.length}
+          idleCount={idleTrucks.length}
+        />
 
         {statusMessage ? (
           <View style={styles.statusToast}>
@@ -753,24 +547,49 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           </View>
         ) : null}
 
-        <WorldMapCanvas
-          calibrationMode={debugConfig.mapCalibrationEnabled}
-          cities={cities}
-          routes={routes}
-          contracts={contracts}
-          activeDeliveries={activeDeliveries}
-          activeTransfers={activeTransfers}
-          depotCityIds={depotCityIds}
-          idleTruckCountByCity={idleTruckCountByCity}
-          selectedFilter={selectedMapFilter}
-          featuredContract={featuredContract}
-          selectedContract={userSelectedContract}
-          selectedDeliveryId={selectedDeliveryId}
-          onCityPress={handleCityPress}
-          onRoutePress={() => setStatusMessage('Rota seçildi')}
-          onContractPress={handleContractPress}
-          onDeliveryPress={handleDeliveryPress}
-        />
+        <TurkeyNetworkCard>
+          <WorldMapCanvas
+            ref={mapRef}
+            calibrationMode={debugConfig.mapCalibrationEnabled}
+            cities={cities}
+            contracts={contracts}
+            activeDeliveries={activeDeliveries}
+            activeTransfers={activeTransfers}
+            trucks={trucks}
+            homeCityId={player?.homeCityId}
+            depotCityIds={depotCityIds}
+            idleTruckCountByCity={idleTruckCountByCity}
+            selectedFilter={selectedMapFilter}
+            selectedCityId={selectedCityId}
+            featuredContract={featuredContract}
+            selectedContract={userSelectedContract}
+            selectedDeliveryId={selectedDeliveryId}
+            onCityPress={handleCityPress}
+            onBackgroundPress={handleMapBackgroundPress}
+            onContractPress={handleContractPress}
+            onDeliveryPress={handleDeliveryPress}
+            onMapGestureActiveChange={setMapGestureActive}
+          />
+        </TurkeyNetworkCard>
+
+        {selectedCityPanelData ? (
+          <SelectedCityPanel
+            cityName={selectedCityPanelData.cityName}
+            truckCount={selectedCityPanelData.truckCount}
+            depotCount={selectedCityPanelData.depotCount}
+            jobCount={selectedCityPanelData.jobCount}
+            onViewJobs={
+              selectedCityPanelData.jobCount > 0 ? handleViewCityJobs : undefined
+            }
+            onOpenDepot={
+              selectedCityPanelData.depotCount > 0 && selectedCityPanelData.firstProductId
+                ? handleOpenCityDepot
+                : undefined
+            }
+            onFocus={handleFocusSelectedCity}
+            onClose={handleMapBackgroundPress}
+          />
+        ) : null}
 
         {showRecommendedAction ? (
           <CompactRecommendedActionRow
@@ -779,7 +598,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           />
         ) : null}
 
-        <TruckTrackingSection
+        <MapTruckTrackingSection
           trucks={trucks}
           deliveries={activeDeliveries}
           transfers={activeTransfers}
@@ -787,6 +606,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           homeCityId={player.homeCityId}
           currentTime={currentTime}
           onOpenFleet={handleOpenFleet}
+          onTruckPress={() => handleOpenFleet()}
         />
       </ScrollView>
     </View>
@@ -799,7 +619,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
   scrollContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: MAP_HORIZONTAL_PADDING,
   },
   loadingContainer: {
     flex: 1,
@@ -821,113 +641,6 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     fontSize: 13,
     textAlign: 'center',
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  headerSideSlot: {
-    width: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerCenter: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    minWidth: 0,
-  },
-  headerTitle: {
-    color: COLORS.text,
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-    textAlign: 'center',
-  },
-  headerSubtitle: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  headerIconButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerIconText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-
-  filterScroll: {
-    marginHorizontal: -16,
-    marginBottom: 10,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    gap: 10,
-    paddingRight: 24,
-  },
-  filterChip: {
-    minHeight: 34,
-    paddingHorizontal: 14,
-    marginRight: 0,
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterChipActive: {
-    backgroundColor: '#0F2A44',
-    borderColor: COLORS.cyan,
-  },
-  filterChipText: {
-    color: COLORS.muted,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  filterChipTextActive: {
-    color: '#FFFFFF',
-  },
-
-  statsPill: {
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    minHeight: 28,
-    backgroundColor: COLORS.card2,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    marginBottom: 10,
-  },
-  statsPillText: {
-    color: COLORS.muted,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  statsPillDivider: {
-    color: COLORS.border,
-    fontSize: 11,
-    marginHorizontal: 6,
   },
 
   statusToast: {
@@ -1020,133 +733,5 @@ const styles = StyleSheet.create({
     color: COLORS.cyan,
     fontSize: 11,
     fontWeight: '800',
-  },
-
-  trackingSection: {
-    marginTop: 14,
-  },
-  trackingHeader: {
-    marginBottom: 8,
-  },
-  trackingTitle: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  trackingSubtitle: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 2,
-    lineHeight: 15,
-  },
-  cityChipScroll: {
-    marginHorizontal: -16,
-    marginBottom: 10,
-  },
-  cityChipRow: {
-    paddingHorizontal: 16,
-    gap: 8,
-    flexDirection: 'row',
-  },
-  cityChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: COLORS.card2,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  cityChipText: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  noIdleChipText: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  trackCard: {
-    marginBottom: 8,
-  },
-  trackCardRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  trackIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: COLORS.card2,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  trackCardMain: {
-    flex: 1,
-    minWidth: 0,
-  },
-  trackCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 2,
-  },
-  trackCardTitle: {
-    color: COLORS.text,
-    fontSize: 13,
-    fontWeight: '800',
-    flex: 1,
-  },
-  trackRouteLine: {
-    color: COLORS.text,
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  trackMetaLine: {
-    color: COLORS.muted,
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: 1,
-  },
-  trackProgress: {
-    marginTop: 6,
-  },
-  moreTrucksHint: {
-    color: COLORS.muted,
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  fleetLinkButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
-    minHeight: 42,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.card,
-    marginTop: 2,
-  },
-  fleetLinkText: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  fleetLinkChevron: {
-    color: COLORS.muted,
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: -1,
   },
 });

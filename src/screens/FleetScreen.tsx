@@ -5,9 +5,22 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
+import OwnedTruckCard from '../components/fleet/OwnedTruckCard';
+import DriverCard from '../components/fleet/DriverCard';
+import OwnedTrailerCard from '../components/fleet/OwnedTrailerCard';
+/** Kamyon kartı aksiyon etiketleri: Bakım Yap · Geliştirmeleri Yönet */
+import {
+  FLEET_HEADER_HEIGHT,
+  FLEET_METRIC_HEIGHT,
+  FLEET_SCROLL_BOTTOM_EXTRA,
+  FLEET_SECTION_GAP,
+  FLEET_SEGMENT_BG,
+  FLEET_SEGMENT_BORDER,
+  getFleetDriverColumnWidths,
+} from '../components/fleet/fleetTheme';
 
 import {
   ActionButton,
@@ -16,89 +29,46 @@ import {
   EmptyState,
   GameIcon,
   ProgressBar,
-  ScreenHeader,
-  SectionTitle,
-  SegmentedControl,
-  SmallStatPill,
   StatusBadge,
 } from '../components/ui';
-import type { StatusBadgeVariant } from '../components/ui';
-import {
-  countOwnedTrucksOfCatalog,
-  resolveTruckMarketRequiredLevel,
-  TRUCK_MARKET,
-  type TruckMarketItem,
-} from '../data/trucks';
-import {
-  getDriverPoolForLevel,
-  getDriverTierLabel,
-  isDriverPoolItemHired,
-  resolveDriverRequiredLevel,
-  type DriverMarketItem,
-} from '../data/drivers';
-import { timeBalance } from '../config/balance';
+import type { GameIconName } from '../theme/icons';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getCityName } from '../utils/entityLookup';
+import { resolveTruckCityId } from '../simulation/delivery';
+import { getTruckEffectiveCapacityTons } from '../simulation/capacity';
 import {
-  getTruckWeeklyLeaseCost,
-  isActiveLeasedTruck,
-} from '../simulation/dailyOperatingCosts';
-import { calculateTruckRepairCost, resolveTruckCityId } from '../simulation/delivery';
+  getTrailerStatusLabel,
+  getTrailerTypeLabel,
+} from '../simulation/trailerOps';
 import {
   getDriverOnTimeRate,
   getDriverXpProgress,
 } from '../simulation/driverProgress';
-import {
-  getTruckUpgradeSummary,
-} from '../simulation/truckUpgrades';
 import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
 import {
   calculateDriverSeveranceCost,
-  calculateTruckResaleValue,
   canFireDriver,
   canSellTruck,
-  type DriverFireCheck,
+  resolveDriverDailySalary,
   type TruckSellCheck,
 } from '../simulation/fleetManagement';
 import TruckTransferModal from '../components/TruckTransferModal';
 import UpgradesScreen from './UpgradesScreen';
-import AdRewardButton from '../components/monetization/AdRewardButton';
-import {
-  calculateDiscountedRepairCost,
-  getActiveMaintenanceDiscountToken,
-} from '../simulation/adRewardGrants';
 import { useGameStore } from '../store/gameStore';
-import { colors, formatDisplayPercent, formatCityLocative, formatIdleTruckReadyHint, formatMoney, formatRatioPercent, spacing, typography } from '../theme';
-import type { Delivery, DeliveryStatus, Driver, Truck, TruckTransfer } from '../types/game';
-import type { MonetizationState } from '../types/monetization';
+import { colors, formatDisplayPercent, formatMoney, spacing, typography } from '../theme';
+import type { Delivery, DeliveryStatus, Driver, Trailer, Truck, TruckTransfer } from '../types/game';
 
-const CONDITION_GOOD_THRESHOLD = 70;
-const CONDITION_FAIR_THRESHOLD = 40;
-const MAINTENANCE_REQUIRED_THRESHOLD = 30;
-const MAINTENANCE_RECOMMENDED_THRESHOLD = 70;
-const REPAIR_HIDE_THRESHOLD = 95;
-const RISKY_ATTENTION_THRESHOLD = 40;
-const FUEL_EFFICIENT_THRESHOLD = 65;
-const EXPERIENCED_THRESHOLD = 65;
-const FAST_SPEED_THRESHOLD = 40;
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
 
-type FleetTab = 'trucks' | 'drivers' | 'shop';
+type FleetTab = 'trucks' | 'drivers' | 'trailers';
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
 
 const FLEET_TABS = [
   { key: 'trucks' as const, label: 'Kamyonlar', icon: 'truck' as const },
   { key: 'drivers' as const, label: 'Şoförler', icon: 'driver' as const },
-  { key: 'shop' as const, label: 'Mağaza', icon: 'market' as const },
+  { key: 'trailers' as const, label: 'Dorseler', icon: 'route' as const },
 ];
-
-function formatRemainingHours(currentTime: number, estimatedArrivalTime: number): string {
-  const remaining = Math.max(0, estimatedArrivalTime - currentTime);
-  const hrs = Math.floor(remaining);
-  const mins = Math.round((remaining - hrs) * 60);
-  if (hrs > 0) return `${hrs}s ${mins}dk`;
-  return `${mins}dk`;
-}
 
 function findActiveDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery | undefined {
   return deliveries.find(
@@ -107,16 +77,9 @@ function findActiveDeliveryForTruck(truckId: string, deliveries: Delivery[]): De
   );
 }
 
-function findActiveDeliveryForDriver(driverId: string, deliveries: Delivery[]): Delivery | undefined {
-  return deliveries.find(
-    (delivery) =>
-      delivery.driverId === driverId && ACTIVE_DELIVERY_STATUSES.includes(delivery.status),
-  );
-}
-
 function getConditionColor(condition: number): string {
-  if (condition >= CONDITION_GOOD_THRESHOLD) return colors.success;
-  if (condition >= CONDITION_FAIR_THRESHOLD) return colors.accentAmber;
+  if (condition >= 70) return colors.success;
+  if (condition >= 35) return colors.accentAmber;
   return colors.danger;
 }
 
@@ -133,88 +96,27 @@ function findActiveTransferForTruckLocal(
   return findActiveTransferForTruck(truckId, transfers);
 }
 
-function getTruckStatusBadge(status: Truck['status']): { label: string; variant: StatusBadgeVariant } {
-  switch (status) {
-    case 'on_route':
-      return { label: 'YOLDA', variant: 'blue' };
-    case 'transferring':
-      return { label: 'YÖNLENDİRİLİYOR', variant: 'blue' };
-    case 'maintenance':
-      return { label: 'BAKIM', variant: 'danger' };
-    default:
-      return { label: 'BOŞTA', variant: 'success' };
-  }
+interface FleetMetricTileProps {
+  label: string;
+  value: string;
+  icon: GameIconName;
+  accentColor: string;
 }
 
-function getDriverStatusBadge(status: Driver['status']): { label: string; variant: StatusBadgeVariant } {
-  switch (status) {
-    case 'driving':
-      return { label: 'YOLDA', variant: 'blue' };
-    case 'resting':
-      return { label: 'DİNLENİYOR', variant: 'amber' };
-    default:
-      return { label: 'BOŞTA', variant: 'success' };
-  }
-}
-
-function getMaintenanceBadge(condition: number): { label: string; variant: StatusBadgeVariant } | null {
-  if (condition < MAINTENANCE_REQUIRED_THRESHOLD) {
-    return { label: 'Bakım gerekli', variant: 'danger' };
-  }
-  if (condition < MAINTENANCE_RECOMMENDED_THRESHOLD) {
-    return { label: 'Bakım önerilir', variant: 'warning' };
-  }
-  return null;
-}
-
-function getDriverTrait(driver: Driver): { label: string; variant: StatusBadgeVariant } {
-  const fuelSaving = driver.fuelSaving ?? 0;
-  const experience = driver.experience ?? 0;
-  const attention = driver.attention ?? 50;
-  const speed = driver.speed ?? 0;
-
-  if (fuelSaving >= FUEL_EFFICIENT_THRESHOLD) {
-    return { label: 'Yakıt tasarruflu', variant: 'success' };
-  }
-  if (experience >= EXPERIENCED_THRESHOLD) {
-    return { label: 'Tecrübeli', variant: 'info' };
-  }
-  if (attention < RISKY_ATTENTION_THRESHOLD || speed > FAST_SPEED_THRESHOLD) {
-    return { label: 'Riskli', variant: 'danger' };
-  }
-  return { label: 'Dengeli şoför', variant: 'muted' };
-}
-
-function getTruckShopTags(template: TruckMarketItem): { label: string; variant: StatusBadgeVariant }[] {
-  const tags: { label: string; variant: StatusBadgeVariant }[] = [];
-  if (template.capacity >= 28) tags.push({ label: 'Yüksek kapasite', variant: 'success' });
-  if (template.fuelConsumptionPerKm <= 0.3) tags.push({ label: 'Yakıt tasarruflu', variant: 'success' });
-  if (template.speed >= 78) tags.push({ label: 'Hızlı teslimat', variant: 'warning' });
-  if (template.reliability >= 85) tags.push({ label: 'Dayanıklı', variant: 'info' });
-  if (template.reliability < 75) tags.push({ label: 'Arıza riski yüksek', variant: 'danger' });
-  return tags.slice(0, 3);
-}
-
-function getDriverShopTags(template: DriverMarketItem): { label: string; variant: StatusBadgeVariant }[] {
-  const tags: { label: string; variant: StatusBadgeVariant }[] = [];
-  if (template.comingSoon) tags.push({ label: 'Yakında', variant: 'warning' });
-  if (template.fuelSaving >= 50) tags.push({ label: 'Yakıt tasarruflu', variant: 'success' });
-  if (template.attention >= 80) tags.push({ label: 'Güvenli sürücü', variant: 'success' });
-  if (template.speed >= 15) tags.push({ label: 'Hızlı sürücü', variant: 'warning' });
-  if (tags.length === 0) {
-    tags.push({ label: getDriverTierLabel(template.tier), variant: 'muted' });
-  }
-  return tags.slice(0, 2);
-}
-
-function translateErrorMessage(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback;
-  if (error.message.includes('Level')) return error.message;
-  if (error.message.includes('Yetersiz')) return 'Nakit yetersiz';
-  if (error.message.includes('zaten')) return 'Zaten mevcut';
-  if (error.message.includes('bulunamadı')) return 'Bulunamadı';
-  if (error.message.includes('Yoldaki')) return 'Kamyon yolda';
-  return error.message;
+function FleetMetricTile({ label, value, icon, accentColor }: FleetMetricTileProps) {
+  return (
+    <View style={styles.metricTile}>
+      <View style={[styles.metricIconWrap, { backgroundColor: `${accentColor}18` }]}>
+        <GameIcon name={icon} size={24} color={accentColor} />
+      </View>
+      <View style={styles.metricTextBlock}>
+        <Text style={styles.metricLabel}>{label}</Text>
+        <Text style={[styles.metricValue, { color: accentColor }]} numberOfLines={1}>
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
 }
 
 interface FleetMetricStripProps {
@@ -229,730 +131,85 @@ const FleetMetricStrip = React.memo(function FleetMetricStrip({
   truckCount,
   driverCount,
   idleTrucks,
-  onRouteTrucks,
   averageCondition,
-}: FleetMetricStripProps) {
+}: Omit<FleetMetricStripProps, 'onRouteTrucks'>) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.metricStrip}
-    >
-      <SmallStatPill label="Kamyon" value={String(truckCount)} icon="truck" accentColor={colors.accentBlue} layout="chip" dense />
-      <SmallStatPill label="Şoför" value={String(driverCount)} icon="driver" accentColor={colors.info} layout="chip" dense />
-      <SmallStatPill label="Boşta" value={String(idleTrucks)} icon="success" accentColor={colors.success} layout="chip" dense />
-      <SmallStatPill label="Yolda" value={String(onRouteTrucks)} icon="route" accentColor={colors.accentBlue} layout="chip" dense />
-      <SmallStatPill
+    <View style={styles.metricStrip}>
+      <FleetMetricTile label="Kamyon" value={String(truckCount)} icon="truck" accentColor={colors.accentBlue} />
+      <FleetMetricTile label="Şoför" value={String(driverCount)} icon="driver" accentColor={colors.info} />
+      <FleetMetricTile label="Boşta" value={String(idleTrucks)} icon="success" accentColor={colors.success} />
+      <FleetMetricTile
         label="Kondisyon"
         value={formatDisplayPercent(averageCondition)}
         icon="maintenance"
         accentColor={getConditionColor(averageCondition)}
-        layout="chip"
-        dense
       />
-    </ScrollView>
+    </View>
   );
 });
 
-interface OwnedTruckCardProps {
-  truck: Truck;
-  playerMoney: number;
-  delivery?: Delivery;
-  transfer?: TruckTransfer;
-  drivers: Driver[];
-  homeCityId?: string;
-  monetization: MonetizationState;
-  sellCheck: TruckSellCheck;
-  onRepair: (truck: Truck) => void;
-  onManageUpgrades: (truck: Truck) => void;
-  onTransfer: (truck: Truck, targetCityId?: string) => void;
-  onSell: (truck: Truck) => void;
-  onShowSellBlocked: (reason: string) => void;
-}
-
-function formatLeaseRemainingDays(
-  currentTime: number,
-  leaseExpiresAt?: number | null,
-): string {
-  if (leaseExpiresAt == null) {
-    return '—';
-  }
-  const hoursLeft = Math.max(0, leaseExpiresAt - currentTime);
-  const days = Math.ceil(hoursLeft / timeBalance.hoursPerDay);
-  return `${days} gün`;
-}
-
-const OwnedTruckCard = React.memo(function OwnedTruckCard({
-  truck,
-  playerMoney,
-  delivery,
-  transfer,
-  drivers,
-  homeCityId,
-  monetization,
-  sellCheck,
-  onRepair,
-  onManageUpgrades,
-  onTransfer,
-  onSell,
-  onShowSellBlocked,
-}: OwnedTruckCardProps) {
-  const isOnRoute = truck.status === 'on_route';
-  const isTransferring = truck.status === 'transferring';
-  const isIdle = truck.status === 'idle';
-  const isLeased = isActiveLeasedTruck(truck);
-  const needsLiveTime = isOnRoute || isTransferring || isLeased;
-  const currentTime = useGameStore((state) => (needsLiveTime ? state.currentTime : 0));
-  const truckCondition = truck.condition ?? 100;
-  const conditionColor = getConditionColor(truckCondition);
-  const repairCost = calculateTruckRepairCost(truck);
-  const statusBadge = getTruckStatusBadge(truck.status);
-  const maintenanceBadge = getMaintenanceBadge(truckCondition);
-  const showRepairButton = isIdle && truckCondition < 100 && truckCondition < REPAIR_HIDE_THRESHOLD;
-  const truckCityId = resolveTruckCityId(truck, homeCityId);
-  const truckCityName = getCityName(truckCityId);
-  const destinationCityName = delivery
-    ? getCityName(delivery.destinationCityId)
-    : transfer
-      ? getCityName(transfer.toCityId)
-      : truckCityName;
-  const hasIdleDriver = !!selectDriverForTransfer(truck.id, drivers);
-  const canTransfer = isIdle && hasIdleDriver;
-  const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
-  const isLeaseExpired =
-    (truck.ownershipType ?? 'owned') === 'leased' && !isLeased;
-  const weeklyLeaseCost = getTruckWeeklyLeaseCost(truck);
-  const leaseDailyAccrual = truck.leaseDailyCost ?? 0;
-  const resaleValue = isLeased ? 0 : calculateTruckResaleValue(truck);
-  const showSellInfo = !isLeased && resaleValue > 0;
-  const showSellButton = !isLeased && (sellCheck.canSell || sellCheck.reason);
-  const upgradeBadges = getTruckUpgradeSummary(truck);
-  const upgradeLevel = truck.upgradeLevel ?? 0;
-  const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
-    monetization,
-    truck.id,
-    currentTime,
-  );
-  const { finalCost: discountedRepairCost } = calculateDiscountedRepairCost(
-    repairCost,
-    maintenanceDiscountToken,
-  );
-  const effectiveRepairCost = maintenanceDiscountToken ? discountedRepairCost : repairCost;
-  const canAffordEffectiveRepair = playerMoney >= effectiveRepairCost;
-  const showMaintenanceAdOffer =
-    showRepairButton && repairCost > 300 && !maintenanceDiscountToken;
-
-  const handleSellPress = () => {
-    if (!sellCheck.canSell) {
-      onShowSellBlocked(sellCheck.reason ?? 'Kamyon satılamaz.');
-      return;
-    }
-    onSell(truck);
-  };
-
+function FleetTabSegment({
+  activeTab,
+  onChange,
+}: {
+  activeTab: FleetTab;
+  onChange: (tab: FleetTab) => void;
+}) {
   return (
-    <AppCard style={styles.fleetCard} padded>
-      <View style={styles.cardTopRow}>
-        <View style={styles.entityIconBox}>
-          <GameIcon name="truck" size={18} color={colors.accentBlue} />
-        </View>
-
-        <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
-            {truck.name}
-          </Text>
-        </View>
-
-        <View style={styles.cardRight}>
-          {isIdle ? (
-            <StatusBadge
-              label={formatCityLocative(truckCityId, truckCityName)}
-              variant="info"
-              size="sm"
-            />
-          ) : null}
-          <StatusBadge label={statusBadge.label} variant={statusBadge.variant} size="sm" />
-        </View>
-      </View>
-
-      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        {isIdle ? null : `Konum: ${truckCityName} · `}
-        {truck.capacity ?? 0} ton · {truck.speed ?? 0} km/h
-        {upgradeLevel > 0 ? ` · Geliştirme +${upgradeLevel}` : ''}
-      </Text>
-
-      {upgradeBadges.length > 0 ? (
-        <Text style={styles.footerMuted} numberOfLines={2}>
-          {upgradeBadges.join(' · ')}
-        </Text>
-      ) : null}
-
-      {isLeaseExpired ? (
-        <View style={styles.leaseInfoBlock}>
-          <View style={styles.leaseBadgeRow}>
-            <StatusBadge label="Kira süresi doldu" variant="danger" size="sm" />
-            <Text style={styles.leaseInfoText} numberOfLines={1} ellipsizeMode="tail">
-              Bu kamyon yeni işlerde kullanılamaz.
-            </Text>
-          </View>
-        </View>
-      ) : isLeased ? (
-        <View style={styles.leaseInfoBlock}>
-          <View style={styles.leaseBadgeRow}>
-            <StatusBadge label="Kiralık" variant="amber" size="sm" />
-            <Text style={styles.leaseInfoText} numberOfLines={1} ellipsizeMode="tail">
-              Haftalık kira: {formatMoney(weeklyLeaseCost)} · Kalan:{' '}
-              {formatLeaseRemainingDays(currentTime, truck.leaseExpiresAt)}
-            </Text>
-          </View>
-          <Text style={styles.leaseInfoSubtext} numberOfLines={1} ellipsizeMode="tail">
-            Günlük karşılık: {formatMoney(leaseDailyAccrual)}
-          </Text>
-        </View>
-      ) : null}
-
-      {isOnRoute && delivery ? (
-        <View style={styles.inlineRouteBlock}>
-          <View style={styles.inlineRouteRow}>
-            <GameIcon name="route" size={12} color={colors.accentBlue} />
-            <Text style={styles.routeText} numberOfLines={1} ellipsizeMode="tail">
-              {getCityName(delivery.originCityId)} → {getCityName(delivery.destinationCityId)}
-            </Text>
-          </View>
-          <View style={styles.inlineRouteMetaRow}>
-            <GameIcon name="time" size={11} color={colors.textMuted} />
-            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
-              {formatRatioPercent(delivery.progress)} · {destinationCityName}'ya gidiyor
-            </Text>
-          </View>
-          <ProgressBar progress={delivery.progress} color={colors.accentBlue} height={3} />
-        </View>
-      ) : null}
-
-      {isTransferring && transfer ? (
-        <View style={styles.inlineRouteBlock}>
-          <View style={styles.inlineRouteRow}>
-            <GameIcon name="route" size={12} color={colors.info} />
-            <Text style={styles.routeText} numberOfLines={1} ellipsizeMode="tail">
-              {getCityName(transfer.fromCityId)} → {getCityName(transfer.toCityId)}
-            </Text>
-          </View>
-          <View style={styles.inlineRouteMetaRow}>
-            <GameIcon name="time" size={11} color={colors.textMuted} />
-            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
-              Boş transfer · {formatRatioPercent(transfer.progress)} ·{' '}
-              {formatRemainingHours(currentTime, transfer.estimatedArrivalAt)} kaldı
-            </Text>
-          </View>
-          <ProgressBar progress={transfer.progress} color={colors.info} height={3} />
-        </View>
-      ) : null}
-
-      <View style={styles.conditionRow}>
-        <View style={styles.conditionLabelRow}>
-          <Text style={[styles.conditionLabel, { color: conditionColor }]}>
-            Kondisyon {Math.round(truckCondition)}%
-          </Text>
-          {maintenanceBadge ? (
-            <StatusBadge label={maintenanceBadge.label} variant={maintenanceBadge.variant} size="sm" />
-          ) : null}
-        </View>
-        <ProgressBar progress={truckCondition / 100} color={conditionColor} height={3} />
-      </View>
-
-      {isLeased ? (
-        <Text style={styles.footerMuted}>Kiralık kamyon satılamaz</Text>
-      ) : showSellInfo ? (
-        <Text style={styles.resaleHint} numberOfLines={1}>
-          Satış değeri: {formatMoney(resaleValue)}
-        </Text>
-      ) : null}
-
-      <View style={styles.cardFooter}>
-        {showMaintenanceAdOffer ? (
-          <AdRewardButton
-            slotId="maintenance_discount"
-            label="Reklam izle, bakım %30 indirimli"
-            description="Sonraki bakımda en fazla $500 indirim uygulanır."
-            context={{
-              selectedTruckId: truck.id,
-              currentRepairCost: repairCost,
-            }}
-            variant="secondary"
-          />
-        ) : null}
-        {showRepairButton ? (
-          <ActionButton
-            label={
-              canAffordEffectiveRepair
-                ? maintenanceDiscountToken
-                  ? `Bakım Yap (${formatMoney(effectiveRepairCost)} indirimli)`
-                  : `Bakım Yap (${formatMoney(repairCost)})`
-                : 'Yetersiz nakit'
-            }
-            onPress={() => onRepair(truck)}
-            disabled={!canAffordEffectiveRepair}
-            variant="secondary"
-            icon="repair"
-            iconSize={13}
-            compact
-            style={styles.compactAction}
-          />
-        ) : null}
-        {!isLeased ? (
-          <View style={styles.upgradeManageBlock}>
-            <ActionButton
-              label="Geliştirmeleri Yönet"
-              onPress={() => onManageUpgrades(truck)}
-              variant="secondary"
-              icon="upgrade"
-              iconSize={13}
-              compact
-              style={styles.compactAction}
-            />
-            <Text style={styles.upgradeManageHint}>Motor, yakıt, kapasite ve dayanıklılık</Text>
-          </View>
-        ) : null}
-        {isOnRoute ? (
-          <Text style={styles.footerMuted}>Teslimat sürüyor</Text>
-        ) : isTransferring ? (
-          <Text style={styles.footerMuted}>Boş transfer sürüyor</Text>
-        ) : truck.status === 'maintenance' ? (
-          <>
-            <Text style={styles.footerMuted}>Tamir tamamlanmadan işe çıkamaz</Text>
-            {showSellButton ? (
-              <ActionButton
-                label={sellCheck.canSell ? 'Sat' : 'Satılamaz'}
-                onPress={handleSellPress}
-                disabled={!sellCheck.canSell}
-                variant="secondary"
-                icon="cash"
-                iconSize={13}
-                compact
-                style={[styles.compactAction, styles.sellActionButton]}
+    <View style={styles.segmentContainer}>
+      {FLEET_TABS.map((tab) => {
+        const isActive = tab.key === activeTab;
+        return (
+          <Pressable
+            key={tab.key}
+            style={[styles.segmentTab, isActive && styles.segmentTabActive]}
+            onPress={() => onChange(tab.key)}
+          >
+            {tab.icon ? (
+              <GameIcon
+                name={tab.icon}
+                size={14}
+                color={isActive ? colors.accentBlue : colors.textMuted}
               />
             ) : null}
-          </>
-        ) : isIdle ? (
-          <View style={styles.transferActionsRow}>
-            <ActionButton
-              label={hasIdleDriver ? 'Yönlendir' : 'Şoför gerekli'}
-              onPress={() => onTransfer(truck)}
-              disabled={!canTransfer}
-              variant="secondary"
-              icon="route"
-              iconSize={13}
-              compact
-              style={styles.compactAction}
-            />
-            {showRecallIzmir ? (
-              <ActionButton
-                label="İzmir'e Çağır"
-                onPress={() => onTransfer(truck, 'izmir')}
-                disabled={!canTransfer}
-                variant="secondary"
-                icon="warehouse"
-                iconSize={13}
-                compact
-                style={styles.compactAction}
-              />
-            ) : null}
-            {showSellButton ? (
-              <ActionButton
-                label={sellCheck.canSell ? 'Sat' : 'Satılamaz'}
-                onPress={handleSellPress}
-                disabled={!sellCheck.canSell}
-                variant="secondary"
-                icon="cash"
-                iconSize={13}
-                compact
-                style={[styles.compactAction, styles.sellActionButton]}
-              />
-            ) : null}
-          </View>
-        ) : null}
-        {isIdle && !hasIdleDriver ? (
-          <Text style={styles.footerMuted}>Yönlendirme için boşta şoför gerekiyor.</Text>
-        ) : isIdle ? (
-          <Text style={styles.idleLocationHint} numberOfLines={2}>
-            {formatIdleTruckReadyHint(truckCityId, truckCityName)}
-          </Text>
-        ) : null}
-      </View>
-    </AppCard>
+            <Text style={[styles.segmentLabel, isActive && styles.segmentLabelActive]} numberOfLines={1}>
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
-});
-
-interface OwnedDriverCardProps {
-  driver: Driver;
-  trucks: Truck[];
-  activeDelivery?: Delivery;
-  playerMoney: number;
-  fireCheck: DriverFireCheck;
-  onFire: (driver: Driver) => void;
-  onShowFireBlocked: (reason: string) => void;
 }
 
-const OwnedDriverCard = React.memo(function OwnedDriverCard({
-  driver,
-  trucks,
-  activeDelivery,
-  playerMoney,
-  fireCheck,
-  onFire,
-  onShowFireBlocked,
-}: OwnedDriverCardProps) {
-  const needsLiveTime = driver.status === 'driving';
-  const currentTime = useGameStore((state) => (needsLiveTime ? state.currentTime : 0));
-  const statusBadge = getDriverStatusBadge(driver.status);
-  const trait = getDriverTrait(driver);
-  const assignedTruck =
-    trucks.find((t) => t.id === driver.assignedTruckId) ??
-    (activeDelivery ? trucks.find((t) => t.id === activeDelivery.truckId) : undefined);
-  const attention = Math.round(driver.attention ?? 0);
-  const experience = Math.round(driver.experience ?? 0);
-  const driverLevel = driver.level ?? 1;
-  const driverXp = getDriverXpProgress(driver);
-  const onTimeRate = getDriverOnTimeRate(driver);
-  const completedCount = driver.completedDeliveries ?? 0;
-  const isDriving = driver.status === 'driving';
-  const isIdle = driver.status === 'idle';
-  const severanceCost = fireCheck.severanceCost ?? calculateDriverSeveranceCost(driver);
-  const canAffordSeverance = playerMoney >= severanceCost;
-
-  const handleFirePress = () => {
-    if (!fireCheck.canFire) {
-      onShowFireBlocked(fireCheck.reason ?? 'Şoför işten çıkarılamaz.');
-      return;
-    }
-    if (!canAffordSeverance) {
-      onShowFireBlocked(`Çıkış maliyeti için ${formatMoney(severanceCost)} gerekli.`);
-      return;
-    }
-    onFire(driver);
-  };
-
-  return (
-    <AppCard style={styles.fleetCard} padded>
-      <View style={styles.cardTopRow}>
-        <View style={[styles.entityIconBox, styles.driverIconCircle]}>
-          <GameIcon name="driver" size={18} color={colors.accentBlue} />
-        </View>
-
-        <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
-            {driver.name}
-          </Text>
-        </View>
-
-        <View style={styles.cardRight}>
-          <StatusBadge label={statusBadge.label} variant={statusBadge.variant} size="sm" />
-        </View>
-      </View>
-
-      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        Seviye {driverLevel} · XP {driverXp.xp}
-        {driverLevel < 5 ? ` / ${driverXp.xpForNextLevel}` : ''} · Deneyim {experience} · Dikkat {attention}
-      </Text>
-      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        Teslimat {completedCount}
-        {completedCount > 0 ? ` · Zamanında %${Math.round(onTimeRate * 100)}` : ''}
-        {driver.specialty ? ` · Uzmanlık: ${driver.specialty}` : ''}
-        {' · '}Maaş {formatMoney(driver.salaryPerDay ?? 0)}/gün
-      </Text>
-      {driverLevel < 5 ? (
-        <ProgressBar progress={driverXp.progressRatio} color={colors.accentBlue} height={3} />
-      ) : null}
-
-      {isDriving && activeDelivery ? (
-        <View style={styles.inlineRouteBlock}>
-          <View style={styles.inlineRouteRow}>
-            <GameIcon name="truck" size={12} color={colors.accentBlue} />
-            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
-              {assignedTruck?.name ?? 'Atanmış kamyon'}
-            </Text>
-          </View>
-          <View style={styles.inlineRouteRow}>
-            <GameIcon name="route" size={12} color={colors.accentBlue} />
-            <Text style={styles.routeText} numberOfLines={1} ellipsizeMode="tail">
-              {getCityName(activeDelivery.originCityId)} → {getCityName(activeDelivery.destinationCityId)}
-            </Text>
-          </View>
-          <View style={styles.inlineRouteMetaRow}>
-            <GameIcon name="time" size={11} color={colors.textMuted} />
-            <Text style={styles.routeMeta} numberOfLines={1} ellipsizeMode="tail">
-              {formatRatioPercent(activeDelivery.progress)} ·{' '}
-              {formatRemainingHours(currentTime, activeDelivery.estimatedArrivalTime)} kaldı
-            </Text>
-          </View>
-          <ProgressBar progress={activeDelivery.progress} color={colors.accentBlue} height={3} />
-        </View>
-      ) : null}
-
-      <View style={styles.traitRow}>
-        <StatusBadge label={trait.label} variant={trait.variant} size="sm" />
-      </View>
-
-      <Text style={styles.severanceHint} numberOfLines={1}>
-        Çıkış maliyeti: {formatMoney(severanceCost)}
-      </Text>
-
-      <View style={styles.cardFooter}>
-        {isIdle ? (
-          <Text style={styles.footerMuted}>Yeni teslimat için hazır</Text>
-        ) : driver.status === 'resting' ? (
-          <Text style={styles.footerMuted}>Dinleniyor</Text>
-        ) : isDriving ? (
-          <Text style={styles.footerMuted}>Aktif teslimatta</Text>
-        ) : null}
-
-        <ActionButton
-          label={
-            !fireCheck.canFire
-              ? 'Çıkarılamaz'
-              : !canAffordSeverance
-                ? 'Nakit yetersiz'
-                : 'İşten Çıkar'
-          }
-          onPress={handleFirePress}
-          disabled={!fireCheck.canFire || !canAffordSeverance}
-          variant="danger"
-          icon="driver"
-          iconSize={13}
-          compact
-          style={styles.compactAction}
-        />
-      </View>
-    </AppCard>
-  );
-});
-
-interface ShopTruckCardProps {
-  template: TruckMarketItem;
-  playerMoney: number;
-  playerLevel: number;
-  ownedCount: number;
-  canBuy: boolean;
-  canLease: boolean;
-  onBuy: (catalogId: string) => void;
-  onLease: (catalogId: string) => void;
+function translateErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  if (error.message.includes('Level')) return error.message;
+  if (error.message.includes('Yetersiz')) return 'Nakit yetersiz';
+  if (error.message.includes('zaten')) return 'Zaten mevcut';
+  if (error.message.includes('bulunamadı')) return 'Bulunamadı';
+  if (error.message.includes('Yoldaki')) return 'Kamyon yolda';
+  return error.message;
 }
-
-const ShopTruckCard = React.memo(function ShopTruckCard({
-  template,
-  playerMoney,
-  playerLevel,
-  ownedCount,
-  canBuy,
-  canLease,
-  onBuy,
-  onLease,
-}: ShopTruckCardProps) {
-  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
-  const requiredLevel = resolveTruckMarketRequiredLevel(template);
-  const isLevelLocked = safePlayerLevel < requiredLevel;
-  const weeklyLeaseCost = template.weeklyLeaseCost ?? 0;
-  const canAffordBuy = playerMoney >= template.purchasePrice;
-  const canAffordLease = weeklyLeaseCost > 0 && playerMoney >= weeklyLeaseCost;
-  const buyDisabled = !canBuy || !canAffordBuy || isLevelLocked;
-  const leaseDisabled = !canLease || !canAffordLease || isLevelLocked || weeklyLeaseCost <= 0;
-  const tags = getTruckShopTags(template);
-
-  let buyButtonLabel = 'Satın Al';
-  if (isLevelLocked) {
-    buyButtonLabel = `Level ${requiredLevel} gerekli`;
-  } else if (!canBuy) {
-    buyButtonLabel = 'Yakında';
-  } else if (!canAffordBuy) {
-    buyButtonLabel = 'Nakit yetersiz';
-  } else if (ownedCount > 0) {
-    buyButtonLabel = 'Tekrar Satın Al';
-  }
-
-  let leaseButtonLabel = 'Haftalık Kirala';
-  if (isLevelLocked) {
-    leaseButtonLabel = `Level ${requiredLevel} gerekli`;
-  } else if (!canLease || weeklyLeaseCost <= 0) {
-    leaseButtonLabel = 'Kiralama yok';
-  } else if (!canAffordLease) {
-    leaseButtonLabel = 'Nakit yetersiz';
-  }
-
-  return (
-    <AppCard style={[styles.fleetCard, isLevelLocked && styles.lockedCard]} padded>
-      <View style={styles.cardTopRow}>
-        <View style={styles.entityIconBox}>
-          <GameIcon name="truck" size={18} color={colors.accentBlue} />
-        </View>
-        <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
-            {template.name}
-          </Text>
-        </View>
-        <View style={styles.cardRight}>
-          <View style={styles.priceRow}>
-            <GameIcon name="cash" size={12} color={colors.success} />
-            <Text style={styles.priceText} numberOfLines={1} ellipsizeMode="tail">
-              {formatMoney(template.purchasePrice)}
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        {template.capacity} ton · {template.speed} km/h · {template.fuelConsumptionPerKm.toFixed(2)} L/km ·
-        Dayanıklılık {template.reliability}
-        {requiredLevel > 1 ? ` · Lv.${requiredLevel}` : ''}
-      </Text>
-
-      {weeklyLeaseCost > 0 ? (
-        <Text style={styles.leaseHint} numberOfLines={1} ellipsizeMode="tail">
-          Haftalık kira: {formatMoney(weeklyLeaseCost)} · 7 gün
-        </Text>
-      ) : null}
-
-      {ownedCount > 0 ? (
-        <Text style={styles.ownedHint}>Filonda {ownedCount} adet mevcut</Text>
-      ) : null}
-
-      {tags.length > 0 ? (
-        <View style={styles.tagRow}>
-          {tags.map((tag) => (
-            <StatusBadge key={tag.label} label={tag.label} variant={tag.variant} size="sm" />
-          ))}
-        </View>
-      ) : null}
-
-      <View style={styles.shopButtonRow}>
-        <ActionButton
-          label={buyButtonLabel}
-          onPress={() => onBuy(template.id)}
-          disabled={buyDisabled}
-          variant="primary"
-          icon={isLevelLocked ? 'level' : 'plus'}
-          iconSize={13}
-          compact
-          style={styles.shopActionHalf}
-        />
-        <ActionButton
-          label={leaseButtonLabel}
-          onPress={() => onLease(template.id)}
-          disabled={leaseDisabled}
-          variant="secondary"
-          icon="truck"
-          iconSize={13}
-          compact
-          style={styles.shopActionHalf}
-        />
-      </View>
-    </AppCard>
-  );
-});
-
-interface ShopDriverCardProps {
-  template: DriverMarketItem;
-  playerMoney: number;
-  playerLevel: number;
-  alreadyHired: boolean;
-  canHire: boolean;
-  onHire: (poolId: string) => void;
-}
-
-const ShopDriverCard = React.memo(function ShopDriverCard({
-  template,
-  playerMoney,
-  playerLevel,
-  alreadyHired,
-  canHire,
-  onHire,
-}: ShopDriverCardProps) {
-  const safePlayerLevel = Math.max(1, playerLevel ?? 1);
-  const requiredLevel = resolveDriverRequiredLevel(template);
-  const isLevelLocked = safePlayerLevel < requiredLevel;
-  const isComingSoon = template.comingSoon === true;
-  const canAfford = playerMoney >= template.hiringFee;
-  const disabled = !canHire || alreadyHired || !canAfford || isLevelLocked || isComingSoon;
-  const tags = getDriverShopTags(template);
-
-  let buttonLabel = 'İşe Al';
-  if (isComingSoon) {
-    buttonLabel = 'Yakında';
-  } else if (isLevelLocked) {
-    buttonLabel = `Level ${requiredLevel} gerekli`;
-  } else if (!canHire) {
-    buttonLabel = 'Yakında';
-  } else if (alreadyHired) {
-    buttonLabel = 'İşe alındı';
-  } else if (!canAfford) {
-    buttonLabel = 'Nakit yetersiz';
-  }
-
-  return (
-    <AppCard
-      style={[styles.fleetCard, (isLevelLocked || isComingSoon) && styles.lockedCard]}
-      padded
-    >
-      <View style={styles.cardTopRow}>
-        <View style={[styles.entityIconBox, styles.driverIconCircle]}>
-          <GameIcon name="driver" size={18} color={colors.accentBlue} />
-        </View>
-        <View style={styles.cardMain}>
-          <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
-            {template.name}
-          </Text>
-        </View>
-        <View style={styles.cardRight}>
-          <View style={styles.priceRow}>
-            <GameIcon name="cash" size={12} color={colors.accentAmber} />
-            <Text style={styles.priceTextHire} numberOfLines={1} ellipsizeMode="tail">
-              {formatMoney(template.hiringFee)}
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      <Text style={styles.statsRow} numberOfLines={1} ellipsizeMode="tail">
-        Deneyim {template.experience} · Dikkat {template.attention} · Maaş{' '}
-        {formatMoney(template.salaryPerDay)}/gün
-      </Text>
-
-      {tags.length > 0 ? (
-        <View style={styles.tagRow}>
-          {tags.map((tag) => (
-            <StatusBadge key={tag.label} label={tag.label} variant={tag.variant} size="sm" />
-          ))}
-        </View>
-      ) : null}
-
-      <ActionButton
-        label={buttonLabel}
-        onPress={() => onHire(template.id)}
-        disabled={disabled}
-        variant="primary"
-        icon={isLevelLocked ? 'level' : 'plus'}
-        iconSize={13}
-        compact
-        fullWidth
-        style={styles.shopAction}
-      />
-    </AppCard>
-  );
-});
 
 export default function FleetScreen() {
   const { showDialog, alert: showAlert } = useAppDialog();
+  const { width: screenWidth } = useWindowDimensions();
+  const driverHireLayout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
+  const { tabBarHeight } = useTabBarLayout();
+  const fleetScrollBottomPadding = tabBarHeight + FLEET_SCROLL_BOTTOM_EXTRA;
   const player = useGameStore((state) => state.player);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const monetization = useGameStore((state) => state.monetization);
-  const buyTruck = useGameStore((state) => state.buyTruck);
-  const leaseTruck = useGameStore((state) => state.leaseTruck);
-  const hireDriver = useGameStore((state) => state.hireDriver);
+  const attachTrailerToTruck = useGameStore((state) => state.attachTrailerToTruck);
+  const detachTrailerFromTruck = useGameStore((state) => state.detachTrailerFromTruck);
   const sellTruck = useGameStore((state) => state.sellTruck);
   const fireDriver = useGameStore((state) => state.fireDriver);
   const repairTruck = useGameStore((state) => state.repairTruck);
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
+  const requestNavigationToShop = useGameStore((state) => state.requestNavigationToShop);
 
   const [activeTab, setActiveTab] = useState<FleetTab>('trucks');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
@@ -960,15 +217,17 @@ export default function FleetScreen() {
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
   const [managingUpgradesTruckId, setManagingUpgradesTruckId] = useState<string | null>(null);
 
+  const [attachPickerTrailer, setAttachPickerTrailer] = useState<Trailer | null>(null);
+
   useEffect(() => {
     if (!pendingFleetSubTab) return;
 
-    if (pendingFleetSubTab === 'shop' || pendingFleetSubTab === 'hire_drivers') {
-      setActiveTab('shop');
-    } else if (pendingFleetSubTab === 'trucks') {
+    if (pendingFleetSubTab === 'trucks') {
       setActiveTab('trucks');
     } else if (pendingFleetSubTab === 'drivers') {
       setActiveTab('drivers');
+    } else if (pendingFleetSubTab === 'trailers') {
+      setActiveTab('trailers');
     }
 
     clearPendingFleetSubTab();
@@ -981,8 +240,8 @@ export default function FleetScreen() {
   }, [statusMessage]);
 
   const trucks = useMemo(() => player?.trucks ?? [], [player?.trucks]);
+  const trailers = useMemo(() => player?.trailers ?? [], [player?.trailers]);
   const drivers = useMemo(() => player?.drivers ?? [], [player?.drivers]);
-  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const playerMoney = player?.money ?? 0;
 
   const fleetSummary = useMemo(
@@ -994,16 +253,6 @@ export default function FleetScreen() {
     }),
     [trucks, drivers],
   );
-
-  const sortedTruckMarket = useMemo(
-    () =>
-      [...TRUCK_MARKET].sort(
-        (a, b) => resolveTruckMarketRequiredLevel(a) - resolveTruckMarketRequiredLevel(b),
-      ),
-    [],
-  );
-
-  const driverPool = useMemo(() => getDriverPoolForLevel(playerLevel), [playerLevel]);
 
   const showFleetTip =
     activeTab === 'trucks' && fleetSummary.idleTrucks === 0 && fleetSummary.onRouteTrucks > 0;
@@ -1059,22 +308,6 @@ export default function FleetScreen() {
     return map;
   }, [trucks, fleetManagementState]);
 
-  const fireCheckByDriverId = useMemo(() => {
-    const map = new Map<string, DriverFireCheck>();
-    for (const driver of drivers) {
-      map.set(driver.id, canFireDriver(driver.id, fleetManagementState));
-    }
-    return map;
-  }, [drivers, fleetManagementState]);
-
-  const ownedTruckCountByCatalog = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const template of sortedTruckMarket) {
-      map.set(template.id, countOwnedTrucksOfCatalog(trucks, template.id));
-    }
-    return map;
-  }, [sortedTruckMarket, trucks]);
-
   const handleManageUpgrades = useCallback((truck: Truck) => {
     setManagingUpgradesTruckId(truck.id);
   }, []);
@@ -1092,44 +325,126 @@ export default function FleetScreen() {
     }
   }, [repairTruck]);
 
-  const handleBuyTruck = useCallback((catalogId: string) => {
-    if (typeof buyTruck !== 'function') {
-      setStatusMessage({ type: 'error', text: 'Yakında' });
-      return;
-    }
-    const result = buyTruck(catalogId);
-    if (!result.success) {
-      setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
-      return;
-    }
-    setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon satın alındı' });
-  }, [buyTruck]);
+  const eligibleTrucksForTrailer = useCallback(
+    (trailer: Trailer) =>
+      trucks.filter(
+        (truck) =>
+          truck.status === 'idle' &&
+          (truck.ownershipType ?? 'owned') === 'owned' &&
+          !truck.leaseExpired &&
+          resolveTruckCityId(truck, player?.homeCityId) === trailer.city &&
+          !trailers.some(
+            (item) => item.attachedTruckId === truck.id && item.id !== trailer.id,
+          ),
+      ),
+    [trucks, trailers, player?.homeCityId],
+  );
 
-  const handleLeaseTruck = useCallback((catalogId: string) => {
-    if (typeof leaseTruck !== 'function') {
-      setStatusMessage({ type: 'error', text: 'Kiralama henüz kullanılamıyor' });
-      return;
-    }
-    const result = leaseTruck(catalogId);
-    if (!result.success) {
-      setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
-      return;
-    }
-    setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon kiralandı' });
-  }, [leaseTruck]);
+  const handleAttachTrailer = useCallback(
+    (trailer: Trailer) => {
+      const eligible = eligibleTrucksForTrailer(trailer);
+      if (eligible.length === 0) {
+        showAlert(
+          'Uygun kamyon yok',
+          `${getCityName(trailer.city)} şehrinde boşta ve uygun kamyon bulunamadı.`,
+        );
+        return;
+      }
+      if (eligible.length === 1) {
+        const result = attachTrailerToTruck(trailer.id, eligible[0].id);
+        setStatusMessage({
+          type: result.success ? 'success' : 'error',
+          text: result.message ?? (result.success ? 'Bağlandı' : 'Bağlama başarısız'),
+        });
+        return;
+      }
+      setAttachPickerTrailer(trailer);
+    },
+    [attachTrailerToTruck, eligibleTrucksForTrailer, showAlert],
+  );
 
-  const handleHireDriver = useCallback((poolId: string) => {
-    if (typeof hireDriver !== 'function') {
-      setStatusMessage({ type: 'error', text: 'Yakında' });
-      return;
-    }
-    const result = hireDriver(poolId);
-    if (!result.success) {
-      setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
-      return;
-    }
-    setStatusMessage({ type: 'success', text: result.message ?? 'Şoför işe alındı' });
-  }, [hireDriver]);
+  const handleDetachTrailer = useCallback(
+    (trailer: Trailer) => {
+      const result = detachTrailerFromTruck(trailer.id);
+      setStatusMessage({
+        type: result.success ? 'success' : 'error',
+        text: result.message ?? (result.success ? 'Dorse ayrıldı' : 'Ayırma başarısız'),
+      });
+    },
+    [detachTrailerFromTruck],
+  );
+
+  const handleTrailerMaintenance = useCallback(
+    (trailer: Trailer) => {
+      const condition = Math.round(trailer.condition ?? 100);
+      showDialog({
+        title: 'Dorse bakımı',
+        message: trailer.name,
+        details: [
+          { label: 'Kondisyon', value: `%${condition}` },
+          { label: 'Durum', value: getTrailerStatusLabel(trailer, trucks) },
+          { label: 'Şehir', value: getCityName(trailer.city) },
+        ],
+        cancelLabel: 'Kapat',
+        confirmLabel: 'Tamam',
+      });
+    },
+    [showDialog, trucks],
+  );
+
+  const handleTrailerDetail = useCallback(
+    (trailer: Trailer) => {
+      const linkedTruck = trailer.attachedTruckId
+        ? trucks.find((truck) => truck.id === trailer.attachedTruckId)
+        : undefined;
+      const condition = Math.round(trailer.condition ?? 100);
+      showDialog({
+        title: trailer.name,
+        message: `${getTrailerTypeLabel(trailer.type)} · ${getCityName(trailer.city)}`,
+        details: [
+          { label: 'Kapasite bonusu', value: `+${Math.round(trailer.capacityBonusTons)} t` },
+          { label: 'Kondisyon', value: `%${condition}` },
+          { label: 'Durum', value: getTrailerStatusLabel(trailer, trucks) },
+          { label: 'Bağlı kamyon', value: linkedTruck?.name ?? 'Yok' },
+          { label: 'Satın alma', value: formatMoney(trailer.purchasePrice ?? 0), tone: 'warning' },
+        ],
+        cancelLabel: 'Kapat',
+        confirmLabel: 'Tamam',
+      });
+    },
+    [showDialog, trucks],
+  );
+
+  const handleTrailerMore = useCallback(
+    (trailer: Trailer) => {
+      const linkedTruck = trailer.attachedTruckId
+        ? trucks.find((truck) => truck.id === trailer.attachedTruckId)
+        : undefined;
+      const condition = Math.round(trailer.condition ?? 100);
+      const canDetach = trailer.status === 'attached';
+
+      showDialog({
+        title: 'Dorse İşlemleri',
+        message: trailer.name,
+        variant: 'info',
+        details: [
+          { label: 'Dorse tipi', value: getTrailerTypeLabel(trailer.type) },
+          { label: 'Kapasite', value: `+${Math.round(trailer.capacityBonusTons)} t` },
+          { label: 'Kondisyon', value: `%${condition}` },
+          { label: 'Bulunduğu şehir', value: getCityName(trailer.city) },
+          { label: 'Bağlı kamyon', value: linkedTruck?.name ?? 'Yok' },
+          { label: 'Satın alma değeri', value: formatMoney(trailer.purchasePrice ?? 0), tone: 'warning' },
+          { label: 'Satış değeri', value: '—', tone: 'muted' },
+          { label: 'Durum', value: getTrailerStatusLabel(trailer, trucks) },
+        ],
+        cancelLabel: 'Kapat',
+        confirmLabel: canDetach ? 'Kamyondan Ayır' : 'Tamam',
+        destructive: canDetach,
+        onConfirm: canDetach ? () => handleDetachTrailer(trailer) : undefined,
+      });
+    },
+    [handleDetachTrailer, showDialog, trucks],
+  );
 
   const handleSellTruck = useCallback((truck: Truck) => {
     const sellCheck = canSellTruck(truck.id, fleetManagementState);
@@ -1211,9 +526,148 @@ export default function FleetScreen() {
     });
   }, [fleetManagementState, showAlert, showDialog, fireDriver]);
 
-  const handleShowFireBlocked = useCallback((reason: string) => {
-    showAlert('Şoför işten çıkarılamaz', reason);
-  }, [showAlert]);
+  const handleGoToHireDrivers = useCallback(() => {
+    requestNavigationToShop('drivers');
+  }, [requestNavigationToShop]);
+
+  const handleAssignDriver = useCallback((driver: Driver) => {
+    if (driver.status === 'driving') {
+      showAlert('Atama yapılamaz', 'Şoför aktif teslimatta.');
+      return;
+    }
+    if (driver.status === 'resting') {
+      showAlert('Atama yapılamaz', 'Şoför dinleniyor.');
+      return;
+    }
+    const assignedTruck = trucks.find((truck) => truck.id === driver.assignedTruckId);
+    if (assignedTruck) {
+      showAlert(
+        'Kamyon ataması',
+        `${driver.name} → ${assignedTruck.name}. Yeni atama için Sözleşmeler sekmesinden teslimat başlat.`,
+      );
+      return;
+    }
+    showAlert(
+      'Kamyon ata',
+      'Boşta şoförü kamyona atamak için Sözleşmeler sekmesinden teslimat başlat.',
+    );
+  }, [showAlert, trucks]);
+
+  const handleDriverTraining = useCallback((driver: Driver) => {
+    const xpProgress = getDriverXpProgress(driver);
+    const completedCount = driver.completedDeliveries ?? 0;
+    const onTimeRate = getDriverOnTimeRate(driver);
+    showDialog({
+      title: 'Şoför gelişimi',
+      message: `${driver.name} teslimatlarla XP kazanır ve seviye atlar.`,
+      details: [
+        { label: 'Seviye', value: `Lv. ${xpProgress.level}` },
+        {
+          label: 'XP',
+          value:
+            xpProgress.level >= 5
+              ? String(xpProgress.xp)
+              : `${xpProgress.xp} / ${xpProgress.xpForNextLevel}`,
+        },
+        { label: 'Deneyim', value: String(Math.round(driver.experience ?? 0)) },
+        {
+          label: 'Teslimat',
+          value: completedCount > 0 ? `${completedCount} · %${Math.round(onTimeRate * 100)} zamanında` : '0',
+        },
+      ],
+      cancelLabel: 'Kapat',
+      confirmLabel: 'Tamam',
+    });
+  }, [showDialog]);
+
+  const handleDriverDetail = useCallback((driver: Driver) => {
+    const xpProgress = getDriverXpProgress(driver);
+    const dailySalary = driver.salaryPerDay ?? driver.dailySalary ?? resolveDriverDailySalary(driver);
+    const assignedTruck = trucks.find((truck) => truck.id === driver.assignedTruckId);
+    const completedCount = driver.completedDeliveries ?? 0;
+    const onTimeRate = getDriverOnTimeRate(driver);
+    const statusLabel =
+      driver.status === 'driving' ? 'Teslimatta' : driver.status === 'resting' ? 'Dinleniyor' : 'Boşta';
+
+    showDialog({
+      title: driver.name,
+      message: assignedTruck ? `Atanan kamyon: ${assignedTruck.name}` : 'Araç atanmamış',
+      details: [
+        { label: 'Durum', value: statusLabel },
+        { label: 'Seviye', value: `Lv. ${xpProgress.level}` },
+        { label: 'Maaş', value: `${formatMoney(dailySalary)}/gün`, tone: 'warning' },
+        { label: 'Deneyim', value: String(Math.round(driver.experience ?? 0)) },
+        { label: 'Güvenlik', value: String(Math.round(driver.attention ?? 0)) },
+        { label: 'Yakıt', value: String(Math.round(driver.fuelSaving ?? 0)) },
+        { label: 'Moral', value: `%${Math.round(driver.morale ?? 80)}` },
+        {
+          label: 'Teslimat',
+          value: completedCount > 0 ? `${completedCount} · %${Math.round(onTimeRate * 100)} zamanında` : '0',
+        },
+        ...(driver.specialty ? [{ label: 'Uzmanlık', value: driver.specialty }] : []),
+      ],
+      cancelLabel: 'Kapat',
+      confirmLabel: 'Tamam',
+    });
+  }, [showDialog, trucks]);
+
+  const handleDriverMore = useCallback((driver: Driver) => {
+    const fireCheck = canFireDriver(driver.id, fleetManagementState);
+    const severanceCost = fireCheck.severanceCost ?? calculateDriverSeveranceCost(driver);
+    const dailySalary = driver.salaryPerDay ?? driver.dailySalary ?? resolveDriverDailySalary(driver);
+    const assignedTruck =
+      trucks.find((truck) => truck.id === driver.assignedTruckId) ??
+      (() => {
+        const delivery = deliveryByDriverId.get(driver.id);
+        return delivery ? trucks.find((truck) => truck.id === delivery.truckId) : undefined;
+      })();
+    const activeDelivery = deliveryByDriverId.get(driver.id);
+    const completedCount = driver.completedDeliveries ?? 0;
+
+    let routeText = '—';
+    if (activeDelivery && ACTIVE_DELIVERY_STATUSES.includes(activeDelivery.status)) {
+      routeText = `${getCityName(activeDelivery.originCityId)} → ${getCityName(activeDelivery.destinationCityId)}`;
+    } else if (assignedTruck) {
+      routeText = getCityName(resolveTruckCityId(assignedTruck, player?.homeCityId));
+    }
+
+    showDialog({
+      title: 'Şoför İşlemleri',
+      message: driver.name,
+      variant: 'info',
+      details: [
+        { label: 'Atandığı araç', value: assignedTruck?.name ?? 'Atanmamış' },
+        { label: 'Şehir / rota', value: routeText },
+        { label: 'Uzmanlık', value: driver.specialty ?? '—' },
+        { label: 'Teslimat sayısı', value: String(completedCount) },
+        { label: 'Günlük maaş', value: `${formatMoney(dailySalary)}/gün`, tone: 'warning' },
+        { label: 'Çıkış maliyeti', value: formatMoney(severanceCost), tone: 'danger' },
+      ],
+      cancelLabel: 'Kapat',
+      confirmLabel: 'İşten Çıkar',
+      destructive: true,
+      onConfirm: () => {
+        if (!fireCheck.canFire) {
+          showAlert('Şoför işten çıkarılamaz', fireCheck.reason ?? 'Bu şoför şu anda çıkarılamaz.');
+          return;
+        }
+        if (playerMoney < severanceCost) {
+          showAlert('Şoför işten çıkarılamaz', `Çıkış maliyeti için ${formatMoney(severanceCost)} gerekli.`);
+          return;
+        }
+        handleFireDriver(driver);
+      },
+    });
+  }, [
+    deliveryByDriverId,
+    fleetManagementState,
+    handleFireDriver,
+    player?.homeCityId,
+    playerMoney,
+    showAlert,
+    showDialog,
+    trucks,
+  ]);
 
   const handleOpenTransfer = useCallback((truck: Truck, targetCityId?: string) => {
     if (!selectDriverForTransfer(truck.id, drivers)) {
@@ -1245,66 +699,57 @@ export default function FleetScreen() {
   }
 
   return (
-    <AppScreen scroll>
-      <ScreenHeader
-        title="Filo"
-        subtitle="Kamyonlarını, şoförlerini ve satın alımları yönet"
-      />
-
-      {statusMessage ? (
-        <AppCard
-          variant={statusMessage.type === 'success' ? 'success' : 'danger'}
-          style={styles.statusBanner}
-          padded
-        >
-          <View style={styles.statusBannerRow}>
-            <GameIcon
-              name={statusMessage.type === 'success' ? 'success' : 'warning'}
-              size={16}
-              color={statusMessage.type === 'success' ? colors.success : colors.danger}
-            />
-            <Text
-              style={[
-                styles.statusBannerText,
-                { color: statusMessage.type === 'success' ? colors.success : colors.danger },
-              ]}
-            >
-              {statusMessage.text}
-            </Text>
+    <AppScreen scroll scrollBottomPadding={fleetScrollBottomPadding}>
+      <View style={styles.screenStack}>
+        <View style={styles.fleetHeader}>
+          <View style={styles.fleetHeaderText}>
+            <Text style={styles.fleetTitle}>Filo</Text>
+            <Text style={styles.fleetSubtitle}>Araçlarını ve şoförlerini yönet</Text>
           </View>
-        </AppCard>
-      ) : null}
+        </View>
 
-      <FleetMetricStrip
-        truckCount={trucks.length}
-        driverCount={drivers.length}
-        idleTrucks={fleetSummary.idleTrucks}
-        onRouteTrucks={fleetSummary.onRouteTrucks}
-        averageCondition={fleetSummary.averageCondition}
-      />
+        {statusMessage ? (
+          <AppCard
+            variant={statusMessage.type === 'success' ? 'success' : 'danger'}
+            style={styles.statusBanner}
+            padded
+          >
+            <View style={styles.statusBannerRow}>
+              <GameIcon
+                name={statusMessage.type === 'success' ? 'success' : 'warning'}
+                size={16}
+                color={statusMessage.type === 'success' ? colors.success : colors.danger}
+              />
+              <Text
+                style={[
+                  styles.statusBannerText,
+                  { color: statusMessage.type === 'success' ? colors.success : colors.danger },
+                ]}
+              >
+                {statusMessage.text}
+              </Text>
+            </View>
+          </AppCard>
+        ) : null}
 
-      <SegmentedControl
-        options={FLEET_TABS}
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        accentColor={colors.accentBlue}
-      />
+        <FleetMetricStrip
+          truckCount={trucks.length}
+          driverCount={drivers.length}
+          idleTrucks={fleetSummary.idleTrucks}
+          averageCondition={fleetSummary.averageCondition}
+        />
 
-      {activeTab === 'trucks' ? (
-        <View style={styles.tabContent}>
-          <SectionTitle
-            title="Kamyonlar"
-            subtitle="Teslimat sonrası kamyon varış şehrinde kalır · Yönlendir ile taşıyabilirsin"
-            compact
-          />
+        <FleetTabSegment activeTab={activeTab} onChange={setActiveTab} />
 
-          {trucks.length === 0 ? (
+        {activeTab === 'trucks' ? (
+          <View style={styles.tabContent}>
+            {trucks.length === 0 ? (
             <EmptyState
               title="Henüz kamyon yok"
               message="Mağazadan ilk kamyonunu satın al."
               icon="truck"
               actionLabel="Mağazaya Git"
-              onAction={() => setActiveTab('shop')}
+              onAction={() => requestNavigationToShop('trucks')}
             />
           ) : (
             <>
@@ -1312,6 +757,7 @@ export default function FleetScreen() {
                 <OwnedTruckCard
                   key={truck.id}
                   truck={truck}
+                  trailers={trailers}
                   playerMoney={playerMoney}
                   delivery={deliveryByTruckId.get(truck.id)}
                   transfer={transferByTruckId.get(truck.id)}
@@ -1334,7 +780,7 @@ export default function FleetScreen() {
                   </View>
                   <Text style={styles.tipText}>
                     Boşta kamyonun yok. Yeni sözleşme almak için teslimatın bitmesini bekle veya
-                    Mağaza sekmesinden yeni kamyon satın al.
+                    Mağazadan yeni kamyon satın al.
                   </Text>
                 </AppCard>
               ) : null}
@@ -1343,74 +789,110 @@ export default function FleetScreen() {
         </View>
       ) : null}
 
-      {activeTab === 'drivers' ? (
+      {activeTab === 'trailers' ? (
         <View style={styles.tabContent}>
-          <SectionTitle title="Şoförler" subtitle="Filondaki tüm şoförler" compact />
+          <View style={styles.trailerSectionHeader}>
+            <Text style={styles.trailerSectionTitle}>Dorseler</Text>
+            <Text style={styles.trailerSectionSubtitle}>
+              Dorselerini kamyonlara bağla ve taşıma kapasiteni artır.
+            </Text>
+          </View>
 
-          {drivers.length === 0 ? (
+          {trailers.length === 0 ? (
             <EmptyState
-              title="Henüz şoför yok"
-              message="Şoför havuzundan ilk şoförünü işe al."
-              icon="driver"
-              actionLabel="Mağazaya Git"
-              onAction={() => setActiveTab('shop')}
+              title="Henüz dorsen yok"
+              message="Kamyonlarının kapasitesini artırmak için mağazadan dorse satın al."
+              icon="route"
+              actionLabel="Dorse Mağazasına Git"
+              onAction={() => requestNavigationToShop('trailers')}
+              compact
             />
           ) : (
-            drivers.map((driver) => (
-              <OwnedDriverCard
-                key={driver.id}
-                driver={driver}
+            trailers.map((trailer) => (
+              <OwnedTrailerCard
+                key={trailer.id}
+                trailer={trailer}
                 trucks={trucks}
-                activeDelivery={deliveryByDriverId.get(driver.id)}
-                playerMoney={playerMoney}
-                fireCheck={fireCheckByDriverId.get(driver.id) ?? { canFire: false }}
-                onFire={handleFireDriver}
-                onShowFireBlocked={handleShowFireBlocked}
+                onAttach={handleAttachTrailer}
+                onDetach={handleDetachTrailer}
+                onMaintenance={handleTrailerMaintenance}
+                onDetail={handleTrailerDetail}
+                onMore={handleTrailerMore}
               />
             ))
           )}
+          {attachPickerTrailer ? (
+            <AppCard variant="highlighted" style={styles.tipCard} padded>
+              <Text style={styles.tipTitle}>
+                {attachPickerTrailer.name} — kamyon seç
+              </Text>
+              {eligibleTrucksForTrailer(attachPickerTrailer).map((truck) => (
+                <ActionButton
+                  key={truck.id}
+                  label={`${truck.name} · ${getTruckEffectiveCapacityTons(truck, trailers).toFixed(1)} t`}
+                  onPress={() => {
+                    const result = attachTrailerToTruck(attachPickerTrailer.id, truck.id);
+                    setAttachPickerTrailer(null);
+                    setStatusMessage({
+                      type: result.success ? 'success' : 'error',
+                      text: result.message ?? (result.success ? 'Bağlandı' : 'Bağlama başarısız'),
+                    });
+                  }}
+                  variant="secondary"
+                  compact
+                  fullWidth
+                  style={styles.shopAction}
+                />
+              ))}
+              <ActionButton
+                label="Vazgeç"
+                onPress={() => setAttachPickerTrailer(null)}
+                variant="secondary"
+                compact
+                fullWidth
+                style={styles.shopAction}
+              />
+            </AppCard>
+          ) : null}
         </View>
       ) : null}
 
-      {activeTab === 'shop' ? (
+      {activeTab === 'drivers' ? (
         <View style={styles.tabContent}>
-          <SectionTitle title="Kamyon Pazarı" subtitle="Yeni kamyon satın al" compact />
-          {sortedTruckMarket.length === 0 ? (
-            <EmptyState title="Mağaza şu anda boş" icon="inventory" />
-          ) : (
-            sortedTruckMarket.map((template) => (
-              <ShopTruckCard
-                key={template.id}
-                template={template}
-                playerMoney={playerMoney}
-                playerLevel={playerLevel}
-                ownedCount={ownedTruckCountByCatalog.get(template.id) ?? 0}
-                canBuy={typeof buyTruck === 'function'}
-                canLease={typeof leaseTruck === 'function'}
-                onBuy={handleBuyTruck}
-                onLease={handleLeaseTruck}
-              />
-            ))
-          )}
+          <View style={styles.driverHireRow}>
+            <Pressable style={styles.driverHireBtn} onPress={handleGoToHireDrivers}>
+              <GameIcon name="plus" size={14} color="#FFFFFF" />
+              <Text style={styles.driverHireBtnText}>Şoför İşe Al</Text>
+            </Pressable>
+            <View style={[styles.driverSlotBadge, { minWidth: driverHireLayout.slotBadgeWidth }]}>
+              <Text style={styles.driverSlotValue}>
+                {drivers.length} / {trucks.length}
+              </Text>
+              <Text style={styles.driverSlotLabel}>slot</Text>
+            </View>
+          </View>
 
-          <SectionTitle
-            title="Şoför Havuzu"
-            subtitle="Yeni şoför işe al"
-            compact
-            style={styles.shopSectionSpaced}
-          />
-          {driverPool.length === 0 ? (
-            <EmptyState title="Mağaza şu anda boş" icon="driver" />
+          {drivers.length === 0 ? (
+            <EmptyState
+              title="Henüz şoförün yok"
+              message="Yeni araçlarını kullanabilmek için şoför işe al."
+              icon="driver"
+              actionLabel="Şoför İşe Al"
+              onAction={handleGoToHireDrivers}
+              compact
+            />
           ) : (
-            driverPool.map((template) => (
-              <ShopDriverCard
-                key={template.id}
-                template={template}
-                playerMoney={playerMoney}
-                playerLevel={playerLevel}
-                alreadyHired={isDriverPoolItemHired(drivers, template.id)}
-                canHire={typeof hireDriver === 'function'}
-                onHire={handleHireDriver}
+            drivers.map((driver) => (
+              <DriverCard
+                key={driver.id}
+                driver={driver}
+                trucks={trucks}
+                homeCityId={player.homeCityId}
+                activeDelivery={deliveryByDriverId.get(driver.id)}
+                onAssign={handleAssignDriver}
+                onTraining={handleDriverTraining}
+                onDetail={handleDriverDetail}
+                onMore={handleDriverMore}
               />
             ))
           )}
@@ -1428,6 +910,7 @@ export default function FleetScreen() {
         onStarted={(message) => setStatusMessage({ type: 'success', text: message })}
         onError={(message) => setStatusMessage({ type: 'error', text: message })}
       />
+      </View>
     </AppScreen>
   );
 }
@@ -1444,7 +927,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   statusBanner: {
-    marginBottom: spacing.sm,
+    marginBottom: 0,
   },
   statusBannerRow: {
     flexDirection: 'row',
@@ -1456,13 +939,168 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flex: 1,
   },
+  screenStack: {
+    gap: FLEET_SECTION_GAP,
+  },
+  fleetHeader: {
+    height: FLEET_HEADER_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 8,
+  },
+  fleetHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fleetTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#F3F7FF',
+    lineHeight: 28,
+  },
+  fleetSubtitle: {
+    fontSize: 11.5,
+    color: '#A9B6CC',
+    marginTop: 2,
+    lineHeight: 14,
+  },
   metricStrip: {
-    gap: spacing.sm,
-    paddingBottom: spacing.sm,
-    paddingRight: spacing.sm,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  metricTile: {
+    flex: 1,
+    minWidth: 0,
+    height: FLEET_METRIC_HEIGHT,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardSoft,
+    paddingHorizontal: 5,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  metricIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  metricTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  metricLabel: {
+    fontSize: 8,
+    lineHeight: 10,
+    color: colors.textMuted,
+    marginBottom: 1,
+  },
+  metricValue: {
+    fontSize: 14,
+    lineHeight: 16,
+    fontWeight: '800',
+  },
+  segmentContainer: {
+    height: 44,
+    borderRadius: 14,
+    padding: 3,
+    backgroundColor: FLEET_SEGMENT_BG,
+    borderWidth: 1,
+    borderColor: FLEET_SEGMENT_BORDER,
+    flexDirection: 'row',
+    gap: 3,
+  },
+  segmentTab: {
+    flex: 1,
+    height: 36,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  segmentTabActive: {
+    backgroundColor: 'rgba(35,136,255,0.13)',
+    borderColor: colors.accentBlue,
+  },
+  segmentLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#8795AA',
+  },
+  segmentLabelActive: {
+    color: colors.accentBlue,
+    fontWeight: '700',
   },
   tabContent: {
-    marginTop: spacing.sm,
+    gap: FLEET_SECTION_GAP,
+  },
+  driverHireRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  driverHireBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 13,
+    backgroundColor: colors.accentBlue,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+  },
+  driverHireBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  driverSlotBadge: {
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#0D1A2D',
+    borderWidth: 1,
+    borderColor: 'rgba(50,95,150,0.38)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    flexShrink: 0,
+  },
+  driverSlotValue: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#F3F7FF',
+    lineHeight: 13,
+  },
+  driverSlotLabel: {
+    fontSize: 7.5,
+    color: '#74839B',
+    lineHeight: 9,
+    marginTop: 1,
+  },
+  trailerSectionHeader: {
+    gap: 3,
+    marginBottom: 2,
+  },
+  trailerSectionTitle: {
+    fontSize: 15.5,
+    fontWeight: '800',
+    color: '#F3F7FF',
+    lineHeight: 18,
+  },
+  trailerSectionSubtitle: {
+    fontSize: 10,
+    color: '#91A0B8',
+    lineHeight: 13,
   },
   fleetCard: {
     marginBottom: 11,

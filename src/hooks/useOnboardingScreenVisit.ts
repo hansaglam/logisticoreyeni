@@ -32,13 +32,13 @@ export function useActiveOnboardingHint(stepIds: OnboardingStepId[]) {
         step.hintDescription &&
         shouldShowOnboardingHint(onboarding, step.hintId, stepId)
       ) {
-        const isMarketStep = stepId === 'market_intro' || stepId === 'first_trade';
+        const badgeLabel = 'REHBER' as OnboardingHintBadge;
         return {
           hintId: step.hintId,
           title: step.hintTitle,
           description: step.hintDescription,
           icon: step.icon as GameIconName,
-          badgeLabel: (isMarketStep ? 'İPUCU' : 'REHBER') as OnboardingHintBadge,
+          badgeLabel,
           accentVariant: step.variant === 'reward' ? ('reward' as const) : ('guide' as const),
           onDismiss: () => dismissHint(step.hintId!),
         };

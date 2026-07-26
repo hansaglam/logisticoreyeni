@@ -1,63 +1,95 @@
 /**
- * WorldMapCanvas.tsx
- *
- * Illüstratif harita görseli üzerine SVG rotalar, şehir pin'leri ve kamyon
- * marker'ları. Tüm overlay koordinatları tek mapBounds kaynağından hesaplanır.
+ * WorldMapCanvas — gömülü etiketli lojistik harita üzerine yalnızca dinamik katmanlar.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Image,
-  LayoutChangeEvent,
-  Pressable,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Asset } from 'expo-asset';
-import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 
+import AnimatedDeliveryTruckMarker from './AnimatedDeliveryTruckMarker';
+import { resolveTruckMapLocation } from './mapTruckLocation';
+
+import {
+  getTurkeyLogisticsNetworkMap,
+  getTurkeyLogisticsNetworkMapModule,
+} from '../../assets/mapAssets';
 import { debugConfig } from '../../config/debug';
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
 import { normalizeCityId } from '../../data/networkPositions';
-import type { City, Contract, Delivery, Route, TruckTransfer } from '../../types/game';
+import type { City, Contract, Delivery, Route, Truck, TruckTransfer } from '../../types/game';
+import { GameIcon } from '../ui';
 import IdleTruckCountBadge from './IdleTruckCountBadge';
+import { getCityOverlayOffsets } from './mapCityOverlayOffsets';
+import { getMapLayerOpacity, isMapLayerVisible, type MapOverlayLayer } from './mapLayerVisibility';
+import InteractiveTurkeyMap, {
+  type InteractiveTurkeyMapHandle,
+  type MapCalibrationTapResult,
+  type MapDetailLevel,
+} from './InteractiveTurkeyMap';
+import type { NetworkFilterKey } from './mapTypes';
 
-const MAP_IMAGE = require('../../../assets/maps/turkey-relief.png');
+export type { NetworkFilterKey };
+import type { MapRoadPoint } from '../../data/mapRoadNetwork';
+import {
+  getRoadRoute,
+  getTruckPositionAlongRoadRoute,
+  normalizeMapDeliveryProgress,
+  normalizedPointToPixel,
+  polylineToSvgPath,
+  splitPolylineAtProgress,
+  type MapBounds as RoadMapBounds,
+} from './mapRoadUtils';
+import { normalizedToContentPoint, roundMapCoordinate } from './mapCoordinateUtils';
+import { computeMapContentSize } from './mapTransformUtils';
+import {
+  MAP_ACCENT,
+  MAP_DELIVERY_DESTINATION,
+  MAP_DELIVERY_DESTINATION_GLOW,
+  MAP_DELIVERY_ORIGIN,
+  MAP_MARKER_HIT_RADIUS,
+  MAP_ROUTE_COMPLETED,
+  MAP_ROUTE_COMPLETED_GLOW,
+  MAP_ROUTE_COMPLETED_GLOW_WIDTH,
+  MAP_ROUTE_COMPLETED_WIDTH,
+  MAP_ROUTE_REMAINING,
+  MAP_ROUTE_REMAINING_OPACITY,
+  MAP_ROUTE_REMAINING_WIDTH,
+  MAP_TRANSFER_ROUTE,
+  MAP_VIEWPORT_BACKGROUND,
+  MAP_VIEWPORT_HEIGHT,
+  MAP_VIEWPORT_HEIGHT_COMPACT,
+} from './mapTheme';
+
+const MAP_IMAGE = getTurkeyLogisticsNetworkMap();
+const COMPACT_BREAKPOINT = 360;
+const MAP_CALIBRATION_ENABLED = debugConfig.mapCalibrationEnabled;
 
 function resolveMapAspectRatio(): number {
   const source = Image.resolveAssetSource(MAP_IMAGE);
   if (source?.width && source?.height && source.height > 0) {
     return source.width / source.height;
   }
-  return 1.55;
+  return 1672 / 941;
 }
 
 const MAP_ASPECT_RATIO = resolveMapAspectRatio();
 
-// Enable debugConfig.mapCalibrationEnabled temporarily to calibrate map city positions.
-// Tap on the map and copy xPct/yPct values into worldMapPositions.ts.
-const MAP_CALIBRATION_ENABLED = debugConfig.mapCalibrationEnabled;
-
-export type NetworkFilterKey = 'all' | 'trucks' | 'depots' | 'routes' | 'opportunities';
-
-const PIN_RADIUS = 2.5;
-const PIN_STROKE_WIDTH = 1;
-const PIN_LABEL_OFFSET = 9;
-const LABELED_CITY_IDS = new Set(['istanbul', 'ankara']);
-
-const COLORS = {
-  routeActive: '#94A3B8',
-  pinFill: '#EF4444',
-  pinDepot: '#38BDF8',
-  pinStroke: '#0F172A',
-  text: '#F9FAFB',
-};
-
-const TRANSFER_ROUTE_COLOR = '#64748B';
-const TRANSFER_ROUTE_OPACITY = 0.55;
-const ACTIVE_ROUTE_WIDTH = 1;
-const ACTIVE_ROUTE_OPACITY = 0.4;
-const ACTIVE_ROUTE_SELECTED_OPACITY = 0.6;
+export type WorldMapCanvasHandle = InteractiveTurkeyMapHandle;
 
 export type WorldMapCanvasProps = {
   cities?: City[];
@@ -65,16 +97,21 @@ export type WorldMapCanvasProps = {
   contracts?: Contract[];
   activeDeliveries?: Delivery[];
   activeTransfers?: TruckTransfer[];
+  trucks?: Truck[];
+  homeCityId?: string;
   depotCityIds?: string[];
   idleTruckCountByCity?: Record<string, number>;
   selectedFilter: NetworkFilterKey;
+  selectedCityId?: string | null;
   featuredContract?: Contract | null;
   selectedContract?: Contract | null;
   selectedDeliveryId?: string | null;
   onCityPress?: (cityId: string) => void;
+  onBackgroundPress?: () => void;
   onRoutePress?: (routeId: string) => void;
   onContractPress?: (contractId: string) => void;
   onDeliveryPress?: (deliveryId: string) => void;
+  onMapGestureActiveChange?: (active: boolean) => void;
   calibrationMode?: boolean;
 };
 
@@ -103,335 +140,818 @@ function pointOnQuadratic(
   y2: number,
 ) {
   const oneMinusT = 1 - t;
-  const x = oneMinusT * oneMinusT * x1 + 2 * oneMinusT * t * cx + t * t * x2;
-  const y = oneMinusT * oneMinusT * y1 + 2 * oneMinusT * t * cy + t * t * y2;
-  return { x, y };
-}
-
-function pctToPixel(xPct: number, yPct: number, bounds: MapBounds) {
   return {
-    x: (xPct / 100) * bounds.width,
-    y: (yPct / 100) * bounds.height,
+    x: oneMinusT * oneMinusT * x1 + 2 * oneMinusT * t * cx + t * t * x2,
+    y: oneMinusT * oneMinusT * y1 + 2 * oneMinusT * t * cy + t * t * y2,
   };
 }
 
-function getIdleBadgeVisual(filter: NetworkFilterKey): { opacity: number; prominent: boolean } {
-  if (filter === 'trucks') return { opacity: 1, prominent: true };
-  if (filter === 'routes') return { opacity: 0.45, prominent: false };
-  if (filter === 'depots') return { opacity: 0.65, prominent: false };
-  return { opacity: 0.92, prominent: false };
+function normToPixel(xNorm: number, yNorm: number, bounds: MapBounds) {
+  return { x: xNorm * bounds.width, y: yNorm * bounds.height };
 }
 
-export default function WorldMapCanvas({
-  cities = [],
-  routes: _routes = [],
-  activeDeliveries = [],
-  activeTransfers = [],
-  depotCityIds = [],
-  idleTruckCountByCity,
-  selectedFilter,
-  featuredContract: _featuredContract,
-  selectedContract: _selectedContract,
-  selectedDeliveryId,
-  onCityPress,
-  onRoutePress: _onRoutePress,
-  onContractPress: _onContractPress,
-  onDeliveryPress,
-  calibrationMode = false,
-}: WorldMapCanvasProps) {
-  const [containerWidth, setContainerWidth] = useState(0);
-  const [mapImageReady, setMapImageReady] = useState(false);
+function routeTouchesCity(
+  originCityId: string,
+  destinationCityId: string,
+  cityId: string | null | undefined,
+): boolean {
+  if (!cityId) return true;
+  const normalized = normalizeCityId(cityId);
+  return (
+    normalizeCityId(originCityId) === normalized ||
+    normalizeCityId(destinationCityId) === normalized
+  );
+}
+
+function SelectedCityRing({ cx, cy }: { cx: number; cy: number }) {
+  return (
+    <>
+      <Circle cx={cx} cy={cy} r={18} fill="none" stroke={MAP_ACCENT} strokeWidth={1.4} strokeOpacity={0.35} />
+      <Circle cx={cx} cy={cy} r={14} fill="none" stroke={MAP_ACCENT} strokeWidth={2} strokeOpacity={0.92} />
+    </>
+  );
+}
+
+function DeliveryOriginMarker({ cx, cy, opacity }: { cx: number; cy: number; opacity: number }) {
+  return (
+    <>
+      <Circle
+        cx={cx}
+        cy={cy}
+        r={11}
+        fill="none"
+        stroke={MAP_DELIVERY_ORIGIN}
+        strokeWidth={1.5}
+        strokeOpacity={0.45 * opacity}
+      />
+      <Circle
+        cx={cx}
+        cy={cy}
+        r={7.5}
+        fill="none"
+        stroke={MAP_DELIVERY_ORIGIN}
+        strokeWidth={2}
+        strokeOpacity={opacity}
+      />
+      <Circle cx={cx} cy={cy} r={3} fill={MAP_DELIVERY_ORIGIN} fillOpacity={opacity} />
+    </>
+  );
+}
+
+function DeliveryDestinationMarker({ cx, cy, opacity }: { cx: number; cy: number; opacity: number }) {
+  return (
+    <>
+      <Circle
+        cx={cx}
+        cy={cy}
+        r={14}
+        fill="none"
+        stroke={MAP_DELIVERY_DESTINATION_GLOW}
+        strokeWidth={2}
+        strokeOpacity={opacity}
+      />
+      <Circle
+        cx={cx}
+        cy={cy}
+        r={10}
+        fill="none"
+        stroke={MAP_DELIVERY_DESTINATION}
+        strokeWidth={2.5}
+        strokeOpacity={opacity}
+      />
+      <Circle cx={cx} cy={cy} r={4} fill={MAP_DELIVERY_DESTINATION} fillOpacity={opacity} />
+    </>
+  );
+}
+
+interface DeliveryRouteRenderItem {
+  delivery: Delivery;
+  hasRoute: boolean;
+  completedPath: string;
+  remainingPath: string;
+  completedGlowPath: string;
+  origin: { x: number; y: number };
+  destination: { x: number; y: number };
+  truckPixel: { x: number; y: number };
+  truckAngle: number;
+  normalizedProgress: number;
+  opacity: number;
+}
+
+function logTruckPositionDebug(params: {
+  originCityId: string;
+  destinationCityId: string;
+  progress: number | undefined;
+  normalizedProgress: number;
+  routeStart: { x: number; y: number };
+  routeEnd: { x: number; y: number };
+  calculatedTruckPoint: { x: number; y: number };
+}) {
+  if (!__DEV__) return;
+  console.log('[map-truck]', {
+    originCityId: params.originCityId,
+    destinationCityId: params.destinationCityId,
+    progress: params.progress,
+    normalizedProgress: params.normalizedProgress,
+    routeStart: params.routeStart,
+    routeEnd: params.routeEnd,
+    calculatedTruckPoint: params.calculatedTruckPoint,
+  });
+}
+
+function logMissingRoadRoute(originCityId: string, destinationCityId: string) {
+  if (__DEV__) {
+    console.warn('[map-road] route not found', {
+      from: originCityId,
+      to: destinationCityId,
+    });
+  }
+}
+
+function WorldMapCanvasInner(
+  {
+    cities = [],
+    contracts = [],
+    activeDeliveries = [],
+    activeTransfers = [],
+    trucks = [],
+    homeCityId,
+    depotCityIds = [],
+    idleTruckCountByCity,
+    selectedFilter,
+    selectedCityId,
+    featuredContract,
+    selectedContract: _selectedContract,
+    selectedDeliveryId,
+    onCityPress,
+    onBackgroundPress,
+    onRoutePress: _onRoutePress,
+    onContractPress: _onContractPress,
+    onDeliveryPress,
+    onMapGestureActiveChange,
+    calibrationMode = false,
+  }: WorldMapCanvasProps,
+  ref: React.ForwardedRef<WorldMapCanvasHandle>,
+) {
+  const mapRef = useRef<InteractiveTurkeyMapHandle>(null);
+  const [detailLevel, setDetailLevel] = useState<MapDetailLevel>('low');
+  useImperativeHandle(ref, () => ({
+    resetToOperational: () => mapRef.current?.resetToOperational(),
+  }));
+
+  const { width: screenWidth } = useWindowDimensions();
+  const isCompact = screenWidth < COMPACT_BREAKPOINT;
+  const viewportHeight = isCompact ? MAP_VIEWPORT_HEIGHT_COMPACT : MAP_VIEWPORT_HEIGHT;
+  const [mapImageReady, setMapImageReady] = React.useState(false);
+  const [calibrationDots, setCalibrationDots] = useState<MapRoadPoint[]>([]);
+
+  const contentSize = useMemo<MapBounds>(
+    () => computeMapContentSize(viewportHeight, MAP_ASPECT_RATIO),
+    [viewportHeight],
+  );
 
   useEffect(() => {
     let cancelled = false;
-
     void (async () => {
       try {
-        const asset = Asset.fromModule(MAP_IMAGE);
+        const asset = Asset.fromModule(getTurkeyLogisticsNetworkMapModule());
         await asset.downloadAsync();
         if (!cancelled && __DEV__) {
-          console.log('[map] asset preloaded', asset.localUri ?? asset.uri);
+          console.log('[map] logistics network asset preloaded');
         }
       } catch (error) {
         if (!cancelled && __DEV__) {
-          console.warn('[map] asset preload failed', error);
+          console.warn('[map] logistics network asset preload failed', error);
         }
       }
     })();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const mapBounds = useMemo<MapBounds>(() => {
-    const width = containerWidth;
-    const height = width > 0 ? width / MAP_ASPECT_RATIO : 0;
-    return { width, height };
-  }, [containerWidth]);
-
-  const handleWrapperLayout = useCallback((event: LayoutChangeEvent) => {
-    const { width } = event.nativeEvent.layout;
-    if (width > 0) {
-      setContainerWidth(width);
-    }
-  }, []);
-
-  const handleCalibrationTap = useCallback(
-    (viewportX: number, viewportY: number) => {
-      if (!MAP_CALIBRATION_ENABLED || mapBounds.width === 0 || mapBounds.height === 0) {
-        return;
-      }
-      const xPct = Math.round((viewportX / mapBounds.width) * 1000) / 10;
-      const yPct = Math.round((viewportY / mapBounds.height) * 1000) / 10;
-      console.log('[calibration]', { xPct, yPct });
-    },
-    [mapBounds],
+  const mapBounds = contentSize;
+  const normalizedDepotIds = useMemo(
+    () => new Set(depotCityIds.map(normalizeCityId)),
+    [depotCityIds],
   );
 
-  const handleMapImageLoad = useCallback(() => {
-    setMapImageReady(true);
-    if (__DEV__) {
-      console.log('[map] image loaded');
+  const opportunityCityIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const contract of contracts) {
+      if (contract.status !== 'available') continue;
+      ids.add(normalizeCityId(contract.originCityId));
     }
-  }, []);
-
-  const handleMapImageError = useCallback(() => {
-    setMapImageReady(false);
-    if (__DEV__) {
-      console.warn('[map] image failed to load');
+    if (featuredContract?.originCityId) {
+      ids.add(normalizeCityId(featuredContract.originCityId));
     }
-  }, []);
+    return ids;
+  }, [contracts, featuredContract]);
 
-  const showTrucks = selectedFilter === 'all' || selectedFilter === 'trucks';
-  const showDepots = selectedFilter === 'all' || selectedFilter === 'depots';
-  const showActiveRoutes =
-    selectedFilter === 'all' || selectedFilter === 'trucks' || selectedFilter === 'routes';
-  const idleBadgeVisual = getIdleBadgeVisual(selectedFilter);
-  const showIdleTruckBadges =
+  const tappableCities = useMemo(() => {
+    return cities.filter((city) => {
+      const pos = getWorldMapCityPosition(city.id);
+      if (!pos) return false;
+      const cityNorm = normalizeCityId(city.id);
+      const isDepot = normalizedDepotIds.has(cityNorm);
+      if (selectedFilter === 'depots') return isDepot;
+      if (selectedFilter === 'opportunities') return opportunityCityIds.has(cityNorm);
+      return true;
+    });
+  }, [cities, normalizedDepotIds, opportunityCityIds, selectedFilter]);
+
+  const runningDeliveries = useMemo(
+    () => activeDeliveries.filter((d) => d.status === 'preparing' || d.status === 'on_route'),
+    [activeDeliveries],
+  );
+
+  const runningDeliveryProgressKey = useMemo(
+    () =>
+      runningDeliveries
+        .map(
+          (d) =>
+            `${d.id}:${d.originCityId}:${d.destinationCityId}:${d.progress ?? 0}`,
+        )
+        .join('|'),
+    [runningDeliveries],
+  );
+  const runningTransfers = useMemo(
+    () => (activeTransfers ?? []).filter((t) => t.status === 'active'),
+    [activeTransfers],
+  );
+
+  const featuredCityId = useMemo(
+    () => (featuredContract?.originCityId ? normalizeCityId(featuredContract.originCityId) : null),
+    [featuredContract],
+  );
+
+  const showRoutes =
     selectedFilter === 'all' ||
     selectedFilter === 'trucks' ||
-    selectedFilter === 'routes' ||
-    selectedFilter === 'depots';
-  const runningTransfers = (activeTransfers ?? []).filter((transfer) => transfer.status === 'active');
-  const showTransfers = showTrucks && runningTransfers.length > 0;
+    selectedFilter === 'routes';
 
-  const viewportStyle =
-    containerWidth > 0
-      ? { width: mapBounds.width, height: mapBounds.height }
-      : { width: '100%' as const, aspectRatio: MAP_ASPECT_RATIO };
+  const layerVisible = useCallback(
+    (layer: MapOverlayLayer, cityId?: string, isFeaturedOpportunity = false) =>
+      isMapLayerVisible({
+        layer,
+        detailLevel,
+        filter: selectedFilter,
+        selectedCityId,
+        cityId,
+        isFeaturedOpportunity,
+      }),
+    [detailLevel, selectedCityId, selectedFilter],
+  );
+
+  const layerOpacity = useCallback(
+    (layer: MapOverlayLayer, cityId?: string, isFeaturedOpportunity = false) =>
+      getMapLayerOpacity({
+        layer,
+        detailLevel,
+        filter: selectedFilter,
+        selectedCityId,
+        cityId,
+        isFeaturedOpportunity,
+      }),
+    [detailLevel, selectedCityId, selectedFilter],
+  );
+
+  const handleCalibrationTap = useCallback(
+    (result: MapCalibrationTapResult) => {
+      if (!MAP_CALIBRATION_ENABLED || mapBounds.width === 0 || !result.isInsideContent) return;
+
+      const point: MapRoadPoint = {
+        x: roundMapCoordinate(result.normalized.x, 4),
+        y: roundMapCoordinate(result.normalized.y, 4),
+      };
+
+      console.log('[Map calibration]');
+      console.log('viewport:', {
+        x: roundMapCoordinate(result.viewport.x, 4),
+        y: roundMapCoordinate(result.viewport.y, 4),
+      });
+      console.log('content:', {
+        x: roundMapCoordinate(result.content.x, 4),
+        y: roundMapCoordinate(result.content.y, 4),
+      });
+      console.log('normalized:', point);
+      console.log('transform:', {
+        scale: roundMapCoordinate(result.transform.scale, 4),
+        translateX: roundMapCoordinate(result.transform.translateX, 4),
+        translateY: roundMapCoordinate(result.transform.translateY, 4),
+      });
+
+      if (__DEV__) {
+        setCalibrationDots((prev) => {
+          const next = [...prev, point];
+          console.log('points array:', JSON.stringify(next, null, 2));
+          return next;
+        });
+      }
+    },
+    [mapBounds.width],
+  );
+
+  const handleCityPressAtContentPoint = useCallback(
+    (contentX: number, contentY: number) => {
+      let nearestCityId: string | null = null;
+      let nearestDistance = MAP_MARKER_HIT_RADIUS * MAP_MARKER_HIT_RADIUS;
+
+      for (const city of tappableCities) {
+        const pos = getWorldMapCityPosition(city.id);
+        if (!pos) continue;
+        const pixel = normToPixel(pos.x, pos.y, mapBounds);
+        const dx = pixel.x - contentX;
+        const dy = pixel.y - contentY;
+        const distanceSq = dx * dx + dy * dy;
+        if (distanceSq <= nearestDistance) {
+          nearestDistance = distanceSq;
+          nearestCityId = city.id;
+        }
+      }
+
+      if (nearestCityId) {
+        onCityPress?.(nearestCityId);
+      } else {
+        onBackgroundPress?.();
+      }
+    },
+    [mapBounds, onBackgroundPress, onCityPress, tappableCities],
+  );
+
+  const resolveRouteOpacity = useCallback(
+    (originCityId: string, destinationCityId: string, isSelectedDelivery: boolean) => {
+      const base = isSelectedDelivery ? 1 : 0.92;
+      const routeDim = layerOpacity('route');
+      if (!selectedCityId) return base * routeDim;
+      if (routeTouchesCity(originCityId, destinationCityId, selectedCityId)) {
+        return base;
+      }
+      return 0.18 * routeDim;
+    },
+    [layerOpacity, selectedCityId],
+  );
+
+  const deliveryRouteRenderData = useMemo((): DeliveryRouteRenderItem[] => {
+    if (!showRoutes || runningDeliveries.length === 0 || mapBounds.width === 0) return [];
+    if (!layerVisible('route')) return [];
+
+    const roadBounds: RoadMapBounds = mapBounds;
+
+    const items: DeliveryRouteRenderItem[] = [];
+
+    for (const delivery of runningDeliveries) {
+      const from = getWorldMapCityPosition(delivery.originCityId);
+      const to = getWorldMapCityPosition(delivery.destinationCityId);
+      if (!from || !to) continue;
+
+      const origin = normToPixel(from.x, from.y, mapBounds);
+      const destination = normToPixel(to.x, to.y, mapBounds);
+      const opacity = resolveRouteOpacity(
+        delivery.originCityId,
+        delivery.destinationCityId,
+        delivery.id === selectedDeliveryId,
+      );
+      if (opacity <= 0) continue;
+
+      const roadPoints = getRoadRoute(delivery.originCityId, delivery.destinationCityId);
+      if (!roadPoints || roadPoints.length < 2) {
+        logMissingRoadRoute(delivery.originCityId, delivery.destinationCityId);
+        items.push({
+          delivery,
+          hasRoute: false,
+          completedPath: '',
+          remainingPath: '',
+          completedGlowPath: '',
+          origin,
+          destination,
+          truckPixel: { x: 0, y: 0 },
+          truckAngle: 0,
+          normalizedProgress: 0,
+          opacity,
+        });
+        continue;
+      }
+
+      const normalizedProgress = normalizeMapDeliveryProgress(delivery.progress);
+      const { completedPoints, remainingPoints } = splitPolylineAtProgress(
+        roadPoints,
+        normalizedProgress,
+      );
+      const truckSample = getTruckPositionAlongRoadRoute(roadPoints, delivery.progress);
+      const truckPixel = normalizedPointToPixel(truckSample.point, roadBounds);
+
+      logTruckPositionDebug({
+        originCityId: delivery.originCityId,
+        destinationCityId: delivery.destinationCityId,
+        progress: delivery.progress,
+        normalizedProgress,
+        routeStart: roadPoints[0],
+        routeEnd: roadPoints[roadPoints.length - 1],
+        calculatedTruckPoint: truckSample.point,
+      });
+
+      items.push({
+        delivery,
+        hasRoute: true,
+        completedPath: polylineToSvgPath(completedPoints, roadBounds),
+        remainingPath: polylineToSvgPath(remainingPoints, roadBounds),
+        completedGlowPath: polylineToSvgPath(completedPoints, roadBounds),
+        origin,
+        destination,
+        truckPixel,
+        truckAngle: truckSample.angleRadians,
+        normalizedProgress,
+        opacity,
+      });
+    }
+
+    return items;
+  }, [
+    showRoutes,
+    runningDeliveries,
+    runningDeliveryProgressKey,
+    mapBounds,
+    layerVisible,
+    resolveRouteOpacity,
+    selectedDeliveryId,
+  ]);
+
+  const idleTruckMarkers = useMemo(() => {
+    if (!showRoutes || trucks.length === 0 || mapBounds.width === 0) return [];
+    if (!layerVisible('truck')) return [];
+
+    const onRouteTruckIds = new Set<string>();
+    for (const delivery of runningDeliveries) {
+      onRouteTruckIds.add(delivery.truckId);
+    }
+    for (const transfer of runningTransfers) {
+      onRouteTruckIds.add(transfer.truckId);
+    }
+
+    return trucks
+      .filter((truck) => !onRouteTruckIds.has(truck.id))
+      .map((truck) => {
+        const location = resolveTruckMapLocation({ truck, mapBounds, homeCityId });
+        if (location.kind !== 'city' || !location.pixelPoint) {
+          return null;
+        }
+        const opacity = layerOpacity('truck') * 0.82;
+        if (opacity <= 0) {
+          return null;
+        }
+        return { truck, location, opacity };
+      })
+      .filter((item): item is NonNullable<typeof item> => item != null);
+  }, [
+    showRoutes,
+    trucks,
+    runningDeliveries,
+    runningTransfers,
+    mapBounds,
+    layerVisible,
+    layerOpacity,
+    homeCityId,
+  ]);
+
+  const handleDetailLevelChange = useCallback((level: MapDetailLevel) => {
+    setDetailLevel(level);
+  }, []);
 
   return (
-    <View style={styles.wrapper} onLayout={handleWrapperLayout}>
-      <View style={[styles.viewport, viewportStyle]}>
-        <View
-          collapsable={false}
-          style={
-            containerWidth > 0
-              ? { width: mapBounds.width, height: mapBounds.height }
-              : styles.viewportPlaceholder
-          }
-        >
-          <Image
-            source={MAP_IMAGE}
-            style={[StyleSheet.absoluteFill, styles.mapImage]}
-            resizeMode="cover"
-            onLoad={handleMapImageLoad}
-            onError={handleMapImageError}
-          />
+    <View style={styles.wrapper}>
+      <InteractiveTurkeyMap
+        ref={mapRef}
+        viewportHeight={viewportHeight}
+        contentSize={contentSize}
+        onCityPressAtContentPoint={handleCityPressAtContentPoint}
+        onCalibrationTap={handleCalibrationTap}
+        onDetailLevelChange={handleDetailLevelChange}
+        onMapGestureActiveChange={onMapGestureActiveChange}
+        calibrationMode={calibrationMode}
+      >
+        <Image
+          source={MAP_IMAGE}
+          style={{ width: contentSize.width, height: contentSize.height }}
+          onLoad={() => setMapImageReady(true)}
+          onError={() => setMapImageReady(false)}
+        />
 
-          {!mapImageReady ? <View style={styles.mapImageFallback} pointerEvents="none" /> : null}
+        {!mapImageReady ? <View style={styles.fallback} pointerEvents="none" /> : null}
 
-          {mapBounds.width > 0 && (
-            <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
-              {showActiveRoutes &&
-                showTrucks &&
-                activeDeliveries.map((delivery) => {
-                  const from = getWorldMapCityPosition(delivery.originCityId);
-                  const to = getWorldMapCityPosition(delivery.destinationCityId);
-                  if (!from || !to) return null;
-                  const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
-                  const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
-                  const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
-                  const isSelected = delivery.id === selectedDeliveryId;
-                  const truckPos = pointOnQuadratic(
-                    Math.max(0, Math.min(1, delivery.progress)),
-                    p1.x,
-                    p1.y,
-                    cx,
-                    cy,
-                    p2.x,
-                    p2.y,
-                  );
-                  return (
-                    <React.Fragment key={delivery.id}>
-                      <Path
-                        d={d}
-                        stroke={COLORS.routeActive}
-                        strokeWidth={ACTIVE_ROUTE_WIDTH}
-                        strokeOpacity={isSelected ? ACTIVE_ROUTE_SELECTED_OPACITY : ACTIVE_ROUTE_OPACITY}
-                        fill="none"
-                      />
-                      <Circle
-                        cx={truckPos.x}
-                        cy={truckPos.y}
-                        r={isSelected ? 4 : 3}
-                        fill="#0F172A"
-                        stroke={COLORS.routeActive}
-                        strokeWidth={1.5}
-                        strokeOpacity={isSelected ? 0.85 : 0.65}
-                        onPress={() => onDeliveryPress?.(delivery.id)}
-                      />
-                    </React.Fragment>
-                  );
-                })}
+        {mapBounds.width > 0 && deliveryRouteRenderData.length > 0 ? (
+          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
+            {deliveryRouteRenderData.map(
+              ({
+                delivery,
+                hasRoute,
+                completedPath,
+                remainingPath,
+                completedGlowPath,
+                origin,
+                destination,
+                opacity,
+              }) => (
+                <React.Fragment key={delivery.id}>
+                  {hasRoute ? (
+                    <>
+                      {remainingPath ? (
+                        <Path
+                          d={remainingPath}
+                          stroke={MAP_ROUTE_REMAINING}
+                          strokeWidth={MAP_ROUTE_REMAINING_WIDTH}
+                          strokeOpacity={MAP_ROUTE_REMAINING_OPACITY * opacity}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                        />
+                      ) : null}
+                      {completedGlowPath ? (
+                        <Path
+                          d={completedGlowPath}
+                          stroke={MAP_ROUTE_COMPLETED_GLOW}
+                          strokeWidth={MAP_ROUTE_COMPLETED_GLOW_WIDTH}
+                          strokeOpacity={opacity}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                        />
+                      ) : null}
+                      {completedPath ? (
+                        <Path
+                          d={completedPath}
+                          stroke={MAP_ROUTE_COMPLETED}
+                          strokeWidth={MAP_ROUTE_COMPLETED_WIDTH}
+                          strokeOpacity={opacity}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                        />
+                      ) : null}
+                    </>
+                  ) : null}
+                  <DeliveryOriginMarker cx={origin.x} cy={origin.y} opacity={opacity} />
+                  <DeliveryDestinationMarker cx={destination.x} cy={destination.y} opacity={opacity} />
+                </React.Fragment>
+              ),
+            )}
+          </Svg>
+        ) : null}
 
-              {showTransfers &&
-                runningTransfers.map((transfer) => {
-                  const from = getWorldMapCityPosition(transfer.fromCityId);
-                  const to = getWorldMapCityPosition(transfer.toCityId);
-                  if (!from || !to) return null;
-                  const p1 = pctToPixel(from.xPct, from.yPct, mapBounds);
-                  const p2 = pctToPixel(to.xPct, to.yPct, mapBounds);
-                  const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
-                  const truckPos = pointOnQuadratic(
-                    Math.max(0, Math.min(1, transfer.progress)),
-                    p1.x,
-                    p1.y,
-                    cx,
-                    cy,
-                    p2.x,
-                    p2.y,
-                  );
-                  return (
-                    <React.Fragment key={transfer.id}>
-                      <Path
-                        d={d}
-                        stroke={TRANSFER_ROUTE_COLOR}
-                        strokeWidth={ACTIVE_ROUTE_WIDTH}
-                        strokeOpacity={TRANSFER_ROUTE_OPACITY}
-                        strokeDasharray="4 3"
-                        fill="none"
-                      />
-                      <Circle
-                        cx={truckPos.x}
-                        cy={truckPos.y}
-                        r={3}
-                        fill="#0F172A"
-                        stroke={TRANSFER_ROUTE_COLOR}
-                        strokeWidth={1.5}
-                        strokeOpacity={0.8}
-                      />
-                    </React.Fragment>
-                  );
-                })}
+        {__DEV__ && MAP_CALIBRATION_ENABLED && calibrationDots.length > 0 ? (
+          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill} pointerEvents="none">
+            {calibrationDots.map((point, index) => {
+              const pixel = normalizedToContentPoint(point.x, point.y, mapBounds);
+              return (
+                <Circle
+                  key={`calibration-${index}`}
+                  cx={pixel.x}
+                  cy={pixel.y}
+                  r={4}
+                  fill="#FF4D6D"
+                  fillOpacity={0.9}
+                />
+              );
+            })}
+          </Svg>
+        ) : null}
 
-              {cities.map((city) => {
-                const pos = getWorldMapCityPosition(city.id);
-                if (!pos) return null;
-                const isDepot = depotCityIds.includes(city.id);
-                if (isDepot && !showDepots) return null;
-
-                const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
-                const fill = isDepot ? COLORS.pinDepot : COLORS.pinFill;
-                const showLabel = LABELED_CITY_IDS.has(city.id);
-
-                return (
-                  <React.Fragment key={city.id}>
+        {mapBounds.width > 0 && showRoutes && runningTransfers.length > 0 ? (
+          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
+            {runningTransfers.map((transfer) => {
+              const from = getWorldMapCityPosition(transfer.fromCityId);
+              const to = getWorldMapCityPosition(transfer.toCityId);
+              if (!from || !to) return null;
+              const p1 = normToPixel(from.x, from.y, mapBounds);
+              const p2 = normToPixel(to.x, to.y, mapBounds);
+              const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
+              const opacity = resolveRouteOpacity(transfer.fromCityId, transfer.toCityId, false);
+              if (!layerVisible('route')) return null;
+              const truckPos = pointOnQuadratic(
+                Math.max(0, Math.min(1, transfer.progress ?? 0)),
+                p1.x,
+                p1.y,
+                cx,
+                cy,
+                p2.x,
+                p2.y,
+              );
+              const showTruckMarker = layerVisible('truck');
+              return (
+                <React.Fragment key={transfer.id}>
+                  <Path
+                    d={d}
+                    stroke={MAP_TRANSFER_ROUTE}
+                    strokeWidth={2}
+                    strokeOpacity={opacity * 0.75}
+                    strokeDasharray="6 4"
+                    fill="none"
+                  />
+                  {showTruckMarker ? (
                     <Circle
-                      cx={pixel.x}
-                      cy={pixel.y}
-                      r={PIN_RADIUS}
-                      fill={fill}
-                      stroke={COLORS.pinStroke}
-                      strokeWidth={PIN_STROKE_WIDTH}
-                      onPress={() => onCityPress?.(city.id)}
+                      cx={truckPos.x}
+                      cy={truckPos.y}
+                      r={4.5}
+                      fill={MAP_VIEWPORT_BACKGROUND}
+                      stroke={MAP_TRANSFER_ROUTE}
+                      strokeWidth={1.8}
+                      strokeOpacity={opacity}
                     />
-                    {showLabel ? (
-                      <SvgText
-                        x={pixel.x}
-                        y={pixel.y + PIN_LABEL_OFFSET}
-                        fill={COLORS.text}
-                        fontSize={9}
-                        fontWeight="700"
-                        textAnchor="middle"
-                        onPress={() => onCityPress?.(city.id)}
-                      >
-                        {city.name}
-                      </SvgText>
-                    ) : null}
-                  </React.Fragment>
-                );
-              })}
-            </Svg>
-          )}
+                  ) : null}
+                </React.Fragment>
+              );
+            })}
+          </Svg>
+        ) : null}
 
-          {mapBounds.width > 0 && showIdleTruckBadges ? (
-            <View style={StyleSheet.absoluteFill} pointerEvents="none">
-              {cities.map((city) => {
+        {mapBounds.width > 0 ? (
+          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
+            {tappableCities.map((city) => {
+              const pos = getWorldMapCityPosition(city.id);
+              if (!pos) return null;
+              const isSelected =
+                normalizeCityId(city.id) === normalizeCityId(selectedCityId ?? '');
+              const pixel = normToPixel(pos.x, pos.y, mapBounds);
+              return (
+                <React.Fragment key={city.id}>
+                  <Circle
+                    cx={pixel.x}
+                    cy={pixel.y}
+                    r={MAP_MARKER_HIT_RADIUS}
+                    fill="transparent"
+                    onPress={() => onCityPress?.(city.id)}
+                  />
+                  {isSelected ? <SelectedCityRing cx={pixel.x} cy={pixel.y} /> : null}
+                </React.Fragment>
+              );
+            })}
+          </Svg>
+        ) : null}
+
+        {mapBounds.width > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {tappableCities.map((city) => {
+              const pos = getWorldMapCityPosition(city.id);
+              if (!pos) return null;
+              const idleCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
+              if (idleCount <= 0) return null;
+              if (!layerVisible('badge', city.id)) return null;
+              const pixel = normToPixel(pos.x, pos.y, mapBounds);
+              const offsets = getCityOverlayOffsets(normalizeCityId(city.id));
+              const opacity = layerOpacity('badge', city.id);
+              if (opacity <= 0) return null;
+              return (
+                <IdleTruckCountBadge
+                  key={`idle-${city.id}`}
+                  count={idleCount}
+                  opacity={opacity}
+                  prominent={selectedFilter === 'trucks'}
+                  style={{
+                    position: 'absolute',
+                    left: pixel.x + offsets.countBadge.x,
+                    top: pixel.y + offsets.countBadge.y,
+                  }}
+                />
+              );
+            })}
+          </View>
+        ) : null}
+
+        {mapBounds.width > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {tappableCities
+              .filter((city) => normalizedDepotIds.has(normalizeCityId(city.id)))
+              .map((city) => {
+                if (!layerVisible('depot', city.id)) return null;
                 const pos = getWorldMapCityPosition(city.id);
                 if (!pos) return null;
-
-                const idleCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
-                if (idleCount <= 0) return null;
-
-                const pixel = pctToPixel(pos.xPct, pos.yPct, mapBounds);
-
+                const pixel = normToPixel(pos.x, pos.y, mapBounds);
+                const offsets = getCityOverlayOffsets(normalizeCityId(city.id));
+                const opacity = layerOpacity('depot', city.id);
+                if (opacity <= 0) return null;
                 return (
-                  <IdleTruckCountBadge
-                    key={`idle-badge-${city.id}`}
-                    count={idleCount}
-                    opacity={idleBadgeVisual.opacity}
-                    prominent={idleBadgeVisual.prominent}
+                  <View
+                    key={`depot-${city.id}`}
                     style={{
                       position: 'absolute',
-                      left: pixel.x + 5,
-                      top: pixel.y - 16,
+                      left: pixel.x + offsets.depot.x - 7,
+                      top: pixel.y + offsets.depot.y - 7,
+                      opacity,
                     }}
-                  />
+                  >
+                    <GameIcon name="warehouse" size={13} color={MAP_ACCENT} />
+                  </View>
                 );
               })}
-            </View>
-          ) : null}
-        </View>
-
-        {MAP_CALIBRATION_ENABLED && calibrationMode && mapBounds.width > 0 ? (
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={(event) => {
-              const { locationX, locationY } = event.nativeEvent;
-              handleCalibrationTap(locationX, locationY);
-            }}
-          />
+          </View>
         ) : null}
-      </View>
+
+        {mapBounds.width > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {tappableCities
+              .filter((city) => opportunityCityIds.has(normalizeCityId(city.id)))
+              .map((city) => {
+                const cityNorm = normalizeCityId(city.id);
+                const isFeatured = featuredCityId === cityNorm;
+                if (!layerVisible('opportunity', city.id, isFeatured)) return null;
+                const pos = getWorldMapCityPosition(city.id);
+                if (!pos) return null;
+                const pixel = normToPixel(pos.x, pos.y, mapBounds);
+                const offsets = getCityOverlayOffsets(cityNorm);
+                const opacity = layerOpacity('opportunity', city.id, isFeatured);
+                if (opacity <= 0) return null;
+                return (
+                  <View
+                    key={`opp-${city.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: pixel.x + offsets.opportunity.x - 7,
+                      top: pixel.y + offsets.opportunity.y - 7,
+                      opacity,
+                    }}
+                  >
+                    <GameIcon name="market" size={13} color="#F59E0B" />
+                  </View>
+                );
+              })}
+          </View>
+        ) : null}
+
+        {mapBounds.width > 0 && showRoutes && layerVisible('truck') && deliveryRouteRenderData.length > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            {deliveryRouteRenderData.map(
+              ({ delivery, hasRoute, truckPixel, truckAngle, normalizedProgress, opacity }) =>
+                hasRoute ? (
+                  <AnimatedDeliveryTruckMarker
+                    key={`delivery-truck-${delivery.id}`}
+                    pixelX={truckPixel.x}
+                    pixelY={truckPixel.y}
+                    angleRadians={truckAngle}
+                    progress={normalizedProgress}
+                    opacity={opacity * layerOpacity('truck')}
+                    onPress={() => onDeliveryPress?.(delivery.id)}
+                  />
+                ) : null,
+            )}
+          </View>
+        ) : null}
+
+        {mapBounds.width > 0 && showRoutes && layerVisible('truck') && idleTruckMarkers.length > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            {idleTruckMarkers.map(({ truck, location, opacity }) => (
+              <AnimatedDeliveryTruckMarker
+                key={`idle-truck-${truck.id}`}
+                pixelX={location.pixelPoint!.x}
+                pixelY={location.pixelPoint!.y}
+                angleRadians={location.angleRadians ?? 0}
+                progress={1}
+                opacity={opacity}
+              />
+            ))}
+          </View>
+        ) : null}
+
+        {mapBounds.width > 0 && showRoutes && layerVisible('truck') && runningTransfers.length > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {runningTransfers.map((transfer) => {
+              const from = getWorldMapCityPosition(transfer.fromCityId);
+              const to = getWorldMapCityPosition(transfer.toCityId);
+              if (!from || !to) return null;
+              const p1 = normToPixel(from.x, from.y, mapBounds);
+              const p2 = normToPixel(to.x, to.y, mapBounds);
+              const { cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
+              const progress = Math.max(0, Math.min(1, transfer.progress ?? 0));
+              const truckPos = pointOnQuadratic(progress, p1.x, p1.y, cx, cy, p2.x, p2.y);
+              const opacity =
+                layerOpacity('truck') * resolveRouteOpacity(transfer.fromCityId, transfer.toCityId, false);
+              if (opacity <= 0) return null;
+              return (
+                <View
+                  key={`transfer-truck-${transfer.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: truckPos.x - 8,
+                    top: truckPos.y - 8,
+                    opacity: opacity * 0.75,
+                  }}
+                >
+                  <GameIcon name="truck" size={14} color={MAP_TRANSFER_ROUTE} />
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+      </InteractiveTurkeyMap>
     </View>
   );
 }
 
+const WorldMapCanvas = memo(forwardRef(WorldMapCanvasInner));
+WorldMapCanvas.displayName = 'WorldMapCanvas';
+
+export default WorldMapCanvas;
+
 const styles = StyleSheet.create({
-  wrapper: {
-    width: '100%',
-    borderRadius: 20,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#1E293B',
-    position: 'relative',
-  },
-  viewport: {
-    overflow: 'hidden',
-    backgroundColor: '#111827',
-  },
-  viewportPlaceholder: {
-    width: '100%',
-    aspectRatio: MAP_ASPECT_RATIO,
-  },
-  mapImage: {
-    width: '100%',
-    height: '100%',
-  },
-  mapImageFallback: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#1E293B',
-  },
+  wrapper: { width: '100%' },
+  fallback: { ...StyleSheet.absoluteFillObject, backgroundColor: MAP_VIEWPORT_BACKGROUND },
 });

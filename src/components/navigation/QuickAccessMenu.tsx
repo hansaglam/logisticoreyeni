@@ -27,6 +27,7 @@ interface QuickAccessItemDef {
 const QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = (
   [
     { key: 'fleet', label: 'Filo', icon: 'truck' },
+    { key: 'shop', label: 'Mağaza', icon: 'inventory' },
     { key: 'warehouse', label: 'Depolar', icon: 'warehouse' },
     { key: 'finance', label: 'Finans', icon: 'cash' },
     { key: 'missions', label: 'Görevler', icon: 'contract' },

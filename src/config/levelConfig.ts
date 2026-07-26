@@ -584,7 +584,8 @@ export function applyCapacityProfileToTonnageRange(
     }
     case 'aspirational': {
       const aspirationalMin = Math.max(safeMin, ownedMax + 1);
-      const aspirationalMax = safeMax;
+      const fleetSoftCap = Math.max(ownedMax * 1.25, ownedMax + 5);
+      const aspirationalMax = Math.min(safeMax, Math.max(aspirationalMin, fleetSoftCap));
       if (aspirationalMax < aspirationalMin) {
         return null;
       }

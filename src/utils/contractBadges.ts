@@ -4,6 +4,11 @@
 
 import type { ContractAvailability } from '../types/game';
 import type { ContractRiskLevel } from '../simulation/contractPreview';
+import type { CapacityDisabledReasonKind } from '../simulation/cargoCapacity';
+import {
+  getCargoWeightClass,
+  getCargoWeightClassLabel,
+} from '../simulation/capacity';
 import { getContractAvailabilityLabel } from './contractAvailabilityDisplay';
 
 export interface ContractCardBadge {
@@ -43,8 +48,9 @@ export function getAvailabilityBadgeLabel(
   reason: ContractAvailability['reason'] | undefined,
   _playerLevel?: number,
   _requiredLevel?: number,
+  capacityDisabledReasonKind?: CapacityDisabledReasonKind,
 ): string | null {
-  return getContractAvailabilityLabel(reason);
+  return getContractAvailabilityLabel(reason, { capacityDisabledReasonKind });
 }
 
 function getAvailabilityBadgeStyle(
@@ -80,7 +86,11 @@ function getAvailabilityBadge(availability: ContractAvailability): ContractCardB
     return null;
   }
 
-  const label = getContractAvailabilityLabel(availability.reason);
+  const label =
+    availability.title ??
+    getContractAvailabilityLabel(availability.reason, {
+      capacityDisabledReasonKind: undefined,
+    });
   if (!label) {
     return null;
   }
@@ -120,7 +130,7 @@ function getRiskBadge(riskLevel: ContractRiskLevel, riskLabel: string): Contract
   };
 }
 
-/** Kart üzerinde en fazla 2 badge: önce uygunluk, sonra tip veya acil/risk. */
+/** Kart üzerinde en fazla 2 badge: önce uygunluk, sonra tip veya acil/risk/ağır yük. */
 export function buildContractCardBadges(params: {
   availability: ContractAvailability;
   playerLevel: number;
@@ -129,13 +139,33 @@ export function buildContractCardBadges(params: {
   riskLabel: string;
   contractType?: import('../types/game').ContractType;
   contractTypeLabel?: string;
+  cargoWeightTons?: number;
 }): ContractCardBadge[] {
-  const { availability, urgent, riskLevel, riskLabel, contractType, contractTypeLabel } = params;
+  const {
+    availability,
+    urgent,
+    riskLevel,
+    riskLabel,
+    contractType,
+    contractTypeLabel,
+    cargoWeightTons,
+  } = params;
   const badges: ContractCardBadge[] = [];
 
   const availabilityBadge = getAvailabilityBadge(availability);
   if (availabilityBadge) {
     badges.push(availabilityBadge);
+  }
+
+  const cargoWeightClass = cargoWeightTons != null ? getCargoWeightClass(cargoWeightTons) : null;
+  const cargoWeightLabel =
+    cargoWeightClass != null ? getCargoWeightClassLabel(cargoWeightClass) : null;
+  if (cargoWeightLabel) {
+    badges.push({
+      key: `cargo-${cargoWeightClass}`,
+      label: cargoWeightLabel,
+      ...(cargoWeightClass === 'oversized' ? RED : AMBER_MUTED),
+    });
   }
 
   if (contractType && contractType !== 'standard' && contractTypeLabel) {

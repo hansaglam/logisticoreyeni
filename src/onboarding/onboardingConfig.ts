@@ -12,126 +12,86 @@ export interface OnboardingStepConfig {
   route: OnboardingRoute;
   variant: NextActionVariant;
   icon: GameIconName;
-  /** Yalnızca kullanıcı CTA ile tamamlanır */
-  manualComplete?: boolean;
   hintId?: string;
   hintTitle?: string;
   hintDescription?: string;
+  /** Kamyon rotası artwork göster */
+  showArtwork?: boolean;
 }
 
 export const ONBOARDING_STEP_ORDER: OnboardingStepId[] = [
-  'welcome',
-  'first_contract',
+  'choose_first_contract',
+  'assign_team',
   'track_delivery',
-  'market_intro',
-  'first_trade',
-  'warehouse_intro',
-  'claim_rewards',
-  'finish',
+  'complete_first_delivery',
+  'claim_first_reward',
 ];
+
+export const ONBOARDING_TOTAL_STEPS = ONBOARDING_STEP_ORDER.length;
 
 export const ONBOARDING_STEPS: OnboardingStepConfig[] = [
   {
-    id: 'welcome',
-    title: 'LogistiCore’a Hoş Geldin',
-    description:
-      'Şirketini büyütmek için sözleşmeler al, teslimatlar yap ve piyasayı takip et.',
-    dashboardDescription:
-      'İlk hedefin: uygun bir sözleşme seçip ilk teslimatını başlatmak.',
-    ctaLabel: 'Başla',
-    route: null,
-    variant: 'primary',
-    icon: 'company',
-    manualComplete: true,
-  },
-  {
-    id: 'first_contract',
+    id: 'choose_first_contract',
     title: 'İlk İşini Seç',
-    description:
-      'İşler ekranında sana uygun sözleşmelerden biriyle ilk teslimatına başla.',
+    description: 'Uygun bir sözleşme seçerek lojistik operasyonuna başla.',
     ctaLabel: 'İşlere Git',
     route: 'Contracts',
     variant: 'primary',
     icon: 'contract',
-    hintId: 'contracts_first_contract',
+    showArtwork: true,
+    hintId: 'contracts_choose_first',
     hintTitle: 'Uygun İşler',
-    hintDescription:
-      'Başlatabileceğin işler üstte görünür. Bir işe dokunup teslimatı başlat.',
+    hintDescription: 'Başlatabileceğin işler üstte görünür. Bir işe dokunup devam et.',
+  },
+  {
+    id: 'assign_team',
+    title: 'Kamyon ve Şoför Ata',
+    description: 'Yük kapasitesine uygun kamyonu ve müsait şoförü görevlendir.',
+    ctaLabel: 'Atamayı Yap',
+    route: 'Contracts',
+    variant: 'primary',
+    icon: 'truck',
+    hintId: 'contracts_assign_team',
+    hintTitle: 'Ekip Ataması',
+    hintDescription: 'Kamyon ve şoför seçip teslimatı başlat.',
   },
   {
     id: 'track_delivery',
     title: 'Teslimatı Takip Et',
-    description: 'Aktif teslimatlarını Harita ekranından takip edebilirsin.',
+    description: 'Kamyonun rotasını ve kalan teslim süresini haritadan izle.',
     ctaLabel: 'Haritaya Git',
     route: 'Map',
     variant: 'track',
     icon: 'map',
+    showArtwork: true,
     hintId: 'map_track_delivery',
     hintTitle: 'Harita İpucu',
     hintDescription: 'Aktif teslimatlarını ve araç konumlarını buradan izle.',
   },
   {
-    id: 'market_intro',
-    title: 'Piyasayı Keşfet',
-    description:
-      'Stok fazla ürünler alım için, yoğun talep gören ürünler satış için takip edilebilir.',
-    ctaLabel: 'Piyasaya Git',
-    route: 'Market',
-    variant: 'explore',
-    icon: 'market',
-    hintId: 'market_intro',
-    hintTitle: 'Piyasa İpucu',
-    hintDescription: 'Stok Fazla alım, Yoğun Talep satış fırsatı olabilir.',
+    id: 'complete_first_delivery',
+    title: 'İlk Teslimatını Tamamla',
+    description: 'Teslimat tamamlandığında ödeme, deneyim ve itibar kazanırsın.',
+    ctaLabel: 'Teslimatı Gör',
+    route: 'Map',
+    variant: 'track',
+    icon: 'truck',
+    showArtwork: true,
+    hintId: 'map_complete_delivery',
+    hintTitle: 'Teslimat Devam Ediyor',
+    hintDescription: 'Teslimat tamamlanana kadar rotayı buradan takip edebilirsin.',
   },
   {
-    id: 'first_trade',
-    title: 'İlk Ticaretini Yap',
-    description:
-      'Deposu olan şehirlerde ürün alabilir, fiyat değişince kârla satabilirsin.',
-    ctaLabel: 'Piyasaya Git',
-    route: 'Market',
-    variant: 'explore',
-    icon: 'market',
-    hintId: 'market_first_trade',
-    hintTitle: 'Piyasa İpucu',
-    hintDescription: 'Stok Fazla alım, Yoğun Talep satış fırsatı olabilir.',
-  },
-  {
-    id: 'warehouse_intro',
-    title: 'Stoklarını Yönet',
-    description:
-      'Depolar ekranında ürünlerini, kapasiteni ve net kâr/zarar durumunu görebilirsin.',
-    ctaLabel: 'Depolara Git',
-    route: 'Warehouse',
-    variant: 'primary',
-    icon: 'warehouse',
-    hintId: 'warehouse_intro',
-    hintTitle: 'Depo İpucu',
-    hintDescription: 'Stoklarının net kâr/zararını ve boş kapasiteni buradan takip et.',
-  },
-  {
-    id: 'claim_rewards',
-    title: 'Görev Ödüllerini Al',
-    description:
-      'Tamamlanan başlangıç görevlerinden ödül alarak şirketini hızlandır.',
+    id: 'claim_first_reward',
+    title: 'İlk Ödülünü Al',
+    description: 'Başlangıç görevini tamamladın. Hazır ödülünü alarak şirketini güçlendir.',
     ctaLabel: 'Görevlere Git',
     route: 'Missions',
     variant: 'reward',
-    icon: 'contract',
-    hintId: 'missions_claim_rewards',
+    icon: 'level',
+    hintId: 'missions_claim_reward',
     hintTitle: 'Görev Ödülleri',
     hintDescription: 'Hazır ödülleri alarak şirketini daha hızlı büyüt.',
-  },
-  {
-    id: 'finish',
-    title: 'Şirketin Yola Çıktı',
-    description:
-      'Artık işler, piyasa fırsatları ve depolarla şirketini büyütebilirsin.',
-    ctaLabel: 'Tamam',
-    route: null,
-    variant: 'primary',
-    icon: 'company',
-    manualComplete: true,
   },
 ];
 
@@ -157,7 +117,26 @@ export function getOnboardingStepIndex(stepId: OnboardingStepId): number {
 
 export function getOnboardingProgressLabel(stepId: OnboardingStepId): string {
   const index = getOnboardingStepIndex(stepId);
-  return `Başlangıç Rehberi ${index}/${ONBOARDING_STEP_ORDER.length}`;
+  return `BAŞLANGIÇ REHBERİ · ${index}/${ONBOARDING_TOTAL_STEPS}`;
 }
 
 export const KNOWN_ONBOARDING_STEP_IDS = new Set<OnboardingStepId>(ONBOARDING_STEP_ORDER);
+
+const LEGACY_STEP_MAP: Record<string, OnboardingStepId> = {
+  welcome: 'choose_first_contract',
+  first_contract: 'choose_first_contract',
+  track_delivery: 'track_delivery',
+  market_intro: 'claim_first_reward',
+  first_trade: 'claim_first_reward',
+  warehouse_intro: 'claim_first_reward',
+  claim_rewards: 'claim_first_reward',
+  finish: 'claim_first_reward',
+};
+
+export function migrateOnboardingStepId(stepId: string | null | undefined): OnboardingStepId | null {
+  if (!stepId) return null;
+  if (KNOWN_ONBOARDING_STEP_IDS.has(stepId as OnboardingStepId)) {
+    return stepId as OnboardingStepId;
+  }
+  return LEGACY_STEP_MAP[stepId] ?? 'choose_first_contract';
+}

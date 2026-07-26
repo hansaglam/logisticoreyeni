@@ -15,8 +15,6 @@ import {
 import { useAppDialog } from '../components/AppDialogProvider';
 
 import TradeProductModal from '../components/TradeProductModal';
-import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
-import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import {
   ActionButton,
   AppCard,
@@ -706,9 +704,6 @@ export default function WarehouseScreen() {
   const upgradeWarehouse = useGameStore((state) => state.upgradeWarehouse);
   const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
 
-  useOnboardingScreenVisit('Warehouse');
-  const onboardingHint = useActiveOnboardingHint(['warehouse_intro']);
-
   const warehouses: WarehouseLike[] = player?.warehouses ?? [];
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
@@ -862,17 +857,6 @@ export default function WarehouseScreen() {
           ) : undefined
         }
       />
-
-      {onboardingHint ? (
-        <OnboardingHintCard
-          title={onboardingHint.title}
-          description={onboardingHint.description}
-          icon={onboardingHint.icon}
-          badgeLabel={onboardingHint.badgeLabel}
-          accentVariant={onboardingHint.accentVariant}
-          onDismiss={onboardingHint.onDismiss}
-        />
-      ) : null}
 
       {statusMessage ? (
         <View style={styles.statusToast}>

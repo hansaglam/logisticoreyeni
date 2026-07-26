@@ -250,7 +250,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const claimWeeklyObjectiveReward = useGameStore((state) => state.claimWeeklyObjectiveReward);
 
   useOnboardingScreenVisit('Missions');
-  const onboardingHint = useActiveOnboardingHint(['claim_rewards']);
+  const onboardingHint = useActiveOnboardingHint(['claim_first_reward']);
 
   const seasonKey = useMemo(() => getWeeklySeasonKey(), []);
   const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);

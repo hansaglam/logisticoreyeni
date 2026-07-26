@@ -3,6 +3,13 @@
  */
 
 import type { ContractAvailabilityReason } from '../types/game';
+import type { CapacityDisabledReasonKind } from '../simulation/capacity';
+import {
+  FUTURE_TRAILER_SYSTEM_NOTE,
+  formatCapacityShortfallLabel,
+  getCapacityDisabledReasonLabel,
+  getSystemMaxFleetCapacityTons,
+} from '../simulation/capacity';
 import { TRUCK_STAYS_AT_DESTINATION_NOTE } from './truckLocationUx';
 
 export interface ContractAvailabilityMessageContext {
@@ -14,6 +21,8 @@ export interface ContractAvailabilityMessageContext {
   requiredReputation?: number;
   playerReputation?: number;
   requiredDriverLevel?: number;
+  capacityDisabledReasonKind?: CapacityDisabledReasonKind;
+  maxFleetCapacityTons?: number;
 }
 
 function formatTonCapacity(tons: number): string {
@@ -27,6 +36,7 @@ function formatTonCapacity(tons: number): string {
 
 export function getContractAvailabilityLabel(
   reason: ContractAvailabilityReason | undefined,
+  context?: Pick<ContractAvailabilityMessageContext, 'capacityDisabledReasonKind'>,
 ): string | null {
   switch (reason) {
     case 'LEVEL_INSUFFICIENT':
@@ -37,8 +47,12 @@ export function getContractAvailabilityLabel(
     case 'NO_IDLE_TRUCK_IN_ORIGIN_CITY':
       return 'Kamyon meşgul';
     case 'NO_TRUCK_WITH_CAPACITY':
-    case 'CAPACITY_INSUFFICIENT':
+    case 'CAPACITY_INSUFFICIENT': {
+      if (context?.capacityDisabledReasonKind) {
+        return getCapacityDisabledReasonLabel(context.capacityDisabledReasonKind);
+      }
       return 'Tonaj yetersiz';
+    }
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Kamyon kondisyonu düşük';
     case 'REPUTATION_TOO_LOW':
@@ -99,7 +113,63 @@ export function buildContractAvailabilityMessage(
         'Mevcut teslimatın bitmesini bekleyebilir veya bu şehir için yeni bir kamyon ayırabilirsin.'
       );
     case 'NO_TRUCK_WITH_CAPACITY':
-    case 'CAPACITY_INSUFFICIENT':
+    case 'CAPACITY_INSUFFICIENT': {
+      const capacityKind = context.capacityDisabledReasonKind;
+      if (capacityKind === 'beyond_system') {
+        return (
+          `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
+          `${FUTURE_TRAILER_SYSTEM_NOTE} Şimdilik daha düşük tonajlı işler seçebilirsin.`
+        );
+      }
+      if (capacityKind === 'heavy_haul_required') {
+        const systemMax = getSystemMaxFleetCapacityTons();
+        return (
+          `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
+          `Mevcut filondaki en yüksek kapasite ${formatTonCapacity(context.maxFleetCapacityTons ?? 0)}. ` +
+          `Kamyon + dorse ile en fazla ${formatTonCapacity(systemMax)} taşınabilir; bu yük için uygun dorse veya daha güçlü filo gerekir.`
+        );
+      }
+      if (capacityKind === 'trailer_required') {
+        return (
+          `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
+          `${fromCityName} şehrindeki kamyonun ${formatTonCapacity(bestCapacity)} taşıyor; ` +
+          'ağır yük için boştaki bir dorseyi kamyonuna bağlamalısın. Filo → Dorseler sekmesinden dorse satın alıp bağlayabilirsin.'
+        );
+      }
+      if (capacityKind === 'refrigerated_trailer_required') {
+        return (
+          `Bu soğuk zincir işi ${cargoWeight.toFixed(1)} ton gerektiriyor. ` +
+          'Soğutmalı dorse bağlı bir kamyon veya aynı şehirde soğutmalı dorse ile bağlama gerekir.'
+        );
+      }
+      if (capacityKind === 'trailer_type_mismatch') {
+        return (
+          `Bu iş için uygun dorse tipi gerekli. Filo → Dorseler sekmesinden uyumlu dorse satın alıp kamyonuna bağla.`
+        );
+      }
+      if (capacityKind === 'wrong_city') {
+        return (
+          `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
+          `${fromCityName} şehrindeki en uygun müsait kamyonun ${formatTonCapacity(bestCapacity)} taşıyabiliyor, ` +
+          'ancak filonda başka bir şehirde bu yükü taşıyabilecek kamyon var. ' +
+          `${TRUCK_STAYS_AT_DESTINATION_NOTE} Filo ekranından kamyonu Yönlendir ile bu şehre taşıyabilirsin.`
+        );
+      }
+      if (capacityKind === 'upgrade_possible') {
+        return (
+          `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
+          `${fromCityName} şehrindeki kamyonun şu an ${formatTonCapacity(bestCapacity)} taşıyabiliyor. ` +
+          'Kargo kapasitesi yükseltmesiyle bu işi alabilirsin.'
+        );
+      }
+      if (capacityKind === 'insufficient' || !capacityKind) {
+        if (bestCapacity > 0) {
+          return (
+            `${formatCapacityShortfallLabel(bestCapacity, cargoWeight)}. ` +
+            `${fromCityName} şehrindeki en uygun müsait kamyonun ${formatTonCapacity(bestCapacity)} taşıyabiliyor.`
+          );
+        }
+      }
       if (bestCapacity > 0) {
         return (
           `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
@@ -112,6 +182,7 @@ export function buildContractAvailabilityMessage(
         `${fromCityName} şehrinde müsait kamyonun var ancak bu yük için kapasitesi yetersiz. ` +
         'Daha yüksek kapasiteli bir kamyon alabilir veya daha düşük tonajlı bir sözleşme seçebilirsin.'
       );
+    }
     case 'TRUCK_CONDITION_TOO_LOW':
       return 'Bu iş için uygun kamyonun var ancak kondisyonu düşük. Bakım yaptırarak bu sözleşmeyi alabilirsin.';
     case 'REPUTATION_TOO_LOW': {
@@ -135,7 +206,7 @@ export function buildContractAvailabilityCopy(
   reason: ContractAvailabilityReason,
   context: ContractAvailabilityMessageContext,
 ): { title: string; buttonLabel: string; message: string } {
-  const label = getContractAvailabilityLabel(reason) ?? 'Alınamaz';
+  const label = getContractAvailabilityLabel(reason, context) ?? 'Alınamaz';
   return {
     title: label,
     buttonLabel: label,

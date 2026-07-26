@@ -8,6 +8,7 @@
  */
 
 import { create } from 'zustand';
+import type { ShopCategory } from '../navigation/tabTypes';
 import type {
   City,
   Contract,
@@ -34,6 +35,7 @@ import type {
   StartTruckTransferResult,
   StoreGameState,
   TradeActionResult,
+  Trailer,
   Truck,
   TruckTransfer,
   TutorialStepId,
@@ -69,6 +71,11 @@ import {
 } from '../data/drivers';
 import { findTruckMarketItem, resolveTruckMarketRequiredLevel, STARTER_TRUCK } from '../data/trucks';
 import {
+  createTrailerFromTemplate,
+  findTrailerMarketItem,
+  TRAILER_MARKET,
+} from '../data/trailers';
+import {
   createDefaultGlobalEconomy,
   getSafeFuelPrice,
   normalizeGlobalEconomy,
@@ -99,12 +106,14 @@ import {
   calculateLatePenalty,
   calculateTruckRepairCost,
   canTruckCarryContract,
+  applyFleetArrivalForDelivery,
   createDelivery,
   getContractAvailability,
   getContractCargoWeight,
   getHighestOwnedTruckCapacity,
   getMaxIdleTruckCapacity,
   isDeliveryProgressComplete,
+  logDeliveryCompletionLocation,
   safeCompleteDelivery,
   DeliveryError,
   failDelivery as failDeliverySim,
@@ -116,6 +125,7 @@ import {
   isContractOfferExpired,
   isTruckAvailableForAssignment,
   normalizeTruckCity,
+  resolveDeliveryDestinationCityId,
   resolveTruckCityId,
   selectIdleTruckForContract,
   updateDeliveryProgress,
@@ -123,10 +133,36 @@ import {
   type DeliverySettlementResult,
 } from '../simulation/delivery';
 import {
+  getMaxPotentialFleetCapacityTons,
+  getTruckEffectiveCapacityTons,
+} from '../simulation/capacity';
+import {
+  attachTrailerToTruckState,
+  detachTrailerFromTruckState,
+  detachTrailersFromTruckState,
+  normalizePlayerTrailers,
+  syncAllTrailersWithFleet,
+  syncTrailersWithTruckLocation,
+  validateTrailerPurchase,
+} from '../simulation/trailerOps';
+import { getEffectiveTruckCapacityTons } from '../simulation/cargoCapacity';
+import {
   maybeRollDeliveryIncident,
   createDebugDeliveryIncident,
   resolveDeliveryIncident as resolveDeliveryIncidentSim,
 } from '../simulation/deliveryIncidents';
+import {
+  buildOfflineProgressSummary,
+  calculateOfflineElapsed,
+  createOfflineProgressSnapshot,
+  OFFLINE_PROGRESS_VERSION,
+  realMsToGameHours,
+  resolveOfflineBaselineMs,
+  shouldShowOfflineSummary,
+  shouldSkipDuplicateOfflineApply,
+  type OfflineProgressSummary,
+} from '../simulation/offlineProgression';
+import { loadOfflineMeta, saveOfflineMeta } from '../storage/offlineMeta';
 import {
   createTruckTransfer,
   resolveTransferRoute,
@@ -175,7 +211,7 @@ import {
 } from '../utils/warehouseCalculations';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
-import { contractBalance, contractGenerationBalance, economyBalance, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import { contractBalance, contractGenerationBalance, economyBalance, buildTimeScaleDebugSnapshot, getEffectiveOfflineGameSpeed, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   applyAdRewardGrant,
   calculateDeliveryBoostProgress,
@@ -247,16 +283,16 @@ import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
 import { getMissionById } from '../config/missions';
 import { createDefaultTutorialState } from '../config/tutorial';
 import {
-  advanceOnboardingIfNeeded,
   buildOnboardingEvaluationState,
-  completeOnboardingStep,
   createDefaultOnboardingState,
   dismissOnboardingGuide,
   dismissOnboardingHint,
   isOnboardingActive,
+  markOnboardingAssignmentOpened,
   markOnboardingMissionRewardClaimed,
   markOnboardingScreenVisited as markOnboardingScreenVisitedState,
   resetOnboardingForDev as resetOnboardingStateForDev,
+  syncOnboardingProgress,
 } from '../onboarding/onboardingProgress';
 import {
   clearSpotlightTutorialProgressState,
@@ -356,6 +392,42 @@ let gameInitPromise: Promise<void> | null = null;
 const completedDeliveryNotificationIds = new Set<string>();
 const completedTransferNotificationIds = new Set<string>();
 
+let offlineProgressionActive = false;
+let offlineProgressApplying = false;
+
+interface OfflineProgressCollector {
+  earnings: number;
+  expenses: number;
+  completedDeliveries: number;
+  lateDeliveries: number;
+  driverLevelUps: string[];
+  worldEventsUpdated: boolean;
+  marketUpdated: boolean;
+  dailyCostsApplied: boolean;
+}
+
+let offlineProgressCollector: OfflineProgressCollector | null = null;
+
+const OFFLINE_META_PERSIST_INTERVAL_MS = 15_000;
+let lastOfflineMetaPersistAt = 0;
+let cachedOfflineMetaLastSimulated: number | null = null;
+
+function schedulePersistOfflineMeta(lastSimulatedRealTimeMs: number, lastSimulationGameSpeed: number): void {
+  const now = Date.now();
+  if (now - lastOfflineMetaPersistAt < OFFLINE_META_PERSIST_INTERVAL_MS) {
+    return;
+  }
+  lastOfflineMetaPersistAt = now;
+  cachedOfflineMetaLastSimulated = lastSimulatedRealTimeMs;
+  void saveOfflineMeta({ lastSimulatedRealTimeMs, lastSimulationGameSpeed });
+}
+
+function persistOfflineMetaImmediate(lastSimulatedRealTimeMs: number, lastSimulationGameSpeed: number): void {
+  lastOfflineMetaPersistAt = Date.now();
+  cachedOfflineMetaLastSimulated = lastSimulatedRealTimeMs;
+  void saveOfflineMeta({ lastSimulatedRealTimeMs, lastSimulationGameSpeed });
+}
+
 function getEffectiveTradeUnitPrice(
   state: Pick<StoreGameState, 'worldEvents' | 'currentTime'>,
   city: { id: string },
@@ -428,14 +500,14 @@ function notifySaveWriteFailureOnce(
   }
 }
 
-export type NavigationTab = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'market' | 'more';
+export type NavigationTab = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'shop' | 'market' | 'more';
 
 export interface NavigationRequest {
   tab: NavigationTab;
   moreSubRoute?: 'finance' | 'warehouse' | 'debug' | 'missions';
 }
 
-export type FleetSubTab = 'trucks' | 'drivers' | 'shop' | 'hire_drivers';
+export type FleetSubTab = 'trucks' | 'drivers' | 'trailers' | 'shop' | 'hire_drivers';
 
 export type AutoSaveReason =
   | 'critical'
@@ -458,7 +530,8 @@ export type AutoSaveReason =
   | 'manual'
   | 'debug_cash_change'
   | 'time_tick'
-  | 'delivery_incident';
+  | 'delivery_incident'
+  | 'offline_progress';
 
 const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'critical',
@@ -475,6 +548,7 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'clear_save',
   'background',
   'manual',
+  'offline_progress',
 ]);
 
 function resetAutoSaveTracking(gameTime = 0): void {
@@ -605,9 +679,10 @@ let leaseTruckInFlight = false;
 
 function buildContractRefreshParams(state: StoreGameState) {
   const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-  const ownedMaxTruckCapacity = getHighestOwnedTruckCapacity(state.player.trucks);
-  const idleMaxTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
   const trucks = state.player.trucks ?? [];
+  const trailers = state.player.trailers ?? [];
+  const ownedMaxTruckCapacity = getMaxPotentialFleetCapacityTons(trucks, trailers);
+  const idleMaxTruckCapacity = getMaxIdleTruckCapacity(trucks, trailers);
   const drivers = state.player.drivers ?? [];
   const homeCityId = state.player.homeCityId;
   const idleTruckOriginCityIds = getIdleTruckOriginCityIds(trucks, homeCityId);
@@ -643,6 +718,7 @@ function buildContractRefreshParams(state: StoreGameState) {
     busyTruckOriginCityIds,
     fleetCityContext,
     trucks,
+    trailers,
     drivers,
     homeCityId,
     activeWorldEvents,
@@ -813,9 +889,11 @@ function createFreshGameStorePatch(): Partial<GameStore> {
     pendingMoreSubRoute: null,
     pendingUpgradeTruckId: null,
     pendingFleetSubTab: null,
+    pendingShopCategory: null,
     marketContractFilter: null,
     highlightedContractId: null,
     pendingMarketFocus: null,
+    pendingOfflineProgressSummary: null,
     contractGenerationDebug: createEmptyContractGenerationDebug(0),
     deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
     dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
@@ -1074,6 +1152,7 @@ export function createInitialGameState(): StoreGameState {
     homeCityId: 'izmir' as const,
     trucks: [structuredClone(STARTER_TRUCK)],
     drivers: [structuredClone(STARTER_DRIVER)],
+    trailers: [] as Trailer[],
   };
   const contracts = ensureStarterContracts({
     contracts: balancedContracts,
@@ -1095,6 +1174,7 @@ export function createInitialGameState(): StoreGameState {
     currentTime: 0,
     playerLevel: 1,
     trucks: starterPlayer.trucks,
+    trailers: starterPlayer.trailers,
     drivers: starterPlayer.drivers,
     homeCityId: starterPlayer.homeCityId,
     idleTruckOriginCityIds: ['izmir'],
@@ -1106,6 +1186,7 @@ export function createInitialGameState(): StoreGameState {
     currentTime: 0,
     isPaused: false,
     gameSpeed: 1,
+    lastSimulationGameSpeed: 1,
     lastEconomyTickTime: 0,
     lastDailyOperatingCostTime: 0,
     lastContractGenerationTime: 0,
@@ -1129,6 +1210,7 @@ export function createInitialGameState(): StoreGameState {
       diamonds: 0,
       trucks: [structuredClone(STARTER_TRUCK)],
       drivers: [structuredClone(STARTER_DRIVER)],
+      trailers: [],
       warehouses: [
         {
           id: 'warehouse-starter-1',
@@ -1184,6 +1266,9 @@ export function createInitialGameState(): StoreGameState {
     worldEventsVersion: 1,
     lastWorldEventGeneratedDay: 0,
     monetization: createDefaultMonetizationState(),
+    lastSeenRealTimeMs: Date.now(),
+    lastSimulatedRealTimeMs: Date.now(),
+    offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
   };
 }
 
@@ -1198,6 +1283,7 @@ export interface GameStore extends StoreGameState {
   pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | 'leaderboard' | 'upgrades' | null;
   pendingUpgradeTruckId: string | null;
   pendingFleetSubTab: FleetSubTab | null;
+  pendingShopCategory: ShopCategory | null;
   marketContractFilter: MarketContractFilter | null;
   highlightedContractId: string | null;
   pendingMarketFocus: MarketFocusRequest | null;
@@ -1207,6 +1293,8 @@ export interface GameStore extends StoreGameState {
   deliverySettlementDebug: DeliverySettlementDebugSnapshot;
   /** Günlük işletme gideri zamanlaması — save'e yazılmaz */
   dailyOperatingCostDebug: DailyOperatingCostDebugSnapshot;
+  /** Offline catch-up özeti — save'e yazılmaz */
+  pendingOfflineProgressSummary: OfflineProgressSummary | null;
   addNotification: (notification: Omit<GameNotification, 'id'> & { id?: string }) => void;
   dismissNotification: (notificationId: string) => void;
   clearNotifications: () => void;
@@ -1217,6 +1305,8 @@ export interface GameStore extends StoreGameState {
   clearPendingUpgradeTruckId: () => void;
   requestNavigationToFleet: (subTab?: FleetSubTab) => void;
   clearPendingFleetSubTab: () => void;
+  requestNavigationToShop: (category?: ShopCategory) => void;
+  clearPendingShopCategory: () => void;
   setMarketContractFilter: (filter: MarketContractFilter | null) => void;
   clearMarketContractFilter: () => void;
   setHighlightedContractId: (contractId: string | null) => void;
@@ -1257,6 +1347,9 @@ export interface GameStore extends StoreGameState {
   resumeGame: () => void;
   setGameSpeed: (speed: number) => void;
   advanceTime: (hours: number) => void;
+  recordLastSeenRealTimeMs: () => void;
+  applyOfflineProgressionIfNeeded: () => void;
+  dismissOfflineProgressSummary: () => void;
   replenishContractsIfNeeded: () => void;
   runEconomyTick: () => void;
   getContractGenerationDebug: () => ContractGenerationDebugSnapshot;
@@ -1286,6 +1379,9 @@ export interface GameStore extends StoreGameState {
   completeDeliveryById: (deliveryId: string) => void;
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => void;
   buyTruck: (catalogId: string) => TradeActionResult;
+  buyTrailer: (catalogId: string) => TradeActionResult;
+  attachTrailerToTruck: (trailerId: string, truckId: string) => TradeActionResult;
+  detachTrailerFromTruck: (trailerId: string) => TradeActionResult;
   leaseTruck: (catalogId: string) => TradeActionResult;
   hireDriver: (poolId: string) => TradeActionResult;
   sellTruck: (truckId: string) => TradeActionResult;
@@ -1373,6 +1469,11 @@ export interface GameStore extends StoreGameState {
   debugSetCash: (amount: number) => void;
   debugAdvanceOneDay: () => void;
   debugAdvanceOfflineDays: (days?: number) => void;
+  debugSimulateOfflineRealMinutes: (minutes?: number) => {
+    realMinutes: number;
+    gameHours: number;
+    gameSpeed: number;
+  };
   debugProcessDailyCosts: () => void;
   debugExpireLeaseTruck: () => void;
   debugGetEconomyBalanceSummary: () => string;
@@ -1392,6 +1493,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   pendingMoreSubRoute: null,
   pendingUpgradeTruckId: null,
   pendingFleetSubTab: null,
+  pendingShopCategory: null,
   marketContractFilter: null,
   highlightedContractId: null,
   pendingMarketFocus: null,
@@ -1408,6 +1510,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     skippedOperatingDaysDueToCap: 0,
     lastCharge: null,
   },
+  pendingOfflineProgressSummary: null,
   saveStatus: createSaveStatusSnapshot(false),
   isGameReady: false,
   saveError: null,
@@ -1476,12 +1579,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ pendingUpgradeTruckId: null });
   },
 
-  requestNavigationToFleet: (subTab = 'shop') => {
+  requestNavigationToFleet: (subTab = 'trucks') => {
+    if (subTab === 'shop') {
+      get().requestNavigationToShop('trucks');
+      return;
+    }
+    if (subTab === 'hire_drivers') {
+      get().requestNavigationToShop('drivers');
+      return;
+    }
     set({ navigationRequest: { tab: 'fleet' }, pendingFleetSubTab: subTab });
   },
 
   clearPendingFleetSubTab: () => {
     set({ pendingFleetSubTab: null });
+  },
+
+  requestNavigationToShop: (category = 'trucks') => {
+    set({ navigationRequest: { tab: 'shop' }, pendingShopCategory: category });
+  },
+
+  clearPendingShopCategory: () => {
+    set({ pendingShopCategory: null });
   },
 
   setMarketContractFilter: (filter) => {
@@ -1667,8 +1786,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   notifyContractAssignmentOpened: () => {
     const state = get();
     const tutorial = state.tutorial ?? createDefaultTutorialState();
-    set({ tutorial: tutorialOnContractAssignmentOpened(tutorial) });
+    const onboarding = state.onboarding ?? createDefaultOnboardingState();
+    const nextOnboarding = markOnboardingAssignmentOpened(onboarding);
+    set({
+      tutorial: tutorialOnContractAssignmentOpened(tutorial),
+      onboarding: nextOnboarding,
+    });
     get().markSaveDirty();
+    get().advanceOnboardingProgress();
   },
 
   notifyTutorialDeliveryStarted: () => {
@@ -1762,31 +1887,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().markSaveDirty();
   },
 
-  completeOnboardingStepPress: (stepId) => {
-    const state = get();
-    const onboarding = state.onboarding ?? createDefaultOnboardingState();
-    const nextOnboarding = completeOnboardingStep(onboarding, stepId);
-    set({ onboarding: nextOnboarding });
-    get().markSaveDirty();
+  completeOnboardingStepPress: (_stepId) => {
     get().advanceOnboardingProgress();
   },
 
   advanceOnboardingProgress: () => {
     const state = get();
+    if (!state.player) {
+      return;
+    }
     const currentOnboarding = state.onboarding ?? createDefaultOnboardingState();
-    const nextOnboarding = advanceOnboardingIfNeeded(
+    const nextOnboarding = syncOnboardingProgress(
       buildOnboardingEvaluationState({
         onboarding: currentOnboarding,
         activeDeliveries: state.activeDeliveries ?? [],
         missions: state.missions ?? createDefaultMissionsState(),
         player: state.player,
+        currentTime: state.currentTime,
         getMissionProgress: (missionId) => getMissionProgress(missionId, state),
       }),
     );
     if (
       nextOnboarding.currentStepId === currentOnboarding.currentStepId &&
       nextOnboarding.completed === currentOnboarding.completed &&
-      nextOnboarding.completedStepIds.length === currentOnboarding.completedStepIds.length
+      nextOnboarding.completedStepIds.length === currentOnboarding.completedStepIds.length &&
+      nextOnboarding.assignmentOpened === currentOnboarding.assignmentOpened
     ) {
       return;
     }
@@ -2228,7 +2353,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const currentOnboarding = state.onboarding ?? createDefaultOnboardingState();
     const nextOnboarding =
       isOnboardingActive(currentOnboarding) &&
-      currentOnboarding.currentStepId === 'claim_rewards'
+      currentOnboarding.currentStepId === 'claim_first_reward'
         ? markOnboardingMissionRewardClaimed(currentOnboarding)
         : currentOnboarding;
 
@@ -2531,6 +2656,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           pendingMoreSubRoute: null,
           pendingUpgradeTruckId: null,
           pendingFleetSubTab: null,
+    pendingShopCategory: null,
           marketContractFilter: null,
           highlightedContractId: null,
         });
@@ -2558,6 +2684,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           pendingMoreSubRoute: null,
           pendingUpgradeTruckId: null,
           pendingFleetSubTab: null,
+    pendingShopCategory: null,
           marketContractFilter: null,
           highlightedContractId: null,
         });
@@ -2565,10 +2692,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
         hasHydratedGame = true;
       } finally {
         isLoadingSave = false;
+        const meta = await loadOfflineMeta();
+        if (meta?.lastSimulatedRealTimeMs) {
+          cachedOfflineMetaLastSimulated = meta.lastSimulatedRealTimeMs;
+          const current = get();
+          set({
+            lastSimulatedRealTimeMs: Math.max(
+              current.lastSimulatedRealTimeMs ?? 0,
+              meta.lastSimulatedRealTimeMs,
+              current.lastSeenRealTimeMs ?? 0,
+            ),
+            lastSimulationGameSpeed:
+              current.lastSimulationGameSpeed ?? meta.lastSimulationGameSpeed ?? current.gameSpeed,
+          });
+        }
         set({ isGameReady: true });
         patchSaveStatus(set, { isLoadingSave: false });
         get().refreshContractsFromMarket();
         get().checkMarketPriceAlerts({ sendLocal: false });
+        get().applyOfflineProgressionIfNeeded();
       }
     })();
 
@@ -2584,6 +2726,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       pendingMoreSubRoute: null,
       pendingUpgradeTruckId: null,
       pendingFleetSubTab: null,
+    pendingShopCategory: null,
       marketContractFilter: null,
       highlightedContractId: null,
       pendingMarketFocus: null,
@@ -2664,6 +2807,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         pendingMoreSubRoute: null,
         pendingUpgradeTruckId: null,
         pendingFleetSubTab: null,
+    pendingShopCategory: null,
         marketContractFilter: null,
         highlightedContractId: null,
         pendingMarketFocus: null,
@@ -2898,13 +3042,169 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   setGameSpeed: (speed: number) => {
-    set({ gameSpeed: Math.max(0.25, Math.min(speed, 8)) });
+    const nextSpeed = Math.max(0.25, Math.min(speed, 8));
+    set({ gameSpeed: nextSpeed, lastSimulationGameSpeed: nextSpeed });
+  },
+
+  recordLastSeenRealTimeMs: () => {
+    const nowMs = Date.now();
+    const simulationGameSpeed = getEffectiveOfflineGameSpeed(get());
+    set({ lastSeenRealTimeMs: nowMs, lastSimulatedRealTimeMs: nowMs });
+    persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
+  },
+
+  dismissOfflineProgressSummary: () => {
+    set({ pendingOfflineProgressSummary: null });
+  },
+
+  applyOfflineProgressionIfNeeded: () => {
+    if (offlineProgressApplying || isLoadingSave || !get().isGameReady) {
+      return;
+    }
+
+    const state = get();
+    const nowMs = Date.now();
+    const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
+    const baselineMs = resolveOfflineBaselineMs({
+      stateLastSimulated: state.lastSimulatedRealTimeMs,
+      metaLastSimulated: cachedOfflineMetaLastSimulated,
+      stateLastSeen: state.lastSeenRealTimeMs,
+      nowMs,
+    });
+
+    if (baselineMs == null) {
+      set({
+        lastSeenRealTimeMs: nowMs,
+        lastSimulatedRealTimeMs: nowMs,
+        offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
+      });
+      persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
+      return;
+    }
+
+    if (
+      shouldSkipDuplicateOfflineApply(
+        baselineMs,
+        state.lastOfflineProgressAppliedAt,
+        nowMs,
+      )
+    ) {
+      set({ lastSeenRealTimeMs: nowMs, lastSimulatedRealTimeMs: nowMs });
+      persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
+      return;
+    }
+
+    const elapsed = calculateOfflineElapsed(baselineMs, nowMs);
+    if (!elapsed.shouldApply) {
+      set({
+        lastSeenRealTimeMs: nowMs,
+        lastSimulatedRealTimeMs: nowMs,
+        offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
+      });
+      persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
+      return;
+    }
+
+    offlineProgressApplying = true;
+    offlineProgressionActive = true;
+    offlineProgressCollector = {
+      earnings: 0,
+      expenses: 0,
+      completedDeliveries: 0,
+      lateDeliveries: 0,
+      driverLevelUps: [],
+      worldEventsUpdated: false,
+      marketUpdated: false,
+      dailyCostsApplied: false,
+    };
+
+    const beforeSnapshot = createOfflineProgressSnapshot(state);
+    const gameHours = realMsToGameHours(elapsed.appliedMs, simulationGameSpeed);
+
+    if (__DEV__) {
+      const scale = buildTimeScaleDebugSnapshot(simulationGameSpeed);
+      console.log(
+        `[time-debug-offline] elapsedRealMs=${elapsed.appliedMs} appliedMs=${elapsed.appliedMs} gameSpeed=${scale.gameSpeed} msPerGameHour=${scale.msPerGameHour} gameHours=${gameHours.toFixed(2)} gameHoursPerRealMinute=${scale.gameHoursPerRealMinute.toFixed(2)}`,
+      );
+    }
+
+    try {
+      if (gameHours > 0) {
+        get().advanceTime(gameHours);
+      }
+    } finally {
+      offlineProgressionActive = false;
+      offlineProgressApplying = false;
+    }
+
+    const afterState = get();
+    const collector = offlineProgressCollector ?? {
+      earnings: 0,
+      expenses: 0,
+      completedDeliveries: 0,
+      lateDeliveries: 0,
+      driverLevelUps: [],
+      worldEventsUpdated: false,
+      marketUpdated: false,
+      dailyCostsApplied: false,
+    };
+    offlineProgressCollector = null;
+
+    if (__DEV__ && gameHours > 0) {
+      const elapsedMin = Math.round(elapsed.appliedMs / 60_000);
+      console.log(
+        `[offline] elapsedReal=${elapsedMin}m gameHours=${gameHours.toFixed(1)} speed=${simulationGameSpeed} completed=${collector.completedDeliveries}`,
+      );
+    }
+
+    const summary = buildOfflineProgressSummary(beforeSnapshot, afterState, elapsed, {
+      earnings: collector.earnings,
+      expenses: collector.expenses,
+      completedDeliveries: collector.completedDeliveries,
+      lateDeliveries: collector.lateDeliveries,
+      worldEventsUpdated: collector.worldEventsUpdated,
+      marketUpdated: collector.marketUpdated,
+      dailyCostsApplied: collector.dailyCostsApplied,
+    });
+
+    if (__DEV__) {
+      if (summary.completedDeliveries > 0 && summary.earnings <= 0) {
+        console.warn('[offline-summary-debug] completed>0 but earnings=0', summary);
+      }
+      console.log(
+        `[offline-summary-debug] completed=${summary.completedDeliveries} late=${summary.lateDeliveries} earnings=${summary.earnings} expenses=${summary.expenses} other=${summary.otherNetChange} beforeMoney=${beforeSnapshot.money} afterMoney=${afterState.player.money ?? 0} net=${summary.netChange} ledgerEntries=${summary.ledgerEntryCount}`,
+      );
+    }
+
+    set({
+      lastSeenRealTimeMs: nowMs,
+      lastSimulatedRealTimeMs: nowMs,
+      lastOfflineProgressAppliedAt: nowMs,
+      offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
+      pendingOfflineProgressSummary: shouldShowOfflineSummary(summary) ? summary : null,
+    });
+    persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
+
+    if (shouldShowOfflineSummary(summary)) {
+      get().markSaveDirty();
+      get().autoSave('offline_progress');
+    }
   },
 
   advanceTime: (hours: number) => {
     const state = get();
-    if (state.isPaused || hours <= 0) {
+    if (hours <= 0) {
       return;
+    }
+    if (state.isPaused && !offlineProgressionActive) {
+      return;
+    }
+
+    const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
+    if (!offlineProgressionActive) {
+      const nowMs = Date.now();
+      set({ lastSimulationGameSpeed: simulationGameSpeed, lastSimulatedRealTimeMs: nowMs });
+      schedulePersistOfflineMeta(nowMs, simulationGameSpeed);
     }
 
     const newTime = state.currentTime + hours;
@@ -3046,7 +3346,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().clearOldMarketNews();
     get().clearOldGameEvents();
     get().markSaveDirty();
-    get().autoSave('time_tick');
+    if (!offlineProgressionActive) {
+      get().autoSave('time_tick');
+    }
   },
 
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => {
@@ -3093,6 +3395,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const totalCost = breakdown.total * chargedDays;
+    if (offlineProgressionActive && offlineProgressCollector) {
+      offlineProgressCollector.expenses += totalCost;
+      offlineProgressCollector.dailyCostsApplied = true;
+    }
     const ledgerEntry = buildSummarizedDailyOperatingCostLedgerEntry(
       breakdown,
       currentTime,
@@ -3151,7 +3457,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       patch.lastDailyOperatingCostTime = options.lastDailyOperatingCostTime;
     }
 
-    if (shouldSurfaceCatchup && eventLogMessage) {
+    if (shouldSurfaceCatchup && eventLogMessage && !offlineProgressionActive) {
       patch.eventLog = prependGameEvent(
         state.eventLog,
         {
@@ -3171,7 +3477,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       elapsedDays > chargedDays ||
       (chargedDays > 1 && operatingCostBalance.notifyWhenMultipleDaysCharged);
 
-    if (shouldNotify && notificationMessage) {
+    if (shouldNotify && notificationMessage && !offlineProgressionActive) {
       try {
         get().addNotification({
           time: currentTime,
@@ -3220,6 +3526,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   runEconomyTick: () => {
+    if (offlineProgressionActive && offlineProgressCollector) {
+      offlineProgressCollector.marketUpdated = true;
+      offlineProgressCollector.worldEventsUpdated = true;
+    }
+
     const state = get();
     const safeEconomy = normalizeGlobalEconomy(state.globalEconomy);
     const previousFuelPrice = getSafeFuelPrice(safeEconomy);
@@ -3589,8 +3900,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   generateNewContracts: () => {
     const state = get();
     const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-    const ownedMaxTruckCapacity = getHighestOwnedTruckCapacity(state.player.trucks);
-    const idleMaxTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
+    const refreshParams = buildContractRefreshParams(state);
     const newContracts = generateContracts(
       citiesToRecord(state.cities),
       state.routes,
@@ -3601,18 +3911,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         currentTime: state.currentTime,
         maxNewContracts: 10,
         playerLevel,
-        ownedMaxTruckCapacity: ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
-        idleMaxTruckCapacity,
-        ...(() => {
-          const params = buildContractRefreshParams(state);
-          return {
-            idleTruckOriginCityIds: params.idleTruckOriginCityIds,
-            activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
-            busyTruckOriginCityIds: params.busyTruckOriginCityIds,
-            fleetCityContext: params.fleetCityContext,
-            activeWorldEvents: params.activeWorldEvents,
-          };
-        })(),
+        ownedMaxTruckCapacity:
+          refreshParams.ownedMaxTruckCapacity || getMaxContractTonnageForLevel(playerLevel),
+        idleMaxTruckCapacity: refreshParams.idleMaxTruckCapacity,
+        idleTruckOriginCityIds: refreshParams.idleTruckOriginCityIds,
+        activeDeliveryDestinationCityIds: refreshParams.activeDeliveryDestinationCityIds,
+        busyTruckOriginCityIds: refreshParams.busyTruckOriginCityIds,
+        fleetCityContext: refreshParams.fleetCityContext,
+        activeWorldEvents: refreshParams.activeWorldEvents,
       },
     );
 
@@ -3738,12 +4044,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
     const cargoWeight = getContractCargoWeight(contract, product);
+    const trailers = state.player.trailers ?? [];
 
-    if ((truck.capacity ?? 0) < cargoWeight) {
+    if (!canTruckCarryContract(truck, contract, product, trailers)) {
+      const effectiveCapacity = getTruckEffectiveCapacityTons(truck, trailers);
       return {
         success: false,
         errorCode: 'CAPACITY_INSUFFICIENT',
-        message: `Bu iş için ${cargoWeight.toFixed(1)} ton kapasite gerekiyor. Seçilen kamyon ${(truck.capacity ?? 0).toFixed(1)} ton taşıyabiliyor.`,
+        message: `Bu iş için ${cargoWeight.toFixed(1)} ton kapasite gerekiyor. Seçilen kamyon ${effectiveCapacity.toFixed(1)} ton taşıyabiliyor.`,
       };
     }
 
@@ -3760,15 +4068,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         success: false,
         errorCode: 'LEASE_EXPIRED',
         message: 'Kiralık kamyonun süresi doldu.',
-      };
-    }
-
-    if (!canTruckCarryContract(truck, contract, product)) {
-      const maxIdleTruckCapacity = getMaxIdleTruckCapacity(state.player.trucks);
-      return {
-        success: false,
-        errorCode: 'CAPACITY_INSUFFICIENT',
-        message: formatCapacityExceededMessage(cargoWeight, maxIdleTruckCapacity),
       };
     }
 
@@ -3839,12 +4138,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const cashBeforeStart = state.player.money;
     const cashAfterStart = cashBeforeStart - delivery.fuelCost;
 
+    const updatedTrailers = syncTrailersWithTruckLocation(
+      trailers,
+      truckId,
+      originCityId,
+      'on_route',
+    );
+
     set({
       player: {
         ...state.player,
         money: cashAfterStart,
         trucks: updatedTrucks,
         drivers: updatedDrivers,
+        trailers: updatedTrailers,
       },
       contracts: updatedContracts,
       activeDeliveries: [...state.activeDeliveries, delivery],
@@ -3917,6 +4224,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.currentTime,
       state.player.reputation ?? 0,
       state.player.homeCityId,
+      state.player.trailers,
     );
 
     if (!availability.canStart) {
@@ -3942,6 +4250,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       product,
       state.currentTime,
       state.player.homeCityId,
+      state.player.trailers,
     );
     const driver = (state.player.drivers ?? []).find((candidate) => candidate.status === 'idle');
 
@@ -3991,26 +4300,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return delivery;
       }
 
-      // Arıza / kaza riski — seyahat süresine orantılı düşük ihtimal
-      const progressFraction = hoursPassed / Math.max(delivery.travelHours, 0.1);
-      if (randomBetween(0, 1) < delivery.breakdownChance * progressFraction * 0.15) {
-        if (!failedThisTick.has(delivery.id)) {
-          deliveriesToFail.push({ id: delivery.id, reason: 'breakdown' });
-          failedThisTick.add(delivery.id);
+      // Arıza / kaza riski — offline catch-up sırasında uygulanmaz
+      if (!offlineProgressionActive) {
+        const progressFraction = hoursPassed / Math.max(delivery.travelHours, 0.1);
+        if (randomBetween(0, 1) < delivery.breakdownChance * progressFraction * 0.15) {
+          if (!failedThisTick.has(delivery.id)) {
+            deliveriesToFail.push({ id: delivery.id, reason: 'breakdown' });
+            failedThisTick.add(delivery.id);
+          }
+          return delivery;
         }
-        return delivery;
-      }
-      if (randomBetween(0, 1) < delivery.accidentChance * progressFraction * 0.12) {
-        if (!failedThisTick.has(delivery.id)) {
-          deliveriesToFail.push({ id: delivery.id, reason: 'accident' });
-          failedThisTick.add(delivery.id);
+        if (randomBetween(0, 1) < delivery.accidentChance * progressFraction * 0.12) {
+          if (!failedThisTick.has(delivery.id)) {
+            deliveriesToFail.push({ id: delivery.id, reason: 'accident' });
+            failedThisTick.add(delivery.id);
+          }
+          return delivery;
         }
-        return delivery;
       }
 
       let updated = updateDeliveryProgress(delivery, hoursPassed);
 
       if (
+        !offlineProgressionActive &&
         !updated.incidentGenerated &&
         updated.progress >= 0.2 &&
         updated.progress <= 0.85 &&
@@ -4025,6 +4337,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         );
       }
 
+      if (offlineProgressionActive && updated.incident?.status === 'pending') {
+        updated = {
+          ...updated,
+          incident: undefined,
+          incidentGenerated: true,
+          incidentResolved: true,
+        };
+      }
+
       if (isDeliveryProgressComplete(updated.progress)) {
         deliveriesToComplete.push(updated.id);
       }
@@ -4032,7 +4353,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return updated;
     });
 
-    set({ activeDeliveries: updatedDeliveries });
+    let nextTrucks = state.player.trucks;
+    let nextDrivers = state.player.drivers;
+
+    if (deliveriesToComplete.length > 0) {
+      const completingDeliveries = updatedDeliveries.filter((delivery) =>
+        deliveriesToComplete.includes(delivery.id),
+      );
+
+      for (const delivery of completingDeliveries) {
+        const arrival = applyFleetArrivalForDelivery(nextTrucks, nextDrivers, delivery);
+        nextTrucks = arrival.trucks;
+        nextDrivers = arrival.drivers;
+      }
+    }
+
+    set({
+      activeDeliveries: updatedDeliveries,
+      player: {
+        ...state.player,
+        trucks: nextTrucks,
+        drivers: nextDrivers,
+      },
+    });
 
     for (const { id, reason } of deliveriesToFail) {
       get().failDeliveryById(id, reason);
@@ -4288,11 +4631,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return candidate;
     });
 
+    const updatedTrailers = syncTrailersWithTruckLocation(
+      state.player.trailers ?? [],
+      transfer.truckId,
+      transfer.toCityId,
+      'idle',
+    );
+
     set({
       player: {
         ...state.player,
         trucks: updatedTrucks,
         drivers: updatedDrivers,
+        trailers: updatedTrailers,
       },
       activeTransfers: (state.activeTransfers ?? []).filter(
         (candidate) => candidate.id !== transferId,
@@ -4413,6 +4764,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const typePenaltyMult = getContractTypePenaltyMultiplier(contract);
     let adjustedPenaltyCost = Math.round(penaltyCost * typePenaltyMult);
     const completedTruckBefore = simState.trucks.find((t) => t.id === delivery.truckId);
+    const truckCityBefore = completedTruckBefore
+      ? resolveTruckCityId(completedTruckBefore, state.player.homeCityId)
+      : 'unknown';
+    const destinationCityId = resolveDeliveryDestinationCityId(delivery);
     if (
       normalizeContractType(contract) === 'fragile' &&
       completedTruckBefore &&
@@ -4433,6 +4788,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       fuelAlreadyPaid: true,
     });
 
+    if (offlineProgressionActive && offlineProgressCollector) {
+      offlineProgressCollector.completedDeliveries += 1;
+      if (isLateDelivery) {
+        offlineProgressCollector.lateDeliveries += 1;
+      }
+      offlineProgressCollector.earnings += settlement.grossRevenue;
+      offlineProgressCollector.expenses +=
+        settlement.fuelCost + settlement.maintenanceCost + settlement.penaltyCost;
+    }
+
     const moneyAfterComplete = beforeMoney + settlement.cashDeltaOnCompletion;
     const netProfit = settlement.netProfit;
     const routeLabel = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
@@ -4444,6 +4809,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const notificationMessage = `${locationToastMessage} Net kâr: ${formatNotificationMoney(netProfit)}`;
     const eventMessage = `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
     const completedTruck = newSimState.trucks.find((t) => t.id === delivery.truckId);
+    const truckCityAfter = completedTruck
+      ? resolveTruckCityId(completedTruck, state.player.homeCityId)
+      : 'unknown';
+
+    logDeliveryCompletionLocation({
+      deliveryId: delivery.id,
+      truckId: delivery.truckId,
+      originCityId: delivery.originCityId,
+      destinationCityId,
+      truckCityBefore,
+      truckCityAfter,
+      truckStatusAfter: completedTruck?.status ?? 'idle',
+      activeDeliveryCleared: true,
+    });
     const driverXpGain = calculateDriverDeliveryXp({
       contract,
       distanceKm,
@@ -4466,13 +4845,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const nextDriver = recordDriverDeliveryStats(driver, !isLateDelivery);
       const xpResult = applyDriverXp(nextDriver, driverXpGain, contract);
       if (xpResult.leveledUp) {
-        queueMicrotask(() => {
-          get().applyRetentionEventAndSync({
-            type: 'driver_level_up',
-            driverId: driver.id,
-            newLevel: xpResult.newLevel,
+        if (offlineProgressionActive && offlineProgressCollector) {
+          offlineProgressCollector.driverLevelUps.push(`${driver.name} → Lv.${xpResult.newLevel}`);
+        } else {
+          queueMicrotask(() => {
+            get().applyRetentionEventAndSync({
+              type: 'driver_level_up',
+              driverId: driver.id,
+              newLevel: xpResult.newLevel,
+            });
           });
-        });
+        }
       }
       return xpResult.driver;
     });
@@ -4508,6 +4891,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
         trucks: merged.player!.trucks,
         drivers: updatedDrivers,
         warehouses: merged.player!.warehouses,
+        trailers: syncTrailersWithTruckLocation(
+          state.player.trailers ?? [],
+          delivery.truckId,
+          delivery.destinationCityId,
+          'idle',
+        ),
         money: moneyAfterComplete,
         completedContracts: state.player.completedContracts + 1,
         lateDeliveries: isLateDelivery
@@ -4600,20 +4989,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     try {
-      get().addNotification({
-        time: state.currentTime,
-        type: 'success',
-        title: 'Teslimat tamamlandı',
-        message: notificationMessage,
-        actionLabel: 'Finansı Gör',
-        actionTarget: 'finance',
-        autoDismissMs: 3500,
-      });
+      if (!offlineProgressionActive) {
+        get().addNotification({
+          time: state.currentTime,
+          type: 'success',
+          title: 'Teslimat tamamlandı',
+          message: notificationMessage,
+          actionLabel: 'Finansı Gör',
+          actionTarget: 'finance',
+          autoDismissMs: 3500,
+        });
+      }
     } catch (error) {
       console.warn('[gameStore] addNotification failed:', error);
     }
 
-    get().autoSave('delivery_completed');
+    if (!offlineProgressionActive) {
+      get().autoSave('delivery_completed');
+    }
     get().processExpiredLeases();
     get().advanceOnboardingProgress();
   },
@@ -4780,6 +5173,100 @@ export const useGameStore = create<GameStore>((set, get) => ({
       success: true,
       message: `${template.name} satın alındı.`,
     };
+  },
+
+  buyTrailer: (catalogId: string): TradeActionResult => {
+    const state = get();
+    const template = findTrailerMarketItem(catalogId);
+    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const validation = validateTrailerPurchase(
+      template,
+      playerLevel,
+      state.player.money ?? 0,
+    );
+    if (!validation.success || !template) {
+      return {
+        success: false,
+        message: validation.message,
+        errorCode: validation.errorCode === 'INSUFFICIENT_FUNDS' ? 'INSUFFICIENT_FUNDS' : undefined,
+      };
+    }
+
+    const instanceId = `${catalogId}-${Date.now()}`;
+    const newTrailer = createTrailerFromTemplate(template, {
+      id: instanceId,
+      city: state.player.homeCityId ?? 'izmir',
+      createdAtGameTime: state.currentTime,
+    });
+
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - template.purchasePrice,
+        trailers: [...(state.player.trailers ?? []), newTrailer],
+      },
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'truck_purchase',
+        amount: template.purchasePrice,
+        description: `${template.name} satın alındı`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Dorse satın alındı',
+          message: `${template.name} ${getCityName(newTrailer.city)} şehrine eklendi.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+    get().autoSave('purchase');
+    return {
+      success: true,
+      message: `${template.name} satın alındı.`,
+    };
+  },
+
+  attachTrailerToTruck: (trailerId: string, truckId: string): TradeActionResult => {
+    const state = get();
+    const trucks = state.player.trucks ?? [];
+    const trailers = state.player.trailers ?? [];
+    const result = attachTrailerToTruckState(trailers, trailerId, truckId, trucks);
+    if (result.error) {
+      return { success: false, message: result.error.message };
+    }
+
+    set({
+      player: {
+        ...state.player,
+        trailers: syncAllTrailersWithFleet(result.trailers, trucks),
+      },
+    });
+    get().autoSave('purchase');
+    return { success: true, message: 'Dorse kamyona bağlandı.' };
+  },
+
+  detachTrailerFromTruck: (trailerId: string): TradeActionResult => {
+    const state = get();
+    const trucks = state.player.trucks ?? [];
+    const trailers = state.player.trailers ?? [];
+    const result = detachTrailerFromTruckState(trailers, trailerId, trucks);
+    if (result.error) {
+      return { success: false, message: result.error.message };
+    }
+
+    set({
+      player: {
+        ...state.player,
+        trailers: result.trailers,
+      },
+    });
+    get().autoSave('purchase');
+    return { success: true, message: 'Dorse ayrıldı.' };
   },
 
   leaseTruck: (catalogId: string): TradeActionResult => {
@@ -5005,6 +5492,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       driver.assignedTruckId === truckId ? { ...driver, assignedTruckId: null } : driver,
     );
     const updatedTrucks = (state.player.trucks ?? []).filter((item) => item.id !== truckId);
+    const updatedTrailers = detachTrailersFromTruckState(
+      state.player.trailers ?? [],
+      truckId,
+      state.player.trucks ?? [],
+    );
 
     set({
       player: {
@@ -5012,6 +5504,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         money: (state.player.money ?? 0) + salePrice,
         trucks: updatedTrucks,
         drivers: updatedDrivers,
+        trailers: updatedTrailers,
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
@@ -5338,6 +5831,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
         (current.status === 'on_route' || current.status === 'preparing') &&
         isDeliveryProgressComplete(current.progress)
       ) {
+        const boostState = get();
+        const arrival = applyFleetArrivalForDelivery(
+          boostState.player.trucks,
+          boostState.player.drivers,
+          current,
+        );
+        set({
+          player: {
+            ...boostState.player,
+            trucks: arrival.trucks,
+            drivers: arrival.drivers,
+          },
+        });
         get().completeDeliveryById(boostedDeliveryToComplete);
       }
     }
@@ -5434,6 +5940,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().autoSave('delivery_incident');
 
     if (isDeliveryProgressComplete(result.delivery.progress)) {
+      const completionState = get();
+      const completingDelivery = completionState.activeDeliveries.find(
+        (item) => item.id === deliveryId,
+      );
+      if (completingDelivery) {
+        const arrival = applyFleetArrivalForDelivery(
+          completionState.player.trucks,
+          completionState.player.drivers,
+          completingDelivery,
+        );
+        set({
+          player: {
+            ...completionState.player,
+            trucks: arrival.trucks,
+            drivers: arrival.drivers,
+          },
+        });
+      }
       get().completeDeliveryById(deliveryId);
     }
 
@@ -6179,6 +6703,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   debugAdvanceOfflineDays: (days = 10) => {
     get().advanceTime(Math.max(1, Math.floor(days)) * timeBalance.hoursPerDay);
+  },
+
+  debugSimulateOfflineRealMinutes: (minutes = 30) => {
+    const state = get();
+    const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
+    const realMinutes = Math.max(1, Math.floor(minutes));
+    const appliedMs = realMinutes * 60_000;
+    const gameHours = realMsToGameHours(appliedMs, simulationGameSpeed);
+
+    offlineProgressionActive = true;
+    try {
+      if (gameHours > 0) {
+        get().advanceTime(gameHours);
+      }
+    } finally {
+      offlineProgressionActive = false;
+    }
+
+    if (__DEV__) {
+      console.log(
+        `[offline-debug] realMinutes=${realMinutes} gameHours=${gameHours.toFixed(2)} gameSpeed=${simulationGameSpeed}`,
+      );
+    }
+
+    return { realMinutes, gameHours, gameSpeed: simulationGameSpeed };
   },
 
   debugProcessDailyCosts: () => {

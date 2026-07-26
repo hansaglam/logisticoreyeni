@@ -1,571 +1,443 @@
 import React, { useEffect, useRef } from 'react';
 import {
   Animated,
+  Image,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
-  TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
-import { ActionButton, GameIcon, StatusBadge } from '../ui';
+import { getOnboardingArtwork } from '../../assets/onboardingAssets';
+import { GameIcon } from '../ui';
 import type { GameIconName } from '../../theme/icons';
-import { colors, radius, spacing, typography } from '../../theme';
-import type { NextActionVariant, RewardChipData } from './dashboardHubLogic';
+import type { OnboardingStepId } from '../../types/game';
+import type { NextActionVariant } from './dashboardHubLogic';
+
+const NARROW_BREAKPOINT = 360;
+const CARD_HEIGHT = 154;
+const CARD_HEIGHT_NARROW = 150;
+
+const ARTWORK_COLUMN_WIDTH = 110;
+const ARTWORK_COLUMN_HEIGHT = 62;
+const ARTWORK_IMAGE_WIDTH = 104;
+const ARTWORK_IMAGE_HEIGHT = 58;
+
+const ARTWORK_COLUMN_WIDTH_NARROW = 91;
+const ARTWORK_IMAGE_WIDTH_NARROW = 87;
+const ARTWORK_IMAGE_HEIGHT_NARROW = 52;
 
 export interface DashboardNextActionCardProps {
+  stepId: OnboardingStepId;
   title: string;
   description: string;
   ctaLabel: string;
   onPress: () => void;
   variant?: NextActionVariant;
   icon?: GameIconName;
-  badgeLabel?: string;
-  rewardChips?: RewardChipData[];
-  eyebrowText?: string;
-  onDismissGuide?: () => void;
-  dismissGuideLabel?: string;
-  /** Başlangıç Rehberi aktifken premium rehber görünümü */
-  isOnboardingGuide?: boolean;
-  /** Rehber kartında kısa hedef etiketi */
-  goalHintLabel?: string;
+  progressLabel: string;
+  stepIndex: number;
+  totalSteps: number;
 }
 
-const VARIANT_ACCENT: Record<NextActionVariant, string> = {
-  primary: colors.accentBlue,
-  reward: colors.accentAmber,
-  track: colors.info,
-  explore: colors.success,
+const CARD_BG = '#07172C';
+const CTA_BLUE = '#2388FF';
+
+const STEP_DISPLAY: Record<
+  OnboardingStepId,
+  { title: string; description: string; guideIcon: GameIconName; accent: string }
+> = {
+  choose_first_contract: {
+    title: 'İlk İşini Seç',
+    description: 'Uygun bir sözleşme seçerek operasyonuna başla.',
+    guideIcon: 'contract',
+    accent: '#2388FF',
+  },
+  assign_team: {
+    title: 'Kamyon ve Şoför Ata',
+    description: 'Yüke uygun araç ve müsait şoförü görevlendir.',
+    guideIcon: 'truck',
+    accent: '#28C6E8',
+  },
+  track_delivery: {
+    title: 'Teslimatı Takip Et',
+    description: 'Rotayı ve kalan süreyi haritadan izle.',
+    guideIcon: 'map',
+    accent: '#39A0FF',
+  },
+  complete_first_delivery: {
+    title: 'İlk Teslimatını Tamamla',
+    description: 'Teslimatı bitirerek ödeme ve deneyim kazan.',
+    guideIcon: 'success',
+    accent: '#11C96B',
+  },
+  claim_first_reward: {
+    title: 'İlk Ödülünü Al',
+    description: 'Hazır görev ödülünü alarak şirketini güçlendir.',
+    guideIcon: 'level',
+    accent: '#FFAA00',
+  },
 };
 
-const REWARD_CHIP_COLOR: Record<RewardChipData['key'], string> = {
-  count: colors.accentAmber,
-  money: colors.success,
-  xp: colors.accentAmber,
-  diamonds: colors.accentBlue,
-  reputation: colors.info,
+const STEP_ARTWORK_SCALE: Record<OnboardingStepId, number> = {
+  choose_first_contract: 1,
+  assign_team: 1.03,
+  track_delivery: 1.08,
+  complete_first_delivery: 1.08,
+  claim_first_reward: 1.1,
 };
 
-const GUIDE_CYAN = '#38BDF8';
-const GUIDE_CTA_BLUE = '#2F80FF';
-
-function RewardChip({ chip }: { chip: RewardChipData }) {
-  const color = REWARD_CHIP_COLOR[chip.key];
+function StepDots({
+  stepIndex,
+  totalSteps,
+  activeAccent,
+}: {
+  stepIndex: number;
+  totalSteps: number;
+  activeAccent: string;
+}) {
   return (
-    <View
-      style={[
-        styles.rewardChip,
-        { backgroundColor: `${color}16`, borderColor: `${color}45` },
-      ]}
-    >
-      {chip.icon ? <GameIcon name={chip.icon} size={10} color={color} /> : null}
-      <Text style={[styles.rewardChipText, { color }]} numberOfLines={1}>
-        {chip.label}
-      </Text>
-    </View>
-  );
-}
-
-function GuideDecorations() {
-  return (
-    <>
-      <View style={styles.glowOrbTopRight} pointerEvents="none" />
-      <View style={styles.glowOrbBottomLeft} pointerEvents="none" />
-      <View style={styles.guideSheen} pointerEvents="none" />
-    </>
-  );
-}
-
-interface GuideCardProps {
-  icon: GameIconName;
-  eyebrowText: string;
-  title: string;
-  description: string;
-  ctaLabel: string;
-  onPress: () => void;
-  onDismissGuide?: () => void;
-  dismissGuideLabel: string;
-  accent: string;
-  goalHintLabel?: string;
-}
-
-function GuideCard({
-  icon,
-  eyebrowText,
-  title,
-  description,
-  ctaLabel,
-  onPress,
-  onDismissGuide,
-  dismissGuideLabel,
-  accent,
-  goalHintLabel,
-}: GuideCardProps) {
-  return (
-    <View style={styles.cardGuide}>
-      <View style={styles.guideAccentColumn} pointerEvents="none">
-        <View style={[styles.guideAccentCore, { backgroundColor: accent }]} />
-        <View style={[styles.guideAccentFade, { backgroundColor: `${accent}88` }]} />
-      </View>
-
-      <GuideDecorations />
-
-      <View style={styles.contentGuide}>
-        <View style={styles.guideHeaderRow}>
-          <View style={styles.iconWrapGuide}>
-            <View style={styles.iconWrapGuideGlow} />
-            <GameIcon name={icon} size={21} color={GUIDE_CYAN} />
-            <View style={styles.iconSparkle} />
-          </View>
-
-          <View style={styles.guideTitleBlock}>
-            <View style={styles.guideEyebrowRow}>
-              <View style={styles.guideBadge}>
-                <Text style={styles.guideBadgeText}>REHBER</Text>
-              </View>
-              <Text style={styles.eyebrowGuide} numberOfLines={1}>
-                {eyebrowText}
-              </Text>
-            </View>
-            <Text style={styles.titleGuide} numberOfLines={1}>
-              {title}
-            </Text>
-          </View>
-        </View>
-
-        {goalHintLabel ? (
-          <Text style={styles.goalHintLabel}>{goalHintLabel}</Text>
-        ) : null}
-
-        <Text style={styles.descriptionGuide} numberOfLines={2}>
-          {description}
-        </Text>
-
-        <View style={styles.guideActions}>
-          <TouchableOpacity
-            style={styles.ctaGuideButton}
-            onPress={onPress}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-          >
-            <Text style={styles.ctaGuideLabel}>{ctaLabel}</Text>
-            <GameIcon name="chevronRight" size={14} color="#FFFFFF" />
-          </TouchableOpacity>
-
-          {onDismissGuide ? (
-            <TouchableOpacity
-              onPress={onDismissGuide}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dismissGuide}>{dismissGuideLabel}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      </View>
+    <View style={styles.stepDots}>
+      {Array.from({ length: totalSteps }, (_, index) => {
+        const isCompleted = index < stepIndex - 1;
+        const isActive = index === stepIndex - 1;
+        return (
+          <View
+            key={index}
+            style={[
+              styles.stepDot,
+              isCompleted && styles.stepDotCompleted,
+              isActive && { backgroundColor: activeAccent },
+              !isCompleted && !isActive && styles.stepDotPending,
+            ]}
+          />
+        );
+      })}
     </View>
   );
 }
 
 export default function DashboardNextActionCard({
-  title,
-  description,
+  stepId,
+  title: _title,
+  description: _description,
   ctaLabel,
   onPress,
-  variant = 'primary',
-  icon = 'contract',
-  badgeLabel,
-  rewardChips,
-  eyebrowText = 'Sıradaki Hamle',
-  onDismissGuide,
-  dismissGuideLabel = 'Rehberi Gizle',
-  isOnboardingGuide = false,
-  goalHintLabel,
+  progressLabel,
+  stepIndex,
+  totalSteps,
 }: DashboardNextActionCardProps) {
-  const accent = isOnboardingGuide
-    ? variant === 'reward'
-      ? colors.accentAmber
-      : GUIDE_CYAN
-    : VARIANT_ACCENT[variant];
-  const showRewardChips = variant === 'reward' && !!rewardChips?.length && !isOnboardingGuide;
-  const ctaVariant = isOnboardingGuide ? 'primary' : variant === 'reward' ? 'primary' : 'secondary';
+  const { width } = useWindowDimensions();
+  const isNarrow = width < NARROW_BREAKPOINT;
+  const stepDisplay = STEP_DISPLAY[stepId];
+  const displayTitle = stepDisplay?.title ?? _title;
+  const displayDescription = stepDisplay?.description ?? _description;
+  const guideIcon = stepDisplay?.guideIcon ?? 'contract';
+  const accent = stepDisplay?.accent ?? '#39A0FF';
+  const artwork = getOnboardingArtwork(stepId);
+  const artworkScale = STEP_ARTWORK_SCALE[stepId];
 
-  const fadeAnim = useRef(new Animated.Value(isOnboardingGuide ? 0 : 1)).current;
-  const slideAnim = useRef(new Animated.Value(isOnboardingGuide ? 10 : 0)).current;
-  const pulseAnim = useRef(new Animated.Value(0.92)).current;
+  const artworkColumnWidth = isNarrow ? ARTWORK_COLUMN_WIDTH_NARROW : ARTWORK_COLUMN_WIDTH;
+  const artworkImageWidth = isNarrow ? ARTWORK_IMAGE_WIDTH_NARROW : ARTWORK_IMAGE_WIDTH;
+  const artworkImageHeight = isNarrow ? ARTWORK_IMAGE_HEIGHT_NARROW : ARTWORK_IMAGE_HEIGHT;
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(10)).current;
 
   useEffect(() => {
-    if (!isOnboardingGuide) {
-      return;
-    }
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
       Animated.timing(slideAnim, { toValue: 0, duration: 260, useNativeDriver: true }),
     ]).start();
-
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 0.92, duration: 1800, useNativeDriver: true }),
-      ]),
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [isOnboardingGuide, fadeAnim, slideAnim, pulseAnim]);
-
-  if (isOnboardingGuide) {
-    return (
-      <Animated.View
-        style={[
-          styles.guideOuter,
-          {
-            opacity: fadeAnim,
-            transform: [{ translateY: slideAnim }],
-          },
-        ]}
-      >
-        <Animated.View style={[styles.guideOuterGlow, { opacity: pulseAnim }]}>
-          <GuideCard
-            icon={icon}
-            eyebrowText={eyebrowText ?? ''}
-            title={title}
-            description={description}
-            ctaLabel={ctaLabel}
-            onPress={onPress}
-            onDismissGuide={onDismissGuide}
-            dismissGuideLabel={dismissGuideLabel}
-            accent={accent}
-            goalHintLabel={goalHintLabel}
-          />
-        </Animated.View>
-      </Animated.View>
-    );
-  }
+  }, [stepIndex, fadeAnim, slideAnim]);
 
   return (
-    <View style={styles.card}>
-      <View style={[styles.accentStrip, { backgroundColor: accent }]} />
-      <View style={styles.content}>
-        <View style={styles.header}>
-          <View style={[styles.iconWrap, { backgroundColor: `${accent}1F` }]}>
-            <GameIcon name={icon} size={17} color={accent} />
-          </View>
-          <View style={styles.titleBlock}>
-            <Text style={styles.eyebrow}>{eyebrowText}</Text>
-            <Text style={styles.title} numberOfLines={1}>
-              {title}
+    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+      <View style={[styles.card, isNarrow && styles.cardNarrow]}>
+        <View style={styles.cardBgGlowTop} pointerEvents="none" />
+        <View style={styles.cardBgTintBottom} pointerEvents="none" />
+
+        <View style={styles.headerRow}>
+          <View style={styles.headerLeft}>
+            <View style={styles.headerIconWrap}>
+              <GameIcon name={guideIcon} size={isNarrow ? 12 : 13} color={accent} />
+            </View>
+            <Text
+              style={styles.headerLabel}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}
+            >
+              {progressLabel}
             </Text>
           </View>
-          {badgeLabel ? <StatusBadge label={badgeLabel} variant="amber" size="sm" /> : null}
+          <StepDots stepIndex={stepIndex} totalSteps={totalSteps} activeAccent={accent} />
         </View>
 
-        <Text style={styles.description} numberOfLines={2}>
-          {description}
-        </Text>
-
-        {showRewardChips ? (
-          <View style={styles.rewardChipRow}>
-            {rewardChips!.map((chip) => (
-              <RewardChip key={chip.key} chip={chip} />
-            ))}
+        <View style={[styles.mainRow, isNarrow && styles.mainRowNarrow]}>
+          <View style={styles.textColumn}>
+            <Text
+              style={[styles.title, isNarrow && styles.titleNarrow]}
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}
+            >
+              {displayTitle}
+            </Text>
+            <Text
+              style={[styles.description, isNarrow && styles.descriptionNarrow]}
+              numberOfLines={2}
+            >
+              {displayDescription}
+            </Text>
           </View>
-        ) : null}
 
-        <ActionButton
-          label={ctaLabel}
+          {artwork != null ? (
+            <View
+              style={[
+                styles.artworkColumn,
+                { width: artworkColumnWidth, height: ARTWORK_COLUMN_HEIGHT },
+              ]}
+              pointerEvents="none"
+            >
+              <Image
+                source={artwork}
+                style={{
+                  width: artworkImageWidth,
+                  height: artworkImageHeight,
+                  opacity: 1,
+                  backgroundColor: 'transparent',
+                  transform: [{ scale: artworkScale }],
+                }}
+                resizeMode="contain"
+              />
+            </View>
+          ) : null}
+        </View>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.ctaButton,
+            isNarrow && styles.ctaButtonNarrow,
+            pressed && styles.ctaButtonPressed,
+          ]}
           onPress={onPress}
-          variant={ctaVariant}
-          compact
-          style={styles.cta}
-        />
+        >
+          <View style={styles.ctaHighlight} pointerEvents="none" />
+          <View style={styles.ctaShade} pointerEvents="none" />
+          <View style={styles.ctaContentRow}>
+            <Text style={styles.ctaLabel}>{ctaLabel}</Text>
+            <View style={styles.ctaChevron}>
+              <GameIcon name="chevronRight" size={14} color="#FFFFFF" />
+            </View>
+          </View>
+        </Pressable>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  guideOuter: {
-    ...Platform.select({
-      android: { elevation: 4 },
-      ios: {
-        shadowColor: GUIDE_CYAN,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.28,
-        shadowRadius: 12,
-      },
-    }),
-  },
-  guideOuterGlow: {
-    borderRadius: radius.lg + 1,
-  },
-  cardGuide: {
-    flexDirection: 'row',
-    borderRadius: radius.lg,
-    backgroundColor: '#08111F',
-    borderWidth: 1.5,
-    borderColor: 'rgba(56, 189, 248, 0.46)',
-    overflow: 'hidden',
-    minHeight: 158,
-  },
-  guideAccentColumn: {
-    width: 5,
-    overflow: 'hidden',
-  },
-  guideAccentCore: {
-    flex: 1,
-    width: 5,
-  },
-  guideAccentFade: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 5,
-    width: 8,
-    opacity: 0.35,
-  },
-  glowOrbTopRight: {
-    position: 'absolute',
-    top: -48,
-    right: -36,
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-  },
-  glowOrbBottomLeft: {
-    position: 'absolute',
-    bottom: -56,
-    left: 24,
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(14, 165, 233, 0.09)',
-  },
-  guideSheen: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(56, 189, 248, 0.04)',
-  },
-  contentGuide: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 11,
-    gap: 8,
-  },
-  guideHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  iconWrapGuide: {
-    width: 44,
-    height: 44,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(14, 165, 233, 0.22)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(56, 189, 248, 0.48)',
-    overflow: 'visible',
-    ...Platform.select({
-      android: { elevation: 3 },
-      ios: {
-        shadowColor: GUIDE_CYAN,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.35,
-        shadowRadius: 6,
-      },
-    }),
-  },
-  iconWrapGuideGlow: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 13,
-    backgroundColor: 'rgba(56, 189, 248, 0.14)',
-  },
-  iconSparkle: {
-    position: 'absolute',
-    top: 3,
-    right: 3,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: GUIDE_CYAN,
-    opacity: 0.85,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.45)',
-  },
-  guideTitleBlock: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  guideEyebrowRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    minWidth: 0,
-  },
-  guideBadge: {
-    height: 20,
-    paddingHorizontal: 7,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.38)',
-    backgroundColor: 'rgba(56, 189, 248, 0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  guideBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.75,
-    color: GUIDE_CYAN,
-  },
-  eyebrowGuide: {
-    ...typography.caption,
-    fontSize: 10.5,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-    color: 'rgba(56, 189, 248, 0.88)',
-    flex: 1,
-    minWidth: 0,
-  },
-  titleGuide: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    lineHeight: 21,
-  },
-  goalHintLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    color: 'rgba(56, 189, 248, 0.72)',
-    paddingLeft: 56,
-    marginTop: -2,
-    textTransform: 'uppercase',
-  },
-  descriptionGuide: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: 'rgba(203, 213, 225, 0.92)',
-    paddingLeft: 56,
-    marginTop: 1,
-  },
-  guideActions: {
-    paddingLeft: 56,
-    gap: 0,
-    marginTop: 2,
-  },
-  ctaGuideButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 6,
-    height: 42,
-    paddingHorizontal: 20,
-    borderRadius: 15,
-    backgroundColor: GUIDE_CTA_BLUE,
-    borderWidth: 1,
-    borderColor: 'rgba(125, 190, 255, 0.42)',
-    ...Platform.select({
-      android: { elevation: 3 },
-      ios: {
-        shadowColor: GUIDE_CTA_BLUE,
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.38,
-        shadowRadius: 6,
-      },
-    }),
-  },
-  ctaGuideLabel: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 0.2,
-  },
-  dismissGuide: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: colors.textMuted,
-    opacity: 0.75,
-    marginTop: 8,
-  },
   card: {
-    flexDirection: 'row',
-    borderRadius: radius.lg,
-    backgroundColor: colors.card,
+    height: CARD_HEIGHT,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 10,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'rgba(35, 136, 255, 0.72)',
+    backgroundColor: CARD_BG,
     overflow: 'hidden',
+    ...Platform.select({
+      android: { elevation: 2 },
+      ios: {
+        shadowColor: CTA_BLUE,
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
+      },
+    }),
   },
-  accentStrip: {
-    width: 3,
-    opacity: 0.7,
+  cardNarrow: {
+    height: CARD_HEIGHT_NARROW,
   },
-  content: {
-    flex: 1,
-    padding: spacing.sm + 2,
-    gap: 8,
+  cardBgGlowTop: {
+    position: 'absolute',
+    right: -40,
+    top: -30,
+    width: 150,
+    height: 110,
+    borderRadius: 999,
+    backgroundColor: 'rgba(35, 136, 255, 0.035)',
   },
-  header: {
+  cardBgTintBottom: {
+    position: 'absolute',
+    left: -24,
+    bottom: -20,
+    width: 120,
+    height: 90,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0, 20, 50, 0.045)',
+  },
+  headerRow: {
+    height: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    justifyContent: 'space-between',
+    marginBottom: 4,
   },
-  iconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: radius.sm,
+  headerLeft: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  titleBlock: {
     flex: 1,
     minWidth: 0,
   },
-  eyebrow: {
-    ...typography.caption,
-    fontSize: 9.5,
+  headerIconWrap: {
+    marginRight: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerLabel: {
+    fontSize: 9,
+    lineHeight: 11,
     fontWeight: '700',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.3,
+    color: '#39A0FF',
+    flexShrink: 1,
+  },
+  stepDots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginLeft: 8,
+    marginRight: 2,
+    flexShrink: 0,
+    alignSelf: 'center',
+  },
+  stepDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 999,
+  },
+  stepDotCompleted: {
+    backgroundColor: '#2388FF',
+  },
+  stepDotPending: {
+    backgroundColor: 'rgba(50, 95, 150, 0.32)',
+  },
+  mainRow: {
+    height: 62,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    minWidth: 0,
+  },
+  mainRowNarrow: {
+    marginBottom: 4,
+  },
+  textColumn: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    paddingRight: 8,
   },
   title: {
-    ...typography.cardTitle,
-    fontSize: 15,
-    color: colors.textPrimary,
-    marginTop: 1,
+    fontSize: 18,
+    lineHeight: 21,
+    fontWeight: '800',
+    color: '#F3F7FF',
+  },
+  titleNarrow: {
+    fontSize: 16.5,
+    lineHeight: 20,
   },
   description: {
-    ...typography.caption,
-    fontSize: 11.5,
-    color: colors.textSecondary,
-    lineHeight: 15,
+    fontSize: 10.5,
+    lineHeight: 14,
+    fontWeight: '400',
+    color: '#A9B6CC',
+    marginTop: 2,
   },
-  rewardChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 5,
-    marginTop: -2,
+  descriptionNarrow: {
+    fontSize: 10,
+    lineHeight: 13,
   },
-  rewardChip: {
+  artworkColumn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    overflow: 'visible',
+    backgroundColor: 'transparent',
+  },
+  ctaButton: {
+    height: 42,
+    width: '100%',
+    alignSelf: 'stretch',
+    borderRadius: 13,
+    marginTop: 0,
+    marginBottom: 0,
+    overflow: 'hidden',
+    backgroundColor: CTA_BLUE,
+    borderWidth: 1,
+    borderColor: 'rgba(74, 168, 255, 0.85)',
+    ...Platform.select({
+      android: { elevation: 2 },
+      ios: {
+        shadowColor: CTA_BLUE,
+        shadowOpacity: 0.16,
+        shadowRadius: 5,
+        shadowOffset: { width: 0, height: 2 },
+      },
+    }),
+  },
+  ctaButtonNarrow: {
+    height: 40,
+  },
+  ctaButtonPressed: {
+    opacity: 0.94,
+    transform: [{ scale: 0.985 }],
+  },
+  ctaHighlight: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '48%',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderTopLeftRadius: 13,
+    borderTopRightRadius: 13,
+  },
+  ctaShade: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '42%',
+    backgroundColor: 'rgba(0, 38, 100, 0.10)',
+    borderBottomLeftRadius: 13,
+    borderBottomRightRadius: 13,
+  },
+  ctaContentRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    borderWidth: 1,
+    justifyContent: 'center',
+    height: '100%',
   },
-  rewardChipText: {
-    ...typography.caption,
-    fontSize: 10,
+  ctaLabel: {
+    fontSize: 14.5,
+    lineHeight: 18,
     fontWeight: '800',
+    color: '#FFFFFF',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
-  cta: {
-    alignSelf: 'flex-start',
-    marginTop: 3,
+  ctaChevron: {
+    marginLeft: 8,
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

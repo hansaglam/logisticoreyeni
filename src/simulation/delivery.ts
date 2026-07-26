@@ -17,6 +17,7 @@ import type {
   GlobalEconomy,
   Product,
   Route,
+  Trailer,
   Truck,
 } from '../types/game';
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
@@ -24,11 +25,20 @@ import { getSafeFuelPrice } from './economy';
 import { getCargoWeightCostMultiplier } from './contractEconomics';
 import { meetsDriverLevelRequirement } from './driverProgress';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
+import { normalizeCityId } from '../data/networkPositions';
 import { getCityName, getProductByIdSafe } from '../utils/entityLookup';
 import {
   buildContractAvailabilityCopy,
   type ContractAvailabilityMessageContext,
 } from '../utils/contractAvailabilityDisplay';
+import {
+  buildCapacityDisabledReasonInput,
+  canTruckCarryCargo,
+  canTruckCarryContract as canTruckCarryContractWithTrailers,
+  getMaxFleetCapacityTons,
+  getTruckEffectiveCapacityTons,
+  resolveCapacityDisabledReasonKind,
+} from './capacity';
 
 const isDevBuild = typeof __DEV__ !== 'undefined' && __DEV__;
 
@@ -111,11 +121,14 @@ export function calculateCargoWeight(contract: Contract, product?: Product): num
   return getContractCargoWeight(contract, product);
 }
 
-/** Kamyon sözleşme yükünü taşıyabilir mi? */
-// TODO: Add multi-truck or multi-trip contracts for cargoWeight greater than truck capacity.
-export function canTruckCarryContract(truck: Truck, contract: Contract, product?: Product): boolean {
-  const cargoWeight = getContractCargoWeight(contract, product);
-  return cargoWeight <= (truck.capacity ?? 0) && cargoWeight > 0;
+/** Kamyon sözleşme yükünü taşıyabilir mi? (bağlı dorse dahil) */
+export function canTruckCarryContract(
+  truck: Truck,
+  contract: Contract,
+  product?: Product,
+  trailers?: Trailer[],
+): boolean {
+  return canTruckCarryContractWithTrailers(truck, trailers, contract, product);
 }
 
 /** Kamyon teslimat için boşta mı? */
@@ -169,8 +182,62 @@ export function isDriverIdle(driver: Driver): boolean {
   return driver.status === 'idle';
 }
 
-export function resolveTruckCityId(truck: Truck, fallbackHomeCityId?: string): string {
-  return truck.currentCityId ?? truck.homeCityId ?? fallbackHomeCityId ?? DEFAULT_TRUCK_CITY_ID;
+export function resolveTruckCityId(
+  truck: Pick<Truck, 'currentCityId' | 'homeCityId'>,
+  fallbackHomeCityId?: string,
+): string {
+  return normalizeCityId(
+    truck.currentCityId ?? truck.homeCityId ?? fallbackHomeCityId ?? DEFAULT_TRUCK_CITY_ID,
+  );
+}
+
+export function resolveDeliveryDestinationCityId(
+  delivery: Pick<Delivery, 'destinationCityId'>,
+): string {
+  return normalizeCityId(delivery.destinationCityId);
+}
+
+export function applyTruckArrivalAtCity(truck: Truck, destinationCityId: string): Truck {
+  return {
+    ...truck,
+    status: 'idle',
+    currentCityId: normalizeCityId(destinationCityId),
+  };
+}
+
+export function applyFleetArrivalForDelivery(
+  trucks: Truck[],
+  drivers: Driver[],
+  delivery: Pick<Delivery, 'truckId' | 'driverId' | 'destinationCityId'>,
+): { trucks: Truck[]; drivers: Driver[] } {
+  const destinationCityId = resolveDeliveryDestinationCityId(delivery);
+  return {
+    trucks: trucks.map((truck) =>
+      truck.id === delivery.truckId
+        ? applyTruckArrivalAtCity(truck, destinationCityId)
+        : truck,
+    ),
+    drivers: drivers.map((driver) =>
+      driver.id === delivery.driverId ? { ...driver, status: 'idle' as const } : driver,
+    ),
+  };
+}
+
+export interface DeliveryCompletionLocationLog {
+  deliveryId: string;
+  truckId: string;
+  originCityId: string;
+  destinationCityId: string;
+  truckCityBefore: string;
+  truckCityAfter: string;
+  truckStatusAfter: Truck['status'];
+  activeDeliveryCleared: boolean;
+}
+
+export function logDeliveryCompletionLocation(log: DeliveryCompletionLocationLog): void {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log('[delivery-complete-location]', log);
+  }
 }
 
 export function normalizeTruckCity(truck: Truck, fallbackHomeCityId?: string): Truck {
@@ -238,12 +305,13 @@ export function getMaxIdleTruckCapacityAtOrigin(
   trucks: Truck[] | undefined,
   originCityId: string | undefined,
   fallbackHomeCityId?: string,
+  trailers?: Trailer[],
 ): number {
   const idleAtOrigin = getIdleTrucksAtOrigin(trucks, originCityId, fallbackHomeCityId);
   if (idleAtOrigin.length === 0) {
     return 0;
   }
-  return Math.max(...idleAtOrigin.map((truck) => truck.capacity ?? 0));
+  return Math.max(...idleAtOrigin.map((truck) => getTruckEffectiveCapacityTons(truck, trailers)));
 }
 
 export function getBusyTruckOriginCityIds(
@@ -291,15 +359,21 @@ export function getIdleDrivers(drivers: Driver[] | undefined): Driver[] {
 }
 
 /** Boşta kamyonlar arasındaki en yüksek kapasite (ton) */
-export function getMaxIdleTruckCapacity(trucks: Truck[] | undefined): number {
+export function getMaxIdleTruckCapacity(
+  trucks: Truck[] | undefined,
+  trailers?: Trailer[],
+): number {
   const idle = getIdleTrucks(trucks);
   if (idle.length === 0) return 0;
-  return Math.max(...idle.map((truck) => truck.capacity ?? 0));
+  return Math.max(...idle.map((truck) => getTruckEffectiveCapacityTons(truck, trailers)));
 }
 
-/** Oyuncunun sahip olduğu en yüksek kamyon kapasitesi (ton) */
-export function getHighestOwnedTruckCapacity(trucks: Truck[] | undefined): number {
-  return (trucks ?? []).reduce((max, truck) => Math.max(max, truck.capacity ?? 0), 0);
+/** Oyuncunun sahip olduğu en yüksek efektif filo kapasitesi (ton, dorse dahil) */
+export function getHighestOwnedTruckCapacity(
+  trucks: Truck[] | undefined,
+  trailers?: Trailer[],
+): number {
+  return getMaxFleetCapacityTons(trucks, trailers);
 }
 
 /**
@@ -312,6 +386,7 @@ export function selectIdleTruckForContract(
   product?: Product,
   currentTime = 0,
   fallbackHomeCityId?: string,
+  trailers?: Trailer[],
 ): Truck | undefined {
   const resolved = product ?? getProductByIdSafe(contract.productId);
   if (!resolved) return undefined;
@@ -321,9 +396,12 @@ export function selectIdleTruckForContract(
       (truck) =>
         isTruckAvailableForAssignment(truck, currentTime) &&
         isTruckAtContractOrigin(truck, contract, fallbackHomeCityId) &&
-        canTruckCarryContract(truck, contract, resolved),
+        canTruckCarryContract(truck, contract, resolved, trailers),
     )
-    .sort((a, b) => (a.capacity ?? 0) - (b.capacity ?? 0))[0];
+    .sort(
+      (a, b) =>
+        getTruckEffectiveCapacityTons(a, trailers) - getTruckEffectiveCapacityTons(b, trailers),
+    )[0];
 }
 
 function buildUnavailableContractAvailability(
@@ -391,10 +469,12 @@ export function getContractAvailability(
   currentTime = 0,
   playerReputation = 0,
   fallbackHomeCityId?: string,
+  trailers?: Trailer[],
 ): ContractAvailability {
   const safePlayerLevel = Math.max(1, playerLevel);
   const requiredLevel = contract.requiredLevel ?? 1;
   const truckList = trucks ?? [];
+  const trailerList = trailers ?? [];
   const driverList = drivers ?? [];
   const product = getProductByIdSafe(contract.productId);
   const requiredCapacity = getContractCargoWeight(contract, product ?? undefined);
@@ -452,10 +532,12 @@ export function getContractAvailability(
 
   const trucksAtOrigin = getTrucksAtOrigin(truckList, originCityId, fallbackHomeCityId);
   const idleTrucksAtOrigin = getIdleTrucksAtOrigin(truckList, originCityId, fallbackHomeCityId);
-  const maxIdleTruckCapacityAtOrigin =
-    idleTrucksAtOrigin.length > 0
-      ? Math.max(...idleTrucksAtOrigin.map((truck) => truck.capacity ?? 0))
-      : 0;
+  const maxIdleTruckCapacityAtOrigin = getMaxIdleTruckCapacityAtOrigin(
+    truckList,
+    originCityId,
+    fallbackHomeCityId,
+    trailerList,
+  );
 
   const buildOriginDebug = (reason: ContractAvailabilityReason) =>
     buildContractAvailabilityDebug(
@@ -486,15 +568,28 @@ export function getContractAvailability(
   }
 
   const trucksWithCapacityAtOrigin = idleTrucksAtOrigin.filter((truck) =>
-    canTruckCarryContract(truck, contract, product ?? undefined),
+    canTruckCarryContract(truck, contract, product ?? undefined, trailerList),
   );
 
   if (trucksWithCapacityAtOrigin.length === 0) {
+    const capacityContext = buildCapacityDisabledReasonInput(
+      requiredCapacity,
+      truckList,
+      trailerList,
+      idleTrucksAtOrigin,
+      isTruckIdle,
+      resolveTruckCityId,
+      originCityId,
+      contract,
+      fallbackHomeCityId,
+    );
     return buildUnavailableContractAvailability('NO_TRUCK_WITH_CAPACITY', {
       ...originContext,
       requiredCapacity,
       bestAvailableTruckCapacity: maxIdleTruckCapacityAtOrigin,
       maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      capacityDisabledReasonKind: resolveCapacityDisabledReasonKind(capacityContext),
+      maxFleetCapacityTons: capacityContext.maxFleetCapacityTons,
       debug: buildOriginDebug('NO_TRUCK_WITH_CAPACITY'),
     });
   }
@@ -1434,10 +1529,8 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
   const conditionLoss = resolveDeliveryConditionLoss(delivery);
 
   const updatedTrucks = updateById(gameState.trucks, delivery.truckId, (truck) => ({
-    ...truck,
-    status: 'idle' as const,
+    ...applyTruckArrivalAtCity(truck, delivery.destinationCityId),
     condition: clamp((truck.condition ?? 100) - conditionLoss, 0, 100),
-    currentCityId: delivery.destinationCityId,
   }));
 
   const updatedDrivers = updateById(gameState.drivers, delivery.driverId, (driver) => ({
@@ -1496,7 +1589,7 @@ export function failDelivery(
     ...truck,
     status: 'idle' as const,
     condition: clamp((truck.condition ?? 100) - conditionLoss * 0.5, 0, 100),
-    currentCityId: delivery.originCityId,
+    currentCityId: normalizeCityId(delivery.originCityId),
   }));
 
   const updatedDrivers = updateById(gameState.drivers, delivery.driverId, (driver) => ({

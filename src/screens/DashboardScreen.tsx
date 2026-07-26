@@ -1,36 +1,34 @@
 /**
  * LogistiCore - Ana Dashboard (Oyun Hub)
  *
- * Mobil tycoon tarzı kompakt ana sayfa — kaynaklar, hero kart, sıradaki hamle,
- * operasyon HUD, modül grid ve fırsatlar. Büyük görev listesi yok; ödül durumu
- * Sıradaki Hamle kartında özetlenir.
+ * Premium mobil tycoon ana sayfa — kaynaklar, hero kart, olaylar/ödüller,
+ * başlangıç rehberi, modül grid ve günlük destek.
  */
 
 import React, { useMemo } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import type { TabKey } from '../navigation/tabTypes';
 import {
-  buildDashboardStatTiles,
+  DashboardAlertBanner,
+  DashboardBackground,
   DashboardHeroCard,
   DashboardModuleGrid,
-  DashboardMarketOpportunitiesSection,
   DashboardNextActionCard,
-  DashboardOpportunitiesSection,
   DashboardRetentionCard,
   DashboardResourceBar,
-  DashboardStatGrid,
   DashboardWorldEventsCard,
-  resolveNextAction,
+  DASHBOARD_HORIZONTAL_PADDING,
+  DASHBOARD_SCROLL_BOTTOM_EXTRA,
+  DASHBOARD_SECTION_GAP,
+  DASHBOARD_SPLIT_MIN_WIDTH,
+  dashboardStyles,
 } from '../components/dashboard';
-import { AppScreen, GameIcon } from '../components/ui';
-import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import DashboardDailyOpsBonusCard from '../components/monetization/DashboardDailyOpsBonusCard';
 import { createDefaultMissionsState } from '../config/missions';
 import { createDefaultRetentionState } from '../simulation/retentionProgress';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { countPlayableContracts } from '../simulation/contracts';
-import { getIdleTruckOriginCityIds } from '../simulation/delivery';
 import { getSafeFuelPrice } from '../simulation/economy';
 import {
   applyWorldEventImpactToFuelPrice,
@@ -40,10 +38,8 @@ import { getLevelProgress } from '../simulation/leveling';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useGameStore } from '../store/gameStore';
-import { buildDashboardOpportunities, pickDiverseDashboardOpportunities } from '../utils/dashboardOpportunities';
 import {
   detectMarketTradeOpportunities,
-  pickDiverseMarketTradeOpportunities,
 } from '../utils/marketTradeOpportunities';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import {
@@ -53,7 +49,6 @@ import {
   resolveOnboardingDashboardAction,
 } from '../onboarding/onboardingProgress';
 import { colors, formatMoney, spacing, typography } from '../theme';
-import { getCityName } from '../utils/entityLookup';
 import type { Player } from '../types/game';
 import { shouldShowPostDeliveryLocationHint } from '../utils/truckLocationUx';
 
@@ -77,23 +72,10 @@ function getWarehouseFillRatio(player: Player, currentTime: number): number {
   return totalCapacity > 0 ? usedCapacity / totalCapacity : 0;
 }
 
-function CashWarningBanner({ cash }: { cash: number }) {
-  return (
-    <View style={styles.cashWarning}>
-      <GameIcon name="warning" size={13} color={colors.warning} />
-      <Text style={styles.cashWarningText}>
-        Nakit düşük ({formatMoney(cash)}) — giderlere dikkat et.
-      </Text>
-    </View>
-  );
-}
-
 export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
-  const routes = useGameStore((state) => state.routes) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const cities = useGameStore((state) => state.cities) ?? [];
@@ -101,8 +83,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const financeTotals = useGameStore((state) => state.financeTotals);
   const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
   const onboarding = useGameStore((state) => state.onboarding);
-  const dismissOnboardingGuide = useGameStore((state) => state.dismissOnboardingGuide);
-  const completeOnboardingStepPress = useGameStore((state) => state.completeOnboardingStepPress);
   const advanceOnboardingProgress = useGameStore((state) => state.advanceOnboardingProgress);
   const isPaused = useGameStore((state) => state.isPaused);
   const pauseGame = useGameStore((state) => state.pauseGame);
@@ -114,12 +94,13 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
   const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
+  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
-  const claimMissionReward = useGameStore((state) => state.claimMissionReward);
-  const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
-  const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
   const addNotification = useGameStore((state) => state.addNotification);
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { tabBarHeight, screenTopPadding } = useTabBarLayout();
+  const dashboardBottomPadding = tabBarHeight + DASHBOARD_SCROLL_BOTTOM_EXTRA;
+  const { width: screenWidth } = useWindowDimensions();
+  const useSplitLayout = screenWidth >= DASHBOARD_SPLIT_MIN_WIDTH;
 
   useOnboardingScreenVisit('Dashboard');
 
@@ -185,48 +166,21 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   const fleetSnapshot = useMemo(() => {
     const snapshotTrucks = player?.trucks ?? [];
-    const snapshotDrivers = player?.drivers ?? [];
     return {
       idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
-      idleDrivers: snapshotDrivers.filter((d) => d.status === 'idle').length,
     };
   }, [player]);
 
-  const marketTradeOpportunitiesAll = useMemo(() => {
-    if (!player) return [];
+  const marketOpportunityCount = useMemo(() => {
+    if (!player) return 0;
     return detectMarketTradeOpportunities({
       player,
       cities,
       products,
       currentTime,
       limit: 8,
-    });
+    }).length;
   }, [player, cities, products, currentTime]);
-
-  const marketTradeOpportunities = useMemo(
-    () => pickDiverseMarketTradeOpportunities(marketTradeOpportunitiesAll, 2),
-    [marketTradeOpportunitiesAll],
-  );
-
-  const opportunities = useMemo(() => {
-    if (!player) return [];
-    const built = buildDashboardOpportunities({
-      contracts,
-      trucks: player.trucks ?? [],
-      drivers: player.drivers ?? [],
-      playerLevel: Math.max(1, player.level ?? player.companyLevel ?? 1),
-      currentTime,
-      globalEconomy,
-      activeDeliveries,
-      cities,
-      routes,
-      products,
-      limit: 6,
-    });
-    return pickDiverseDashboardOpportunities(built, 2);
-  }, [contracts, player, currentTime, globalEconomy, activeDeliveries, cities, routes, products]);
-
-  const topOpportunities = opportunities;
 
   const warehouseFillRatio = useMemo(
     () => (player ? getWarehouseFillRatio(player, currentTime) : 0),
@@ -270,6 +224,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     missions?.flags?.tradePurchased,
     missions?.flags?.deliveryStarted,
     missions?.claimedMissionRewardIds?.length,
+    onboarding?.assignmentOpened,
     onboarding?.visitedScreens?.length,
   ]);
 
@@ -283,53 +238,22 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         activeDeliveries,
         missions,
         player,
+        currentTime,
         getMissionProgress: getMissionProgressValue,
       }),
     );
-  }, [
-    player,
-    onboarding,
-    activeDeliveries,
-    missions,
-    getMissionProgressValue,
-  ]);
+  }, [player, onboarding, activeDeliveries, missions, currentTime, getMissionProgressValue]);
 
-  const nextAction = useMemo(
-    () =>
-      resolveNextAction({
-        runningDeliveries: runningDeliveries.length,
-        playableContracts: playableContractCount,
-        idleTruckCount: fleetSnapshot.idleTrucks,
-        missions,
-        getMissionProgress: getMissionProgressValue,
-        marketOpened: missions.flags.marketOpened,
-      }),
-    [runningDeliveries.length, playableContractCount, fleetSnapshot.idleTrucks, missions, getMissionProgressValue],
-  );
-
-  const idleTruckCitySummary = useMemo(() => {
-    if (!player) return undefined;
-    const cityIds = getIdleTruckOriginCityIds(player.trucks ?? [], player.homeCityId);
-    if (cityIds.length === 0) return undefined;
-    return cityIds.map((cityId) => getCityName(cityId)).join(', ');
-  }, [player]);
-
-  const statTiles = useMemo(() => {
-    if (!player) return [];
-    return buildDashboardStatTiles({
-      idleTrucks: fleetSnapshot.idleTrucks,
-      activeDeliveries: runningDeliveries.length,
-      idleDrivers: fleetSnapshot.idleDrivers,
-      warehouseFillRatio,
-      idleTruckCitySummary,
-    });
-  }, [player, fleetSnapshot, runningDeliveries.length, warehouseFillRatio, idleTruckCitySummary]);
+  const showOnboardingCard = onboardingAction != null;
 
   if (!player) {
     return (
-      <View style={styles.loadingRoot}>
-        <ActivityIndicator size="large" color={colors.accentBlue} />
-        <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
+      <View style={styles.screenRoot}>
+        <DashboardBackground />
+        <View style={styles.loadingRoot}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
+        </View>
       </View>
     );
   }
@@ -343,6 +267,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(player.completedContracts ?? 0);
   const onboardingCompleted = onboarding?.completed === true;
+
   const handleDailyOpsBonusSuccess = (amount: number) => {
     addNotification({
       time: currentTime,
@@ -379,43 +304,36 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     handleNavigate('market');
   };
 
-  const handleNextActionPress = () => {
-    if (onboardingAction) {
-      dispatchOnboardingNavigation(onboardingAction.action, {
-        navigate: handleNavigate,
-        openMissions: handleOpenMissions,
-        openWarehouse: handleOpenWarehouse,
-        completeStep: completeOnboardingStepPress,
-      });
-      return;
-    }
-
-    switch (nextAction.action.type) {
-      case 'claim':
-        claimMissionReward(nextAction.action.missionId);
-        return;
-      case 'open-missions':
-        handleOpenMissions();
-        return;
-      case 'navigate':
-        handleNavigate(nextAction.action.tab);
-        return;
-    }
+  const handleOnboardingPress = () => {
+    if (!onboardingAction) return;
+    dispatchOnboardingNavigation(onboardingAction.action, {
+      navigate: handleNavigate,
+      openMissions: handleOpenMissions,
+      openWarehouse: handleOpenWarehouse,
+    });
   };
 
   return (
-    <AppScreen
-      scroll
-      padding
-      scrollBottomPadding={scrollBottomPadding}
-      contentContainerStyle={styles.screenContent}
-    >
+    <View style={styles.screenRoot}>
+      <DashboardBackground />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.screenContent,
+          {
+            paddingTop: screenTopPadding + 12,
+            paddingBottom: dashboardBottomPadding,
+            paddingHorizontal: DASHBOARD_HORIZONTAL_PADDING,
+            flexGrow: 0,
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
       <DashboardResourceBar
         money={player.money}
         diamonds={playerDiamonds}
         level={levelProgress.level}
         xpProgress={levelProgress.progressRatio}
-        activeDeliveries={runningDeliveries.length}
         isPaused={isPaused}
         onTogglePause={isPaused ? resumeGame : pauseGame}
       />
@@ -432,83 +350,87 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         money={player.money}
         companyScore={companyScore}
         reputation={player.reputation ?? 0}
+        idleTrucks={fleetSnapshot.idleTrucks}
+        activeDeliveries={runningDeliveries.length}
       />
 
-      {showCashWarning ? <CashWarningBanner cash={player.money} /> : null}
+      {showCashWarning ? (
+        <DashboardAlertBanner
+          message={`Nakit düşük (${formatMoney(player.money)}) — giderlere dikkat et.`}
+        />
+      ) : null}
 
-      <DashboardWorldEventsCard
-        headline={worldEventSummary.headline}
-        isCalm={worldEventSummary.isCalm}
-        topEvents={worldEventSummary.topEvents}
-        onPress={handleOpenMarket}
+      <View style={[dashboardStyles.splitCardsRow, !useSplitLayout && dashboardStyles.splitColumn]}>
+        <View style={dashboardStyles.splitItem}>
+          <DashboardWorldEventsCard
+            activeCount={worldEventSummary.activeCount}
+            isCalm={worldEventSummary.isCalm}
+            topEvents={worldEventSummary.topEvents}
+            currentTime={currentTime}
+            onPress={handleOpenMarket}
+          />
+        </View>
+        <View style={dashboardStyles.splitItem}>
+          <DashboardRetentionCard
+            readyRewards={retentionSummary.readyRewards}
+            readyMilestones={retentionSummary.readyMilestones}
+            readyWeekly={retentionSummary.readyWeekly}
+            weeklyInProgress={retentionSummary.weeklyInProgress}
+            weeklyTotal={retentionSummary.weeklyTotal}
+            onPress={handleOpenMissions}
+          />
+        </View>
+      </View>
+
+      {showOnboardingCard && onboardingAction ? (
+        <DashboardNextActionCard
+          stepId={onboardingAction.stepId}
+          title={onboardingAction.title}
+          description={onboardingAction.description}
+          ctaLabel={onboardingAction.ctaLabel}
+          variant={onboardingAction.variant}
+          icon={onboardingAction.icon}
+          progressLabel={onboardingAction.progressLabel}
+          stepIndex={onboardingAction.stepIndex}
+          totalSteps={onboardingAction.totalSteps}
+          onPress={handleOnboardingPress}
+        />
+      ) : null}
+
+      <View style={dashboardStyles.lowerSection}>
+      <DashboardModuleGrid
+        showLocationHint={showTruckLocationHint}
+        onNavigate={handleNavigate}
+        onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
+        contractsAvailable={playableContractCount}
+        contractsOpen={availableContracts.length}
+        marketOpportunities={marketOpportunityCount}
+        idleTrucks={fleetSnapshot.idleTrucks}
+        activeDeliveries={runningDeliveries.length}
+        warehouseFillRatio={warehouseFillRatio}
       />
-
-      <DashboardRetentionCard
-        readyRewards={retentionSummary.readyRewards}
-        weeklyInProgress={retentionSummary.weeklyInProgress}
-        weeklyTotal={retentionSummary.weeklyTotal}
-        onPress={handleOpenMissions}
-      />
-
-      <DashboardNextActionCard
-        title={onboardingAction?.title ?? nextAction.title}
-        description={onboardingAction?.description ?? nextAction.description}
-        ctaLabel={onboardingAction?.ctaLabel ?? nextAction.ctaLabel}
-        variant={onboardingAction?.variant ?? nextAction.variant}
-        icon={onboardingAction?.icon ?? nextAction.icon}
-        badgeLabel={onboardingAction ? undefined : nextAction.badgeLabel}
-        rewardChips={onboardingAction ? undefined : nextAction.rewardChips}
-        eyebrowText={onboardingAction?.progressLabel}
-        onDismissGuide={onboardingAction ? dismissOnboardingGuide : undefined}
-        isOnboardingGuide={!!onboardingAction}
-        goalHintLabel={onboardingAction ? 'Sıradaki hedef' : undefined}
-        onPress={handleNextActionPress}
-      />
-
-      {showTruckLocationHint ? <TruckLocationHintRow style={styles.truckLocationHint} /> : null}
 
       <DashboardDailyOpsBonusCard
         playerLevel={levelProgress.level}
         onboardingCompleted={onboardingCompleted}
         onSuccess={handleDailyOpsBonusSuccess}
       />
-
-      <DashboardStatGrid tiles={statTiles} />
-
-      <View style={styles.hubLower}>
-        <DashboardModuleGrid
-          onNavigate={handleNavigate}
-          onOpenWarehouse={onOpenWarehouse}
-          contractsAvailable={playableContractCount}
-          contractsOpen={availableContracts.length}
-          marketOpportunities={marketTradeOpportunitiesAll.length}
-          idleTrucks={fleetSnapshot.idleTrucks}
-          activeDeliveries={runningDeliveries.length}
-          warehouseFillRatio={warehouseFillRatio}
-        />
-
-        <DashboardOpportunitiesSection
-          items={topOpportunities}
-          onPressItem={(item) => openContractsForMapContract(item.contract)}
-          onViewAll={() => handleNavigate('contracts')}
-        />
-
-        <DashboardMarketOpportunitiesSection
-          items={marketTradeOpportunities}
-          onPressItem={(item) =>
-            openMarketFromAlert({ cityId: item.cityId, productId: item.productId })
-          }
-          onViewAll={() => handleNavigate('market')}
-        />
       </View>
-    </AppScreen>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  loadingRoot: {
+  screenRoot: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  scroll: {
+    flex: 1,
+  },
+  loadingRoot: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.lg,
@@ -518,31 +440,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   screenContent: {
-    gap: 11,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.sm,
-  },
-  hubLower: {
-    gap: 13,
-  },
-  cashWarning: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: 10,
-    backgroundColor: colors.warningSoft,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-  },
-  cashWarningText: {
-    ...typography.caption,
-    flex: 1,
-    color: colors.warning,
-    fontWeight: '600',
-  },
-  truckLocationHint: {
-    marginTop: -2,
+    gap: DASHBOARD_SECTION_GAP,
+    justifyContent: 'flex-start',
   },
 });

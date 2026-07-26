@@ -56,6 +56,64 @@ export function getMsPerGameHour(gameSpeed: number): number {
   return timeBalance.normalMsPerGameHour;
 }
 
+/** Gerçek zaman (ms) → oyun saati — online tick ve offline catch-up için tek kaynak */
+export function realMsToGameHours(realElapsedMs: number, gameSpeed = 1): number {
+  if (realElapsedMs <= 0) {
+    return 0;
+  }
+  return realElapsedMs / getMsPerGameHour(gameSpeed);
+}
+
+/** Aktif oyun döngüsü tick aralığı (ms) */
+export const GAME_LOOP_TICK_MS = 1000;
+
+export function getGameHoursPerTick(gameSpeed: number): number {
+  return realMsToGameHours(GAME_LOOP_TICK_MS, gameSpeed);
+}
+
+export function getGameHoursPerRealMinute(gameSpeed: number): number {
+  return realMsToGameHours(60_000, gameSpeed);
+}
+
+export function getEffectiveOfflineGameSpeed(state: {
+  gameSpeed?: number;
+  lastSimulationGameSpeed?: number;
+}): number {
+  const current =
+    typeof state.gameSpeed === 'number' && Number.isFinite(state.gameSpeed) && state.gameSpeed > 0
+      ? state.gameSpeed
+      : undefined;
+  const lastActive =
+    typeof state.lastSimulationGameSpeed === 'number' &&
+    Number.isFinite(state.lastSimulationGameSpeed) &&
+    state.lastSimulationGameSpeed > 0
+      ? state.lastSimulationGameSpeed
+      : undefined;
+  return Math.max(0.25, Math.min(current ?? lastActive ?? 1, 8));
+}
+
+export interface TimeScaleDebugSnapshot {
+  gameSpeed: number;
+  msPerGameHour: number;
+  gameHoursPerTick: number;
+  tickMs: number;
+  gameHoursPerRealMinute: number;
+}
+
+export function buildTimeScaleDebugSnapshot(
+  gameSpeed: number,
+  tickMs = GAME_LOOP_TICK_MS,
+): TimeScaleDebugSnapshot {
+  const msPerGameHour = getMsPerGameHour(gameSpeed);
+  return {
+    gameSpeed,
+    msPerGameHour,
+    gameHoursPerTick: realMsToGameHours(tickMs, gameSpeed),
+    tickMs,
+    gameHoursPerRealMinute: realMsToGameHours(60_000, gameSpeed),
+  };
+}
+
 export const economyBalance = {
   /** Varsayılan yakıt fiyatı ($/L) */
   baseFuelPrice: 1.72,

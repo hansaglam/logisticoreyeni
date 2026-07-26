@@ -1,8 +1,12 @@
 import React from 'react';
 import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
-import GameIcon from '../ui/GameIcon';
-import { colors } from '../../theme';
+import {
+  MAP_ACCENT,
+  MAP_ACCENT_BORDER,
+  MAP_SURFACE,
+  MAP_TITLE_COLOR,
+} from './mapTheme';
 
 interface IdleTruckCountBadgeProps {
   count: number;
@@ -29,37 +33,37 @@ export default function IdleTruckCountBadge({
       ]}
       pointerEvents="none"
     >
-      <GameIcon name="truck" size={prominent ? 13 : 12} color={colors.accentBlue} />
-      <Text style={[styles.text, prominent && styles.textProminent]}>{count}</Text>
+      <Text style={[styles.text, prominent && styles.textProminent]}>+{count}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   badge: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
     height: 20,
-    paddingHorizontal: 6,
+    minWidth: 28,
+    paddingHorizontal: 7,
     borderRadius: 999,
-    backgroundColor: colors.accentBlueSoft,
+    backgroundColor: MAP_SURFACE,
     borderWidth: 1,
-    borderColor: colors.accentBlue,
+    borderColor: MAP_ACCENT_BORDER,
   },
   badgeProminent: {
     height: 22,
-    paddingHorizontal: 7,
-    borderWidth: 1.5,
+    minWidth: 30,
+    paddingHorizontal: 8,
+    borderWidth: 1.2,
   },
   text: {
-    color: colors.accentBlue,
+    color: MAP_TITLE_COLOR,
     fontSize: 10,
     fontWeight: '800',
     lineHeight: 12,
   },
   textProminent: {
+    color: MAP_ACCENT,
     fontSize: 11,
     lineHeight: 13,
   },

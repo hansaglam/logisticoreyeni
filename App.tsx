@@ -6,6 +6,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, AppState, Platform, StyleSheet, Text, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
@@ -39,8 +40,10 @@ import DashboardScreen from './src/screens/DashboardScreen';
 import MapScreen from './src/screens/MapScreen';
 import ContractsScreen from './src/screens/ContractsScreen';
 import FleetScreen from './src/screens/FleetScreen';
+import ShopScreen from './src/screens/ShopScreen';
 import MarketScreen from './src/screens/MarketScreen';
 import MoreScreen from './src/screens/MoreScreen';
+import OfflineProgressSummaryModal from './src/components/offline/OfflineProgressSummaryModal';
 import { UI } from './src/theme/ui';
 
 const MAIN_TABS: TabDefinition[] = [
@@ -64,6 +67,8 @@ function renderActiveScreen(
       return <ContractsScreen />;
     case 'fleet':
       return <FleetScreen />;
+    case 'shop':
+      return <ShopScreen />;
     case 'market':
       return <MarketScreen onOpenContracts={() => onNavigate('contracts')} />;
     case 'more':
@@ -79,6 +84,8 @@ function AppShell() {
   const isGameReady = useGameStore((state) => state.isGameReady);
   const navigationRequest = useGameStore((state) => state.navigationRequest);
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
+  const pendingOfflineProgressSummary = useGameStore((state) => state.pendingOfflineProgressSummary);
+  const dismissOfflineProgressSummary = useGameStore((state) => state.dismissOfflineProgressSummary);
 
   useSpotlightTutorialTriggers({ activeTab, isGameReady });
 
@@ -103,6 +110,9 @@ function AppShell() {
     switch (action) {
       case 'fleet':
         setActiveTab('fleet');
+        break;
+      case 'shop':
+        setActiveTab('shop');
         break;
       case 'warehouse':
         handleOpenWarehouse();
@@ -148,6 +158,11 @@ function AppShell() {
         {renderActiveScreen(activeTab, setActiveTab, handleOpenWarehouse)}
       </View>
       <GameToast />
+      <OfflineProgressSummaryModal
+        visible={pendingOfflineProgressSummary != null}
+        summary={pendingOfflineProgressSummary}
+        onDismiss={dismissOfflineProgressSummary}
+      />
       {ENABLE_SPOTLIGHT_TUTORIAL ? <TutorialOverlay layer="root" /> : null}
       <GameTabBar
         tabs={MAIN_TABS}
@@ -202,8 +217,10 @@ export default function App() {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
+        useGameStore.getState().applyOfflineProgressionIfNeeded();
       }
-      if (nextState === 'background' || nextState === 'inactive') {
+      if (nextState === 'background') {
+        useGameStore.getState().recordLastSeenRealTimeMs();
         void useGameStore.getState().saveGame();
       }
     });
@@ -223,11 +240,13 @@ export default function App() {
   }, [isGameReady]);
 
   return (
-    <AppSafeAreaProvider>
-      <AppDialogProvider>
-        {isGameReady ? <AppShell /> : <GameLoadingScreen />}
-      </AppDialogProvider>
-    </AppSafeAreaProvider>
+    <GestureHandlerRootView style={styles.root}>
+      <AppSafeAreaProvider>
+        <AppDialogProvider>
+          {isGameReady ? <AppShell /> : <GameLoadingScreen />}
+        </AppDialogProvider>
+      </AppSafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 

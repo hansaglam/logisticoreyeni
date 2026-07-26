@@ -1,38 +1,38 @@
 /**
  * worldMapPositions.ts
  *
- * Referans görseldeki gibi illüstratif bir harita kullanıyoruz (gerçek coğrafi
- * projeksiyon değil). Bu yüzden koordinatlar enlem/boylamdan değil, HARİTA
- * GÖRSELİNİN kendi genişlik/yüksekliğine göre YÜZDE olarak veriliyor:
+ * Koordinatlar harita görselinin normalize edilmiş bounds'u içinde tutulur:
  *
- *   xPct: 0   -> görselin sol kenarı
- *   xPct: 100 -> görselin sağ kenarı
- *   yPct: 0   -> görselin üst kenarı
- *   yPct: 100 -> görselin alt kenarı
+ *   x: 0 -> sol kenar, 1 -> sağ kenar
+ *   y: 0 -> üst kenar, 1 -> alt kenar
+ *
+ * Asset: assets/maps/turkey-logistics-network-map.png (1672×941)
  *
  * NASIL KALİBRE EDİLİR:
  * 1) src/config/debug.ts içinde mapCalibrationEnabled: true yap.
  * 2) Haritanın üzerinde şehrin olması gereken noktaya dokun.
- * 3) Konsola basılan { xPct, yPct } değerini buraya kopyala.
+ * 3) Konsola basılan { x, y } değerini buraya kopyala.
  * 4) mapCalibrationEnabled'ı tekrar false yap.
- *
- * Aşağıdaki değerler SADECE PLACEHOLDER'DIR — kendi görseline göre
- * kalibrasyon modunu kullanarak güncellemen gerekir.
  */
 
 export interface WorldMapCityPosition {
   id: string;
-  xPct: number; // 0-100
-  yPct: number; // 0-100
+  /** 0–1 normalized x within map image bounds */
+  x: number;
+  /** 0–1 normalized y within map image bounds */
+  y: number;
 }
 
-// Placeholder — calibrationMode ile turkey-relief.png üzerinde yeniden kalibre et.
+/**
+ * turkey-logistics-network-map.png üzerinde kalibre edilmiş şehir dokunma noktaları.
+ * Görselde şehir isimleri gömülü olduğundan yalnızca hit-test koordinatları tutulur.
+ */
 export const WORLD_MAP_POSITIONS: Record<string, WorldMapCityPosition> = {
-  istanbul: { id: 'istanbul', xPct: 28.9, yPct: 36.8 },
-  bursa: { id: 'bursa', xPct: 29.2, yPct: 44.8 },
-  ankara: { id: 'ankara', xPct: 42.09, yPct: 45.4 },
-  izmir: { id: 'izmir', xPct: 24.4, yPct: 61.1 },
-  antalya: { id: 'antalya', xPct: 35.6, yPct: 73.6 },
+  istanbul: { id: 'istanbul', x: 0.208, y: 0.168 },
+  bursa: { id: 'bursa', x: 0.238, y: 0.278 },
+  ankara: { id: 'ankara', x: 0.428, y: 0.298 },
+  izmir: { id: 'izmir', x: 0.118, y: 0.408 },
+  antalya: { id: 'antalya', x: 0.348, y: 0.578 },
 };
 
 export function getWorldMapCityPosition(cityId: string): WorldMapCityPosition | null {

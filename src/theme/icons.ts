@@ -8,6 +8,7 @@ export const gameIcons = {
   profit: 'chart-line-variant',
   contract: 'clipboard-text-outline',
   truck: 'truck-outline',
+  trailer: 'truck-trailer',
   driver: 'account-tie-outline',
   warehouse: 'warehouse',
   market: 'chart-line',

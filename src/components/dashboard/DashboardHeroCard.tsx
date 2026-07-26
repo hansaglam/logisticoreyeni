@@ -1,9 +1,30 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import React from 'react';
+import {
+  Image,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
+import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
 import { GameIcon, ProgressBar } from '../ui';
 import { formatCompanyScore } from '../../simulation/companyScore';
-import { colors, formatGameTimeCompact, formatMoney, formatUnitPrice, radius, spacing, typography } from '../../theme';
+import type { GameIconName } from '../../theme/icons';
+import {
+  colors,
+  formatGameTimeCompact,
+  formatMoney,
+  formatUnitPrice,
+} from '../../theme';
+import DashboardCardGridOverlay from './DashboardCardGridOverlay';
+import {
+  DASHBOARD_HERO_BORDER,
+  DASHBOARD_HERO_PADDING,
+  DASHBOARD_HERO_RADIUS,
+  dashboardHeroElevation,
+  getDashboardMoneyColor,
+} from './dashboardTheme';
 
 interface DashboardHeroCardProps {
   companyName: string;
@@ -17,23 +38,51 @@ interface DashboardHeroCardProps {
   money: number;
   companyScore: number;
   reputation: number;
+  idleTrucks: number;
+  activeDeliveries: number;
 }
 
-function StatChip({
-  label,
-  value,
-  color,
-}: {
+interface MetricTileProps {
   label: string;
   value: string;
+  icon: GameIconName;
   color: string;
-}) {
+  compact: boolean;
+  labelMinScale?: number;
+}
+
+function MetricTile({ label, value, icon, color, compact, labelMinScale = 0.72 }: MetricTileProps) {
+  const iconBox = compact ? 28 : 30;
+  const iconGlyph = compact ? 13 : 14;
+
   return (
-    <View style={styles.chip}>
-      <Text style={styles.chipLabel} numberOfLines={1}>
+    <View style={[styles.metricTile, { borderColor: `${color}32`, backgroundColor: `${color}0C` }]}>
+      <View
+        style={[
+          styles.metricIconWrap,
+          {
+            width: iconBox,
+            height: iconBox,
+            backgroundColor: `${color}20`,
+          },
+        ]}
+      >
+        <GameIcon name={icon} size={iconGlyph} color={color} />
+      </View>
+      <Text
+        style={styles.metricLabel}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={labelMinScale}
+      >
         {label}
       </Text>
-      <Text style={[styles.chipValue, { color }]} numberOfLines={1}>
+      <Text
+        style={[styles.metricValue, { color, fontSize: compact ? 15 : 16 }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
         {value}
       </Text>
     </View>
@@ -52,131 +101,221 @@ export default function DashboardHeroCard({
   money,
   companyScore,
   reputation,
+  idleTrucks,
+  activeDeliveries,
 }: DashboardHeroCardProps) {
-  const [xpTrackWidth, setXpTrackWidth] = useState(0);
+  const { width } = useWindowDimensions();
+  const compact = width < 360;
   const effectiveXpProgress = isMaxLevel ? 1 : Math.min(1, Math.max(0, xpProgress));
-
-  const handleXpTrackLayout = (event: LayoutChangeEvent) => {
-    setXpTrackWidth(event.nativeEvent.layout.width);
-  };
+  const reputationDisplay = `${Math.round(Math.min(100, Math.max(0, reputation)))}/100`;
+  const moneyColor = getDashboardMoneyColor(money);
+  const fleetLabel = compact ? 'BOŞTA · AKTİF' : 'BOŞTA / AKTİF';
+  const fleetValue = `${idleTrucks} / ${activeDeliveries}`;
 
   return (
-    <View style={styles.card}>
-      <View style={styles.topRow}>
-        <View style={styles.logoSlot}>
-          <View style={styles.logoGlow} />
-          <View style={styles.logoWrap}>
-            <GameIcon name="company" size={24} color={colors.accentAmber} />
+    <View style={[styles.card, dashboardHeroElevation]}>
+      <View style={styles.leftPanel} pointerEvents="none" />
+      {dashboardAssetFlags.usePortBackground ? (
+        <>
+          <Image
+            source={dashboardAssets.portBackground}
+            style={styles.portAccent}
+            resizeMode="cover"
+          />
+          <View style={styles.portBlend} pointerEvents="none" />
+          <View style={styles.portTint} pointerEvents="none" />
+        </>
+      ) : null}
+      <View style={styles.gridClip} pointerEvents="none">
+        <DashboardCardGridOverlay style={{ opacity: 0.028 }} />
+      </View>
+
+      <View style={styles.content}>
+        <View style={styles.topRow}>
+          <View style={styles.emblemSlot}>
+            <View style={styles.emblemGlow} pointerEvents="none" />
+            {dashboardAssetFlags.useCompanyEmblem ? (
+              <View style={styles.emblemWrap}>
+                <Image
+                  source={dashboardAssets.companyEmblem}
+                  style={styles.emblem}
+                  resizeMode="contain"
+                />
+              </View>
+            ) : (
+              <View style={styles.emblemFallback}>
+                <GameIcon name="company" size={24} color={colors.amber} />
+              </View>
+            )}
           </View>
-        </View>
-        <View style={styles.titleBlock}>
-          <Text style={styles.companyName} numberOfLines={1}>
-            {companyName}
-          </Text>
-          <View style={styles.subtitleRow}>
-            <Text style={styles.subtitle} numberOfLines={1}>
-              Lojistik Şirketi · CEO
+          <View style={styles.titleBlock}>
+            <Text
+              style={[styles.companyName, compact && styles.companyNameCompact]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}
+            >
+              {companyName}
             </Text>
-            <View style={styles.hqBadge}>
-              <Text style={styles.hqBadgeText}>HQ</Text>
+            <View style={styles.subtitleRow}>
+              <Text style={styles.subtitle} numberOfLines={1}>
+                Lojistik Şirketi · CEO
+              </Text>
+              <View style={styles.hqBadge}>
+                <Text style={styles.hqBadgeText}>HQ</Text>
+              </View>
             </View>
           </View>
+          <View style={styles.levelBadge}>
+            <GameIcon name="level" size={12} color={colors.amber} />
+            <Text style={styles.levelBadgeText}>Lv {level}</Text>
+          </View>
         </View>
-        <View style={styles.levelBadge}>
-          <GameIcon name="level" size={11} color={colors.accentAmber} />
-          <Text style={styles.levelBadgeText}>LV {level}</Text>
-        </View>
-      </View>
 
-      <View style={styles.metaRow}>
-        <View style={styles.timePill}>
-          <GameIcon name="time" size={11} color={colors.textMuted} />
-          <Text style={styles.timeText}>{formatGameTimeCompact(currentTime)}</Text>
+        <View style={styles.metaRow}>
+          <View style={styles.metaPill}>
+            <GameIcon name="time" size={12} color={colors.textMuted} />
+            <Text style={styles.metaText}>{formatGameTimeCompact(currentTime)}</Text>
+          </View>
+          <View style={styles.metaPill}>
+            <GameIcon name="fuel" size={12} color={colors.textMuted} />
+            <Text style={styles.metaText} numberOfLines={1}>
+              Yakıt {formatUnitPrice(fuelPrice, '/L')}
+            </Text>
+          </View>
         </View>
-        <View style={styles.fuelPill}>
-          <GameIcon name="fuel" size={11} color={colors.textMuted} />
-          <Text style={styles.fuelText} numberOfLines={1}>
-            Yakıt fiyatı {formatUnitPrice(fuelPrice, '/L')}
-          </Text>
-        </View>
-      </View>
 
-      <View style={styles.xpSection}>
-        <View style={styles.xpHeader}>
-          <Text style={styles.xpLabel}>Deneyim</Text>
-          <Text style={styles.xpValue}>{isMaxLevel ? 'MAX' : `${xp} / ${xpToNext} XP`}</Text>
+        <View style={styles.xpSection}>
+          <View style={styles.xpHeader}>
+            <Text style={styles.xpLabel}>DENEYİM</Text>
+            <Text style={styles.xpValue}>
+              {isMaxLevel ? 'MAX' : `${xp.toLocaleString('en-US')} / ${xpToNext.toLocaleString('en-US')} XP`}
+            </Text>
+          </View>
+          <ProgressBar progress={effectiveXpProgress} color={colors.primary} height={5} trackColor={colors.surface3} />
         </View>
-        <View style={styles.xpBarWrap} onLayout={handleXpTrackLayout}>
-          <ProgressBar
-            progress={effectiveXpProgress}
-            color={colors.accentAmber}
-            height={6}
-            trackColor="rgba(15, 23, 42, 0.9)"
+
+        <View style={styles.metricRow}>
+          <MetricTile label="Nakit" value={formatMoney(money)} icon="cash" color={moneyColor} compact={compact} />
+          <MetricTile label="Puan" value={formatCompanyScore(companyScore)} icon="xp" color={colors.primaryLight} compact={compact} />
+          <MetricTile label="İtibar" value={reputationDisplay} icon="reputation" color={colors.purple} compact={compact} />
+          <MetricTile
+            label={fleetLabel}
+            value={fleetValue}
+            icon="truck"
+            color={colors.amber}
+            compact={compact}
+            labelMinScale={0.68}
           />
-          {xpTrackWidth > 0 && effectiveXpProgress > 0.03 ? (
-            <View
-              style={[
-                styles.xpBarDot,
-                {
-                  left: Math.min(
-                    Math.max(xpTrackWidth * effectiveXpProgress - 4, 2),
-                    xpTrackWidth - 8,
-                  ),
-                },
-              ]}
-            />
-          ) : null}
         </View>
-      </View>
-
-      <View style={styles.chipRow}>
-        <StatChip label="Nakit" value={formatMoney(money)} color={colors.success} />
-        <StatChip label="Puan" value={formatCompanyScore(companyScore)} color={colors.accentBlue} />
-        <StatChip label="İtibar" value={`${Math.round(reputation)}/100`} color={colors.info} />
       </View>
     </View>
   );
 }
 
+const EMBLEM_SIZE = 56;
+const EMBLEM_WRAP = 58;
+
 const styles = StyleSheet.create({
   card: {
-    borderRadius: radius.lg,
-    backgroundColor: colors.card,
+    borderRadius: DASHBOARD_HERO_RADIUS,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.16)',
-    padding: spacing.sm + 4,
-    gap: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 2,
+    borderColor: DASHBOARD_HERO_BORDER,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+  },
+  leftPanel: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '62%',
+    backgroundColor: colors.surface,
+    zIndex: 1,
+  },
+  portAccent: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: '39%',
+    height: '100%',
+    opacity: 0.125,
+    backgroundColor: 'transparent',
+  },
+  portBlend: {
+    position: 'absolute',
+    top: 0,
+    left: '54%',
+    width: '12%',
+    height: '100%',
+    backgroundColor: colors.surface,
+    opacity: 0.5,
+    zIndex: 1,
+  },
+  portTint: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: '40%',
+    height: '100%',
+    backgroundColor: 'rgba(4, 10, 20, 0.10)',
+    zIndex: 1,
+  },
+  gridClip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '36%',
+    overflow: 'hidden',
+    zIndex: 2,
+  },
+  content: {
+    padding: DASHBOARD_HERO_PADDING,
+    gap: 8,
+    zIndex: 3,
   },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: 10,
   },
-  logoSlot: {
-    width: 44,
-    height: 44,
+  emblemSlot: {
+    width: EMBLEM_WRAP,
+    height: EMBLEM_WRAP,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  logoGlow: {
+  emblemGlow: {
     position: 'absolute',
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    width: EMBLEM_WRAP + 4,
+    height: EMBLEM_WRAP + 4,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255, 170, 0, 0.12)',
   },
-  logoWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    backgroundColor: colors.accentAmberSoft,
+  emblemWrap: {
+    width: EMBLEM_WRAP,
+    height: EMBLEM_WRAP,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 170, 0, 0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
+    borderColor: 'rgba(255, 170, 0, 0.18)',
+  },
+  emblem: {
+    width: EMBLEM_SIZE,
+    height: EMBLEM_SIZE,
+    backgroundColor: 'transparent',
+  },
+  emblemFallback: {
+    width: EMBLEM_WRAP,
+    height: EMBLEM_WRAP,
+    borderRadius: 17,
+    backgroundColor: colors.amberSoft,
+    borderWidth: 1,
+    borderColor: colors.amber,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -185,104 +324,85 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   companyName: {
-    ...typography.sectionTitle,
-    fontSize: 16,
+    fontSize: 20,
+    fontWeight: '800',
     color: colors.textPrimary,
+    letterSpacing: 0.05,
+  },
+  companyNameCompact: {
+    fontSize: 19,
   },
   subtitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    marginTop: 1,
+    marginTop: 2,
   },
   subtitle: {
-    ...typography.caption,
-    color: colors.textMuted,
+    color: colors.textSecondary,
     flexShrink: 1,
     minWidth: 0,
+    fontSize: 11,
+    fontWeight: '500',
   },
   hqBadge: {
     paddingHorizontal: 5,
     paddingVertical: 1,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accentBlueSoft,
+    borderRadius: 6,
+    backgroundColor: colors.primarySoft,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.35)',
+    borderColor: 'rgba(35, 136, 255, 0.35)',
+    flexShrink: 0,
   },
   hqBadgeText: {
     fontSize: 8,
     fontWeight: '800',
-    color: colors.accentBlue,
-    letterSpacing: 0.4,
+    color: colors.primaryLight,
+    letterSpacing: 0.3,
   },
   levelBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    height: 29,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: colors.amberSoft,
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.4)',
+    borderColor: colors.amber,
+    flexShrink: 0,
   },
   levelBadgeText: {
-    ...typography.caption,
-    fontWeight: '900',
+    fontWeight: '800',
     fontSize: 11,
-    color: colors.accentAmber,
-    letterSpacing: 0.4,
+    color: colors.amber,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: 6,
+    flexWrap: 'wrap',
+    marginTop: -2,
   },
-  timePill: {
+  metaPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    backgroundColor: colors.cardSoft,
+    height: 25,
+    paddingHorizontal: 9,
+    borderRadius: 11,
+    backgroundColor: 'rgba(10, 20, 38, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(70, 120, 190, 0.24)',
   },
-  timeText: {
-    ...typography.caption,
-    fontSize: 10.5,
+  metaText: {
+    fontSize: 10,
     fontWeight: '600',
     color: colors.textSecondary,
-  },
-  fuelPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    backgroundColor: colors.cardSoft,
-  },
-  fuelText: {
-    ...typography.caption,
-    fontSize: 10.5,
-    fontWeight: '600',
-    color: colors.textSecondary,
+    flexShrink: 1,
   },
   xpSection: {
     gap: 4,
-  },
-  xpBarWrap: {
-    position: 'relative',
-  },
-  xpBarDot: {
-    position: 'absolute',
-    top: -1,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#FDE68A',
-    borderWidth: 1.5,
-    borderColor: colors.accentAmber,
   },
   xpHeader: {
     flexDirection: 'row',
@@ -290,44 +410,52 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   xpLabel: {
-    ...typography.caption,
+    fontSize: 9,
     fontWeight: '700',
     color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    fontSize: 9.5,
+    letterSpacing: 0.35,
   },
   xpValue: {
-    ...typography.caption,
-    fontWeight: '800',
-    fontSize: 11,
-    color: colors.accentAmber,
+    fontWeight: '700',
+    fontSize: 10,
+    color: colors.textSecondary,
+    paddingRight: 5,
   },
-  chipRow: {
+  metricRow: {
     flexDirection: 'row',
-    gap: spacing.xs,
+    gap: 6,
+    marginTop: 2,
   },
-  chip: {
+  metricTile: {
     flex: 1,
     minWidth: 0,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.xs,
-    borderRadius: radius.sm,
-    backgroundColor: colors.cardSoft,
-    borderWidth: 1,
-    borderColor: colors.border,
     alignItems: 'center',
-    gap: 1,
+    justifyContent: 'center',
+    gap: 4,
+    height: 75,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 14,
+    borderWidth: 1,
   },
-  chipLabel: {
-    ...typography.caption,
-    fontSize: 8.5,
-    color: colors.textMuted,
+  metricIconWrap: {
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  metricLabel: {
+    fontSize: 9.5,
     fontWeight: '600',
+    color: colors.textMuted,
+    letterSpacing: 0.1,
+    textAlign: 'center',
+    width: '100%',
   },
-  chipValue: {
-    ...typography.caption,
+  metricValue: {
     fontWeight: '800',
-    fontSize: 11,
+    letterSpacing: -0.2,
+    textAlign: 'center',
+    width: '100%',
   },
 });

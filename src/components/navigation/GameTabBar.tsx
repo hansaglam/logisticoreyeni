@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -8,20 +9,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import {
-  GAME_CENTER_BUTTON_LIFT,
-  GAME_CENTER_BUTTON_SIZE,
-  GAME_TAB_BAR_HEIGHT,
-  TAB_BAR_TOP_PADDING,
-} from '../../constants/layout';
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import { getContractAvailability } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
 import { TutorialTarget } from '../../tutorial/TutorialTarget';
 import type { TutorialTargetId } from '../../tutorial/types';
-import { colors, typography } from '../../theme';
-import { countActiveMarketAlerts } from '../../utils/marketAlerts';
 import { isSafeAreaContextAvailable } from '../../utils/safeArea';
+import { countActiveMarketAlerts } from '../../utils/marketAlerts';
 import GameIcon from '../ui/GameIcon';
 import type { TabDefinition, TabKey } from '../../navigation/tabTypes';
 import { MAIN_TAB_KEYS } from '../../navigation/tabTypes';
@@ -38,12 +32,26 @@ const TAB_TARGET_IDS: Partial<Record<TabKey, TutorialTargetId>> = {
 const LEFT_TAB_KEYS: TabKey[] = ['dashboard', 'map'];
 const RIGHT_TAB_KEYS: TabKey[] = ['contracts', 'market'];
 
+const TAB_BAR_BG = '#071426';
+const TAB_BAR_BORDER = 'rgba(35, 136, 255, 0.24)';
+const TAB_ACTIVE_COLOR = '#2388FF';
+const TAB_INACTIVE_ICON = '#8493AA';
+const TAB_INACTIVE_LABEL = '#8694AA';
+
+const TAB_BAR_PADDING_TOP = 8;
+const TAB_BAR_PADDING_BOTTOM_MIN = 6;
+const TAB_BAR_ROW_HEIGHT = 58;
+const CENTER_BUTTON_SIZE = 58;
+const CENTER_BUTTON_RING_SIZE = 61;
+const CENTER_BUTTON_LIFT = 9;
+
+function getGameTabBarHeight(bottomInset: number): number {
+  return TAB_BAR_PADDING_TOP + TAB_BAR_ROW_HEIGHT + Math.max(bottomInset, TAB_BAR_PADDING_BOTTOM_MIN);
+}
+
 function isMainTabKey(tab: TabKey): boolean {
   return (MAIN_TAB_KEYS as readonly TabKey[]).includes(tab);
 }
-
-const TAB_INACTIVE_COLOR = colors.textMuted;
-const TAB_ACTIVE_COLOR = colors.info;
 
 interface GameTabBarProps {
   tabs: TabDefinition[];
@@ -103,25 +111,27 @@ const SideTabButton = React.memo(function SideTabButton({ tab, isActive, badgeCo
 
   const button = (
     <TouchableOpacity
-      style={[styles.sideTabButton, isActive && styles.sideTabButtonActive]}
+      style={styles.sideTabButton}
       onPress={onPress}
       activeOpacity={0.85}
     >
       <View style={styles.iconWrap}>
         <GameIcon
           name={tab.icon}
-          size={23}
-          color={isActive ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR}
+          size={isActive ? 23 : 21}
+          color={isActive ? TAB_ACTIVE_COLOR : TAB_INACTIVE_ICON}
         />
         {badgeCount && badgeCount > 0 ? <TabBadge count={badgeCount} /> : null}
       </View>
       <Text
         style={[styles.sideTabLabel, isActive && styles.sideTabLabelActive]}
         numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
       >
         {tab.label}
       </Text>
-      {isActive ? <View style={styles.activeGlowLine} /> : null}
+      {isActive ? <View style={styles.activeIndicator} /> : null}
     </TouchableOpacity>
   );
 
@@ -162,8 +172,9 @@ function GameTabBarContent({
   const leftTabs = LEFT_TAB_KEYS.map((key) => tabMap.get(key)).filter(Boolean) as TabDefinition[];
   const rightTabs = RIGHT_TAB_KEYS.map((key) => tabMap.get(key)).filter(Boolean) as TabDefinition[];
 
-  const quickAccessPanelOffset = tabBarHeight + GAME_CENTER_BUTTON_LIFT + 8;
+  const quickAccessPanelOffset = tabBarHeight + CENTER_BUTTON_LIFT + 8;
   const highlightedTab = isMainTabKey(activeTab) ? activeTab : null;
+  const bottomPadding = Math.max(bottomInset, TAB_BAR_PADDING_BOTTOM_MIN);
 
   const handleTabPress = useCallback(
     (tab: TabKey) => {
@@ -197,11 +208,11 @@ function GameTabBarContent({
           anchored && styles.tabBarAnchored,
           {
             minHeight: tabBarHeight,
-            paddingBottom: bottomInset,
+            paddingBottom: bottomPadding,
           },
         ]}
       >
-        <View style={styles.tabBarGlowTop} />
+        <View style={styles.tabBarHighlight} pointerEvents="none" />
         <View style={styles.tabBarRow}>
           <View style={styles.sideGroup}>
             {leftTabs.map((tab) => (
@@ -216,15 +227,19 @@ function GameTabBarContent({
           </View>
 
           <View style={styles.centerSlot}>
-            <TouchableOpacity
-              style={[styles.centerButton, quickAccessOpen && styles.centerButtonOpen]}
-              activeOpacity={0.88}
+            <Pressable
+              style={({ pressed }) => [
+                styles.centerButton,
+                quickAccessOpen && styles.centerButtonOpen,
+                pressed && styles.centerButtonPressed,
+              ]}
               onPress={handleQuickAccessToggle}
             >
+              <View style={styles.centerButtonRing} pointerEvents="none" />
               <View style={[styles.centerButtonInner, quickAccessOpen && styles.centerButtonInnerOpen]}>
-                <GameIcon name="quickAccess" size={22} color={colors.textPrimary} />
+                <GameIcon name="quickAccess" size={26} color="#FFFFFF" />
               </View>
-            </TouchableOpacity>
+            </Pressable>
           </View>
 
           <View style={styles.sideGroup}>
@@ -252,14 +267,15 @@ function GameTabBarContent({
 }
 
 function NativeGameTabBar(props: GameTabBarProps) {
-  // Android immersive: alt sistem bar gizli — SafeArea bottom inset ekleme.
+  const tabBarHeight = getGameTabBarHeight(Platform.OS === 'android' ? 0 : TAB_BAR_PADDING_BOTTOM_MIN);
+
   if (Platform.OS === 'android') {
     return (
       <View style={styles.safeArea}>
         <GameTabBarContent
           {...props}
           bottomInset={0}
-          tabBarHeight={GAME_TAB_BAR_HEIGHT}
+          tabBarHeight={tabBarHeight}
           anchored={false}
         />
       </View>
@@ -271,7 +287,7 @@ function NativeGameTabBar(props: GameTabBarProps) {
       <GameTabBarContent
         {...props}
         bottomInset={0}
-        tabBarHeight={GAME_TAB_BAR_HEIGHT}
+        tabBarHeight={tabBarHeight}
         anchored={false}
       />
     </SafeAreaView>
@@ -279,14 +295,15 @@ function NativeGameTabBar(props: GameTabBarProps) {
 }
 
 function FallbackGameTabBar(props: GameTabBarProps) {
-  const { bottomInset, tabBarHeight } = useTabBarLayout();
+  const { bottomInset } = useTabBarLayout();
   const tabBottomInset = Platform.OS === 'android' ? 0 : bottomInset;
+  const tabBarHeight = getGameTabBarHeight(tabBottomInset);
 
   return (
     <GameTabBarContent
       {...props}
       bottomInset={tabBottomInset}
-      tabBarHeight={Platform.OS === 'android' ? GAME_TAB_BAR_HEIGHT : tabBarHeight}
+      tabBarHeight={tabBarHeight}
       anchored
     />
   );
@@ -307,21 +324,22 @@ const styles = StyleSheet.create({
     bottom: 0,
   },
   tabBar: {
-    backgroundColor: 'rgba(11, 18, 32, 0.97)',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(56, 189, 248, 0.22)',
+    backgroundColor: TAB_BAR_BG,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderColor: TAB_BAR_BORDER,
+    borderBottomWidth: 0,
     overflow: 'visible',
     ...Platform.select({
       ios: {
         shadowColor: '#0F172A',
-        shadowOpacity: 0.35,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.18,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: -2 },
       },
       android: {
-        elevation: 12,
+        elevation: 3,
       },
     }),
   },
@@ -331,121 +349,133 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  tabBarGlowTop: {
+  tabBarHighlight: {
     position: 'absolute',
     top: 0,
-    left: 32,
-    right: 32,
+    left: 0,
+    right: 0,
     height: 1,
-    backgroundColor: 'rgba(56, 189, 248, 0.4)',
+    backgroundColor: 'rgba(74, 168, 255, 0.14)',
   },
   tabBarRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    minHeight: GAME_TAB_BAR_HEIGHT,
-    paddingTop: TAB_BAR_TOP_PADDING,
+    alignItems: 'center',
+    height: TAB_BAR_ROW_HEIGHT,
+    paddingTop: TAB_BAR_PADDING_TOP,
     paddingHorizontal: 4,
   },
   sideGroup: {
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'space-evenly',
   },
   sideTabTarget: {
     flex: 1,
     maxWidth: 80,
+    minWidth: 0,
   },
   sideTabButton: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingBottom: 8,
-    gap: 3,
-    minHeight: 54,
+    justifyContent: 'center',
+    paddingTop: 6,
+    paddingBottom: 2,
+    minWidth: 0,
   },
-  sideTabButtonActive: {},
   iconWrap: {
-    width: 34,
-    height: 34,
+    width: 30,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
   sideTabLabel: {
-    ...typography.tabLabel,
-    color: TAB_INACTIVE_COLOR,
-    fontSize: 11,
-    letterSpacing: 0.2,
+    marginTop: 3,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '500',
+    color: TAB_INACTIVE_LABEL,
+    letterSpacing: 0.15,
   },
   sideTabLabelActive: {
     color: TAB_ACTIVE_COLOR,
     fontWeight: '700',
   },
-  activeGlowLine: {
-    width: 16,
+  activeIndicator: {
+    width: 20,
     height: 2,
-    borderRadius: 1,
+    borderRadius: 999,
     backgroundColor: TAB_ACTIVE_COLOR,
-    marginTop: 1,
+    marginTop: 2,
   },
   badge: {
     position: 'absolute',
     top: 0,
-    right: -2,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    paddingHorizontal: 3,
+    right: -9,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 999,
+    paddingHorizontal: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.danger,
+    backgroundColor: '#FF5A59',
     borderWidth: 1.5,
-    borderColor: colors.surface,
+    borderColor: TAB_BAR_BG,
   },
   badgeText: {
-    color: '#FFF',
+    color: '#FFFFFF',
     fontSize: 9,
     fontWeight: '800',
     lineHeight: 11,
+    includeFontPadding: false,
   },
   centerSlot: {
-    width: GAME_CENTER_BUTTON_SIZE + 6,
+    width: CENTER_BUTTON_RING_SIZE + 4,
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginBottom: GAME_CENTER_BUTTON_LIFT,
+    justifyContent: 'center',
+    marginTop: -CENTER_BUTTON_LIFT,
   },
   centerButton: {
-    width: GAME_CENTER_BUTTON_SIZE,
-    height: GAME_CENTER_BUTTON_SIZE,
-    borderRadius: GAME_CENTER_BUTTON_SIZE / 2,
+    width: CENTER_BUTTON_RING_SIZE,
+    height: CENTER_BUTTON_RING_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },
   centerButtonOpen: {
-    transform: [{ scale: 1.02 }],
+    transform: [{ scale: 1.01 }],
   },
-  centerButtonInnerOpen: {
-    borderColor: 'rgba(56, 189, 248, 0.75)',
+  centerButtonPressed: {
+    opacity: 0.94,
+    transform: [{ scale: 0.96 }],
+  },
+  centerButtonRing: {
+    position: 'absolute',
+    width: CENTER_BUTTON_RING_SIZE,
+    height: CENTER_BUTTON_RING_SIZE,
+    borderRadius: CENTER_BUTTON_RING_SIZE / 2,
+    borderWidth: 1,
+    borderColor: 'rgba(74, 168, 255, 0.38)',
   },
   centerButtonInner: {
-    width: GAME_CENTER_BUTTON_SIZE,
-    height: GAME_CENTER_BUTTON_SIZE,
-    borderRadius: GAME_CENTER_BUTTON_SIZE / 2,
+    width: CENTER_BUTTON_SIZE,
+    height: CENTER_BUTTON_SIZE,
+    borderRadius: CENTER_BUTTON_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.accentBlue,
-    borderWidth: 1.5,
-    borderColor: 'rgba(56, 189, 248, 0.55)',
+    backgroundColor: TAB_ACTIVE_COLOR,
     ...Platform.select({
       ios: {
-        shadowColor: colors.accentBlue,
-        shadowOpacity: 0.35,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
+        shadowColor: TAB_ACTIVE_COLOR,
+        shadowOpacity: 0.27,
+        shadowRadius: 9,
+        shadowOffset: { width: 0, height: 3 },
       },
       android: {
-        elevation: 6,
+        elevation: 5,
       },
     }),
+  },
+  centerButtonInnerOpen: {
+    backgroundColor: '#1A7FE8',
   },
 });

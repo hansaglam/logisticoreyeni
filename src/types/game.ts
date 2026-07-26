@@ -232,6 +232,40 @@ export interface TruckUpgrades {
   durability: number;
 }
 
+/** Dorse türü */
+export type TrailerType = 'standard' | 'heavy' | 'refrigerated' | 'container';
+
+/** Dorse durumu */
+export type TrailerStatus = 'idle' | 'attached' | 'in_use';
+
+/** Oyuncuya ait dorse */
+export interface Trailer {
+  id: string;
+  name: string;
+  type: TrailerType;
+  /** Taşıma kapasitesi bonusu (ton) */
+  capacityBonusTons: number;
+  /** Mağaza katalog kimliği */
+  catalogId?: string;
+  /** Uyumlu kargo ürün kimlikleri — V1 bilgi amaçlı */
+  compatibleCargoTypes?: ProductId[];
+  /** Uyumlu sözleşme türleri — V1 bilgi amaçlı */
+  compatibleContractTypes?: ContractType[];
+  /** Satın alma fiyatı ($) */
+  purchasePrice: number;
+  /** Kondisyon (0–100) */
+  condition: number;
+  /** Dorse bulunduğu şehir */
+  city: string;
+  status: TrailerStatus;
+  /** Bağlı olduğu kamyon — boşta ise null */
+  attachedTruckId?: string | null;
+  /** Oyuncuya ait mi */
+  isOwned: boolean;
+  /** Satın alındığı oyun zamanı (saat) */
+  createdAtGameTime: number;
+}
+
 /** Şoför kalite kademesi — levelConfig.driverUnlocks ile eşleşir */
 export type DriverTier = 'rookie' | 'standard' | 'experienced' | 'expert' | 'international';
 
@@ -690,6 +724,8 @@ export interface Player extends PlayerProgressFields {
   diamonds?: number;
   /** Oyuncunun sahip olduğu kamyonlar */
   trucks: Truck[];
+  /** Oyuncunun sahip olduğu dorseler */
+  trailers?: Trailer[];
   /** Oyuncunun işe aldığı şoförler */
   drivers: Driver[];
   /** Oyuncunun depoları */
@@ -1067,9 +1103,15 @@ export interface RetentionState {
 }
 
 export type OnboardingStepId =
+  | 'choose_first_contract'
+  | 'assign_team'
+  | 'track_delivery'
+  | 'complete_first_delivery'
+  | 'claim_first_reward';
+
+export type OnboardingLegacyStepId =
   | 'welcome'
   | 'first_contract'
-  | 'track_delivery'
   | 'market_intro'
   | 'first_trade'
   | 'warehouse_intro'
@@ -1094,14 +1136,19 @@ export type OnboardingRoute =
   | null;
 
 export interface OnboardingState {
+  version?: number;
   enabled: boolean;
   completed: boolean;
   currentStepId: OnboardingStepId | null;
   completedStepIds: string[];
   dismissedHintIds: string[];
   visitedScreens: string[];
-  /** claim_rewards adımında en az bir görev ödülü alındı */
+  /** Sözleşme atama ekranı açıldı — assign_team adımı */
+  assignmentOpened?: boolean;
+  /** claim_first_reward adımında en az bir görev ödülü alındı */
   missionRewardClaimed?: boolean;
+  startedAtGameTime?: number;
+  completedAtGameTime?: number;
 }
 
 /**
@@ -1164,6 +1211,16 @@ export interface StoreGameState {
   lastWorldEventGeneratedDay?: number;
   /** Monetization M0/M1 — ödüllü reklam kullanımı ve token'lar */
   monetization: import('./monetization').MonetizationState;
+  /** Son gerçek dünya görülme zamanı (ms) — offline progression */
+  lastSeenRealTimeMs?: number;
+  /** Son simüle edilen gerçek zaman (ms) — online tick + offline baseline */
+  lastSimulatedRealTimeMs?: number;
+  /** Son offline catch-up uygulama zamanı (ms) */
+  lastOfflineProgressAppliedAt?: number;
+  /** Offline progression şema sürümü */
+  offlineProgressVersion?: number;
+  /** Son aktif simülasyon hızı — pause/offline catch-up için */
+  lastSimulationGameSpeed?: number;
 }
 
 /**

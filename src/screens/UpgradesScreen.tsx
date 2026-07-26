@@ -20,6 +20,11 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { CITIES_BY_ID } from '../data/cities';
 import { resolveTruckCityId } from '../simulation/delivery';
 import {
+  getAttachedTrailer,
+  getTrailerCapacityBonus,
+  getTruckEffectiveCapacityTons,
+} from '../simulation/capacity';
+import {
   MAX_UPGRADE_LEVEL,
   TRUCK_UPGRADE_ACTION_LABELS,
   TRUCK_UPGRADE_BENEFITS,
@@ -33,7 +38,7 @@ import {
   type TruckUpgradeType,
 } from '../simulation/truckUpgrades';
 import { useGameStore } from '../store/gameStore';
-import type { Truck, TruckStatus } from '../types/game';
+import type { Trailer, Truck, TruckStatus } from '../types/game';
 import { colors, formatMoney, spacing, typography } from '../theme';
 
 type UpgradesTab = 'fleet' | 'company';
@@ -230,10 +235,21 @@ function TruckPickerStrip({
   );
 }
 
-function SelectedTruckCard({ truck, homeCityId }: { truck: Truck; homeCityId?: string }) {
+function SelectedTruckCard({
+  truck,
+  homeCityId,
+  trailers,
+}: {
+  truck: Truck;
+  homeCityId?: string;
+  trailers?: Trailer[];
+}) {
   const normalized = normalizeTruckUpgrades(truck);
   const cityId = resolveTruckCityId(normalized, homeCityId);
   const condition = normalized.condition ?? 100;
+  const baseCapacity = getTruckEffectiveCapacityTons(normalized, []);
+  const totalCapacity = getTruckEffectiveCapacityTons(normalized, trailers);
+  const attached = getAttachedTrailer(normalized.id, trailers);
 
   return (
     <AppCard variant="soft" style={styles.selectedTruckCard} padded>
@@ -249,10 +265,17 @@ function SelectedTruckCard({ truck, homeCityId }: { truck: Truck; homeCityId?: s
           <Text style={styles.selectedTruckMeta} numberOfLines={1}>
             {getCityName(cityId)} · {getTruckStatusShortLabel(normalized.status)}
           </Text>
-          <Text style={styles.selectedTruckStats} numberOfLines={1}>
-            Kondisyon %{Math.round(condition)} · {getEffectiveTruckCapacity(normalized).toFixed(1)} t ·{' '}
+          <Text style={styles.selectedTruckStats} numberOfLines={2}>
+            Kondisyon %{Math.round(condition)} · Toplam kapasite {totalCapacity.toFixed(1)} t ·{' '}
             {normalized.speed ?? 0} km/s
           </Text>
+          {attached ? (
+            <Text style={styles.selectedTruckUpgrades} numberOfLines={1}>
+              Dorse: {attached.name} · +{getTrailerCapacityBonus(attached).toFixed(1)} t (
+              {baseCapacity.toFixed(1)} + {getTrailerCapacityBonus(attached).toFixed(1)} ={' '}
+              {totalCapacity.toFixed(1)} t)
+            </Text>
+          ) : null}
           <Text style={styles.selectedTruckUpgrades} numberOfLines={2}>
             {formatTruckUpgradeSummaryLine(normalized)}
           </Text>
@@ -471,7 +494,11 @@ export default function UpgradesScreen({
       {activeTab === 'fleet' ? (
         <>
           {selectedTruck ? (
-            <SelectedTruckCard truck={selectedTruck} homeCityId={homeCityId} />
+            <SelectedTruckCard
+              truck={selectedTruck}
+              homeCityId={homeCityId}
+              trailers={player?.trailers}
+            />
           ) : (
             <AppCard variant="soft" style={styles.noTruckCard} padded>
               <Text style={styles.noTruckTitle}>Kamyon seçilmedi</Text>

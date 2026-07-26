@@ -3,6 +3,10 @@
  */
 
 import { resolveTruckCityId } from '../simulation/delivery';
+import {
+  canTruckCarryCargo,
+  getTruckEffectiveCapacityTons,
+} from '../simulation/capacity';
 import { getCityName } from './entityLookup';
 import type { Driver, Truck } from '../types/game';
 
@@ -38,8 +42,9 @@ export function evaluateTruckOption(
   truck: Truck,
   cargoWeight: number,
   originCityId: string,
+  trailers?: import('../types/game').Trailer[],
 ): TruckOption {
-  const capacity = truck.capacity ?? 0;
+  const capacity = getTruckEffectiveCapacityTons(truck, trailers);
   const condition = truck.condition ?? 100;
 
   if (truck.status === 'on_route') {
@@ -66,7 +71,7 @@ export function evaluateTruckOption(
     };
   }
 
-  if (capacity < cargoWeight) {
+  if (!canTruckCarryCargo(truck, cargoWeight, trailers)) {
     return {
       truck,
       issue: 'capacity',
@@ -110,8 +115,9 @@ export function buildTruckOptions(
   trucks: Truck[],
   cargoWeight: number,
   originCityId: string,
+  trailers?: import('../types/game').Trailer[],
 ): TruckOption[] {
-  return trucks.map((truck) => evaluateTruckOption(truck, cargoWeight, originCityId));
+  return trucks.map((truck) => evaluateTruckOption(truck, cargoWeight, originCityId, trailers));
 }
 
 export function buildDriverOptions(drivers: Driver[]): DriverOption[] {
@@ -131,7 +137,7 @@ export function pickBestTruckOption(options: TruckOption[]): TruckOption | null 
     const speedDiff = (b.truck.speed ?? 0) - (a.truck.speed ?? 0);
     if (speedDiff !== 0) return speedDiff;
 
-    return (a.truck.capacity ?? 0) - (b.truck.capacity ?? 0);
+    return getTruckEffectiveCapacityTons(a.truck, undefined) - getTruckEffectiveCapacityTons(b.truck, undefined);
   })[0];
 }
 

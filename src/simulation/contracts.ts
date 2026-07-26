@@ -18,6 +18,7 @@ import type {
   ProductId,
   ProductMarket,
   Route,
+  Trailer,
   Truck,
   WorldEvent,
 } from '../types/game';
@@ -39,6 +40,7 @@ import {
   getActiveDeliveryDestinationCityIds,
   getBusyTruckOriginCityIds,
   getContractAvailability,
+  getContractCargoWeight,
   getIdleDrivers,
   getIdleTruckOriginCityIds,
   getIdleTrucksAtOrigin,
@@ -47,6 +49,10 @@ import {
   isTruckAvailableForAssignment,
   canTruckCarryContract,
 } from './delivery';
+import {
+  isContractUnreachableByFleet,
+  shouldSpawnBeyondFleetContract,
+} from './capacity';
 import { meetsDriverLevelRequirement } from './driverProgress';
 import { getRoute as findRoute } from '../data/routes';
 import { getProductByIdSafe } from '../utils/entityLookup';
@@ -660,6 +666,7 @@ export interface PlayableContractContext {
   globalEconomy?: GlobalEconomy;
   playerReputation?: number;
   homeCityId?: string;
+  trailers?: Trailer[];
 }
 
 const MIN_TRUCK_CONDITION_FOR_PLAYABLE = 30;
@@ -696,7 +703,7 @@ function hasAffordableContractAssignment(
   ).filter(
     (truck) =>
       isTruckAvailableForAssignment(truck, currentTime) &&
-      canTruckCarryContract(truck, contract, product) &&
+      canTruckCarryContract(truck, contract, product, context.trailers) &&
       (truck.condition ?? 100) >= MIN_TRUCK_CONDITION_FOR_PLAYABLE,
   );
 
@@ -735,6 +742,7 @@ export function isPlayableContract(
       currentTime,
       context?.playerReputation ?? 0,
       context?.homeCityId,
+      context?.trailers,
     ).canStart
   ) {
     return false;
@@ -1029,6 +1037,31 @@ export function generateContracts(
           continue;
         }
 
+        const contractCargoWeight =
+          finalContract.cargoWeight ?? finalContract.amount ?? 0;
+        const pendingContracts = [
+          ...existingContracts.filter((contract) => contract.status === 'available'),
+          ...candidates.map((candidate) => candidate.contract),
+        ];
+        const pendingTotal = pendingContracts.length;
+        const pendingUnreachable = pendingContracts.filter((contract) => {
+          const weight = contract.cargoWeight ?? contract.amount ?? 0;
+          return isContractUnreachableByFleet(weight, ownedMaxCapacity);
+        }).length;
+        const pendingUnreachableRatio =
+          pendingTotal > 0 ? pendingUnreachable / pendingTotal : 0;
+
+        if (
+          !shouldSpawnBeyondFleetContract(
+            contractCargoWeight,
+            ownedMaxCapacity,
+            pendingUnreachableRatio,
+            playerLevel,
+          )
+        ) {
+          continue;
+        }
+
         const dedupeKey = getContractDedupeKey(finalContract);
         if (existingDedupeKeys.has(dedupeKey)) {
           continue;
@@ -1270,7 +1303,12 @@ export function ensurePlayableContractSupply(
       break;
     }
 
-    const cityCapacity = getMaxIdleTruckCapacityAtOrigin(trucks, originCityId, params.homeCityId);
+    const cityCapacity = getMaxIdleTruckCapacityAtOrigin(
+      trucks,
+      originCityId,
+      params.homeCityId,
+      params.trailers,
+    );
     if (cityCapacity <= 0) {
       continue;
     }
@@ -1318,7 +1356,12 @@ export function ensurePlayableContractSupply(
   ) {
     const originCityId = idleOriginCityIds[originIndex % idleOriginCityIds.length];
     originIndex += 1;
-    const cityCapacity = getMaxIdleTruckCapacityAtOrigin(trucks, originCityId, params.homeCityId);
+    const cityCapacity = getMaxIdleTruckCapacityAtOrigin(
+      trucks,
+      originCityId,
+      params.homeCityId,
+      params.trailers,
+    );
     if (cityCapacity <= 0) {
       if (originIndex > idleOriginCityIds.length * 2) {
         break;
@@ -1448,6 +1491,7 @@ export interface ReplenishContractsParams {
   busyTruckOriginCityIds?: string[];
   fleetCityContext?: PlayerFleetCityContext;
   trucks?: Truck[];
+  trailers?: Trailer[];
   drivers?: Driver[];
   homeCityId?: string;
   activeWorldEvents?: WorldEvent[];

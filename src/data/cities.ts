@@ -35,7 +35,7 @@ function product(
 }
 
 /** Başlangıç şehir listesi — GDD Bölüm 6 ve 7'ye göre */
-/** TODO: Level 4+ depo şehirleri — konya, adana, samsun, gaziantep eklenecek */
+/** Genişletilmiş şehirler: adana (L5), trabzon (L7), diyarbakir (L9) — levelConfig.cityUnlockLevels */
 export const CITIES: City[] = [
   // -------------------------------------------------------------------------
   // İzmir — tarım ve tekstil merkezi; elektronik ve makine ithal eder
@@ -338,6 +338,189 @@ export const CITIES: City[] = [
         targetStock: 160,
         productionPerDay: 15,
         consumptionPerDay: 82,
+      }),
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Adana — tarım, gıda, tekstil; güney liman lojistiği
+  // -------------------------------------------------------------------------
+  {
+    id: 'adana',
+    name: 'Adana',
+    population: 2_250_000,
+    industryLevel: 0.55,
+    tourismLevel: 0.3,
+    agricultureLevel: 0.88,
+    productionMultiplier: 0.95,
+    demandMultiplier: 1.05,
+    fuelPriceModifier: 0.98,
+    trafficDifficulty: 0.72,
+    warehouseCostModifier: 0.92,
+    products: {
+      fruit: product('fruit', {
+        stock: 420,
+        targetStock: 320,
+        productionPerDay: 110,
+        consumptionPerDay: 45,
+      }),
+      steel: product('steel', {
+        stock: 55,
+        targetStock: 90,
+        productionPerDay: 12,
+        consumptionPerDay: 28,
+      }),
+      electronics: product('electronics', {
+        stock: 45,
+        targetStock: 110,
+        productionPerDay: 6,
+        consumptionPerDay: 38,
+      }),
+      machinery: product('machinery', {
+        stock: 40,
+        targetStock: 95,
+        productionPerDay: 8,
+        consumptionPerDay: 32,
+      }),
+      textile: product('textile', {
+        stock: 260,
+        targetStock: 200,
+        productionPerDay: 72,
+        consumptionPerDay: 40,
+      }),
+      furniture: product('furniture', {
+        stock: 50,
+        targetStock: 85,
+        productionPerDay: 14,
+        consumptionPerDay: 28,
+      }),
+      beverage: product('beverage', {
+        stock: 140,
+        targetStock: 130,
+        productionPerDay: 38,
+        consumptionPerDay: 42,
+      }),
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Diyarbakır — tarım, gıda, inşaat; bölgesel dağıtım merkezi
+  // -------------------------------------------------------------------------
+  {
+    id: 'diyarbakir',
+    name: 'Diyarbakır',
+    population: 1_800_000,
+    industryLevel: 0.48,
+    tourismLevel: 0.25,
+    agricultureLevel: 0.82,
+    productionMultiplier: 0.88,
+    demandMultiplier: 0.95,
+    fuelPriceModifier: 1.08,
+    trafficDifficulty: 0.68,
+    warehouseCostModifier: 0.88,
+    products: {
+      fruit: product('fruit', {
+        stock: 380,
+        targetStock: 280,
+        productionPerDay: 95,
+        consumptionPerDay: 38,
+      }),
+      steel: product('steel', {
+        stock: 70,
+        targetStock: 110,
+        productionPerDay: 18,
+        consumptionPerDay: 32,
+      }),
+      electronics: product('electronics', {
+        stock: 35,
+        targetStock: 95,
+        productionPerDay: 5,
+        consumptionPerDay: 30,
+      }),
+      machinery: product('machinery', {
+        stock: 45,
+        targetStock: 100,
+        productionPerDay: 10,
+        consumptionPerDay: 35,
+      }),
+      textile: product('textile', {
+        stock: 90,
+        targetStock: 120,
+        productionPerDay: 22,
+        consumptionPerDay: 35,
+      }),
+      furniture: product('furniture', {
+        stock: 40,
+        targetStock: 75,
+        productionPerDay: 10,
+        consumptionPerDay: 25,
+      }),
+      beverage: product('beverage', {
+        stock: 85,
+        targetStock: 110,
+        productionPerDay: 20,
+        consumptionPerDay: 38,
+      }),
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Trabzon — gıda, soğuk zincir, Karadeniz liman lojistiği
+  // -------------------------------------------------------------------------
+  {
+    id: 'trabzon',
+    name: 'Trabzon',
+    population: 820_000,
+    industryLevel: 0.42,
+    tourismLevel: 0.55,
+    agricultureLevel: 0.72,
+    productionMultiplier: 0.82,
+    demandMultiplier: 1.08,
+    fuelPriceModifier: 1.12,
+    trafficDifficulty: 0.78,
+    warehouseCostModifier: 1.05,
+    products: {
+      fruit: product('fruit', {
+        stock: 180,
+        targetStock: 140,
+        productionPerDay: 48,
+        consumptionPerDay: 42,
+      }),
+      steel: product('steel', {
+        stock: 35,
+        targetStock: 65,
+        productionPerDay: 6,
+        consumptionPerDay: 22,
+      }),
+      electronics: product('electronics', {
+        stock: 40,
+        targetStock: 90,
+        productionPerDay: 5,
+        consumptionPerDay: 32,
+      }),
+      machinery: product('machinery', {
+        stock: 30,
+        targetStock: 70,
+        productionPerDay: 4,
+        consumptionPerDay: 26,
+      }),
+      textile: product('textile', {
+        stock: 55,
+        targetStock: 80,
+        productionPerDay: 14,
+        consumptionPerDay: 30,
+      }),
+      furniture: product('furniture', {
+        stock: 45,
+        targetStock: 90,
+        productionPerDay: 10,
+        consumptionPerDay: 32,
+      }),
+      beverage: product('beverage', {
+        stock: 95,
+        targetStock: 120,
+        productionPerDay: 28,
+        consumptionPerDay: 48,
       }),
     },
   },

@@ -58,6 +58,48 @@ export const ROUTES: Route[] = [
   // --- Bursa – Antalya ---
   route('bursa', 'antalya', 660, 0.72, 110),
   route('antalya', 'bursa', 660, 0.74, 110),
+
+  // --- Adana bağlantıları ---
+  route('adana', 'ankara', 550, 0.65, 100),
+  route('ankara', 'adana', 550, 0.67, 100),
+  route('adana', 'antalya', 480, 0.58, 85),
+  route('antalya', 'adana', 480, 0.6, 85),
+  route('adana', 'istanbul', 940, 0.78, 210),
+  route('istanbul', 'adana', 940, 0.8, 210),
+  route('adana', 'izmir', 870, 0.72, 175),
+  route('izmir', 'adana', 870, 0.74, 175),
+  route('adana', 'bursa', 820, 0.7, 165),
+  route('bursa', 'adana', 820, 0.72, 165),
+  route('adana', 'diyarbakir', 540, 0.62, 95),
+  route('diyarbakir', 'adana', 540, 0.64, 95),
+  route('adana', 'trabzon', 680, 0.68, 120),
+  route('trabzon', 'adana', 680, 0.7, 120),
+
+  // --- Diyarbakır bağlantıları ---
+  route('diyarbakir', 'ankara', 980, 0.7, 165),
+  route('ankara', 'diyarbakir', 980, 0.72, 165),
+  route('diyarbakir', 'istanbul', 1280, 0.82, 240),
+  route('istanbul', 'diyarbakir', 1280, 0.84, 240),
+  route('diyarbakir', 'izmir', 1180, 0.76, 210),
+  route('izmir', 'diyarbakir', 1180, 0.78, 210),
+  route('diyarbakir', 'bursa', 1100, 0.74, 195),
+  route('bursa', 'diyarbakir', 1100, 0.76, 195),
+  route('diyarbakir', 'antalya', 850, 0.68, 145),
+  route('antalya', 'diyarbakir', 850, 0.7, 145),
+  route('diyarbakir', 'trabzon', 520, 0.64, 90),
+  route('trabzon', 'diyarbakir', 520, 0.66, 90),
+
+  // --- Trabzon bağlantıları ---
+  route('trabzon', 'ankara', 760, 0.72, 155),
+  route('ankara', 'trabzon', 760, 0.74, 155),
+  route('trabzon', 'istanbul', 1080, 0.8, 225),
+  route('istanbul', 'trabzon', 1080, 0.82, 225),
+  route('trabzon', 'izmir', 1180, 0.78, 215),
+  route('izmir', 'trabzon', 1180, 0.8, 215),
+  route('trabzon', 'bursa', 920, 0.74, 185),
+  route('bursa', 'trabzon', 920, 0.76, 185),
+  route('trabzon', 'antalya', 920, 0.76, 190),
+  route('antalya', 'trabzon', 920, 0.78, 190),
 ];
 
 /** id → Route sözlüğü */

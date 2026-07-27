@@ -33,6 +33,12 @@ export const WORLD_MAP_POSITIONS: Record<string, WorldMapCityPosition> = {
   ankara: { id: 'ankara', x: 0.428, y: 0.298 },
   izmir: { id: 'izmir', x: 0.118, y: 0.408 },
   antalya: { id: 'antalya', x: 0.348, y: 0.578 },
+  /** Geçici — mapCalibrationEnabled ile kalibre edin */
+  adana: { id: 'adana', x: 0.52, y: 0.68 },
+  /** Geçici — mapCalibrationEnabled ile kalibre edin */
+  diyarbakir: { id: 'diyarbakir', x: 0.78, y: 0.42 },
+  /** Geçici — mapCalibrationEnabled ile kalibre edin */
+  trabzon: { id: 'trabzon', x: 0.62, y: 0.2 },
 };
 
 export function getWorldMapCityPosition(cityId: string): WorldMapCityPosition | null {

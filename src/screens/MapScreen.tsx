@@ -285,8 +285,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   }, [availableContracts, runningDeliveries.length, selectedContractId]);
 
   const marketOpportunities = useMemo(
-    () => findMarketOpportunities(cities, routes, products, 5),
-    [cities, routes, products],
+    () => findMarketOpportunities(cities, routes, products, 5, player?.level ?? player?.companyLevel ?? 1),
+    [cities, routes, products, player?.level, player?.companyLevel],
   );
 
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);

@@ -57,22 +57,25 @@ export const MAP_MARKER_HIT_RADIUS = 20;
 export const MAP_MARKER_GLOW = '#2388FF';
 export const MAP_MARKER_CORE = '#39A0FF';
 export const MAP_ROUTE_STROKE = '#39A0FF';
-export const MAP_ROUTE_ACTIVE = '#5DD4FF';
-export const MAP_ROUTE_COMPLETED = '#5DD4FF';
-export const MAP_ROUTE_REMAINING = '#2388FF';
+/** Aktif teslimat rotası — tamamlanan segment (ana stroke). */
+export const MAP_ROUTE_ACTIVE = '#34D399';
+export const MAP_ROUTE_COMPLETED = '#22C55E';
+/** Aktif teslimat rotası — kalan segment (aynı ton, düşük opacity). */
+export const MAP_ROUTE_REMAINING = '#22C55E';
 export const MAP_ROUTE_REMAINING_OPACITY = 0.42;
 export const MAP_ROUTE_REMAINING_WIDTH = 2.2;
 export const MAP_ROUTE_COMPLETED_WIDTH = 3;
-export const MAP_ROUTE_COMPLETED_GLOW = 'rgba(25,145,255,0.20)';
+export const MAP_ROUTE_COMPLETED_GLOW = 'rgba(34, 197, 94, 0.28)';
 export const MAP_ROUTE_COMPLETED_GLOW_WIDTH = 6;
-export const MAP_ROUTE_GLOW = 'rgba(25,145,255,0.28)';
+export const MAP_ROUTE_GLOW = 'rgba(34, 197, 94, 0.28)';
 export const MAP_ROUTE_ACTIVE_WIDTH = 3;
 export const MAP_ROUTE_GLOW_WIDTH = 7;
+/** Transfer rotaları — mavi kalır. */
 export const MAP_TRANSFER_ROUTE = '#39A0FF';
 
 export const MAP_DELIVERY_ORIGIN = '#39A0FF';
-export const MAP_DELIVERY_DESTINATION = '#5EEAD4';
-export const MAP_DELIVERY_DESTINATION_GLOW = 'rgba(52,211,153,0.35)';
+export const MAP_DELIVERY_DESTINATION = '#34D399';
+export const MAP_DELIVERY_DESTINATION_GLOW = 'rgba(52, 211, 153, 0.25)';
 
 export const MAP_TRUCK_MARKER_SIZE = 28;
 export const MAP_TRUCK_MARKER_MIN_SCREEN = 22;

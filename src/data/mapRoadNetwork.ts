@@ -21,7 +21,21 @@ export type MapRoadSegment = {
   fromCityId: string;
   toCityId: string;
   points: MapRoadPoint[];
+  /** false → graph routing kullanmaz; points kalibre edilene kadar boş bırakılır */
+  isCalibrated?: boolean;
 };
+
+/** Segment graph routing için kullanılabilir mi? (undefined isCalibrated = true) */
+export function isMapRoadSegmentRoutable(segment: MapRoadSegment): boolean {
+  if (segment.isCalibrated === false) {
+    return false;
+  }
+  return segment.points.length >= 2;
+}
+
+export function getMapRoadSegmentById(segmentId: string): MapRoadSegment | undefined {
+  return MAP_ROAD_SEGMENTS.find((segment) => segment.id === segmentId);
+}
 
 const C = WORLD_MAP_POSITIONS;
 
@@ -114,15 +128,21 @@ export const MAP_ROAD_SEGMENTS: MapRoadSegment[] = [
     fromCityId: 'izmir',
     toCityId: 'antalya',
     points: [
-      C.izmir,
-      { x: 0.142, y: 0.432 },
-      { x: 0.172, y: 0.458 },
-      { x: 0.205, y: 0.482 },
-      { x: 0.242, y: 0.508 },
-      { x: 0.278, y: 0.532 },
-      { x: 0.312, y: 0.555 },
-      { x: 0.332, y: 0.568 },
-      C.antalya,
+      
+      { x: 0.0831, y: 0.5157 },
+      { x: 0.0774, y: 0.5486 },
+      { x: 0.0813, y: 0.5778 },
+      { x: 0.0925, y: 0.5741 },
+      { x: 0.1042, y: 0.5903 },
+      { x: 0.1293, y: 0.5871 },
+      { x: 0.139, y: 0.5718 },
+      { x: 0.174, y: 0.6043 },
+      { x: 0.193, y: 0.6548 },
+      { x: 0.2139, y: 0.685 },
+      { x: 0.2212, y: 0.7281 },
+      { x: 0.2337, y: 0.7272 },
+      { x: 0.2528, y: 0.7082 },
+      
     ],
   },
   {
@@ -130,14 +150,28 @@ export const MAP_ROAD_SEGMENTS: MapRoadSegment[] = [
     fromCityId: 'izmir',
     toCityId: 'ankara',
     points: [
-      C.izmir,
-      { x: 0.158, y: 0.398 },
-      { x: 0.205, y: 0.382 },
-      { x: 0.252, y: 0.365 },
-      { x: 0.302, y: 0.348 },
-      { x: 0.352, y: 0.328 },
-      { x: 0.395, y: 0.312 },
-      C.ankara,
+      
+      { x: 0.0819, y: 0.5147 },
+      { x: 0.1123, y: 0.503 },
+      { x: 0.1221, y: 0.5135 },
+      { x: 0.1379, y: 0.5019 },
+      { x: 0.1552, y: 0.4914 },
+      { x: 0.1742, y: 0.4984 },
+      { x: 0.1873, y: 0.4955 },
+      { x: 0.2014, y: 0.478 },
+      { x: 0.2161, y: 0.4605 },
+      { x: 0.2309, y: 0.4681 },
+      { x: 0.2508, y: 0.4838 },
+      { x: 0.2641, y: 0.4879 },
+      { x: 0.2782, y: 0.4675 },
+      { x: 0.289, y: 0.4629 },
+      { x: 0.2972, y: 0.4396 },
+      { x: 0.3211, y: 0.4029 },
+      { x: 0.3552, y: 0.3814 },
+      { x: 0.3542, y: 0.3768 },
+      { x: 0.3738, y: 0.3535 },
+      
+      
     ],
   },
   {
@@ -145,16 +179,74 @@ export const MAP_ROAD_SEGMENTS: MapRoadSegment[] = [
     fromCityId: 'ankara',
     toCityId: 'antalya',
     points: [
-      C.ankara,
-      { x: 0.418, y: 0.338 },
-      { x: 0.408, y: 0.385 },
-      { x: 0.395, y: 0.432 },
-      { x: 0.382, y: 0.478 },
-      { x: 0.368, y: 0.522 },
-      { x: 0.358, y: 0.552 },
-      C.antalya,
+    
+      { x: 0.3742, y: 0.3481 },
+      { x: 0.3512, y: 0.3797 },
+      { x: 0.3334, y: 0.3843 },
+      { x: 0.3201, y: 0.4038 },
+      { x: 0.2992, y: 0.4414 },
+      { x: 0.2872, y: 0.4599 },
+      { x: 0.2755, y: 0.4669 },
+      { x: 0.2643, y: 0.4906 },
+      { x: 0.3018, y: 0.5314 },
+      { x: 0.3274, y: 0.5474 },
+      { x: 0.3491, y: 0.5636 },
+      { x: 0.3595, y: 0.5905 },
+      { x: 0.3347, y: 0.6091 },
+      { x: 0.3261, y: 0.629 },
+      { x: 0.3162, y: 0.6429 },
+      { x: 0.3058, y: 0.6638 },
+      { x: 0.2945, y: 0.6921 },
+      { x: 0.2867, y: 0.7093 },
+      { x: 0.2525, y: 0.7093 },
+      
+     
     ],
+  },
+  {
+    id: 'izmir-istanbul',
+    fromCityId: 'izmir',
+    toCityId: 'istanbul',
+    isCalibrated: false,
+    points: [],
+  },
+  {
+    id: 'ankara-adana',
+    fromCityId: 'ankara',
+    toCityId: 'adana',
+    isCalibrated: false,
+    points: [],
+  },
+  {
+    id: 'antalya-adana',
+    fromCityId: 'antalya',
+    toCityId: 'adana',
+    isCalibrated: false,
+    points: [],
+  },
+  {
+    id: 'adana-diyarbakir',
+    fromCityId: 'adana',
+    toCityId: 'diyarbakir',
+    isCalibrated: false,
+    points: [],
+  },
+  {
+    id: 'ankara-trabzon',
+    fromCityId: 'ankara',
+    toCityId: 'trabzon',
+    isCalibrated: false,
+    points: [],
   },
 ];
 
-export const MAP_ROAD_CITY_IDS = ['istanbul', 'bursa', 'ankara', 'izmir', 'antalya'] as const;
+export const MAP_ROAD_CITY_IDS = [
+  'istanbul',
+  'bursa',
+  'ankara',
+  'izmir',
+  'antalya',
+  'adana',
+  'diyarbakir',
+  'trabzon',
+] as const;

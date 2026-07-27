@@ -46,6 +46,12 @@ import type { NetworkFilterKey } from './mapTypes';
 export type { NetworkFilterKey };
 import type { MapRoadPoint } from '../../data/mapRoadNetwork';
 import {
+  appendMapSegmentCalibrationPoint,
+  getMapSegmentCalibrationPoints,
+  registerMapSegmentCalibrationDevTools,
+  syncMapSegmentCalibration,
+} from './mapSegmentCalibration';
+import {
   getRoadRoute,
   getTruckPositionAlongRoadRoute,
   normalizeMapDeliveryProgress,
@@ -311,6 +317,20 @@ function WorldMapCanvasInner(
   );
 
   useEffect(() => {
+    if (__DEV__ && MAP_CALIBRATION_ENABLED) {
+      registerMapSegmentCalibrationDevTools();
+      syncMapSegmentCalibration(debugConfig.mapCalibrationSegmentId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (__DEV__ && MAP_CALIBRATION_ENABLED) {
+      syncMapSegmentCalibration(debugConfig.mapCalibrationSegmentId);
+      setCalibrationDots(getMapSegmentCalibrationPoints());
+    }
+  }, [debugConfig.mapCalibrationSegmentId]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
@@ -425,28 +445,18 @@ function WorldMapCanvasInner(
         y: roundMapCoordinate(result.normalized.y, 4),
       };
 
-      console.log('[Map calibration]');
-      console.log('viewport:', {
-        x: roundMapCoordinate(result.viewport.x, 4),
-        y: roundMapCoordinate(result.viewport.y, 4),
-      });
-      console.log('content:', {
-        x: roundMapCoordinate(result.content.x, 4),
-        y: roundMapCoordinate(result.content.y, 4),
-      });
+      if (__DEV__ && debugConfig.mapCalibrationSegmentId) {
+        const nextPoints = appendMapSegmentCalibrationPoint(point);
+        setCalibrationDots(nextPoints);
+        return;
+      }
+
+      console.log('[Map calibration] city center');
       console.log('normalized:', point);
-      console.log('transform:', {
-        scale: roundMapCoordinate(result.transform.scale, 4),
-        translateX: roundMapCoordinate(result.transform.translateX, 4),
-        translateY: roundMapCoordinate(result.transform.translateY, 4),
-      });
+      console.log('paste into worldMapPositions.ts:', `{ x: ${point.x}, y: ${point.y} }`);
 
       if (__DEV__) {
-        setCalibrationDots((prev) => {
-          const next = [...prev, point];
-          console.log('points array:', JSON.stringify(next, null, 2));
-          return next;
-        });
+        setCalibrationDots((prev) => [...prev, point]);
       }
     },
     [mapBounds.width],

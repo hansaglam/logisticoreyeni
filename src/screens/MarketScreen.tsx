@@ -20,7 +20,7 @@ import MarketAlertModal from '../components/market/MarketAlertModal';
 import ActiveMarketAlertsSection from '../components/market/ActiveMarketAlertsSection';
 import MarketWorldEventsStrip from '../components/market/MarketWorldEventsStrip';
 import ProductMarketDetailModal from '../components/market/ProductMarketDetailModal';
-import ProductMiniTrendChart from '../components/market/ProductMiniTrendChart';
+import MarketSparkline from '../components/market/MarketSparkline';
 import {
   getMarketProductColumnWidths,
   getProductAccentColor,
@@ -631,7 +631,12 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
       </View>
 
       <View style={[styles.productChartCol, { minWidth: chartMinWidth }]}>
-        <ProductMiniTrendChart trend={trend} />
+        <MarketSparkline
+          productId={market.productId}
+          priceHistory={market.priceHistory}
+          currentPrice={market.currentPrice}
+          changePercent={trend.changePercent}
+        />
         <Text style={styles.productHint} numberOfLines={2}>
           {hint}
         </Text>

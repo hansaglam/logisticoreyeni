@@ -33,7 +33,9 @@ import {
   pickContractCapacityProfile,
   pickContractGenerationLevelTier,
   resolveContractGenerationRange,
+  isWarehouseCityUnlocked,
 } from '../config/levelConfig';
+import { isRoadGraphPairConnected } from '../components/map/mapRoadUtils';
 import { toProductMarket, getSafeGlobalEconomy } from './economy';
 import {
   calculateFuelCost,
@@ -514,12 +516,30 @@ function getOpportunityDemandLevel(score: number): MarketOpportunity['demandLeve
   return 'low';
 }
 
+function isContractCityPairEligible(
+  originCityId: string,
+  destinationCityId: string,
+  playerLevel: number,
+): boolean {
+  if (originCityId === destinationCityId) {
+    return false;
+  }
+  if (!isWarehouseCityUnlocked(originCityId, playerLevel)) {
+    return false;
+  }
+  if (!isWarehouseCityUnlocked(destinationCityId, playerLevel)) {
+    return false;
+  }
+  return isRoadGraphPairConnected(originCityId, destinationCityId);
+}
+
 /** Sözleşme üretimi ile aynı stok/fiyat mantığına dayalı piyasa fırsatları */
 export function findMarketOpportunities(
   cities: City[],
   routes: Route[],
   products: Product[],
   maxResults = 3,
+  playerLevel = 99,
 ): MarketOpportunity[] {
   const opportunities: MarketOpportunity[] = [];
 
@@ -530,6 +550,10 @@ export function findMarketOpportunities(
 
       for (const destinationCity of cities) {
         if (destinationCity.id === originCity.id) {
+          continue;
+        }
+
+        if (!isContractCityPairEligible(originCity.id, destinationCity.id, playerLevel)) {
           continue;
         }
 
@@ -938,6 +962,10 @@ export function generateContracts(
   for (const originCity of cityList) {
     for (const destinationCity of cityList) {
       if (originCity.id === destinationCity.id) {
+        continue;
+      }
+
+      if (!isContractCityPairEligible(originCity.id, destinationCity.id, playerLevel)) {
         continue;
       }
 

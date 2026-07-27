@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 
 import { ActionButton, GameIcon, IconButton } from './ui';
-import { CITIES_BY_ID } from '../data/cities';
+import { CITIES_BY_ID, CITY_IDS } from '../data/cities';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import {
   estimateTransferForRoute,
@@ -23,7 +23,7 @@ import { colors, formatMoney, spacing, typography } from '../theme';
 import { formatCityLocative } from '../theme/format';
 import type { Route, Truck } from '../types/game';
 
-const TRANSFER_CITY_IDS = ['izmir', 'istanbul', 'ankara', 'bursa', 'antalya'] as const;
+const TRANSFER_CITY_IDS = CITY_IDS;
 const FOOTER_SUMMARY_HEIGHT = 72;
 const FOOTER_BUTTON_HEIGHT = 48;
 

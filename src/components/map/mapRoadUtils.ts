@@ -1,4 +1,5 @@
 import {
+  isMapRoadSegmentRoutable,
   MAP_ROAD_SEGMENTS,
   type MapRoadPoint,
 } from '../../data/mapRoadNetwork';
@@ -159,7 +160,7 @@ export function getDirectRoadSegment(fromCityId: string, toCityId: string): MapR
       (normalizeCityId(item.fromCityId) === to && normalizeCityId(item.toCityId) === from),
   );
 
-  if (!segment) return null;
+  if (!segment || !isMapRoadSegmentRoutable(segment)) return null;
 
   const forward = normalizeCityId(segment.fromCityId) === from;
   return forward ? [...segment.points] : [...segment.points].reverse();
@@ -173,6 +174,7 @@ interface RoadEdge {
 
 function buildRoadAdjacency(): Map<string, RoadEdge[]> {
   const adjacency = new Map<string, RoadEdge[]>();
+  const warnedUncalibrated = new Set<string>();
 
   const addEdge = (fromCityId: string, toCityId: string, points: MapRoadPoint[]) => {
     const weight = getPolylineTotalLength(points);
@@ -182,6 +184,24 @@ function buildRoadAdjacency(): Map<string, RoadEdge[]> {
   };
 
   for (const segment of MAP_ROAD_SEGMENTS) {
+    if (!isMapRoadSegmentRoutable(segment)) {
+      if (
+        typeof __DEV__ !== 'undefined' &&
+        __DEV__ &&
+        !warnedUncalibrated.has(segment.id)
+      ) {
+        warnedUncalibrated.add(segment.id);
+        console.warn('[map-road] segment skipped (uncalibrated or insufficient points)', {
+          id: segment.id,
+          from: segment.fromCityId,
+          to: segment.toCityId,
+          isCalibrated: segment.isCalibrated ?? true,
+          pointCount: segment.points.length,
+        });
+      }
+      continue;
+    }
+
     const from = normalizeCityId(segment.fromCityId);
     const to = normalizeCityId(segment.toCityId);
     addEdge(from, to, segment.points);
@@ -192,6 +212,20 @@ function buildRoadAdjacency(): Map<string, RoadEdge[]> {
 }
 
 let cachedAdjacency: Map<string, RoadEdge[]> | null = null;
+
+export function invalidateRoadGraphCache(): void {
+  cachedAdjacency = null;
+}
+
+export function isRoadGraphPairConnected(fromCityId: string, toCityId: string): boolean {
+  const from = normalizeCityId(fromCityId);
+  const to = normalizeCityId(toCityId);
+  if (from === to) {
+    return true;
+  }
+  const route = getRoadRoute(from, to);
+  return route != null && route.length >= 2;
+}
 
 export function getRoadGraphAdjacency(): Map<string, RoadEdge[]> {
   if (!cachedAdjacency) {

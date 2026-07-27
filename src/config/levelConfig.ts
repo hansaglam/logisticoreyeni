@@ -116,11 +116,13 @@ export const levelConfig = {
     starterCityIds: ['izmir', 'istanbul', 'ankara', 'bursa', 'antalya'],
     /** Bu seviyeden sonra genişletilmiş şehir listesi açılır */
     extendedCityUnlockLevel: 4,
-    /**
-     * TODO: Level 4+ şehirler — konya, adana, samsun, gaziantep
-     * CITIES verisine eklendiğinde extendedCityIds olarak tanımlanacak.
-     */
-    extendedCityIds: [] as string[],
+    extendedCityIds: ['adana', 'trabzon', 'diyarbakir'] as string[],
+    /** Genişletilmiş şehirler için bireysel unlock seviyeleri */
+    cityUnlockLevels: {
+      adana: 5,
+      trabzon: 7,
+      diyarbakir: 9,
+    } as Record<string, number>,
     mediumUpgradeCapacity: 40,
     largeUpgradeCapacity: 60,
     maxUpgradeTier: 3,
@@ -210,21 +212,30 @@ export function getNextLevelForMoreWarehouses(currentWarehouseCount: number): nu
   return getMinLevelForWarehouseCount(Math.max(0, currentWarehouseCount ?? 0));
 }
 
-/** Şehirde depo açma kilidi — başlangıç şehirleri Level 1, genişletilmiş liste Level 4+ */
-export function isWarehouseCityUnlocked(cityId: string, playerLevel: number): boolean {
-  const safeLevel = Math.max(1, playerLevel ?? 1);
-  const { starterCityIds, extendedCityUnlockLevel, extendedCityIds } = levelConfig.warehouseUnlocks;
+/** Şehirde depo açma kilidi — başlangıç şehirleri Level 1, genişletilmiş liste seviye bazlı */
+export function getCityUnlockLevel(cityId: string): number {
+  const { starterCityIds, extendedCityUnlockLevel, extendedCityIds, cityUnlockLevels } =
+    levelConfig.warehouseUnlocks;
 
   if ((starterCityIds as readonly string[]).includes(cityId)) {
-    return true;
+    return 1;
+  }
+
+  const perCityLevel = (cityUnlockLevels as Record<string, number>)[cityId];
+  if (perCityLevel != null) {
+    return perCityLevel;
   }
 
   if ((extendedCityIds as readonly string[]).includes(cityId)) {
-    return safeLevel >= extendedCityUnlockLevel;
+    return extendedCityUnlockLevel;
   }
 
-  // Bilinmeyen şehirler — starter listesinde değilse genişletilmiş seviye gerekir
-  return safeLevel >= extendedCityUnlockLevel;
+  return extendedCityUnlockLevel;
+}
+
+export function isWarehouseCityUnlocked(cityId: string, playerLevel: number): boolean {
+  const safeLevel = Math.max(1, playerLevel ?? 1);
+  return safeLevel >= getCityUnlockLevel(cityId);
 }
 
 /** Depo yükseltme kademesine göre gereken level (null = maksimum kademe) */

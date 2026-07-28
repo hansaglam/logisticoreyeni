@@ -561,6 +561,50 @@ export interface TruckTransfer {
 }
 
 // ---------------------------------------------------------------------------
+// Depolar arası stok transferi (oyuncu kendi stoğu)
+// ---------------------------------------------------------------------------
+
+export type WarehouseStockTransferStatus =
+  | 'pending'
+  | 'active'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+/** Oyuncunun kendi deposundaki ürünü başka şehre taşıma görevi */
+export interface WarehouseStockTransfer {
+  id: string;
+  sourceWarehouseId: string;
+  destinationWarehouseId: string;
+  sourceCityId: string;
+  destinationCityId: string;
+  productId: ProductId;
+  quantityTons: number;
+  averagePurchasePriceAtStart: number;
+  /** Rezerve edilen maliyet tabanı (qty × avg) — muhasebe/rapor */
+  reservedInventoryCost: number;
+  /** Kaynak stok kalitesi (completion merge) */
+  qualityAtStart?: number;
+  truckId: string;
+  trailerId?: string;
+  driverId: string;
+  routeDistanceKm: number;
+  progress: number;
+  status: WarehouseStockTransferStatus;
+  startedAt: number;
+  estimatedCompletionAt: number;
+  completedAt?: number;
+  fuelLitersAtStart: number;
+  fuelLitersTotal: number;
+  fuelCost: number;
+  driverCost: number;
+  totalCost: number;
+  failureReason?: WarehouseActionReason | string;
+  /** Çift completion / rollback koruması */
+  settledAt?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Depo
 // ---------------------------------------------------------------------------
 
@@ -677,10 +721,44 @@ export interface FinanceLedgerEntry {
   };
 }
 
-/** Ticaret işlemi sonucu */
+/**
+ * Depo işlemleri için structured failure reason — UI string karşılaştırması yapmamalı.
+ * Transfer reason’ları V2 stok transferi için rezerve.
+ */
+export type WarehouseActionReason =
+  | 'insufficient-funds'
+  | 'warehouse-full'
+  | 'warehouse-required'
+  | 'cold-storage-required'
+  | 'warehouse-limit-reached'
+  | 'duplicate-warehouse'
+  | 'invalid-city'
+  | 'invalid-quantity'
+  | 'destination-full'
+  | 'transfer-in-progress'
+  | 'product-not-found'
+  | 'insufficient-market-stock'
+  | 'insufficient-inventory'
+  | 'insufficient-stock'
+  | 'source-destination-same'
+  | 'incompatible-trailer'
+  | 'no-available-truck'
+  | 'no-available-driver'
+  | 'insufficient-capacity'
+  | 'insufficient-fuel'
+  | 'route-not-found'
+  | 'incompatible-warehouse'
+  | 'upgrade-maxed'
+  | 'level-required';
+
+/** Ticaret / depo işlemi sonucu */
 export interface TradeActionResult {
   success: boolean;
   message?: string;
+  /** Kullanıcı dostu structured reason — tercihen bunu kullan */
+  reason?: WarehouseActionReason;
+  details?: Record<string, unknown>;
+  transferId?: string;
   errorCode?:
     | 'INVALID_QUANTITY'
     | 'WAREHOUSE_NOT_FOUND'
@@ -1000,11 +1078,21 @@ export interface WorldEvent {
   description: string;
   cityId?: string;
   productId?: ProductId;
-  /** Oyun günü (1-indexed) */
+  /**
+   * @deprecated Kişisel oyun günü — ekonomi source of truth değil.
+   * Eski save uyumluluğu için tutulur; aktiflik startsAt/endsAt tercih edilir.
+   */
   startsAtDay: number;
-  /** Oyun günü (dahil) */
+  /** @deprecated Eski save uyumluluğu */
   endsAtDay: number;
   durationDays: number;
+  /** Global gerçek zaman başlangıç (ms) — ortak olaylar */
+  startsAt?: number;
+  /** Global gerçek zaman bitiş (ms) */
+  endsAt?: number;
+  /** Olayın üretildiği market epoch */
+  globalEpoch?: number;
+  economyConfigVersion?: number;
   impact: WorldEventImpact;
   severity: WorldEventSeverity;
   isActive: boolean;
@@ -1201,6 +1289,10 @@ export interface StoreGameState {
   activeTransfers: TruckTransfer[];
   /** Tamamlanan boş kamyon transferleri */
   completedTransfers?: TruckTransfer[];
+  /** Aktif depolar arası stok transferleri */
+  activeWarehouseStockTransfers: WarehouseStockTransfer[];
+  /** Tamamlanan / iptal / failed stok transferleri (sınırlı) */
+  completedWarehouseStockTransfers?: WarehouseStockTransfer[];
   globalEconomy: GlobalEconomy;
   marketNews: MarketNews[];
   /** Oyuncu ve geliştirici olay günlüğü */
@@ -1237,6 +1329,20 @@ export interface StoreGameState {
   offlineProgressVersion?: number;
   /** Son aktif simülasyon hızı — pause/offline catch-up için */
   lastSimulationGameSpeed?: number;
+  /**
+   * Son işlenen periyodik ekonomi zamanı (trusted ms).
+   * Kişisel oyun gününden bağımsız; idempotent offline gider için.
+   */
+  lastProcessedEconomyAt?: number;
+  /** Son görülen global market epoch */
+  lastSeenMarketEpoch?: number;
+  /** Cache'lenen global snapshot sürümü */
+  cachedSnapshotVersion?: number;
+  cachedSnapshotGeneratedAt?: number;
+  /** Uygulanmış 24s period key'leri (idempotency) — sınırlı */
+  appliedEconomyPeriodKeys?: string[];
+  /** Son acil operasyon sözleşmesi üretim zamanı (ms) */
+  lastEmergencyContractAtMs?: number;
 }
 
 /**

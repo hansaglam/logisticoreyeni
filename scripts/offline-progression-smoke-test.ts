@@ -479,7 +479,11 @@ console.log('\n6. Save migration');
 console.log('\n7. Config sanity');
 {
   assert(MIN_OFFLINE_PROGRESS_MINUTES === 5, 'MIN_OFFLINE_PROGRESS_MINUTES = 5');
-  assert(MAX_OFFLINE_PROGRESS_HOURS === 12, 'MAX_OFFLINE_PROGRESS_HOURS = 12');
+  assert(MAX_OFFLINE_PROGRESS_HOURS === 24, 'MAX_OFFLINE_PROGRESS_HOURS = 24 saat');
+  assert(
+    MAX_OFFLINE_PROGRESS_HOURS * 3_600_000 === 86_400_000,
+    '24h progress = 86_400_000 ms (saniye/dakika değil)',
+  );
   const gameHours = realMsToGameHours(60 * MS_MIN, 1);
   assert(gameHours > 0, 'realMsToGameHours pozitif döner');
   const fields = normalizeOfflineProgressFields({});

@@ -39,6 +39,10 @@ export function calculateTransferDurationHours(distanceKm: number, speedKmh?: nu
   return Math.max(MIN_TRANSFER_HOURS, distanceKm / speed);
 }
 
+/**
+ * Model A: totalCost = nakit kesinti (yalnız yakıt).
+ * driverCost = bilgilendirici allocated maaş payı; periodic salary ile çift kesilmez.
+ */
 export function calculateTransferCosts(params: {
   distanceKm: number;
   truck: Truck;
@@ -49,14 +53,14 @@ export function calculateTransferCosts(params: {
   const fuelConsumption =
     params.truck.fuelConsumptionPerKm ?? DEFAULT_FUEL_CONSUMPTION_PER_KM;
   const fuelCost = params.distanceKm * fuelConsumption * params.fuelPrice;
-  const salaryPerDay = params.driver.salaryPerDay ?? 0;
-  const driverCost =
+  const salaryPerDay = params.driver.salaryPerDay ?? params.driver.dailySalary ?? 0;
+  const allocatedDriverCost =
     params.durationHours * (salaryPerDay / 24) * deliveryBalance.driverCostMultiplier;
 
   return {
     fuelCost: Number(fuelCost.toFixed(2)),
-    driverCost: Number(driverCost.toFixed(2)),
-    totalCost: Number((fuelCost + driverCost).toFixed(2)),
+    driverCost: Number(allocatedDriverCost.toFixed(2)),
+    totalCost: Number(fuelCost.toFixed(2)),
   };
 }
 

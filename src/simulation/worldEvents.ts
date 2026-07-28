@@ -19,6 +19,14 @@ import type {
   WorldEventSeverity,
   WorldEventType,
 } from '../types/game';
+import {
+  getEconomyNow,
+  getMarketEpoch,
+  MS_PER_24H,
+  ECONOMY_CONFIG_VERSION,
+} from './economyClock';
+
+export { getMarketEpoch };
 
 export const IMPACT_CLAMP = {
   fuelPrice: { min: 1, max: 1.35 },
@@ -29,8 +37,17 @@ export const IMPACT_CLAMP = {
   contractSpawnWeight: { min: 1, max: 1.35 },
 } as const;
 
+/**
+ * @deprecated Kişisel oyun günü — UI/ekonomi source of truth olmamalı.
+ * Simülasyon internal timeline için tutulur; dünya olayları market epoch kullanır.
+ */
 export function gameDayFromTime(currentTime: number): number {
   return Math.floor(Math.max(0, currentTime) / 24) + 1;
+}
+
+/** Ortak dünya zamanı indeksi — tüm oyuncular için aynı (market epoch) */
+export function getSharedWorldTimeIndex(nowMs: number = getEconomyNow()): number {
+  return getMarketEpoch(nowMs);
 }
 
 function hashSeed(input: string): number {
@@ -102,14 +119,30 @@ function localizeTitle(
   return template.title;
 }
 
-function isEventActive(event: WorldEvent, currentDay: number): boolean {
+function isEventActive(
+  event: WorldEvent,
+  currentDay: number,
+  nowMs: number = getEconomyNow(),
+): boolean {
+  if (
+    typeof event.startsAt === 'number' &&
+    Number.isFinite(event.startsAt) &&
+    typeof event.endsAt === 'number' &&
+    Number.isFinite(event.endsAt)
+  ) {
+    return nowMs >= event.startsAt && nowMs <= event.endsAt;
+  }
   return currentDay >= event.startsAtDay && currentDay <= event.endsAtDay;
 }
 
-function refreshActiveFlags(events: WorldEvent[], currentDay: number): WorldEvent[] {
+function refreshActiveFlags(
+  events: WorldEvent[],
+  currentDay: number,
+  nowMs: number = getEconomyNow(),
+): WorldEvent[] {
   return events.map((event) => ({
     ...event,
-    isActive: isEventActive(event, currentDay),
+    isActive: isEventActive(event, currentDay, nowMs),
   }));
 }
 
@@ -151,6 +184,18 @@ export function normalizeWorldEventsState(
         startsAtDay,
         Number(record.endsAtDay) || startsAtDay + durationDays - 1,
       );
+      const startsAt =
+        typeof record.startsAt === 'number' && Number.isFinite(record.startsAt)
+          ? record.startsAt
+          : undefined;
+      const endsAt =
+        typeof record.endsAt === 'number' && Number.isFinite(record.endsAt)
+          ? record.endsAt
+          : undefined;
+      const globalEpoch =
+        typeof record.globalEpoch === 'number' && Number.isFinite(record.globalEpoch)
+          ? record.globalEpoch
+          : undefined;
       const impactRaw = record.impact;
       const impact: WorldEventImpact =
         impactRaw && typeof impactRaw === 'object' ? (impactRaw as WorldEventImpact) : {};
@@ -166,6 +211,13 @@ export function normalizeWorldEventsState(
         startsAtDay,
         endsAtDay,
         durationDays,
+        startsAt,
+        endsAt,
+        globalEpoch,
+        economyConfigVersion:
+          typeof record.economyConfigVersion === 'number'
+            ? record.economyConfigVersion
+            : undefined,
         impact,
         severity:
           record.severity === 'low' || record.severity === 'medium' || record.severity === 'high'
@@ -202,10 +254,20 @@ export function initializeWorldEventsState(
   );
 }
 
-export function expireOldWorldEvents(events: WorldEvent[], currentDay: number): WorldEvent[] {
+export function expireOldWorldEvents(
+  events: WorldEvent[],
+  currentDay: number,
+  nowMs: number = getEconomyNow(),
+): WorldEvent[] {
   return refreshActiveFlags(
-    events.filter((event) => event.endsAtDay >= currentDay),
+    events.filter((event) => {
+      if (typeof event.endsAt === 'number' && Number.isFinite(event.endsAt)) {
+        return event.endsAt >= nowMs - MS_PER_24H;
+      }
+      return event.endsAtDay >= currentDay;
+    }),
     currentDay,
+    nowMs,
   );
 }
 
@@ -238,13 +300,17 @@ function instantiateTemplate(
   random: () => number,
   cityId?: string,
   productId?: ProductId,
+  nowMs: number = getEconomyNow(),
 ): WorldEvent {
   const durationDays = Math.round(
     pickRange(random, template.durationDays as [number, number]),
   );
   const startsAtDay = currentDay;
   const endsAtDay = currentDay + durationDays - 1;
-  const id = `we_${template.type}_${cityId ?? 'global'}_${productId ?? 'all'}_${startsAtDay}`;
+  const startsAt = nowMs;
+  const endsAt = nowMs + durationDays * MS_PER_24H;
+  const globalEpoch = getMarketEpoch(nowMs);
+  const id = `we_${template.type}_${cityId ?? 'global'}_${productId ?? 'all'}_${globalEpoch}`;
 
   return {
     id,
@@ -256,6 +322,10 @@ function instantiateTemplate(
     startsAtDay,
     endsAtDay,
     durationDays,
+    startsAt,
+    endsAt,
+    globalEpoch,
+    economyConfigVersion: ECONOMY_CONFIG_VERSION,
     impact: buildImpact(template, random),
     severity: pickSeverity(random, template),
     isActive: true,
@@ -317,13 +387,17 @@ export interface GenerateWorldEventsInput {
 
 export function generateWorldEventsForDay(input: GenerateWorldEventsInput): WorldEvent[] {
   const { currentDay, seedKey } = input;
-  let events = expireOldWorldEvents(input.worldEvents, currentDay);
+  const nowMs = getEconomyNow();
+  let events = expireOldWorldEvents(input.worldEvents, currentDay, nowMs);
   const activeCount = events.filter((event) => event.isActive).length;
   if (activeCount >= MAX_ACTIVE_WORLD_EVENTS) {
     return events;
   }
 
-  const random = createSeededRandom(hashSeed(`${seedKey}:${currentDay}:spawn`));
+  // Ortak seed — şirket adından bağımsız global epoch
+  const random = createSeededRandom(
+    hashSeed(`global-market:${seedKey}:${currentDay}:spawn`),
+  );
   const newEventTarget = Math.floor(random() * (MAX_NEW_EVENTS_PER_DAY + 1));
   if (newEventTarget <= 0) {
     return events;
@@ -348,12 +422,19 @@ export function generateWorldEventsForDay(input: GenerateWorldEventsInput): Worl
 
     events = [
       ...events,
-      instantiateTemplate(template, currentDay, random, target.cityId, target.productId),
+      instantiateTemplate(
+        template,
+        currentDay,
+        random,
+        target.cityId,
+        target.productId,
+        nowMs,
+      ),
     ];
     created += 1;
   }
 
-  return refreshActiveFlags(events, currentDay);
+  return refreshActiveFlags(events, currentDay, nowMs);
 }
 
 export function processWorldEventsForDayRange(input: {

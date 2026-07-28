@@ -68,6 +68,7 @@ import type {
   TutorialState,
   TruckTransfer,
   Warehouse,
+  WarehouseStockTransfer,
 } from '../types/game';
 
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
@@ -113,6 +114,8 @@ export interface SaveGamePayload {
   activeDeliveries: Delivery[];
   activeTransfers?: TruckTransfer[];
   completedTransfers?: TruckTransfer[];
+  activeWarehouseStockTransfers?: WarehouseStockTransfer[];
+  completedWarehouseStockTransfers?: WarehouseStockTransfer[];
   globalEconomy: GlobalEconomy;
   marketNews: MarketNews[];
   eventLog: GameEvent[];
@@ -142,6 +145,12 @@ export interface SaveGamePayload {
   lastOfflineProgressAppliedAt?: number;
   offlineProgressVersion?: number;
   lastSimulationGameSpeed?: number;
+  lastProcessedEconomyAt?: number;
+  lastSeenMarketEpoch?: number;
+  cachedSnapshotVersion?: number;
+  cachedSnapshotGeneratedAt?: number;
+  appliedEconomyPeriodKeys?: string[];
+  lastEmergencyContractAtMs?: number;
 }
 
 export interface SaveBackupStatus {
@@ -397,6 +406,12 @@ export function createDefaultSaveFallbacks(
     completedTransfers: isArray(payload.completedTransfers)
       ? (payload.completedTransfers as TruckTransfer[])
       : [],
+    activeWarehouseStockTransfers: isArray(payload.activeWarehouseStockTransfers)
+      ? (payload.activeWarehouseStockTransfers as WarehouseStockTransfer[])
+      : [],
+    completedWarehouseStockTransfers: isArray(payload.completedWarehouseStockTransfers)
+      ? (payload.completedWarehouseStockTransfers as WarehouseStockTransfer[])
+      : [],
     globalEconomy: normalizeGlobalEconomy(payload.globalEconomy, { logFallback: true }),
     marketNews: isArray(payload.marketNews) ? (payload.marketNews as MarketNews[]) : [],
     eventLog: isArray(payload.eventLog) ? (payload.eventLog as GameEvent[]) : [],
@@ -536,6 +551,11 @@ export function normalizeSavePayload(
     activeDeliveries: normalizeActiveDeliveries(withFallbacks.activeDeliveries as Delivery[]),
     activeTransfers: withFallbacks.activeTransfers as TruckTransfer[],
     completedTransfers: withFallbacks.completedTransfers as TruckTransfer[],
+    activeWarehouseStockTransfers:
+      (withFallbacks.activeWarehouseStockTransfers as WarehouseStockTransfer[] | undefined) ?? [],
+    completedWarehouseStockTransfers:
+      (withFallbacks.completedWarehouseStockTransfers as WarehouseStockTransfer[] | undefined) ??
+      [],
     globalEconomy: normalizeGlobalEconomy(withFallbacks.globalEconomy, { logFallback: true }),
     marketNews: withFallbacks.marketNews as MarketNews[],
     eventLog: withFallbacks.eventLog as GameEvent[],
@@ -1062,6 +1082,10 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     activeDeliveries: structuredClone(state.activeDeliveries),
     activeTransfers: structuredClone(state.activeTransfers ?? []),
     completedTransfers: structuredClone(state.completedTransfers ?? []),
+    activeWarehouseStockTransfers: structuredClone(state.activeWarehouseStockTransfers ?? []),
+    completedWarehouseStockTransfers: structuredClone(
+      state.completedWarehouseStockTransfers ?? [],
+    ),
     globalEconomy: normalizeGlobalEconomy(state.globalEconomy),
     marketNews: structuredClone(state.marketNews),
     eventLog: structuredClone(state.eventLog),
@@ -1094,6 +1118,12 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastOfflineProgressAppliedAt: state.lastOfflineProgressAppliedAt,
     offlineProgressVersion: state.offlineProgressVersion ?? 1,
     lastSimulationGameSpeed: state.lastSimulationGameSpeed ?? state.gameSpeed ?? 1,
+    lastProcessedEconomyAt: state.lastProcessedEconomyAt,
+    lastSeenMarketEpoch: state.lastSeenMarketEpoch,
+    cachedSnapshotVersion: state.cachedSnapshotVersion,
+    cachedSnapshotGeneratedAt: state.cachedSnapshotGeneratedAt,
+    appliedEconomyPeriodKeys: state.appliedEconomyPeriodKeys?.slice(-48),
+    lastEmergencyContractAtMs: state.lastEmergencyContractAtMs,
   };
 }
 
@@ -1132,6 +1162,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     activeDeliveries: normalizeActiveDeliveries(payload.activeDeliveries),
     activeTransfers: payload.activeTransfers ?? [],
     completedTransfers: payload.completedTransfers ?? [],
+    activeWarehouseStockTransfers: payload.activeWarehouseStockTransfers ?? [],
+    completedWarehouseStockTransfers: payload.completedWarehouseStockTransfers ?? [],
     globalEconomy: normalizeGlobalEconomy(payload.globalEconomy),
     marketNews: payload.marketNews,
     eventLog: payload.eventLog,
@@ -1185,6 +1217,31 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       payload.lastSimulationGameSpeed > 0
         ? payload.lastSimulationGameSpeed
         : payload.gameSpeed ?? 1,
+    lastProcessedEconomyAt:
+      payload.lastProcessedEconomyAt != null && Number.isFinite(payload.lastProcessedEconomyAt)
+        ? payload.lastProcessedEconomyAt
+        : undefined,
+    lastSeenMarketEpoch:
+      payload.lastSeenMarketEpoch != null && Number.isFinite(payload.lastSeenMarketEpoch)
+        ? payload.lastSeenMarketEpoch
+        : undefined,
+    cachedSnapshotVersion:
+      payload.cachedSnapshotVersion != null && Number.isFinite(payload.cachedSnapshotVersion)
+        ? payload.cachedSnapshotVersion
+        : undefined,
+    cachedSnapshotGeneratedAt:
+      payload.cachedSnapshotGeneratedAt != null &&
+      Number.isFinite(payload.cachedSnapshotGeneratedAt)
+        ? payload.cachedSnapshotGeneratedAt
+        : undefined,
+    appliedEconomyPeriodKeys: Array.isArray(payload.appliedEconomyPeriodKeys)
+      ? payload.appliedEconomyPeriodKeys.filter((k): k is string => typeof k === 'string').slice(-48)
+      : undefined,
+    lastEmergencyContractAtMs:
+      payload.lastEmergencyContractAtMs != null &&
+      Number.isFinite(payload.lastEmergencyContractAtMs)
+        ? payload.lastEmergencyContractAtMs
+        : undefined,
   };
 }
 

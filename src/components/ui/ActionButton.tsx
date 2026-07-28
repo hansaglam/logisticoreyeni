@@ -18,6 +18,7 @@ interface ActionButtonProps {
   iconSize?: number;
   /** Mağaza kartları vb. için daha düşük profil buton */
   compact?: boolean;
+  accessibilityLabel?: string;
 }
 
 type ButtonPalette = {
@@ -73,6 +74,7 @@ export default function ActionButton({
   icon,
   iconSize = 16,
   compact = false,
+  accessibilityLabel,
 }: ActionButtonProps) {
   const palette = disabled ? disabledVariantStyles[variant] : variantStyles[variant];
 
@@ -81,6 +83,8 @@ export default function ActionButton({
       onPress={onPress}
       disabled={disabled}
       activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
       style={[
         styles.button,
         compact && styles.buttonCompact,

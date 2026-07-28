@@ -17,7 +17,8 @@ export const PRODUCTS: Product[] = [
     perishability: 0.9,
     storageRequirement: {
       preferredWarehouseTypes: ['cold'],
-      allowedWarehouseTypes: ['cold', 'standard'],
+      // V1: soğuk zincir ürünleri yalnız soğuk depoya girer (gizli bozulma yolu yok)
+      allowedWarehouseTypes: ['cold'],
       spoilageSensitive: true,
       spoilageRatePerDay: 0.08,
       valueLossRatePerDay: 0.1,
@@ -96,7 +97,8 @@ export const PRODUCTS: Product[] = [
     perishability: 0.75,
     storageRequirement: {
       preferredWarehouseTypes: ['cold'],
-      allowedWarehouseTypes: ['cold', 'standard'],
+      // V1: soğuk zincir ürünleri yalnız soğuk depoya girer
+      allowedWarehouseTypes: ['cold'],
       spoilageSensitive: true,
       spoilageRatePerDay: 0.06,
       valueLossRatePerDay: 0.08,

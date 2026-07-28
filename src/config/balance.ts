@@ -38,12 +38,25 @@ export const operatingCostBalance = {
   operationsPerDriver: 15,
   /** Haftalık kira süresi (oyun saati) */
   leaseDurationHours: 7 * 24,
-  /** Offline / büyük zaman atlamasında en fazla kesilecek gün sayısı */
+  /** Offline / büyük zaman atlamasında en fazla kesilecek 24s dönem sayısı */
   maxOfflineChargeDays: 3,
   /** advanceTime başına en fazla ledger kaydı */
   maxDailyCostEntriesPerAdvance: 1,
   /** Birden fazla gün kesildiğinde oyuncuya bildirim göster */
   notifyWhenMultipleDaysCharged: true,
+  /**
+   * Offline gerçek-zamanlı progress tavanı (saat).
+   * 24 saat = 24 * 60 * 60 * 1000 ms — saniye/dakika değil.
+   */
+  maxOfflineProgressHours: 24,
+  /** Soft-lock kurtarma: nakit bu eşiğin altındayken acil işler */
+  softLockCashThreshold: 0,
+  /** Acil operasyon sözleşmesi cooldown (gerçek ms) */
+  emergencyContractCooldownMs: 30 * 60 * 1000,
+  /** Aynı anda en fazla acil sözleşme */
+  maxEmergencyContracts: 2,
+  /** Development offline/contract audit logları */
+  economyAuditLogsEnabled: false,
 } as const;
 
 export function getMsPerGameHour(gameSpeed: number): number {
@@ -331,7 +344,10 @@ export const deliveryBalance = {
   defaultAverageSpeed: 60,
   /** UI yakıt tahmini: distanceKm × fuelPrice × oran */
   fuelCostEstimateMultiplier: 0.42,
-  /** Şoför maliyeti hesabında günlük maaş çarpanı (saatlik = maaş/24) */
+  /**
+   * Şoför allocated maliyet çarpanı (saatlik = maaş/24).
+   * Model A: yalnız bilgilendirici; nakit kesinti periodic salary ile yapılır.
+   */
   driverCostMultiplier: 1,
   /** UI bakım tahmini: distanceKm × oran × routeDifficulty */
   maintenanceCostPerKm: 0.35,
@@ -437,8 +453,13 @@ export const marketAlertBalance = {
 } as const;
 
 export const financeBalance = {
-  /** Zorunlu giderler sonrası izin verilen minimum nakit ($) */
+  /**
+   * Zorunlu giderler sonrası izin verilen minimum nakit ($).
+   * Bu tabana düşmek soft-lock riski yaratır — acil operasyon sözleşmeleri ile kurtarılır.
+   */
   minCashBalance: -5_000,
+  /** Soft-lock kurtarma eşiği — bu nakit altında acil işler açılır */
+  softLockRecoveryThreshold: 0,
   /** Kritik nakit eşiği ($) */
   lowCashThreshold: 5000,
   /** Net kâr negatifken sağlık cezası */

@@ -93,10 +93,51 @@ export function formatXpProgress(current: number | undefined | null, max: number
 }
 
 export function formatGameTimeCompact(hours: number | undefined | null): string {
-  const totalHours = Math.max(0, Math.floor(safeNumber(hours)));
-  const day = Math.floor(totalHours / 24) + 1;
-  const hourOfDay = totalHours % 24;
-  return `G${day} · ${hourOfDay.toString().padStart(2, '0')}:00`;
+  // Kişisel "G123" kaldırıldı — canlı ekonomi bağlamı
+  return formatLiveEconomyCompact();
+}
+
+export function formatRelativeMinutes(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) {
+    return `${minutes} dk`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  if (rem === 0) {
+    return `${hours} sa`;
+  }
+  return `${hours} sa ${rem} dk`;
+}
+
+/** Ana ekran / piyasa — canlı ekonomi özeti */
+export function formatLiveEconomyCompact(options?: {
+  lastSyncAtMs?: number | null;
+  nextMarketAtMs?: number | null;
+  nowMs?: number;
+  hasActiveEvent?: boolean;
+}): string {
+  const now = options?.nowMs ?? Date.now();
+  if (options?.hasActiveEvent) {
+    return 'Global olay aktif';
+  }
+  if (options?.nextMarketAtMs != null && Number.isFinite(options.nextMarketAtMs)) {
+    const until = Math.max(0, options.nextMarketAtMs - now);
+    return `Sonraki piyasa: ${formatRelativeMinutes(until)}`;
+  }
+  if (options?.lastSyncAtMs != null && Number.isFinite(options.lastSyncAtMs)) {
+    const ago = Math.max(0, now - options.lastSyncAtMs);
+    return `Son sync: ${formatRelativeMinutes(ago)}`;
+  }
+  return 'Piyasa güncel';
+}
+
+export function formatEventRemaining(endsAtMs: number, nowMs: number = Date.now()): string {
+  const remaining = Math.max(0, endsAtMs - nowMs);
+  if (remaining <= 0) {
+    return 'Sona erdi';
+  }
+  return `${formatRelativeMinutes(remaining)} kaldı`;
 }
 
 export function clampPriceChangePercent(changeRatio: number | undefined | null): number | null {

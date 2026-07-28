@@ -13,6 +13,7 @@ interface IconButtonProps {
   backgroundColor?: string;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }
 
 export default function IconButton({
@@ -23,12 +24,15 @@ export default function IconButton({
   backgroundColor = colors.cardSoft,
   disabled = false,
   style,
+  accessibilityLabel,
 }: IconButtonProps) {
   return (
     <TouchableOpacity
       onPress={onPress}
       disabled={disabled}
       activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       style={[
         styles.button,
         {

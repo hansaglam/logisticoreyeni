@@ -112,7 +112,7 @@ import {
 import { useGameStore } from '../store/gameStore';
 import {
   colors,
-  formatGameTimeCompact,
+  formatLiveEconomyCompact,
   formatMoney,
   formatUnitPrice,
   isFuelExpensiveForDisplay,
@@ -339,8 +339,8 @@ function MarketMetricStrip({
         accentColor={isFuelExpensiveForDisplay(fuelPrice) ? colors.danger : colors.accentAmber}
       />
       <MarketMetricTile
-        label="Zaman"
-        value={formatGameTimeCompact(currentTime)}
+        label="Piyasa"
+        value={formatLiveEconomyCompact()}
         icon="time"
         accentColor={colors.info}
       />

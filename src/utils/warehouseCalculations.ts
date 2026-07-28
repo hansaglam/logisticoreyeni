@@ -3,6 +3,10 @@
  */
 
 import { operatingCostBalance, tradingBalance, warehouseBalance } from '../config/balance';
+import {
+  getWarehouseUpgradeCapacityGain,
+  getWarehouseUpgradeRequiredLevel,
+} from '../config/levelConfig';
 import { CITIES_BY_ID } from '../data/cities';
 import { resolveWarehouseType } from '../simulation/warehouseStorage';
 import type { City, Warehouse, WarehouseType } from '../types/game';
@@ -155,4 +159,68 @@ export function estimateWarehouseUpgradeCost(
   return Math.round(
     warehouseBalance.baseOpenCost * warehouseBalance.upgradeCostRatio * modifier,
   );
+}
+
+export interface WarehouseUpgradePreview {
+  currentLevel: number;
+  nextLevel: number | null;
+  currentCapacity: number;
+  nextCapacity: number | null;
+  currentDailyCost: number;
+  nextDailyCost: number | null;
+  upgradePrice: number | null;
+  requiredPlayerLevel: number | null;
+}
+
+/** UI karşılaştırma paneli için yükseltme önizlemesi */
+export function getWarehouseUpgradePreview(
+  warehouse: WarehouseCostInput,
+  city?: Pick<City, 'warehouseCostModifier'>,
+): WarehouseUpgradePreview {
+  const currentLevel = getWarehouseUpgradeTier(warehouse);
+  const currentCapacity = getWarehouseCapacityTons(warehouse);
+  const currentDailyCost = resolveWarehouseDailyOperatingCost(warehouse, city);
+  const requiredPlayerLevel = getWarehouseUpgradeRequiredLevel(currentLevel);
+  const capacityGain = getWarehouseUpgradeCapacityGain(currentLevel);
+
+  if (requiredPlayerLevel == null || capacityGain <= 0) {
+    return {
+      currentLevel,
+      nextLevel: null,
+      currentCapacity,
+      nextCapacity: null,
+      currentDailyCost,
+      nextDailyCost: null,
+      upgradePrice: null,
+      requiredPlayerLevel: null,
+    };
+  }
+
+  const nextLevel = currentLevel + 1;
+  const nextCapacity = currentCapacity + capacityGain;
+  const nextDailyCost = resolveWarehouseDailyOperatingCost(
+    {
+      ...warehouse,
+      capacityTons: nextCapacity,
+      capacityTon: nextCapacity,
+      upgradeTier: nextLevel,
+      dailyOperatingCost: undefined,
+      rent: undefined,
+      electricityCost: undefined,
+      staffCost: undefined,
+    },
+    city,
+  );
+  const upgradePrice = estimateWarehouseUpgradeCost(city, warehouse.cityId);
+
+  return {
+    currentLevel,
+    nextLevel,
+    currentCapacity,
+    nextCapacity,
+    currentDailyCost,
+    nextDailyCost,
+    upgradePrice,
+    requiredPlayerLevel,
+  };
 }

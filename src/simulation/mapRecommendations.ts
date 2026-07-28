@@ -30,7 +30,6 @@ import { getContractRequiredLevel } from './leveling';
 import { calculateTradeProfit, getCityProductMarketPrice } from './trading';
 
 const FALLBACK_FUEL_RATE_PER_KM = deliveryBalance.fuelCostEstimateMultiplier;
-const FALLBACK_DRIVER_SALARY_PER_DAY = deliveryBalance.fallbackDriverSalaryPerDay;
 const WAREHOUSE_TRADE_MIN_PROFIT = 500;
 const MARKET_OPPORTUNITY_BONUS = 2500;
 const HIGH_RISK_LOW_PROFIT_THRESHOLD = 3000;
@@ -84,22 +83,19 @@ function getRiskMultiplier(riskLabel: string): number {
 function estimateContractProfit(
   contract: Contract,
   globalEconomy: GlobalEconomy,
-  truck?: Truck,
-  driver?: Driver,
+  _truck?: Truck,
+  _driver?: Driver,
 ): number {
   const route = findRoute(contract.originCityId, contract.destinationCityId);
   const routeDifficulty = route?.difficulty ?? 0.5;
-  const travelHours =
-    contract.distanceKm > 0 ? contract.distanceKm / deliveryBalance.defaultAverageSpeed : 0;
-  const salaryPerDay = driver?.salaryPerDay ?? FALLBACK_DRIVER_SALARY_PER_DAY;
   const riskLabel = getRiskLabel(contract);
 
+  // Model A: şoför maaşı periodic cost — iş kârı tahminine dahil edilmez
   const fuelCost = contract.distanceKm * globalEconomy.fuelPrice * FALLBACK_FUEL_RATE_PER_KM;
-  const driverCost = (salaryPerDay / 24) * travelHours;
   const maintenanceCost =
     contract.distanceKm * deliveryBalance.maintenanceCostPerKm * routeDifficulty;
   const riskReserve = contract.payment * getRiskMultiplier(riskLabel);
-  const totalExpense = fuelCost + driverCost + maintenanceCost + riskReserve;
+  const totalExpense = fuelCost + maintenanceCost + riskReserve;
 
   return contract.payment - totalExpense;
 }

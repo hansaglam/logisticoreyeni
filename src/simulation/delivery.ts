@@ -22,11 +22,12 @@ import type {
 } from '../types/game';
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
 import { debugConfig } from '../config/debug';
+import { calculateDeliveryFuelLiters, finalizeTruckFuelAfterJob, normalizeTruckFuel } from '../utils/truckFuel';
 import {
-  calculateDeliveryFuelLiters,
-  finalizeTruckFuelAfterJob,
-  normalizeTruckFuel,
-} from '../utils/truckFuel';
+  calculateCargoWeight,
+  calculateFuelUsed,
+  getContractCargoWeight,
+} from '../utils/deliveryMetrics';
 import { getSafeFuelPrice } from './economy';
 import { getCargoWeightCostMultiplier } from './contractEconomics';
 import { meetsDriverLevelRequirement } from './driverProgress';
@@ -96,6 +97,14 @@ export class DeliveryError extends Error {
 // ---------------------------------------------------------------------------
 
 export { clamp, randomBetween, randomIntBetween } from '../utils/math';
+export {
+  calculateCargoWeight,
+  calculateDriverFuelSkillMultiplier,
+  calculateFuelUsed,
+  calculateLoadWeightMultiplier,
+  calculateRouteFuelMultiplier,
+  getContractCargoWeight,
+} from '../utils/deliveryMetrics';
 
 /** Benzersiz teslimat kimliği üretir */
 export function createDeliveryId(contractId: string, startedAt: number, sequence: number): string {
@@ -104,32 +113,6 @@ export function createDeliveryId(contractId: string, startedAt: number, sequence
 
 /** Kamyon kondisyonu bu eşiğin altındaysa teslimat başlatılamaz */
 const MIN_TRUCK_CONDITION_FOR_DELIVERY = 30;
-
-/**
- * Sözleşmenin kamyon kapasitesi için geçerli yük ağırlığı (ton).
- * Tek kaynak: contract.cargoWeight
- */
-export function getContractCargoWeight(contract: Contract, product?: Product): number {
-  if (contract.cargoWeight != null && contract.cargoWeight > 0) {
-    return contract.cargoWeight;
-  }
-
-  // Eski kayıtlar: amount zaten ton cinsinden tutuluyordu
-  if (contract.amount != null && contract.amount > 0) {
-    return contract.amount;
-  }
-
-  const resolved = product ?? getProductByIdSafe(contract.productId);
-  return resolved?.weightPerUnit ?? 0;
-}
-
-/**
- * Taşınan kargo ağırlığını döndürür (ton).
- * @deprecated getContractCargoWeight kullanın — aynı değeri döndürür.
- */
-export function calculateCargoWeight(contract: Contract, product?: Product): number {
-  return getContractCargoWeight(contract, product);
-}
 
 /** Kamyon sözleşme yükünü taşıyabilir mi? (bağlı dorse dahil) */
 export function canTruckCarryContract(
@@ -865,12 +848,6 @@ export function formatCapacityExceededMessage(
   );
 }
 
-/** Yük doluluk çarpanı — ağır yük yakıt ve aşınmayı artırır */
-export function calculateLoadWeightMultiplier(cargoWeight: number, truckCapacity: number): number {
-  const safeCapacity = Math.max(truckCapacity, 1);
-  return 1 + (cargoWeight / safeCapacity) * 0.25;
-}
-
 // ---------------------------------------------------------------------------
 // Hız ve süre
 // ---------------------------------------------------------------------------
@@ -917,38 +894,6 @@ export function calculateTravelHours(
 // ---------------------------------------------------------------------------
 // Yakıt ve maliyet
 // ---------------------------------------------------------------------------
-
-/** Rota zorluğu yakıt çarpanı */
-export function calculateRouteFuelMultiplier(route: Route): number {
-  return 1 + route.difficulty * 0.45;
-}
-
-/** Şoför yakıt tasarrufu çarpanı — yüksek fuelSaving = daha az yakıt */
-export function calculateDriverFuelSkillMultiplier(driver: Driver): number {
-  return clamp(1 - driver.fuelSaving / 100, 0.35, 1);
-}
-
-/** Toplam yakıt tüketimini hesaplar (litre) */
-export function calculateFuelUsed(
-  contract: Contract,
-  truck: Truck,
-  driver: Driver,
-  route: Route,
-  product: Product,
-): number {
-  const cargoWeight = calculateCargoWeight(contract, product);
-  const loadMultiplier = calculateLoadWeightMultiplier(cargoWeight, truck.capacity);
-  const driverFuelMultiplier = calculateDriverFuelSkillMultiplier(driver);
-  const routeFuelMultiplier = calculateRouteFuelMultiplier(route);
-
-  return (
-    contract.distanceKm *
-    truck.fuelConsumptionPerKm *
-    loadMultiplier *
-    driverFuelMultiplier *
-    routeFuelMultiplier
-  );
-}
 
 /** Yakıt maliyetini hesaplar ($) */
 export function calculateFuelCost(

@@ -1,9 +1,5 @@
-/**
- * Ekonomi tick'inde kontrollü fiyat mikro hareketi — trend + volatilite + mean reversion.
- */
-
 import type { ProductId } from '../types/game';
-import { clampPrice } from './economy';
+import { clampPrice, roundMarketPrice } from './marketEconomyCalculations';
 import {
   createSeededRng,
   getMarketStateBias,
@@ -20,11 +16,6 @@ export interface MarketPriceTickInput {
   stockRatio: number;
   tickIndex: number;
   globalVolatility?: number;
-}
-
-function roundPrice(value: number): number {
-  if (!Number.isFinite(value)) return 0.01;
-  return Math.max(0.01, Math.round(value * 100) / 100);
 }
 
 /**
@@ -79,5 +70,5 @@ export function applyMarketPriceMicroMove(input: MarketPriceTickInput): number {
   const gapToTarget = (targetPrice - nextPrice) / targetPrice;
   nextPrice *= 1 + gapToTarget * 0.24;
 
-  return roundPrice(clampPrice(nextPrice, basePrice));
+  return roundMarketPrice(clampPrice(nextPrice, basePrice));
 }

@@ -3,7 +3,8 @@
  * Arka planda loop çalıştırmaz; oyuncu döndüğünde catch-up yapar.
  */
 
-import { realMsToGameHours } from '../config/balance';
+import { operatingCostBalance, realMsToGameHours } from '../config/balance';
+import { MS_PER_HOUR, MS_PER_MINUTE } from './economyClock';
 import {
   isDeliveryProgressComplete,
   updateDeliveryProgress,
@@ -19,11 +20,9 @@ import type {
 export { realMsToGameHours };
 
 export const OFFLINE_PROGRESS_VERSION = 1;
-export const MAX_OFFLINE_PROGRESS_HOURS = 12;
+/** Offline catch-up tavanı — saat (24 saat = 24 * 60 * 60 * 1000 ms). Saniye/dakika değil. */
+export const MAX_OFFLINE_PROGRESS_HOURS = operatingCostBalance.maxOfflineProgressHours;
 export const MIN_OFFLINE_PROGRESS_MINUTES = 5;
-
-const MS_PER_MINUTE = 60_000;
-const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 
 export interface OfflineElapsedResult {
   elapsedMs: number;

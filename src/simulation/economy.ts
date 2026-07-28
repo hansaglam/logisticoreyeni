@@ -17,17 +17,14 @@ import { PRODUCT_IDS } from '../data/products';
 import { economyBalance } from '../config/balance';
 import { clamp, randomBetween } from '../utils/math';
 import { appendProductPriceHistory } from '../utils/priceHistoryCore';
+import { clampPrice } from './marketEconomyCalculations';
 import { applyMarketPriceMicroMove } from './marketPriceTick';
+
+export { clampPrice } from './marketEconomyCalculations';
 
 // ---------------------------------------------------------------------------
 // Sabitler
 // ---------------------------------------------------------------------------
-
-/** Fiyat taban fiyatın en fazla %40 altına inebilir */
-const PRICE_FLOOR_RATIO = 0.4;
-
-/** Fiyat taban fiyatın en fazla %250 üstüne çıkabilir */
-const PRICE_CEILING_RATIO = 2.5;
 
 /** scarcityMultiplier alt/üst sınırları */
 const SCARCITY_MIN = 0.4;
@@ -62,6 +59,52 @@ export function getBaseFuelPrice(): number {
     return base;
   }
   return 1.72;
+}
+
+/** Canonical yakıt fiyat aralığı ($/L) — bozuk save / cents / çift ×100 koruması */
+export const FUEL_PRICE_MIN_PER_LITER = 0.8;
+export const FUEL_PRICE_MAX_PER_LITER = 5.0;
+
+function resolveFuelSanitizeFallback(fallback?: number | null): number {
+  const base = getBaseFuelPrice();
+  if (fallback == null || !Number.isFinite(fallback) || fallback <= 0) {
+    return base;
+  }
+  // last-valid yalnızca güvenli aralıktaysa kullanılır; asla MAX'a clamp edilmez
+  if (fallback < FUEL_PRICE_MIN_PER_LITER || fallback > FUEL_PRICE_MAX_PER_LITER) {
+    return base;
+  }
+  return Math.round(fallback * 100) / 100;
+}
+
+/**
+ * Internal birim: dolar/litre — $1,529/L gibi değerleri düzeltir.
+ * Bozuk değerleri FUEL_PRICE_MAX'a (5.0) sabitlemez; canonical base veya last-valid kullanır.
+ */
+export function sanitizeFuelPricePerLiter(
+  raw: number | undefined | null,
+  options?: { fallback?: number | null },
+): number {
+  const safeFallback = resolveFuelSanitizeFallback(options?.fallback);
+  if (raw == null || !Number.isFinite(raw) || raw <= 0) {
+    return safeFallback;
+  }
+  let value = raw;
+  // Cents karışımı veya ×100 hatası — yalnızca aşırı büyük değerlerde ölçekle
+  if (value > FUEL_PRICE_MAX_PER_LITER * 10) {
+    value = value / 100;
+  }
+  if (value > FUEL_PRICE_MAX_PER_LITER * 10) {
+    value = value / 100;
+  }
+  if (
+    !Number.isFinite(value) ||
+    value < FUEL_PRICE_MIN_PER_LITER ||
+    value > FUEL_PRICE_MAX_PER_LITER
+  ) {
+    return safeFallback;
+  }
+  return Math.round(value * 100) / 100;
 }
 
 export function createDefaultGlobalEconomy(): GlobalEconomy {
@@ -132,7 +175,9 @@ export function normalizeGlobalEconomy(
 
   const raw = rawGlobalEconomy as Record<string, unknown>;
   const normalized: GlobalEconomy = {
-    fuelPrice: safeEconomyNumber(raw.fuelPrice, defaults.fuelPrice),
+    fuelPrice: sanitizeFuelPricePerLiter(
+      safeEconomyNumber(raw.fuelPrice, defaults.fuelPrice),
+    ),
     globalDemandMultiplier: safeEconomyNumber(
       raw.globalDemandMultiplier,
       defaults.globalDemandMultiplier,
@@ -157,7 +202,9 @@ export function normalizeGlobalEconomy(
 }
 
 export function getSafeFuelPrice(globalEconomy?: GlobalEconomy | null): number {
-  return safeEconomyNumber(globalEconomy?.fuelPrice, getBaseFuelPrice());
+  return sanitizeFuelPricePerLiter(
+    safeEconomyNumber(globalEconomy?.fuelPrice, getBaseFuelPrice()),
+  );
 }
 
 export function getSafeGlobalEconomy(globalEconomy?: GlobalEconomy | null): GlobalEconomy {
@@ -184,13 +231,6 @@ export function toProductMarket(state: CityProductState): ProductMarket {
     ...state,
     currentPrice: state.currentPrice ?? state.basePrice,
   };
-}
-
-/** Fiyatı basePrice tabanlı min/max sınırlarına oturtur */
-export function clampPrice(price: number, basePrice: number): number {
-  const floor = basePrice * PRICE_FLOOR_RATIO;
-  const ceiling = basePrice * PRICE_CEILING_RATIO;
-  return clamp(price, floor, ceiling);
 }
 
 /** Stok / hedef stok oranını güvenli aralıkta hesaplar */

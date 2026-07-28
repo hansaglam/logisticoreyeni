@@ -42,6 +42,7 @@ import type {
   OnboardingScreenId,
   OnboardingStepId,
   Warehouse,
+  WarehouseStockTransfer,
   WarehouseType,
 } from '../types/game';
 import type { AdRewardGrantContext, AdRewardSlotId } from '../types/monetization';
@@ -79,6 +80,7 @@ import {
   createDefaultGlobalEconomy,
   getSafeFuelPrice,
   normalizeGlobalEconomy,
+  sanitizeFuelPricePerLiter,
   updateAllCitiesEconomy,
 } from '../simulation/economy';
 import { randomBetween, randomIntBetween } from '../utils/math';
@@ -204,11 +206,27 @@ import {
 } from '../simulation/trading';
 import {
   buildStorageWarningForPurchase,
-  evaluateStorageSuitability,
   getWarehouseTypeLabel,
   processWarehouseQualityDegradation,
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
+import {
+  formatWarehouseLimitReachedMessage,
+  resolveStorageBlockResult,
+  tradeFail,
+  tradeOk,
+} from '../simulation/warehouseActions';
+import {
+  appendCompletedWarehouseStockTransfer,
+  applyDestinationCompletion,
+  applySourceReservationOnStart,
+  createWarehouseStockTransfer,
+  getWarehouseStockTransferReasonMessage,
+  markWarehouseStockTransferSettled,
+  rollbackStockToSource,
+  updateWarehouseStockTransferProgress,
+  validateWarehouseStockTransfer,
+} from '../simulation/warehouseStockTransfer';
 import {
   completeTutorialStepState,
   dismissTutorialStepState,
@@ -225,7 +243,7 @@ import {
 import type { MissionProgressResult } from '../utils/missionProgress';
 import {
   calculateWarehouseDailyOperatingCostBreakdown,
-  estimateWarehouseUpgradeCost,
+  getWarehouseUpgradePreview,
   resolveWarehouseDailyOperatingCost,
 } from '../utils/warehouseCalculations';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
@@ -295,9 +313,17 @@ import {
   applyWorldEventImpactToProductPrice,
   gameDayFromTime,
   getActiveWorldEvents,
+  getSharedWorldTimeIndex,
   processWorldEventsForDayRange,
   forceCreateWorldEvent,
 } from '../simulation/worldEvents';
+import { ensureEmergencyContractsForSoftLock } from '../simulation/softLockRecovery';
+import { getEconomyNow, getMarketEpoch } from '../simulation/economyClock';
+import {
+  buildPeriodicCostDeductions,
+  logOfflineEconomyAudit,
+} from '../simulation/periodicCosts';
+import { buildGlobalEconomySnapshot } from '../simulation/globalMarketSnapshot';
 import type { WorldEventType } from '../types/game';
 import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
 import { getMissionById } from '../config/missions';
@@ -339,10 +365,8 @@ import {
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
 import {
   canOpenMoreWarehouses,
+  getCityUnlockLevel,
   getMaxWarehousesForLevel,
-  getNextLevelForMoreWarehouses,
-  getWarehouseUpgradeCapacityGain,
-  getWarehouseUpgradeRequiredLevel,
   isWarehouseCityUnlocked,
   levelConfig,
 } from '../config/levelConfig';
@@ -411,6 +435,7 @@ let gameInitPromise: Promise<void> | null = null;
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
 const completedDeliveryNotificationIds = new Set<string>();
 const completedTransferNotificationIds = new Set<string>();
+const settledWarehouseStockTransferIds = new Set<string>();
 
 let offlineProgressionActive = false;
 let offlineProgressApplying = false;
@@ -1253,6 +1278,8 @@ export function createInitialGameState(): StoreGameState {
     activeDeliveries: [],
     activeTransfers: [],
     completedTransfers: [],
+    activeWarehouseStockTransfers: [],
+    completedWarehouseStockTransfers: [],
     globalEconomy,
     marketNews: [
       {
@@ -1396,8 +1423,20 @@ export interface GameStore extends StoreGameState {
   startDeliveryAutoAssign: (contractId: string) => StartDeliveryResult;
   updateDeliveries: (hoursPassed: number) => void;
   updateTransfers: (hoursPassed: number) => void;
+  updateWarehouseStockTransfers: (hoursPassed: number) => void;
   startTruckTransfer: (params: { truckId: string; toCityId: string; driverId?: string }) => StartTruckTransferResult;
   completeTruckTransferById: (transferId: string) => void;
+  startWarehouseStockTransfer: (params: {
+    sourceWarehouseId: string;
+    destinationWarehouseId: string;
+    productId: ProductId;
+    quantityTons: number;
+    truckId?: string;
+    driverId?: string;
+  }) => TradeActionResult;
+  completeWarehouseStockTransferById: (transferId: string) => void;
+  cancelWarehouseStockTransfer: (transferId: string) => TradeActionResult;
+  failWarehouseStockTransfer: (transferId: string, reason?: string) => TradeActionResult;
   completeDeliveryById: (deliveryId: string) => void;
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => void;
   buyTruck: (catalogId: string) => TradeActionResult;
@@ -2865,6 +2904,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().checkMarketPriceAlerts({ sendLocal: false });
       get().advanceOnboardingProgress();
       get().syncRetentionProgress();
+
+      // Soft-lock recovery — bozuk save / -$5000 sonrası alınabilir acil işler
+      const loaded = get();
+      const softLock = ensureEmergencyContractsForSoftLock({
+        money: loaded.player.money ?? 0,
+        contracts: loaded.contracts ?? [],
+        trucks: loaded.player.trucks ?? [],
+        products: loaded.products ?? [],
+        routes: loaded.routes ?? [],
+        globalEconomy: normalizeGlobalEconomy(loaded.globalEconomy),
+        currentTime: loaded.currentTime,
+        homeCityId: loaded.player.homeCityId,
+        lastEmergencyContractAtMs: loaded.lastEmergencyContractAtMs,
+        nowMs: getEconomyNow(),
+      });
+      if (softLock.added.length > 0) {
+        set({
+          contracts: softLock.contracts,
+          lastEmergencyContractAtMs: getEconomyNow(),
+          globalEconomy: normalizeGlobalEconomy(loaded.globalEconomy),
+        });
+        get().markSaveDirty();
+      }
+
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Kayıt yüklenemedi.';
@@ -3071,7 +3134,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   recordLastSeenRealTimeMs: () => {
-    const nowMs = Date.now();
+    const nowMs = getEconomyNow();
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(get());
     set({ lastSeenRealTimeMs: nowMs, lastSimulatedRealTimeMs: nowMs });
     persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
@@ -3087,7 +3150,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const state = get();
-    const nowMs = Date.now();
+    const nowMs = getEconomyNow();
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
     const baselineMs = resolveOfflineBaselineMs({
       stateLastSimulated: state.lastSimulatedRealTimeMs,
@@ -3100,6 +3163,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({
         lastSeenRealTimeMs: nowMs,
         lastSimulatedRealTimeMs: nowMs,
+        lastProcessedEconomyAt: state.lastProcessedEconomyAt ?? nowMs,
+        lastSeenMarketEpoch: getMarketEpoch(nowMs),
         offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
       });
       persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
@@ -3152,6 +3217,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       );
     }
 
+    const cashBefore = state.player.money ?? 0;
+
     try {
       if (gameHours > 0) {
         get().advanceTime(gameHours);
@@ -3160,6 +3227,69 @@ export const useGameStore = create<GameStore>((set, get) => ({
       offlineProgressionActive = false;
       offlineProgressApplying = false;
     }
+
+    const midState = get();
+    const periodic = buildPeriodicCostDeductions({
+      player: midState.player,
+      economyNowMs: nowMs,
+      lastProcessedEconomyAt: midState.lastProcessedEconomyAt ?? baselineMs,
+      alreadyAppliedPeriodKeys: midState.appliedEconomyPeriodKeys ?? [],
+      maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+    });
+    const mergedPeriodKeys = [
+      ...(midState.appliedEconomyPeriodKeys ?? []),
+      ...periodic.periodKeysApplied,
+    ].slice(-48);
+
+    logOfflineEconomyAudit({
+      trustedNow: nowMs,
+      lastProcessedAt: midState.lastProcessedEconomyAt ?? baselineMs,
+      elapsedHours: elapsed.elapsedMs / 3_600_000,
+      cappedHours: elapsed.appliedMs / 3_600_000,
+      periods: periodic.periodsElapsed,
+      deductions: periodic.deductions,
+      cashBefore,
+      cashAfter: midState.player.money ?? 0,
+      newlyProcessedUntil: periodic.newlyProcessedUntil,
+    });
+
+    const softLock = ensureEmergencyContractsForSoftLock({
+      money: midState.player.money ?? 0,
+      contracts: midState.contracts ?? [],
+      trucks: midState.player.trucks ?? [],
+      products: midState.products ?? [],
+      routes: midState.routes ?? [],
+      globalEconomy: normalizeGlobalEconomy(midState.globalEconomy),
+      currentTime: midState.currentTime,
+      homeCityId: midState.player.homeCityId,
+      lastEmergencyContractAtMs: midState.lastEmergencyContractAtMs,
+      nowMs,
+    });
+
+    const snapshot = buildGlobalEconomySnapshot({
+      globalEconomy: midState.globalEconomy,
+      cities: midState.cities,
+      activeEvents: getActiveWorldEvents(
+        midState.worldEvents ?? [],
+        getSharedWorldTimeIndex(nowMs),
+      ),
+      nowMs,
+    });
+
+    set({
+      contracts: softLock.contracts,
+      lastProcessedEconomyAt: Math.max(
+        midState.lastProcessedEconomyAt ?? 0,
+        periodic.newlyProcessedUntil,
+        nowMs,
+      ),
+      appliedEconomyPeriodKeys: mergedPeriodKeys,
+      lastSeenMarketEpoch: snapshot.epoch,
+      cachedSnapshotVersion: snapshot.version,
+      cachedSnapshotGeneratedAt: snapshot.generatedAt,
+      lastEmergencyContractAtMs:
+        softLock.added.length > 0 ? nowMs : midState.lastEmergencyContractAtMs,
+    });
 
     const afterState = get();
     const collector = offlineProgressCollector ?? {
@@ -3209,7 +3339,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
 
-    if (shouldShowOfflineSummary(summary)) {
+    if (shouldShowOfflineSummary(summary) || softLock.added.length > 0) {
       get().markSaveDirty();
       get().autoSave('offline_progress');
     }
@@ -3226,7 +3356,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
     if (!offlineProgressionActive) {
-      const nowMs = Date.now();
+      const nowMs = getEconomyNow();
       set({ lastSimulationGameSpeed: simulationGameSpeed, lastSimulatedRealTimeMs: nowMs });
       schedulePersistOfflineMeta(nowMs, simulationGameSpeed);
     }
@@ -3237,6 +3367,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     get().updateDeliveries(hours);
     get().updateTransfers(hours);
+    get().updateWarehouseStockTransfers(hours);
 
     const stateAfterDelivery = get();
     const qualityResult = processWarehouseQualityDegradation(
@@ -3559,23 +3690,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const safeEconomy = normalizeGlobalEconomy(state.globalEconomy);
     const previousFuelPrice = getSafeFuelPrice(safeEconomy);
     const previousCities = citiesToRecord(state.cities);
-    const tickDay = gameDayFromTime(state.lastEconomyTickTime || state.currentTime);
-
+    // Ortak market epoch — kişisel oyun günü değil
+    const tickEpoch = getSharedWorldTimeIndex();
     const lastGeneratedDay = state.lastWorldEventGeneratedDay ?? 0;
     const worldEventResult =
-      tickDay > lastGeneratedDay
+      tickEpoch > lastGeneratedDay
         ? processWorldEventsForDayRange({
             worldEvents: state.worldEvents ?? [],
             fromDay: lastGeneratedDay + 1,
-            toDay: tickDay,
-            seedKey: state.player.companyName,
+            toDay: tickEpoch,
+            seedKey: 'global',
           })
         : {
-            worldEvents: getActiveWorldEvents(state.worldEvents ?? [], tickDay),
+            worldEvents: getActiveWorldEvents(state.worldEvents ?? [], tickEpoch),
             lastWorldEventGeneratedDay: lastGeneratedDay,
           };
 
-    const activeWorldEvents = getActiveWorldEvents(worldEventResult.worldEvents, tickDay);
+    const activeWorldEvents = getActiveWorldEvents(worldEventResult.worldEvents, tickEpoch);
 
     // Şehir ekonomilerini güncelle
     const updatedCitiesRecord = updateAllCitiesEconomy(
@@ -3583,13 +3714,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       safeEconomy,
     );
 
-    // Yakıt fiyatını küçük rastgele değişimle güncelle
+    // Yakıt fiyatını küçük rastgele değişimle güncelle (sanitize korumalı)
     const fuelChange = randomBetween(-0.06, 0.08);
     let newFuelPrice = Math.max(0.8, previousFuelPrice * (1 + fuelChange));
     newFuelPrice = applyWorldEventImpactToFuelPrice(newFuelPrice, activeWorldEvents);
     const globalEconomy = normalizeGlobalEconomy({
       ...safeEconomy,
-      fuelPrice: Number(newFuelPrice.toFixed(2)),
+      fuelPrice: sanitizeFuelPricePerLiter(Number(newFuelPrice.toFixed(2))),
     });
 
     const expiredContracts = expireOldContracts(state.contracts, state.currentTime);
@@ -3627,7 +3758,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const newActiveEvents = activeWorldEvents.filter(
-      (event) => event.startsAtDay === tickDay,
+      (event) =>
+        event.globalEpoch === tickEpoch ||
+        event.startsAtDay === tickEpoch,
     );
     for (const worldEvent of newActiveEvents) {
       news.push({
@@ -6128,19 +6261,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const city = state.cities.find((candidate) => candidate.id === cityId);
     if (!city) {
-      return {
-        success: false,
-        errorCode: 'CITY_NOT_FOUND',
-        message: 'Şehir bulunamadı.',
-      };
+      return tradeFail('invalid-city', 'Şehir bulunamadı.', 'CITY_NOT_FOUND');
     }
 
     const resolvedType = resolveWarehouseType(warehouseType);
     if (resolvedType !== 'standard' && resolvedType !== 'cold') {
-      return {
-        success: false,
-        message: 'Bu depo tipi henüz kullanılamıyor.',
-      };
+      return tradeFail('incompatible-warehouse', 'Bu depo tipi henüz kullanılamıyor.');
     }
 
     if (
@@ -6149,29 +6275,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
           warehouse.cityId === cityId && resolveWarehouseType(warehouse.warehouseType) === resolvedType,
       )
     ) {
-      return {
-        success: false,
-        message: `Bu şehirde zaten ${getWarehouseTypeLabel(resolvedType).toLowerCase()} var.`,
-      };
+      return tradeFail(
+        'duplicate-warehouse',
+        `Bu şehirde zaten ${getWarehouseTypeLabel(resolvedType).toLowerCase()} var.`,
+      );
     }
 
     const warehouses = state.player.warehouses ?? [];
     const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
 
     if (!isWarehouseCityUnlocked(cityId, playerLevel)) {
-      const requiredCityLevel = levelConfig.warehouseUnlocks.extendedCityUnlockLevel;
-      return {
-        success: false,
-        message: `Bu şehirde depo açmak için Level ${requiredCityLevel} gerekli.`,
-      };
+      const requiredCityLevel = getCityUnlockLevel(cityId);
+      return tradeFail(
+        'level-required',
+        `Bu şehirde depo açmak için Level ${requiredCityLevel} gerekli.`,
+      );
     }
 
     if (!canOpenMoreWarehouses(playerLevel, warehouses.length)) {
-      const nextLevel = getNextLevelForMoreWarehouses(warehouses.length);
-      return {
-        success: false,
-        message: `Yeni depo açmak için Level ${nextLevel} gerekiyor.`,
-      };
+      const maxWarehouses = getMaxWarehousesForLevel(playerLevel);
+      return tradeFail(
+        'warehouse-limit-reached',
+        formatWarehouseLimitReachedMessage(warehouses.length, maxWarehouses),
+      );
     }
 
     const costModifier = city.warehouseCostModifier ?? 1;
@@ -6181,11 +6307,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const typeLabel = getWarehouseTypeLabel(resolvedType);
 
     if (!canAffordVoluntaryPurchase(state.player.money, openCost)) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_FUNDS',
-        message: `${typeLabel} açmak için ${formatNotificationMoney(openCost)} gerekli.`,
-      };
+      return tradeFail(
+        'insufficient-funds',
+        `${typeLabel} açmak için ${formatNotificationMoney(openCost)} gerekli.`,
+        'INSUFFICIENT_FUNDS',
+      );
     }
 
     const warehouseBase = {
@@ -6238,73 +6364,56 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().addCompanyXp(levelBalance.xpRewards.warehouseOpen, 'warehouse_open');
     get().markSaveDirty();
     get().autoSave('warehouse');
-    return {
-      success: true,
-      message: `${city.name} · ${typeLabel} açıldı.`,
-    };
+    return tradeOk(`${city.name} · ${typeLabel} açıldı.`);
   },
-
   upgradeWarehouse: (warehouseId: string): TradeActionResult => {
     const state = get();
     const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
     if (!warehouse) {
-      return {
-        success: false,
-        errorCode: 'WAREHOUSE_NOT_FOUND',
-        message: 'Depo bulunamadı.',
-      };
+      return tradeFail('warehouse-required', 'Depo bulunamadı.', 'WAREHOUSE_NOT_FOUND');
     }
 
     const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-    const currentTier = warehouse.upgradeTier ?? 1;
-    const requiredLevel = getWarehouseUpgradeRequiredLevel(currentTier);
-
-    if (requiredLevel == null) {
-      return {
-        success: false,
-        message: 'Depo maksimum kapasitede.',
-      };
-    }
-
-    if (playerLevel < requiredLevel) {
-      return {
-        success: false,
-        message: `Bu yükseltme için Level ${requiredLevel} gerekli.`,
-      };
-    }
-
-    const capacityIncrease = getWarehouseUpgradeCapacityGain(currentTier);
-    if (capacityIncrease <= 0) {
-      return {
-        success: false,
-        message: 'Depo maksimum kapasitede.',
-      };
-    }
-
     const city = state.cities.find((candidate) => candidate.id === warehouse.cityId);
-    const costModifier = city?.warehouseCostModifier ?? 1;
-    const upgradeCost = estimateWarehouseUpgradeCost(city, warehouse.cityId);
+    const preview = getWarehouseUpgradePreview(warehouse, city);
+
+    if (preview.nextLevel == null || preview.upgradePrice == null || preview.nextCapacity == null) {
+      return tradeFail('upgrade-maxed', 'Depo maksimum kapasitede.');
+    }
+
+    if (preview.requiredPlayerLevel != null && playerLevel < preview.requiredPlayerLevel) {
+      return tradeFail(
+        'level-required',
+        `Bu yükseltme için Level ${preview.requiredPlayerLevel} gerekli.`,
+      );
+    }
+
+    const capacityIncrease = preview.nextCapacity - preview.currentCapacity;
+    if (capacityIncrease <= 0) {
+      return tradeFail('upgrade-maxed', 'Depo maksimum kapasitede.');
+    }
+
+    const upgradeCost = preview.upgradePrice;
 
     if (!canAffordVoluntaryPurchase(state.player.money, upgradeCost)) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_FUNDS',
-        message: `Depo yükseltmek için ${formatNotificationMoney(upgradeCost)} gerekli.`,
-      };
+      return tradeFail(
+        'insufficient-funds',
+        `Depo yükseltmek için ${formatNotificationMoney(upgradeCost)} gerekli.`,
+        'INSUFFICIENT_FUNDS',
+      );
     }
 
     const cityName = city?.name ?? warehouse.cityId;
-    const nextTier = currentTier + 1;
+    const nextTier = preview.nextLevel;
     const upgradeLabel = nextTier === 2 ? 'Orta depo' : 'Büyük depo';
     const updatedWarehouses = state.player.warehouses.map((candidate) => {
       if (candidate.id !== warehouse.id) {
         return candidate;
       }
-      const nextCapacity = candidate.capacityTons + capacityIncrease;
       const upgraded = {
         ...candidate,
-        capacityTons: nextCapacity,
-        capacityTon: nextCapacity,
+        capacityTons: preview.nextCapacity!,
+        capacityTon: preview.nextCapacity!,
         upgradeTier: nextTier,
       };
       return {
@@ -6342,10 +6451,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().addCompanyXp(levelBalance.xpRewards.warehouseUpgrade, 'warehouse_upgrade');
     get().markSaveDirty();
     get().autoSave('warehouse');
-    return {
-      success: true,
-      message: `${cityName} deposu yükseltildi (+${capacityIncrease} ton, ${upgradeLabel}).`,
-    };
+    return tradeOk(`${cityName} deposu yükseltildi (+${capacityIncrease} ton, ${upgradeLabel}).`);
   },
 
   buyProductForWarehouse: ({
@@ -6358,87 +6464,71 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const quantityError = validateTradeQuantity(quantity);
     if (quantityError) {
-      return {
-        success: false,
-        errorCode: 'INVALID_QUANTITY',
-        message: quantityError,
-      };
+      return tradeFail('invalid-quantity', quantityError, 'INVALID_QUANTITY');
     }
 
     const city = state.cities.find((candidate) => candidate.id === cityId);
     if (!city) {
-      return {
-        success: false,
-        errorCode: 'CITY_NOT_FOUND',
-        message: 'Şehir bulunamadı.',
-      };
+      return tradeFail('invalid-city', 'Şehir bulunamadı.', 'CITY_NOT_FOUND');
     }
 
     if (!warehouseId) {
-      return {
-        success: false,
-        errorCode: 'WAREHOUSE_NOT_FOUND',
-        message: 'Satın alma için bir depo seçmelisin.',
-      };
+      return tradeFail(
+        'warehouse-required',
+        'Satın alma için bir depo seçmelisin.',
+        'WAREHOUSE_NOT_FOUND',
+      );
     }
 
     const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
 
     if (!warehouse || warehouse.cityId !== cityId) {
-      return {
-        success: false,
-        errorCode: 'WAREHOUSE_NOT_FOUND',
-        message: 'Seçilen depo bu şehirde bulunamadı.',
-      };
+      return tradeFail(
+        'warehouse-required',
+        'Seçilen depo bu şehirde bulunamadı.',
+        'WAREHOUSE_NOT_FOUND',
+      );
     }
 
     const product = getProductByIdSafe(productId);
     if (!product) {
-      return {
-        success: false,
-        errorCode: 'PRODUCT_NOT_FOUND',
-        message: 'Ürün bulunamadı.',
-      };
+      return tradeFail('product-not-found', 'Ürün bulunamadı.', 'PRODUCT_NOT_FOUND');
+    }
+
+    const storageBlock = resolveStorageBlockResult(product, warehouse.warehouseType);
+    if (storageBlock) {
+      return storageBlock;
     }
 
     const warehouseType = resolveWarehouseType(warehouse.warehouseType);
-    const storageSuitability = evaluateStorageSuitability(product, warehouseType);
-    if (storageSuitability === 'blocked') {
-      return {
-        success: false,
-        errorCode: 'INCOMPATIBLE_WAREHOUSE',
-        message: 'Bu ürün bu depo tipinde saklanamaz.',
-      };
-    }
-
     const unitPrice = getEffectiveTradeUnitPrice(state, city, productId);
     const cityStock = getCityProductStock(city, productId);
     const normalizedWarehouse = normalizeWarehouse(warehouse, state.currentTime);
     const freeCapacity = getWarehouseFreeCapacityTon(normalizedWarehouse);
 
     if (quantity > cityStock) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_STOCK',
-        message: `Şehir stoğu yetersiz. Mevcut: ${cityStock.toFixed(1)} ton.`,
-      };
+      return tradeFail(
+        'insufficient-market-stock',
+        `Şehir stoğu yetersiz. Mevcut: ${cityStock.toFixed(1)} ton.`,
+        'INSUFFICIENT_STOCK',
+      );
     }
 
     if (quantity > freeCapacity) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_CAPACITY',
-        message: `Depo kapasitesi yetersiz. Boş alan: ${freeCapacity.toFixed(1)} ton.`,
-      };
+      return tradeFail(
+        'warehouse-full',
+        `Depo kapasitesi yetersiz. Boş alan: ${freeCapacity.toFixed(1)} ton.`,
+        'INSUFFICIENT_CAPACITY',
+      );
     }
 
     const totalCost = calculateTradeBuyCost(unitPrice, quantity);
     if (!canAffordVoluntaryPurchase(state.player.money, totalCost)) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_FUNDS',
-        message: `Yetersiz nakit. Gerekli: ${formatNotificationMoney(totalCost)}`,
-      };
+      return tradeFail(
+        'insufficient-funds',
+        `Yetersiz nakit. Gerekli: ${formatNotificationMoney(totalCost)}`,
+        'INSUFFICIENT_FUNDS',
+      );
     }
 
     const storageWarning = buildStorageWarningForPurchase(product, warehouseType);
@@ -6533,10 +6623,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       type: 'warehouse_stock_changed',
       totalStockTons: usedCapacityTon,
     });
-    return {
-      success: true,
-      message: `${quantity.toFixed(1)} ton ${productName} depoya eklendi.`,
-    };
+    return tradeOk(`${quantity.toFixed(1)} ton ${productName} depoya eklendi.`);
   },
 
   sellProductFromWarehouse: ({
@@ -6548,29 +6635,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const quantityError = validateTradeQuantity(quantity);
     if (quantityError) {
-      return {
-        success: false,
-        errorCode: 'INVALID_QUANTITY',
-        message: quantityError,
-      };
+      return tradeFail('invalid-quantity', quantityError, 'INVALID_QUANTITY');
     }
 
     const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
     if (!warehouse) {
-      return {
-        success: false,
-        errorCode: 'WAREHOUSE_NOT_FOUND',
-        message: 'Depo bulunamadı.',
-      };
+      return tradeFail('warehouse-required', 'Depo bulunamadı.', 'WAREHOUSE_NOT_FOUND');
     }
 
     const city = state.cities.find((candidate) => candidate.id === warehouse.cityId);
     if (!city) {
-      return {
-        success: false,
-        errorCode: 'CITY_NOT_FOUND',
-        message: 'Depo şehri bulunamadı.',
-      };
+      return tradeFail('invalid-city', 'Depo şehri bulunamadı.', 'CITY_NOT_FOUND');
     }
 
     const normalizedWarehouse = normalizeWarehouse(warehouse);
@@ -6578,19 +6653,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const availableQuantity = inventoryItem?.quantity ?? 0;
 
     if (!inventoryItem || availableQuantity <= 0) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_INVENTORY',
-        message: 'Depoda satılacak ürün yok.',
-      };
+      return tradeFail(
+        'insufficient-inventory',
+        'Depoda satılacak ürün yok.',
+        'INSUFFICIENT_INVENTORY',
+      );
     }
 
     if (quantity > availableQuantity) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_INVENTORY',
-        message: `Depoda yalnızca ${availableQuantity.toFixed(1)} ton var.`,
-      };
+      return tradeFail(
+        'insufficient-inventory',
+        `Depoda yalnızca ${availableQuantity.toFixed(1)} ton var.`,
+        'INSUFFICIENT_INVENTORY',
+      );
     }
 
     const unitPrice = getEffectiveTradeUnitPrice(state, city, productId);
@@ -6633,7 +6708,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         category: 'trade_sale',
         amount: revenue,
         description: `${productName} · Net kâr: ${formatNotificationMoney(profit)} (işlem gideri dahil)`,
-        meta: { productId, profit: Math.max(0, profit) },
+        meta: { productId, profit },
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -6680,10 +6755,389 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     get().markSaveDirty();
     get().autoSave('warehouse');
+    return tradeOk(`${quantity.toFixed(1)} ton ${productName} satıldı.`);
+  },
+
+  updateWarehouseStockTransfers: (hoursPassed: number) => {
+    if (hoursPassed <= 0) {
+      return;
+    }
+
+    const state = get();
+    const transfersToComplete: string[] = [];
+
+    const updatedTransfers = (state.activeWarehouseStockTransfers ?? []).map((transfer) => {
+      if (transfer.status !== 'active' && transfer.status !== 'pending') {
+        return transfer;
+      }
+      const updated = updateWarehouseStockTransferProgress(transfer, hoursPassed);
+      if (updated.progress >= 1) {
+        transfersToComplete.push(updated.id);
+      }
+      return updated;
+    });
+
+    set({ activeWarehouseStockTransfers: updatedTransfers });
+
+    for (const transferId of transfersToComplete) {
+      const current = get().activeWarehouseStockTransfers.find((item) => item.id === transferId);
+      if (
+        current &&
+        (current.status === 'active' || current.status === 'pending') &&
+        current.progress >= 1 &&
+        current.settledAt == null
+      ) {
+        get().completeWarehouseStockTransferById(transferId);
+      }
+    }
+  },
+
+  startWarehouseStockTransfer: ({
+    sourceWarehouseId,
+    destinationWarehouseId,
+    productId,
+    quantityTons,
+    truckId,
+    driverId,
+  }): TradeActionResult => {
+    const state = get();
+    const validation = validateWarehouseStockTransfer({
+      sourceWarehouseId,
+      destinationWarehouseId,
+      productId,
+      quantityTons,
+      truckId,
+      driverId,
+      warehouses: state.player.warehouses,
+      trucks: state.player.trucks,
+      trailers: state.player.trailers ?? [],
+      drivers: state.player.drivers,
+      routes: state.routes,
+      activeWarehouseStockTransfers: state.activeWarehouseStockTransfers,
+      activeTransfers: state.activeTransfers,
+      activeDeliveries: state.activeDeliveries,
+      homeCityId: state.player.homeCityId,
+      playerMoney: state.player.money,
+      fuelPrice: state.globalEconomy?.fuelPrice ?? economyBalance.baseFuelPrice,
+    });
+
+    if (!validation.success || !validation.validated) {
+      return validation;
+    }
+
+    const transfer = createWarehouseStockTransfer({
+      validated: validation.validated,
+      currentTime: state.currentTime,
+      sequence: (state.activeWarehouseStockTransfers ?? []).length + 1,
+    });
+
+    const reservedWarehouses = applySourceReservationOnStart(
+      state.player.warehouses,
+      transfer,
+      state.currentTime,
+    );
+
+    const truck = validation.validated.truck;
+    const driver = validation.validated.driver;
+
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === truck.id ? { ...candidate, status: 'transferring' as const } : candidate,
+    );
+    const updatedDrivers = state.player.drivers.map((candidate) =>
+      candidate.id === driver.id
+        ? { ...candidate, status: 'driving' as const, assignedTruckId: truck.id }
+        : candidate,
+    );
+    const updatedTrailers = syncTrailersWithTruckLocation(
+      state.player.trailers ?? [],
+      truck.id,
+      transfer.sourceCityId,
+      'transferring',
+    );
+
+    const productName = getProductDisplayName(productId);
+    const routeLabel = `${getCityName(transfer.sourceCityId)} → ${getCityName(transfer.destinationCityId)}`;
+
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - transfer.totalCost,
+        warehouses: reservedWarehouses,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+        trailers: updatedTrailers,
+      },
+      activeWarehouseStockTransfers: [
+        ...(state.activeWarehouseStockTransfers ?? []),
+        transfer,
+      ],
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'truck_transfer',
+        amount: transfer.totalCost,
+        description: `Stok transferi · ${productName} · ${routeLabel}`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'warehouse',
+          title: 'Stok transferi başladı',
+          message: `${quantityTons.toFixed(1)} ton ${productName}, ${routeLabel} rotasına çıktı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    get().markSaveDirty();
+    get().autoSave('transfer_started');
     return {
-      success: true,
-      message: `${quantity.toFixed(1)} ton ${productName} satıldı.`,
+      ...tradeOk('Stok transferi başladı.'),
+      transferId: transfer.id,
     };
+  },
+
+  completeWarehouseStockTransferById: (transferId: string) => {
+    const state = get();
+    if (settledWarehouseStockTransferIds.has(transferId)) {
+      return;
+    }
+
+    const transfer = (state.activeWarehouseStockTransfers ?? []).find(
+      (candidate) => candidate.id === transferId,
+    );
+    if (!transfer || transfer.settledAt != null) {
+      return;
+    }
+    if (transfer.status !== 'active' && transfer.status !== 'pending') {
+      return;
+    }
+    if (transfer.progress < 1) {
+      return;
+    }
+
+    settledWarehouseStockTransferIds.add(transferId);
+
+    const completed = markWarehouseStockTransferSettled(transfer, 'completed', state.currentTime);
+    const warehouses = applyDestinationCompletion(
+      state.player.warehouses,
+      completed,
+      state.currentTime,
+    );
+
+    const updatedTrucks = state.player.trucks.map((candidate) => {
+      if (candidate.id !== transfer.truckId) {
+        return candidate;
+      }
+      const arrived = {
+        ...candidate,
+        status: 'idle' as const,
+        currentCityId: transfer.destinationCityId,
+      };
+      return finalizeTruckFuelAfterJob({
+        truck: arrived,
+        fuelLitersAtStart: transfer.fuelLitersAtStart,
+        fuelLitersTotal: transfer.fuelLitersTotal,
+        distanceKm: transfer.routeDistanceKm,
+      });
+    });
+
+    const updatedDrivers = state.player.drivers.map((candidate) =>
+      candidate.id === transfer.driverId
+        ? {
+            ...candidate,
+            status: 'idle' as const,
+            currentCityId: transfer.destinationCityId,
+            assignedTruckId: transfer.truckId,
+          }
+        : candidate,
+    );
+
+    const updatedTrailers = syncTrailersWithTruckLocation(
+      state.player.trailers ?? [],
+      transfer.truckId,
+      transfer.destinationCityId,
+      'idle',
+    );
+
+    const productName = getProductDisplayName(transfer.productId);
+
+    set({
+      player: {
+        ...state.player,
+        warehouses,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+        trailers: updatedTrailers,
+      },
+      activeWarehouseStockTransfers: (state.activeWarehouseStockTransfers ?? []).filter(
+        (candidate) => candidate.id !== transferId,
+      ),
+      completedWarehouseStockTransfers: appendCompletedWarehouseStockTransfer(
+        state.completedWarehouseStockTransfers,
+        completed,
+      ),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          id: `event_wst_complete_${transferId}`,
+          time: state.currentTime,
+          type: 'warehouse',
+          title: 'Stok transferi tamamlandı',
+          message: `${transfer.quantityTons.toFixed(1)} ton ${productName}, ${getCityName(transfer.destinationCityId)} deposuna ulaştı.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+
+    get().markSaveDirty();
+    get().autoSave('transfer_completed');
+  },
+
+  cancelWarehouseStockTransfer: (transferId: string): TradeActionResult => {
+    const state = get();
+    const transfer = (state.activeWarehouseStockTransfers ?? []).find(
+      (candidate) => candidate.id === transferId,
+    );
+    if (!transfer) {
+      return tradeFail('warehouse-required', 'Transfer bulunamadı.');
+    }
+    if (transfer.settledAt != null || settledWarehouseStockTransferIds.has(transferId)) {
+      return tradeFail('transfer-in-progress', 'Transfer zaten kapatıldı.');
+    }
+    if (transfer.status !== 'active' && transfer.status !== 'pending') {
+      return tradeFail('transfer-in-progress', 'Transfer iptal edilemez.');
+    }
+
+    settledWarehouseStockTransferIds.add(transferId);
+    const cancelled = markWarehouseStockTransferSettled(transfer, 'cancelled', state.currentTime);
+    const warehouses = rollbackStockToSource(
+      state.player.warehouses,
+      cancelled,
+      state.currentTime,
+    );
+
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === transfer.truckId
+        ? {
+            ...candidate,
+            status: 'idle' as const,
+            currentCityId: transfer.sourceCityId,
+          }
+        : candidate,
+    );
+    const updatedDrivers = state.player.drivers.map((candidate) =>
+      candidate.id === transfer.driverId
+        ? { ...candidate, status: 'idle' as const, currentCityId: transfer.sourceCityId }
+        : candidate,
+    );
+    const updatedTrailers = syncTrailersWithTruckLocation(
+      state.player.trailers ?? [],
+      transfer.truckId,
+      transfer.sourceCityId,
+      'idle',
+    );
+
+    set({
+      player: {
+        ...state.player,
+        warehouses,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+        trailers: updatedTrailers,
+      },
+      activeWarehouseStockTransfers: (state.activeWarehouseStockTransfers ?? []).filter(
+        (candidate) => candidate.id !== transferId,
+      ),
+      completedWarehouseStockTransfers: appendCompletedWarehouseStockTransfer(
+        state.completedWarehouseStockTransfers,
+        cancelled,
+      ),
+    });
+
+    get().markSaveDirty();
+    get().autoSave('transfer_completed');
+    return tradeOk('Transfer iptal edildi; stok kaynak depoya döndü.');
+  },
+
+  failWarehouseStockTransfer: (transferId: string, reason?: string): TradeActionResult => {
+    const state = get();
+    const transfer = (state.activeWarehouseStockTransfers ?? []).find(
+      (candidate) => candidate.id === transferId,
+    );
+    if (!transfer) {
+      return tradeFail('warehouse-required', 'Transfer bulunamadı.');
+    }
+    if (transfer.settledAt != null || settledWarehouseStockTransferIds.has(transferId)) {
+      return tradeOk('Transfer zaten sonuçlandı.');
+    }
+
+    settledWarehouseStockTransferIds.add(transferId);
+    const failed = markWarehouseStockTransferSettled(
+      transfer,
+      'failed',
+      state.currentTime,
+      reason ?? 'failed',
+    );
+    const warehouses = rollbackStockToSource(state.player.warehouses, failed, state.currentTime);
+
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === transfer.truckId
+        ? {
+            ...candidate,
+            status: 'idle' as const,
+            currentCityId: transfer.sourceCityId,
+          }
+        : candidate,
+    );
+    const updatedDrivers = state.player.drivers.map((candidate) =>
+      candidate.id === transfer.driverId
+        ? { ...candidate, status: 'idle' as const, currentCityId: transfer.sourceCityId }
+        : candidate,
+    );
+    const updatedTrailers = syncTrailersWithTruckLocation(
+      state.player.trailers ?? [],
+      transfer.truckId,
+      transfer.sourceCityId,
+      'idle',
+    );
+
+    set({
+      player: {
+        ...state.player,
+        warehouses,
+        trucks: updatedTrucks,
+        drivers: updatedDrivers,
+        trailers: updatedTrailers,
+      },
+      activeWarehouseStockTransfers: (state.activeWarehouseStockTransfers ?? []).filter(
+        (candidate) => candidate.id !== transferId,
+      ),
+      completedWarehouseStockTransfers: appendCompletedWarehouseStockTransfer(
+        state.completedWarehouseStockTransfers,
+        failed,
+      ),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'warehouse',
+          title: 'Stok transferi başarısız',
+          message:
+            reason ??
+            getWarehouseStockTransferReasonMessage('transfer-in-progress'),
+          importance: 'high',
+        },
+        state.currentTime,
+      ),
+    });
+
+    get().markSaveDirty();
+    get().autoSave('transfer_completed');
+    return tradeOk('Transfer geri alındı; stok kaynak depoya döndü.');
   },
 
   refuelOrUpdateFuelPrice: () => {

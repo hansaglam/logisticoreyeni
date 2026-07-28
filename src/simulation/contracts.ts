@@ -64,8 +64,10 @@ import { getMarketContractMatchScore } from '../utils/marketContractMatch';
 import {
   calculateBalancedContractPayment,
   estimateContractTripCostBreakdown,
+  isContractEconomicallyViable,
   type ContractPaymentInput,
 } from './contractEconomics';
+import { sanitizeFuelPricePerLiter } from './economy';
 
 // ---------------------------------------------------------------------------
 // Yapılandırma sabitleri
@@ -869,6 +871,10 @@ export function generateContractForProduct(
 
   const urgency = calculateUrgency(destinationMarket);
   const requiredLevel = getRequiredLevelForTonnage(amount);
+  const safeEconomy = {
+    ...globalEconomy,
+    fuelPrice: sanitizeFuelPricePerLiter(globalEconomy.fuelPrice),
+  };
 
   const payment = calculateContractPayment({
     amount,
@@ -877,10 +883,25 @@ export function generateContractForProduct(
     destinationMarket,
     route,
     urgency,
-    globalEconomy,
+    globalEconomy: safeEconomy,
     requiredLevel,
     isMarketOpportunity,
   });
+
+  const paymentInput = {
+    amount,
+    product,
+    originMarket,
+    destinationMarket,
+    route,
+    urgency,
+    globalEconomy: safeEconomy,
+    requiredLevel,
+    isMarketOpportunity,
+  };
+  if (!isContractEconomicallyViable(paymentInput) && !isMarketOpportunity) {
+    return null;
+  }
 
   const deadlineHours = calculateDeadlineHours({ route, product, urgency });
 

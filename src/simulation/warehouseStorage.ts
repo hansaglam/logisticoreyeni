@@ -126,6 +126,24 @@ export function clampQuality(value: number): number {
   );
 }
 
+/** Ağırlıklı ortalama alış fiyatı — sıfır miktar ve NaN güvenli */
+export function computeWeightedAverageBuyPrice(
+  oldQuantity: number,
+  oldAverage: number,
+  addedQuantity: number,
+  purchasePrice: number,
+): number {
+  const oldQ = Number.isFinite(oldQuantity) ? Math.max(0, oldQuantity) : 0;
+  const addQ = Number.isFinite(addedQuantity) ? Math.max(0, addedQuantity) : 0;
+  const oldAvg = Number.isFinite(oldAverage) ? Math.max(0, oldAverage) : 0;
+  const price = Number.isFinite(purchasePrice) ? Math.max(0, purchasePrice) : 0;
+  const total = oldQ + addQ;
+  if (total <= 0) {
+    return price;
+  }
+  return (oldQ * oldAvg + addQ * price) / total;
+}
+
 export function getInventoryQuality(item: WarehouseInventoryItem | undefined): number {
   return clampQuality(item?.quality ?? warehouseStorageBalance.maxQuality);
 }
@@ -244,10 +262,12 @@ export function mergeInventoryOnBuyWithQuality(
 
   const existing = next[index];
   const totalQuantity = existing.quantity + quantity;
-  const weightedAverage =
-    totalQuantity > 0
-      ? (existing.quantity * existing.averageBuyPrice + quantity * unitPrice) / totalQuantity
-      : unitPrice;
+  const weightedAverage = computeWeightedAverageBuyPrice(
+    existing.quantity,
+    existing.averageBuyPrice,
+    quantity,
+    unitPrice,
+  );
   const weightedQuality =
     totalQuantity > 0
       ? (existing.quantity * getInventoryQuality(existing) +

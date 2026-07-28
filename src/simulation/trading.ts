@@ -14,6 +14,7 @@ import {
   mergeInventoryOnBuyWithQuality,
   normalizeInventoryItem,
   resolveWarehouseType,
+  computeWeightedAverageBuyPrice,
 } from './warehouseStorage';
 import type {
   City,
@@ -24,7 +25,7 @@ import type {
 } from '../types/game';
 import { toProductMarket } from './economy';
 
-// TODO: Add warehouse-to-warehouse cargo transfer in V2.
+// Depolar arası stok transferi V2 — henüz yok (yalnız kamyon empty transfer var).
 
 /** Eski save kayıtlarındaki legacy storedProducts alanını okur */
 function readLegacyStoredProducts(
@@ -111,9 +112,15 @@ export function getWarehouseUsedCapacityTon(warehouse: Warehouse): number {
 }
 
 export function getWarehouseFreeCapacityTon(warehouse: Warehouse): number {
-  const capacity = warehouse.capacityTons ?? 0;
+  const capacity =
+    warehouse.capacityTons ??
+    warehouse.capacityTon ??
+    tradingBalance.defaultWarehouseCapacityTons;
   return Math.max(0, capacity - getWarehouseUsedCapacityTon(warehouse));
 }
+
+export { computeWeightedAverageBuyPrice } from './warehouseStorage';
+
 
 export function getWarehouseInventoryItem(
   warehouse: Warehouse,
@@ -251,10 +258,12 @@ export function mergeInventoryOnBuy(
 
   const existing = next[index];
   const totalQuantity = existing.quantity + quantity;
-  const weightedAverage =
-    totalQuantity > 0
-      ? (existing.quantity * existing.averageBuyPrice + quantity * unitPrice) / totalQuantity
-      : unitPrice;
+  const weightedAverage = computeWeightedAverageBuyPrice(
+    existing.quantity,
+    existing.averageBuyPrice,
+    quantity,
+    unitPrice,
+  );
 
   next[index] = {
     productId,

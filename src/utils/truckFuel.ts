@@ -7,7 +7,7 @@ import {
   calculateDriverFuelSkillMultiplier,
   calculateFuelUsed,
   calculateRouteFuelMultiplier,
-} from '../simulation/delivery';
+} from './deliveryMetrics';
 import { clamp } from './math';
 
 function hashTruckId(truckId: string): number {

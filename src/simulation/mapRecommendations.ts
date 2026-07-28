@@ -133,14 +133,33 @@ function scoreEligibleContract(
   drivers: Driver[],
   globalEconomy: GlobalEconomy,
   marketOpportunities: MarketOpportunity[],
+  trailers?: import('../types/game').Trailer[],
+  playerReputation = 0,
+  homeCityId?: string,
 ): ScoredContract | null {
-  const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
+  const availability = getContractAvailability(
+    contract,
+    trucks,
+    drivers,
+    playerLevel,
+    0,
+    playerReputation,
+    homeCityId,
+    trailers,
+  );
   if (!availability.canStart) {
     return null;
   }
 
   const product = getProductByIdSafe(contract.productId);
-  const suggestedTruck = selectIdleTruckForContract(trucks, contract, product ?? undefined);
+  const suggestedTruck = selectIdleTruckForContract(
+    trucks,
+    contract,
+    product ?? undefined,
+    0,
+    homeCityId,
+    trailers,
+  );
   const suggestedDriver = getIdleDrivers(drivers)[0];
   const estimatedProfit = estimateContractProfit(
     contract,
@@ -182,6 +201,9 @@ function findBestEligibleContract(
   drivers: Driver[],
   globalEconomy: GlobalEconomy,
   marketOpportunities: MarketOpportunity[],
+  trailers?: import('../types/game').Trailer[],
+  playerReputation = 0,
+  homeCityId?: string,
 ): ScoredContract | null {
   let best: ScoredContract | null = null;
 
@@ -196,6 +218,9 @@ function findBestEligibleContract(
       drivers,
       globalEconomy,
       marketOpportunities,
+      trailers,
+      playerReputation,
+      homeCityId,
     );
     if (!scored) continue;
     if (!best || scored.score > best.score) {
@@ -262,6 +287,9 @@ function hasCapacityBlockedContracts(
   playerLevel: number,
   trucks: Truck[],
   drivers: Driver[],
+  trailers?: import('../types/game').Trailer[],
+  playerReputation = 0,
+  homeCityId?: string,
 ): boolean {
   const idleTrucks = getIdleTrucks(trucks);
   const idleDrivers = getIdleDrivers(drivers);
@@ -273,7 +301,16 @@ function hasCapacityBlockedContracts(
     if (contract.status !== 'available') return false;
     if (getContractRequiredLevel(contract) > playerLevel) return false;
 
-    const availability = getContractAvailability(contract, trucks, drivers, playerLevel);
+    const availability = getContractAvailability(
+      contract,
+      trucks,
+      drivers,
+      playerLevel,
+      0,
+      playerReputation,
+      homeCityId,
+      trailers,
+    );
     return (
       availability.reason === 'NO_TRUCK_WITH_CAPACITY' ||
       availability.reason === 'CAPACITY_INSUFFICIENT'
@@ -286,12 +323,15 @@ export function getRecommendedMapAction(params: GetRecommendedMapActionParams): 
   const player = params.player;
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
+  const trailers = player?.trailers ?? [];
   const warehouses = player?.warehouses ?? [];
   const activeDeliveries = params.activeDeliveries ?? [];
   const marketOpportunities = params.marketOpportunities ?? [];
   const cities = params.cities ?? [];
   const globalEconomy = params.globalEconomy;
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const playerReputation = player?.reputation ?? 0;
+  const homeCityId = player?.homeCityId;
 
   const availableContracts = contracts.filter((contract) => contract.status === 'available');
   const idleTrucks = getIdleTrucks(trucks);
@@ -308,6 +348,9 @@ export function getRecommendedMapAction(params: GetRecommendedMapActionParams): 
       drivers,
       globalEconomy,
       marketOpportunities,
+      trailers,
+      playerReputation,
+      homeCityId,
     );
 
     if (bestContract) {
@@ -368,7 +411,15 @@ export function getRecommendedMapAction(params: GetRecommendedMapActionParams): 
 
   if (
     globalEconomy &&
-    hasCapacityBlockedContracts(availableContracts, playerLevel, trucks, drivers)
+    hasCapacityBlockedContracts(
+      availableContracts,
+      playerLevel,
+      trucks,
+      drivers,
+      trailers,
+      playerReputation,
+      homeCityId,
+    )
   ) {
     return {
       type: 'fleet_upgrade',

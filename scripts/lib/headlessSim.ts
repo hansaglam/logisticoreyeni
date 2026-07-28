@@ -522,6 +522,7 @@ export function startDeliveryHeadless(state: HeadlessSimState, contractId: strin
     globalEconomy: state.globalEconomy,
     currentTime: state.currentTime,
     sequence: state.deliverySequence + 1,
+    trailers: state.player.trailers ?? [],
   });
 
   if (!canAffordVoluntaryPurchase(state.player.money, delivery.fuelCost)) return state;

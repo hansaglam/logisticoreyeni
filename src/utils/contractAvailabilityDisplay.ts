@@ -95,7 +95,7 @@ export function buildContractAvailabilityMessage(
     case 'NO_IDLE_TRUCKS':
       return 'Bu işi almak için şu anda uygun boştaki kamyonun yok. Mevcut teslimatların bitmesini bekleyebilir veya yeni kamyon satın alabilirsin.';
     case 'NO_DRIVERS':
-      return 'Bu işi almak için önce bir şoför işe almalısın.';
+      return 'Uygun kamyon var ancak atanmış şoförü yok.';
     case 'NO_IDLE_DRIVERS':
       return 'Tüm şoförlerin şu anda görevde. Yeni bir şoför işe alabilir veya mevcut teslimatın bitmesini bekleyebilirsin.';
     case 'INVALID_ORIGIN_CITY':
@@ -123,10 +123,18 @@ export function buildContractAvailabilityMessage(
       }
       if (capacityKind === 'heavy_haul_required') {
         const systemMax = getSystemMaxFleetCapacityTons();
+        const fleetMax = context.maxFleetCapacityTons ?? 0;
+        if (fleetMax + 0.001 >= cargoWeight) {
+          return (
+            `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
+            `${fromCityName} şehrindeki müsait kamyonlar şu an bu yükü taşıyamıyor. ` +
+            'Dorse bağlayabilir veya daha yüksek kapasiteli bir kamyonu bu şehre yönlendirebilirsin.'
+          );
+        }
         return (
           `Bu iş ${cargoWeight.toFixed(1)} ton yük gerektiriyor. ` +
-          `Mevcut filondaki en yüksek kapasite ${formatTonCapacity(context.maxFleetCapacityTons ?? 0)}. ` +
-          `Kamyon + dorse ile en fazla ${formatTonCapacity(systemMax)} taşınabilir; bu yük için uygun dorse veya daha güçlü filo gerekir.`
+          `Mevcut filondaki en yüksek etkili kapasite ${formatTonCapacity(fleetMax)}. ` +
+          `En az ${cargoWeight.toFixed(1)} t etkili kapasite gerekli (kamyon + dorse; sistem üst sınırı ${formatTonCapacity(systemMax)}).`
         );
       }
       if (capacityKind === 'trailer_required') {

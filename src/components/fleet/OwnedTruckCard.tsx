@@ -16,6 +16,7 @@ import { GameIcon, ProgressBar, StatusBadge } from '../ui';
 import type { StatusBadgeVariant } from '../ui';
 import { calculateTruckRepairCost, resolveTruckCityId } from '../../simulation/delivery';
 import { getTruckEffectiveCapacityTons } from '../../simulation/capacity';
+import { getAttachedTrailerForTruck } from '../../simulation/trailerAttachment';
 import { isActiveLeasedTruck, getTruckWeeklyLeaseCost } from '../../simulation/dailyOperatingCosts';
 import { MAX_UPGRADE_LEVEL } from '../../simulation/truckUpgrades';
 import {
@@ -144,7 +145,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const upgradeLevel = truck.upgradeLevel ?? 0;
   const capacityTons = getTruckEffectiveCapacityTons(truck, trailers);
   const capacityLabel = `${Math.round(capacityTons)} t`;
-  const attachedTrailer = trailers.find((item) => item.attachedTruckId === truck.id);
+  const attachedTrailer = getAttachedTrailerForTruck(truck.id, trailers);
 
   const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
     monetization,

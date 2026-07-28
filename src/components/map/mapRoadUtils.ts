@@ -1,7 +1,14 @@
+import { getResolvedMapDebugFlags } from '../../config/debug';
+import { debugLog, debugWarn } from '../../utils/debugLog';
 import {
+  buildMapRoadSegmentCheck,
+  findDuplicateMapRoadCityPairs,
+  findDuplicateMapRoadSegmentIds,
   isMapRoadSegmentRoutable,
+  isValidMapRoadPoint,
   MAP_ROAD_SEGMENTS,
   type MapRoadPoint,
+  type MapRoadSegment,
 } from '../../data/mapRoadNetwork';
 import { normalizeCityId } from '../../data/networkPositions';
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
@@ -150,71 +157,278 @@ export function shortestAngleDelta(from: number, to: number): number {
   return delta;
 }
 
-export function getDirectRoadSegment(fromCityId: string, toCityId: string): MapRoadPoint[] | null {
+export function findDirectRoadSegment(
+  fromCityId: string,
+  toCityId: string,
+): MapRoadSegment | null {
   const from = normalizeCityId(fromCityId);
   const to = normalizeCityId(toCityId);
 
-  const segment = MAP_ROAD_SEGMENTS.find(
+  const matches = MAP_ROAD_SEGMENTS.filter(
     (item) =>
       (normalizeCityId(item.fromCityId) === from && normalizeCityId(item.toCityId) === to) ||
       (normalizeCityId(item.fromCityId) === to && normalizeCityId(item.toCityId) === from),
   );
 
-  if (!segment || !isMapRoadSegmentRoutable(segment)) return null;
+  if (matches.length === 0) {
+    return null;
+  }
 
-  const forward = normalizeCityId(segment.fromCityId) === from;
-  return forward ? [...segment.points] : [...segment.points].reverse();
+  const routable = matches.filter(isMapRoadSegmentRoutable);
+  if (routable.length === 0) {
+    return null;
+  }
+
+  if (routable.length > 1) {
+    debugWarn(getResolvedMapDebugFlags().roadWarnings, '[map-road] duplicate city pair segments — using first routable', {
+      from,
+      to,
+      segmentIds: routable.map((segment) => segment.id),
+    });
+  }
+
+  return routable[0] ?? null;
+}
+
+export function orientRoadSegmentPoints(
+  segment: MapRoadSegment,
+  fromCityId: string,
+  toCityId: string,
+): MapRoadPoint[] {
+  const from = normalizeCityId(fromCityId);
+  const to = normalizeCityId(toCityId);
+  const segFrom = normalizeCityId(segment.fromCityId);
+  const segTo = normalizeCityId(segment.toCityId);
+  const points = [...segment.points];
+
+  if (points.length < 2) {
+    return points;
+  }
+
+  if (from === segFrom && to === segTo) {
+    return points;
+  }
+  if (from === segTo && to === segFrom) {
+    return [...points].reverse();
+  }
+
+  return orientSegmentPointsByDistance(points, from, to);
+}
+
+function orientSegmentPointsByDistance(
+  points: MapRoadPoint[],
+  fromCityId: string,
+  toCityId: string,
+): MapRoadPoint[] {
+  const from = normalizeCityId(fromCityId);
+  const to = normalizeCityId(toCityId);
+
+  const forwardScore =
+    pointDistanceToCity(points[0], from) + pointDistanceToCity(points[points.length - 1], to);
+  const reverseScore =
+    pointDistanceToCity(points[points.length - 1], from) + pointDistanceToCity(points[0], to);
+
+  if (reverseScore < forwardScore) {
+    return [...points].reverse();
+  }
+
+  return points;
+}
+
+/** @deprecated Use orientRoadSegmentPoints — kept for existing imports. */
+export function orientSegmentPoints(
+  segment: MapRoadSegment,
+  fromCityId: string,
+  toCityId: string,
+): MapRoadPoint[] {
+  return orientRoadSegmentPoints(segment, fromCityId, toCityId);
+}
+
+/** Normalize mesafe — şehir merkezi ile yol bağlantı noktası arası tolerans */
+export const MAP_ROAD_ENDPOINT_TOLERANCE = 0.18;
+
+function pointDistanceToCity(point: MapRoadPoint, cityId: string): number {
+  const city = getWorldMapCityPosition(cityId);
+  if (!city) {
+    return Infinity;
+  }
+  return pointDistance(point, city);
+}
+
+export interface MapRoadEndpointCheck {
+  segmentId: string;
+  fromCityId: string;
+  toCityId: string;
+  firstPoint: MapRoadPoint;
+  lastPoint: MapRoadPoint;
+  fromCityPosition: MapRoadPoint | null;
+  toCityPosition: MapRoadPoint | null;
+  firstDistanceToFromCity: number;
+  lastDistanceToToCity: number;
+}
+
+export function buildMapRoadEndpointCheck(
+  segment: MapRoadSegment,
+  orientedPoints: MapRoadPoint[],
+): MapRoadEndpointCheck {
+  const fromCityPosition = getWorldMapCityPosition(segment.fromCityId);
+  const toCityPosition = getWorldMapCityPosition(segment.toCityId);
+  const firstPoint = orientedPoints[0];
+  const lastPoint = orientedPoints[orientedPoints.length - 1];
+
+  return {
+    segmentId: segment.id,
+    fromCityId: segment.fromCityId,
+    toCityId: segment.toCityId,
+    firstPoint,
+    lastPoint,
+    fromCityPosition: fromCityPosition
+      ? { x: fromCityPosition.x, y: fromCityPosition.y }
+      : null,
+    toCityPosition: toCityPosition ? { x: toCityPosition.x, y: toCityPosition.y } : null,
+    firstDistanceToFromCity: pointDistanceToCity(firstPoint, segment.fromCityId),
+    lastDistanceToToCity: pointDistanceToCity(lastPoint, segment.toCityId),
+  };
+}
+
+export function logMapRoadEndpointCheck(
+  segment: MapRoadSegment,
+  orientedPoints: MapRoadPoint[],
+  routeFromCityId: string,
+  routeToCityId: string,
+): MapRoadEndpointCheck {
+  const check = buildMapRoadEndpointCheck(segment, orientedPoints);
+  if (typeof __DEV__ === 'undefined' || !__DEV__) {
+    return check;
+  }
+
+  const flags = getResolvedMapDebugFlags();
+  const from = normalizeCityId(routeFromCityId);
+  const to = normalizeCityId(routeToCityId);
+  const routeOrientedCheck = {
+    ...check,
+    routeFromCityId: from,
+    routeToCityId: to,
+    firstDistanceToRouteFrom: pointDistanceToCity(check.firstPoint, from),
+    lastDistanceToRouteTo: pointDistanceToCity(check.lastPoint, to),
+  };
+
+  debugLog(flags.roadEndpoint, '[map-road-endpoint-check]', routeOrientedCheck);
+
+  if (
+    routeOrientedCheck.firstDistanceToRouteFrom > MAP_ROAD_ENDPOINT_TOLERANCE ||
+    routeOrientedCheck.lastDistanceToRouteTo > MAP_ROAD_ENDPOINT_TOLERANCE
+  ) {
+    debugWarn(flags.roadWarnings, '[map-road] segment endpoint mismatch', routeOrientedCheck);
+  }
+
+  return check;
+}
+
+export function getDirectRoadSegment(fromCityId: string, toCityId: string): MapRoadPoint[] | null {
+  const segment = findDirectRoadSegment(fromCityId, toCityId);
+  if (!segment) {
+    return null;
+  }
+  return orientRoadSegmentPoints(segment, fromCityId, toCityId);
 }
 
 interface RoadEdge {
   toCityId: string;
   weight: number;
   points: MapRoadPoint[];
+  segmentId: string;
+}
+
+function getRoadNetworkFingerprint(): string {
+  return MAP_ROAD_SEGMENTS.map((segment) => {
+    const coords = segment.points.map((point) => `${point.x},${point.y}`).join(';');
+    return `${segment.id}:${segment.fromCityId}:${segment.toCityId}:${
+      segment.isCalibrated === false ? 0 : 1
+    }:${segment.points.length}:${coords}`;
+  }).join('|');
+}
+
+function logDuplicateCityPairsInDev(): void {
+  const flags = getResolvedMapDebugFlags();
+  if (!flags.roadWarnings) {
+    return;
+  }
+
+  const duplicatePairs = findDuplicateMapRoadCityPairs();
+  for (const [pair, segmentIds] of duplicatePairs.entries()) {
+    if (segmentIds.length > 1) {
+      debugWarn(true, '[map-road] duplicate city pair in catalog', {
+        pair,
+        segmentIds,
+      });
+    }
+  }
 }
 
 function buildRoadAdjacency(): Map<string, RoadEdge[]> {
-  const adjacency = new Map<string, RoadEdge[]>();
-  const warnedUncalibrated = new Set<string>();
+  logDuplicateCityPairsInDev();
 
-  const addEdge = (fromCityId: string, toCityId: string, points: MapRoadPoint[]) => {
+  const adjacency = new Map<string, RoadEdge[]>();
+  const duplicateIds = findDuplicateMapRoadSegmentIds();
+
+  const addEdge = (
+    fromCityId: string,
+    toCityId: string,
+    points: MapRoadPoint[],
+    segmentId: string,
+  ) => {
     const weight = getPolylineTotalLength(points);
     const edges = adjacency.get(fromCityId) ?? [];
-    edges.push({ toCityId, weight, points: [...points] });
+    edges.push({ toCityId, weight, points: [...points], segmentId });
     adjacency.set(fromCityId, edges);
   };
 
   for (const segment of MAP_ROAD_SEGMENTS) {
-    if (!isMapRoadSegmentRoutable(segment)) {
-      if (
-        typeof __DEV__ !== 'undefined' &&
-        __DEV__ &&
-        !warnedUncalibrated.has(segment.id)
-      ) {
-        warnedUncalibrated.add(segment.id);
-        console.warn('[map-road] segment skipped (uncalibrated or insufficient points)', {
-          id: segment.id,
-          from: segment.fromCityId,
-          to: segment.toCityId,
-          isCalibrated: segment.isCalibrated ?? true,
-          pointCount: segment.points.length,
-        });
-      }
-      continue;
-    }
-
     const from = normalizeCityId(segment.fromCityId);
     const to = normalizeCityId(segment.toCityId);
-    addEdge(from, to, segment.points);
-    addEdge(to, from, [...segment.points].reverse());
+    const routable = isMapRoadSegmentRoutable(segment);
+    const flags = getResolvedMapDebugFlags();
+
+    if (routable) {
+      const forwardPoints = orientRoadSegmentPoints(segment, from, to);
+      const reversePoints = orientRoadSegmentPoints(segment, to, from);
+      addEdge(from, to, forwardPoints, segment.id);
+      addEdge(to, from, reversePoints, segment.id);
+    }
+
+    if (flags.roadSegment) {
+      const includedInGraph =
+        routable &&
+        (adjacency.get(from) ?? []).some((edge) => edge.toCityId === to);
+      debugLog(
+        true,
+        '[map-road-segment-check]',
+        buildMapRoadSegmentCheck(segment, includedInGraph, duplicateIds),
+      );
+    }
+
+    if (flags.roadGraph) {
+      debugLog(true, '[road-graph-segment]', {
+        id: segment.id,
+        isCalibrated: segment.isCalibrated !== false,
+        pointCount: segment.points.length,
+        includedInGraph: routable,
+        fromCityId: from,
+        toCityId: to,
+      });
+    }
   }
 
   return adjacency;
 }
 
 let cachedAdjacency: Map<string, RoadEdge[]> | null = null;
+let cachedFingerprint: string | null = null;
 
 export function invalidateRoadGraphCache(): void {
   cachedAdjacency = null;
+  cachedFingerprint = null;
 }
 
 export function isRoadGraphPairConnected(fromCityId: string, toCityId: string): boolean {
@@ -228,8 +442,10 @@ export function isRoadGraphPairConnected(fromCityId: string, toCityId: string): 
 }
 
 export function getRoadGraphAdjacency(): Map<string, RoadEdge[]> {
-  if (!cachedAdjacency) {
+  const fingerprint = getRoadNetworkFingerprint();
+  if (!cachedAdjacency || cachedFingerprint !== fingerprint) {
     cachedAdjacency = buildRoadAdjacency();
+    cachedFingerprint = fingerprint;
   }
   return cachedAdjacency;
 }
@@ -246,22 +462,110 @@ function mergeRoutePointLists(chunks: MapRoadPoint[][]): MapRoadPoint[] {
   return merged;
 }
 
-/** Dijkstra — kenar ağırlığı polyline toplam normalize uzunluğu. */
-export function getRoadRoute(fromCityId: string, toCityId: string): MapRoadPoint[] | null {
-  const from = normalizeCityId(fromCityId);
-  const to = normalizeCityId(toCityId);
+export type RoadRouteResolutionKind = 'direct' | 'graph' | 'not-found';
 
-  if (from === to) {
-    const pos = getWorldMapCityPosition(from);
-    return pos ? [{ x: pos.x, y: pos.y }] : null;
+export interface RoadRouteResolution {
+  from: string;
+  to: string;
+  resolution: RoadRouteResolutionKind;
+  segmentIds: string[];
+  pointCount: number;
+  totalLength: number;
+  firstPoint?: MapRoadPoint;
+  lastPoint?: MapRoadPoint;
+}
+
+const loggedRouteResolutions = new Set<string>();
+
+export function logRoadRouteResolutionOnce(resolution: RoadRouteResolution): void {
+  if (!getResolvedMapDebugFlags().roadResolution) {
+    return;
   }
 
-  const direct = getDirectRoadSegment(from, to);
-  if (direct) return direct;
+  const key = `${resolution.from}|${resolution.to}|${resolution.resolution}|${resolution.segmentIds.join(',')}`;
+  if (loggedRouteResolutions.has(key)) {
+    return;
+  }
+  loggedRouteResolutions.add(key);
+  debugLog(true, '[map-road-route-resolution]', resolution);
+}
 
+export function resetRoadRouteResolutionLogsForTests(): void {
+  loggedRouteResolutions.clear();
+  invalidateRoadGraphCache();
+}
+
+export interface MapRoadRouteIntegrityCheck {
+  fromCityId: string;
+  toCityId: string;
+  resolution: RoadRouteResolution['resolution'];
+  segmentIds: string[];
+  firstPoint: MapRoadPoint | undefined;
+  lastPoint: MapRoadPoint | undefined;
+  firstDistanceToOrigin: number;
+  lastDistanceToDestination: number;
+  valid: boolean;
+}
+
+export function buildMapRoadRouteIntegrityCheck(
+  fromCityId: string,
+  toCityId: string,
+  route: MapRoadPoint[] | null,
+  resolution: RoadRouteResolution,
+): MapRoadRouteIntegrityCheck {
+  const from = normalizeCityId(fromCityId);
+  const to = normalizeCityId(toCityId);
+  const firstPoint = route?.[0];
+  const lastPoint = route && route.length > 0 ? route[route.length - 1] : undefined;
+  const firstDistanceToOrigin = firstPoint ? pointDistanceToCity(firstPoint, from) : Infinity;
+  const lastDistanceToDestination = lastPoint ? pointDistanceToCity(lastPoint, to) : Infinity;
+  const valid =
+    route != null &&
+    route.length >= 1 &&
+    firstDistanceToOrigin <= MAP_ROAD_ENDPOINT_TOLERANCE &&
+    lastDistanceToDestination <= MAP_ROAD_ENDPOINT_TOLERANCE;
+
+  return {
+    fromCityId: from,
+    toCityId: to,
+    resolution: resolution.resolution,
+    segmentIds: resolution.segmentIds,
+    firstPoint,
+    lastPoint,
+    firstDistanceToOrigin,
+    lastDistanceToDestination,
+    valid,
+  };
+}
+
+function logMapRoadRouteIntegrity(
+  fromCityId: string,
+  toCityId: string,
+  route: MapRoadPoint[] | null,
+  resolution: RoadRouteResolution,
+): MapRoadRouteIntegrityCheck {
+  const check = buildMapRoadRouteIntegrityCheck(fromCityId, toCityId, route, resolution);
+  const flags = getResolvedMapDebugFlags();
+  if (!flags.roadResolution && !flags.roadEndpoint) {
+    return check;
+  }
+
+  debugLog(flags.roadResolution, '[map-road-route-integrity]', check);
+  if (!check.valid && route != null) {
+    debugWarn(flags.roadWarnings, '[map-road] route endpoint mismatch', check);
+  }
+  return check;
+}
+
+function findGraphRoadRoute(fromCityId: string, toCityId: string): {
+  route: MapRoadPoint[] | null;
+  segmentIds: string[];
+} {
+  const from = normalizeCityId(fromCityId);
+  const to = normalizeCityId(toCityId);
   const adjacency = getRoadGraphAdjacency();
   const distances = new Map<string, number>();
-  const previous = new Map<string, { cityId: string; points: MapRoadPoint[] } | null>();
+  const previous = new Map<string, { cityId: string; points: MapRoadPoint[]; segmentId: string } | null>();
   const unvisited = new Set<string>();
 
   for (const cityId of adjacency.keys()) {
@@ -271,7 +575,7 @@ export function getRoadRoute(fromCityId: string, toCityId: string): MapRoadPoint
   }
 
   if (!unvisited.has(from) || !unvisited.has(to)) {
-    return null;
+    return { route: null, segmentIds: [] };
   }
 
   distances.set(from, 0);
@@ -289,7 +593,6 @@ export function getRoadRoute(fromCityId: string, toCityId: string): MapRoadPoint
     }
 
     if (current == null || bestDistance === Infinity) break;
-
     if (current === to) break;
 
     unvisited.delete(current);
@@ -299,34 +602,114 @@ export function getRoadRoute(fromCityId: string, toCityId: string): MapRoadPoint
       const alt = (distances.get(current) ?? Infinity) + edge.weight;
       if (alt < (distances.get(edge.toCityId) ?? Infinity)) {
         distances.set(edge.toCityId, alt);
-        previous.set(edge.toCityId, { cityId: current, points: edge.points });
+        previous.set(edge.toCityId, {
+          cityId: current,
+          points: edge.points,
+          segmentId: edge.segmentId,
+        });
       }
     }
   }
 
   if ((distances.get(to) ?? Infinity) === Infinity) {
-    return null;
+    return { route: null, segmentIds: [] };
   }
 
   const pathChunks: MapRoadPoint[][] = [];
+  const segmentIds: string[] = [];
   let cursor: string | null = to;
 
   while (cursor != null && cursor !== from) {
     const step = previous.get(cursor);
-    if (!step) return null;
+    if (!step) return { route: null, segmentIds: [] };
     pathChunks.unshift(step.points);
+    segmentIds.unshift(step.segmentId);
     cursor = step.cityId;
   }
 
   const route = mergeRoutePointLists(pathChunks);
-
   const originPos = getWorldMapCityPosition(from);
   const destPos = getWorldMapCityPosition(to);
-  if (!originPos || !destPos || route.length === 0) return null;
+  if (!originPos || !destPos || route.length === 0) {
+    return { route: null, segmentIds: [] };
+  }
 
   route[0] = { x: originPos.x, y: originPos.y };
   route[route.length - 1] = { x: destPos.x, y: destPos.y };
 
+  return { route, segmentIds };
+}
+
+export function resolveRoadRoute(fromCityId: string, toCityId: string): {
+  route: MapRoadPoint[] | null;
+  resolution: RoadRouteResolution;
+} {
+  const from = normalizeCityId(fromCityId);
+  const to = normalizeCityId(toCityId);
+
+  if (from === to) {
+    const pos = getWorldMapCityPosition(from);
+    const route = pos ? [{ x: pos.x, y: pos.y }] : null;
+    const resolution: RoadRouteResolution = {
+      from,
+      to,
+      resolution: route ? 'direct' : 'not-found',
+      segmentIds: [],
+      pointCount: route?.length ?? 0,
+      totalLength: 0,
+    };
+    return { route, resolution };
+  }
+
+  const directSegment = findDirectRoadSegment(from, to);
+  if (directSegment) {
+    const route = orientRoadSegmentPoints(directSegment, from, to);
+    logMapRoadEndpointCheck(directSegment, route, from, to);
+    const resolution: RoadRouteResolution = {
+      from,
+      to,
+      resolution: 'direct',
+      segmentIds: [directSegment.id],
+      pointCount: route.length,
+      totalLength: getPolylineTotalLength(route),
+      firstPoint: route[0],
+      lastPoint: route[route.length - 1],
+    };
+    logMapRoadRouteIntegrity(from, to, route, resolution);
+    return { route, resolution };
+  }
+
+  const graphResult = findGraphRoadRoute(from, to);
+  if (graphResult.route) {
+    const resolution: RoadRouteResolution = {
+      from,
+      to,
+      resolution: 'graph',
+      segmentIds: graphResult.segmentIds,
+      pointCount: graphResult.route.length,
+      totalLength: getPolylineTotalLength(graphResult.route),
+      firstPoint: graphResult.route[0],
+      lastPoint: graphResult.route[graphResult.route.length - 1],
+    };
+    logMapRoadRouteIntegrity(from, to, graphResult.route, resolution);
+    return { route: graphResult.route, resolution };
+  }
+
+  const resolution: RoadRouteResolution = {
+    from,
+    to,
+    resolution: 'not-found',
+    segmentIds: [],
+    pointCount: 0,
+    totalLength: 0,
+  };
+  return { route: null, resolution };
+}
+
+/** Direct segment öncelikli; yoksa Dijkstra graph routing. */
+export function getRoadRoute(fromCityId: string, toCityId: string): MapRoadPoint[] | null {
+  const { route, resolution } = resolveRoadRoute(fromCityId, toCityId);
+  logRoadRouteResolutionOnce(resolution);
   return route;
 }
 
@@ -352,3 +735,5 @@ export function polylineToSvgPath(points: MapRoadPoint[], bounds: MapBounds): st
   }
   return path;
 }
+
+export { isValidMapRoadPoint };

@@ -39,7 +39,8 @@ import {
 import { getRoute as findRoute } from '../data/routes';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getCityName, getProductByIdSafe, getProductName } from '../utils/entityLookup';
-import { dedupeAvailableContracts, countPlayableContracts } from '../simulation/contracts';
+import { countPlayableContracts } from '../simulation/contracts';
+import { selectAvailableContractsForUi, logContractsUiSelector, inspectContractsUiSelector } from '../utils/contractsUiSelector';
 import {
   buildContractPreview,
   type ContractPreview,
@@ -816,6 +817,7 @@ export default function ContractsScreen() {
   const playerReputation = player?.reputation ?? 0;
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
+  const trailers = player?.trailers ?? [];
   const completedDeliveryCount = player?.completedContracts ?? 0;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(completedDeliveryCount);
 
@@ -828,9 +830,24 @@ export default function ContractsScreen() {
   );
 
   const availableContracts = useMemo(
-    () => dedupeAvailableContracts(contracts.filter((c) => c.status === 'available')),
+    () => selectAvailableContractsForUi(contracts),
     [contracts],
   );
+
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__) {
+      return;
+    }
+    const originHint = getIdleTruckOriginCityIds(trucks, player?.homeCityId)[0] ?? player?.homeCityId ?? null;
+    logContractsUiSelector(
+      inspectContractsUiSelector({
+        contracts,
+        currentCityId: originHint,
+        originCityId: originHint,
+        destinationCityId: 'adana',
+      }),
+    );
+  }, [contracts, trucks, player?.homeCityId]);
 
   const runningDeliveries = useMemo(
     () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
@@ -864,6 +881,7 @@ export default function ContractsScreen() {
           contract,
           globalEconomy,
           trucks,
+          trailers,
           drivers,
           companyLevel: playerLevel,
           currentTime,
@@ -874,7 +892,7 @@ export default function ContractsScreen() {
       );
     }
     return previews;
-  }, [activeSegment, availableContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
+  }, [activeSegment, availableContracts, trucks, trailers, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
 
   const playableContractCount = useMemo(
     () =>
@@ -889,6 +907,7 @@ export default function ContractsScreen() {
           globalEconomy,
           playerReputation,
           homeCityId: player?.homeCityId,
+          trailers,
         },
       ),
     [
@@ -975,6 +994,7 @@ export default function ContractsScreen() {
           contract,
           globalEconomy,
           trucks,
+          trailers,
           drivers,
           companyLevel: playerLevel,
           currentTime,
@@ -985,7 +1005,7 @@ export default function ContractsScreen() {
       );
     }
     return previews;
-  }, [activeSegment, completedContracts, trucks, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents]);
+  }, [activeSegment, completedContracts, trucks, trailers, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
 
   const tabSegments = useMemo<TabSegment[]>(
     () => [
@@ -1081,6 +1101,7 @@ export default function ContractsScreen() {
       contract: quickSheetContract,
       globalEconomy,
       trucks: player.trucks,
+      trailers: player.trailers,
       drivers: player.drivers,
       companyLevel: playerLevel,
       currentTime,
@@ -1125,6 +1146,7 @@ export default function ContractsScreen() {
       contract: assignmentContract,
       globalEconomy,
       trucks: player.trucks,
+      trailers: player.trailers,
       drivers: player.drivers,
       companyLevel: playerLevel,
       currentTime,

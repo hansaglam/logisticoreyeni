@@ -7,8 +7,12 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { reputationBalance } from '../config/balance';
+import { reputationBalance, contractGenerationBalance } from '../config/balance';
 import { CITIES } from '../data/cities';
+import {
+  mergeCanonicalCities,
+  mergeCanonicalRoutes,
+} from '../data/mergeCanonicalCatalog';
 import { normalizeDriver, STARTER_DRIVER } from '../data/drivers';
 import { PRODUCTS } from '../data/products';
 import { ROUTES } from '../data/routes';
@@ -19,6 +23,7 @@ import { normalizeDelivery } from '../simulation/deliveryIncidents';
 import { normalizePlayerTrailers } from '../simulation/trailerOps';
 import { normalizeContract } from '../simulation/contractTypes';
 import { normalizeTruckUpgrades } from '../simulation/truckUpgrades';
+import { normalizeTruckFuel } from '../utils/truckFuel';
 import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/leveling';
 import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
@@ -39,6 +44,7 @@ import {
   normalizeMonetizationState,
 } from '../simulation/adRewardGrants';
 import { migratePlayerTruckNames } from '../utils/truckDisplayNames';
+import { PRODUCT_PRICE_HISTORY_MAX } from '../utils/priceHistoryCore';
 import type {
   City,
   Contract,
@@ -49,6 +55,7 @@ import type {
   GlobalEconomy,
   MarketNews,
   MissionsState,
+  ProductId,
   RetentionState,
   WorldEvent,
   OnboardingState,
@@ -289,7 +296,9 @@ function recoverStarterFleetIfMissing(
 function normalizePlayerTrucks(trucks: Player['trucks'], homeCityId: string): Player['trucks'] {
   const fallbackHome = homeCityId || 'izmir';
   return (trucks ?? []).map((truck) =>
-    normalizeTruckUpgrades(normalizeTruckCity(truck, fallbackHome)),
+    normalizeTruckFuel(
+      normalizeTruckUpgrades(normalizeTruckCity(truck, fallbackHome)),
+    ),
   );
 }
 
@@ -368,13 +377,13 @@ export function createDefaultSaveFallbacks(
     isPaused: typeof payload.isPaused === 'boolean' ? payload.isPaused : false,
     player,
     cities: isArray(payload.cities) && payload.cities.length > 0
-      ? (payload.cities as City[])
+      ? mergeCanonicalCities(payload.cities as City[])
       : cloneDefaultCities(),
     products: isArray(payload.products) && payload.products.length > 0
       ? (payload.products as Product[])
       : structuredClone(PRODUCTS),
     routes: isArray(payload.routes) && payload.routes.length > 0
-      ? (payload.routes as Route[])
+      ? mergeCanonicalRoutes(payload.routes as Route[])
       : structuredClone(ROUTES),
     contracts: normalizeLoadedContracts(
       isArray(payload.contracts) ? (payload.contracts as Contract[]) : [],
@@ -656,8 +665,10 @@ export function migrateSavePayload(rawPayload: unknown): SaveGamePayload | null 
     return null;
   }
 
+  const strippedPayload = stripLegacyBloatedSaveFields(rawPayload);
+
   const sourceVersion =
-    typeof rawPayload.version === 'number' ? rawPayload.version : 0;
+    typeof strippedPayload.version === 'number' ? strippedPayload.version : 0;
 
   if (sourceVersion > SAVE_GAME_VERSION) {
     console.warn(
@@ -672,7 +683,7 @@ export function migrateSavePayload(rawPayload: unknown): SaveGamePayload | null 
     );
   }
 
-  const normalized = normalizeSavePayload(rawPayload);
+  const normalized = normalizeSavePayload(strippedPayload);
 
   if (sourceVersion < SAVE_GAME_VERSION) {
     normalized.version = SAVE_GAME_VERSION;
@@ -852,6 +863,161 @@ export function getSaveProvider(): SaveProvider {
   return activeSaveProvider;
 }
 
+/** Legacy / debug fields that must never be persisted — stripped on load. */
+const LEGACY_BLOATED_SAVE_KEYS = [
+  'mapRoadSegments',
+  'roadNetwork',
+  'roadSegments',
+  'routePoints',
+  'polyline',
+  'calibrationPoints',
+  'calibration',
+  'sessionsBySegmentId',
+  'activeCalibrationSegmentId',
+  'debugMarkers',
+  'mapDebugConfig',
+  'graphAdjacency',
+  'routeResolutionCache',
+  'uiSelectorCache',
+] as const;
+
+export function stripLegacyBloatedSaveFields(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const stripped = { ...payload };
+  for (const key of LEGACY_BLOATED_SAVE_KEYS) {
+    delete stripped[key];
+  }
+  return stripped;
+}
+
+/** UTF-8 byte length of JSON serialization (cloud save limit probe). */
+export function measureUtf8JsonBytes(value: unknown): number {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(json).length;
+    }
+    return json.length;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+export interface SavePayloadSizeReport {
+  totalBytes: number;
+  totalKb: number;
+  topLevelKeys: Record<string, number>;
+}
+
+/** Per top-level field size breakdown for dev diagnostics. */
+export function analyzeSavePayloadSize(payload: SaveGamePayload): SavePayloadSizeReport {
+  const topLevelKeys: Record<string, number> = {};
+  const fields: Array<keyof SaveGamePayload | 'calibration'> = [
+    'meta',
+    'player',
+    'cities',
+    'products',
+    'routes',
+    'contracts',
+    'activeDeliveries',
+    'globalEconomy',
+    'marketNews',
+    'eventLog',
+    'financeLedger',
+    'tutorial',
+    'missions',
+    'monetization',
+  ];
+
+  const payloadRecord = payload as unknown as Record<string, unknown>;
+
+  for (const key of fields) {
+    if (key in payloadRecord) {
+      topLevelKeys[key] = measureUtf8JsonBytes(payloadRecord[key]);
+    }
+  }
+
+  const legacyCalibration =
+    payloadRecord.calibration ?? payloadRecord.sessionsBySegmentId;
+  if (legacyCalibration !== undefined) {
+    topLevelKeys.calibration = measureUtf8JsonBytes(legacyCalibration);
+  }
+
+  const totalBytes = measureUtf8JsonBytes(payload);
+  return {
+    totalBytes,
+    totalKb: Math.round((totalBytes / 1024) * 10) / 10,
+    topLevelKeys,
+  };
+}
+
+function trimCityProductsForSave(products: City['products']): City['products'] {
+  const trimmed = {} as City['products'];
+  for (const [productId, state] of Object.entries(products)) {
+    trimmed[productId as ProductId] = {
+      ...state,
+      priceHistory: state.priceHistory?.slice(-PRODUCT_PRICE_HISTORY_MAX),
+    };
+  }
+  return trimmed;
+}
+
+/** Persist only dynamic city market state — static metadata rehydrates from canonical catalog. */
+export function slimCityForSave(city: City): City {
+  return {
+    id: city.id,
+    name: city.name,
+    population: 0,
+    industryLevel: 0,
+    tourismLevel: 0,
+    agricultureLevel: 0,
+    productionMultiplier: 1,
+    demandMultiplier: 1,
+    fuelPriceModifier: 1,
+    trafficDifficulty: 0,
+    warehouseCostModifier: 1,
+    products: trimCityProductsForSave(city.products),
+  };
+}
+
+/**
+ * Drop dead contract history before save.
+ * Keeps available/active contracts and any contract tied to an in-flight delivery.
+ */
+export function pruneContractsForSave(
+  contracts: Contract[],
+  activeDeliveries: Delivery[],
+  currentTime: number,
+): Contract[] {
+  const activeContractIds = new Set(
+    activeDeliveries.map((delivery) => delivery.contractId).filter(Boolean),
+  );
+  const gen = contractGenerationBalance;
+  const maxAvailable = gen.maxAvailableContracts + 8;
+
+  const available: Contract[] = [];
+  const retained: Contract[] = [];
+
+  for (const contract of contracts) {
+    if (contract.status === 'active' || activeContractIds.has(contract.id)) {
+      retained.push(contract);
+      continue;
+    }
+    if (contract.status === 'available') {
+      if (currentTime >= contract.expiresAt) {
+        continue;
+      }
+      available.push(contract);
+    }
+  }
+
+  available.sort((a, b) => b.createdAt - a.createdAt);
+  const cappedAvailable = available.slice(0, maxAvailable);
+
+  return [...retained, ...cappedAvailable];
+}
+
 export function serializeGameState(state: StoreGameState): SaveGamePayload {
   const homeCityId = state.player.homeCityId ?? 'izmir';
   const player: Player = normalizeLoadedPlayer({
@@ -885,10 +1051,14 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     },
     currentTime: state.currentTime,
     player,
-    cities: structuredClone(state.cities),
-    products: structuredClone(state.products),
-    routes: structuredClone(state.routes),
-    contracts: structuredClone(state.contracts),
+    cities: state.cities.map(slimCityForSave),
+    products: [],
+    routes: [],
+    contracts: pruneContractsForSave(
+      state.contracts,
+      state.activeDeliveries,
+      state.currentTime,
+    ),
     activeDeliveries: structuredClone(state.activeDeliveries),
     activeTransfers: structuredClone(state.activeTransfers ?? []),
     completedTransfers: structuredClone(state.completedTransfers ?? []),
@@ -952,9 +1122,12 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     lastPlayableContractGeneratedTime: payload.lastPlayableContractGeneratedTime ?? 0,
     lastManualContractRefreshTime: payload.lastManualContractRefreshTime ?? 0,
     player,
-    cities: payload.cities,
-    products: payload.products,
-    routes: payload.routes,
+    cities: mergeCanonicalCities(payload.cities),
+    products:
+      isArray(payload.products) && payload.products.length > 0
+        ? (payload.products as Product[])
+        : structuredClone(PRODUCTS),
+    routes: mergeCanonicalRoutes(payload.routes),
     contracts: normalizeLoadedContracts(payload.contracts ?? []),
     activeDeliveries: normalizeActiveDeliveries(payload.activeDeliveries),
     activeTransfers: payload.activeTransfers ?? [],

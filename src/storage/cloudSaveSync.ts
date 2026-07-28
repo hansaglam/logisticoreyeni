@@ -14,13 +14,18 @@ import {
 } from '../services/cloudSaveService';
 import { syncLeaderboardEntry } from '../services/leaderboardService';
 import { isFirebaseEnabled } from '../services/firebase';
-import { SAVE_GAME_VERSION, serializeGameState, type SaveGamePayload } from '../storage/saveGame';
+import { SAVE_GAME_VERSION, serializeGameState, analyzeSavePayloadSize, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
 import {
   buildCloudSaveSummary,
   buildCloudSaveSummaryFromPayload,
   type CloudSaveSummary,
 } from '../utils/cloudSaveSummary';
+import { debugConfig } from '../config/debug';
+import {
+  estimateCloudSaveDocumentBytes,
+  MAX_SAVE_SIZE_BYTES,
+} from '../utils/cloudSaveSize';
 
 export type CloudSyncReason =
   | 'app_start'
@@ -77,6 +82,8 @@ const STATUS_LABELS: Record<CloudSaveDisplayStatus, string> = {
 let lastCloudSyncAt = 0;
 let cloudSaveStatus: CloudSaveDisplayStatus = 'disabled';
 let lastCloudSyncError: string | null = null;
+let lastSaveTooLargeAt = 0;
+let lastSaveTooLargeEnvelopeBytes = 0;
 let restoreCandidate: CloudRestoreCandidate | null = null;
 let backendInitPromise: Promise<void> | null = null;
 let cloudSyncInitialized = false;
@@ -257,20 +264,46 @@ export async function syncLocalSaveToCloud(
     return false;
   }
 
+  const payload = serializeGameState(options.state);
+  const envelopeBytes = estimateCloudSaveDocumentBytes(payload);
+
+  if (lastCloudSyncError === 'save-too-large' && envelopeBytes > MAX_SAVE_SIZE_BYTES) {
+    if (__DEV__) {
+      console.log('[cloud-save] sync skipped — payload still exceeds cloud limit', envelopeBytes);
+    }
+    setCloudSaveStatus('failed', 'save-too-large');
+    return false;
+  }
+
+  if (__DEV__ && debugConfig.cloudSaveSizeLogsEnabled) {
+    const sizeReport = analyzeSavePayloadSize(payload);
+    console.log('[cloud-save-size]', {
+      totalBytes: sizeReport.totalBytes,
+      totalKb: sizeReport.totalKb,
+      envelopeBytes,
+      topLevelKeys: sizeReport.topLevelKeys,
+    });
+  }
+
   try {
     setCloudSaveStatus('syncing');
     if (__DEV__) {
       console.log('[cloud-save] sync started', reason);
     }
-    const payload = serializeGameState(options.state);
     const result = await saveGameToCloud(uid, payload);
 
     if (!result.ok) {
+      if (result.error === 'save-too-large') {
+        lastSaveTooLargeAt = Date.now();
+        lastSaveTooLargeEnvelopeBytes = envelopeBytes;
+      }
       console.warn('[cloud-save] sync failed', result.error ?? '');
       setCloudSaveStatus('failed', result.error ?? 'Cloud sync failed');
       return false;
     }
 
+    lastSaveTooLargeAt = 0;
+    lastSaveTooLargeEnvelopeBytes = 0;
     lastCloudSyncAt = Date.now();
     setCloudSaveStatus('success');
     void syncLeaderboardFromGameState(options.state);
@@ -355,6 +388,8 @@ export async function initializeCloudBackend(getState: () => StoreGameState): Pr
 export function resetCloudSaveSyncState(): void {
   lastCloudSyncAt = 0;
   lastCloudSyncError = null;
+  lastSaveTooLargeAt = 0;
+  lastSaveTooLargeEnvelopeBytes = 0;
   restoreCandidate = null;
   cloudSaveStatus = isFirebaseEnabled() ? 'pending' : 'disabled';
   backendInitPromise = null;

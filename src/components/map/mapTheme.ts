@@ -52,8 +52,6 @@ export const MAP_RESET_ANIMATION_MS = MAP_GESTURE_SNAP_MS;
 /** Minimum zoom'da fit merkezine snap eşiği. */
 export const MAP_FIT_EPSILON = 0.015;
 
-export const MAP_MARKER_HIT_RADIUS = 20;
-
 export const MAP_MARKER_GLOW = '#2388FF';
 export const MAP_MARKER_CORE = '#39A0FF';
 export const MAP_ROUTE_STROKE = '#39A0FF';
@@ -93,3 +91,13 @@ export const MAP_PANEL_MIN_HEIGHT = 82;
 export const MAP_TRUCK_CARD_HEIGHT = 86;
 export const MAP_TRUCK_CARD_HEIGHT_DELIVERY = 94;
 export const MAP_TRUCK_CARD_RADIUS = 17;
+
+/** Development kalibrasyon debug marker — sabit ekran boyutu (~11 px). */
+export const MAP_CALIBRATION_MARKER_SIZE = 11;
+export const MAP_CALIBRATION_MARKER_CORE = 4.5;
+export const MAP_CALIBRATION_MARKER_RING = 11;
+export const MAP_CALIBRATION_MARKER_FILL = '#FF5C6C';
+export const MAP_CALIBRATION_MARKER_RING_FILL = 'rgba(255,92,108,0.35)';
+export const MAP_CALIBRATION_MARKER_RING_STROKE = 'rgba(255,255,255,0.9)';
+export const MAP_CALIBRATION_INDEX_COLOR = '#FF7A86';
+export const MAP_CALIBRATION_INDEX_FONT = 8;

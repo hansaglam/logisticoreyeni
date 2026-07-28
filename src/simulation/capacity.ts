@@ -14,6 +14,9 @@ import {
   getEffectiveTruckCapacity,
   normalizeTruckUpgrades,
 } from './truckUpgrades';
+import { getAttachedTrailerForTruck } from './trailerAttachment';
+
+export { getAttachedTrailerForTruck } from './trailerAttachment';
 
 /** Floating point toleransı — 45.0 t kapasite, 45.0 t yük alabilmeli */
 export const CAPACITY_EPSILON = 0.001;
@@ -42,16 +45,12 @@ export function getTruckUpgradeCapacityBonus(truck: Truck): number {
   return getCargoCapacityBonus(normalizeTruckUpgrades(truck));
 }
 
+/** @deprecated use getAttachedTrailerForTruck */
 export function getAttachedTrailer(
   truckId: string | undefined,
   trailers: Trailer[] | undefined,
 ): Trailer | undefined {
-  if (!truckId) {
-    return undefined;
-  }
-  return (trailers ?? []).find(
-    (trailer) => trailer.attachedTruckId === truckId && trailer.status !== 'idle',
-  );
+  return getAttachedTrailerForTruck(truckId, trailers);
 }
 
 export function getTrailerCapacityBonus(trailer: Trailer | undefined): number {
@@ -66,8 +65,16 @@ export function getTruckEffectiveCapacityTons(
   trailers: Trailer[] | undefined = [],
 ): number {
   const truckCapacity = getEffectiveTruckCapacity(normalizeTruckUpgrades(truck));
-  const attached = getAttachedTrailer(truck.id, trailers);
+  const attached = getAttachedTrailerForTruck(truck.id, trailers);
   return truckCapacity + getTrailerCapacityBonus(attached);
+}
+
+/** Alias — UI capacity display and contract validation must use the same helper. */
+export function getEffectiveCargoCapacity(
+  truck: Truck,
+  trailers: Trailer[] | undefined = [],
+): number {
+  return getTruckEffectiveCapacityTons(truck, trailers);
 }
 
 /** @deprecated use getTruckEffectiveCapacityTons(truck, trailers) */
@@ -441,9 +448,9 @@ export function getCapacityDisabledReasonLabel(kind: CapacityDisabledReasonKind)
     case 'trailer_type_mismatch':
       return 'Uygun dorse tipi gerekli';
     case 'heavy_haul_required':
-      return 'Bu yük için ağır tonaj aracı gerekir';
+      return 'Kapasite yetersiz · dorse veya daha güçlü araç gerekir';
     case 'wrong_city':
-      return 'Bu şehirde uygun tonajlı kamyon yok';
+      return 'Uygun araç çıkış şehrinde bulunmuyor';
     case 'upgrade_possible':
       return 'Tonaj yetersiz · Kapasite yükselt';
     case 'insufficient':

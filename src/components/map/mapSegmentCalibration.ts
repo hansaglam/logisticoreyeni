@@ -1,70 +1,153 @@
+import { useSyncExternalStore } from 'react';
+
+import { getResolvedMapDebugFlags } from '../../config/debug';
 import { getMapRoadSegmentById, type MapRoadPoint } from '../../data/mapRoadNetwork';
+import { debugCalibrationPointLine, debugLog, debugWarn } from '../../utils/debugLog';
 
-export interface MapSegmentCalibrationSession {
-  segmentId: string;
+function calibrationLogsEnabled(): boolean {
+  return getResolvedMapDebugFlags().calibrationLogs;
+}
+
+function calibrationVerboseEnabled(): boolean {
+  return getResolvedMapDebugFlags().calibrationVerbose;
+}
+
+export type MapCalibrationMode = 'segment' | 'city' | 'off';
+
+export interface MapCalibrationSnapshot {
+  mode: MapCalibrationMode;
+  enabled: boolean;
+  segmentId: string | null;
   points: MapRoadPoint[];
+  version: number;
 }
 
-let activeSession: MapSegmentCalibrationSession | null = null;
+type Listener = () => void;
 
-function requireSession(): MapSegmentCalibrationSession {
-  if (!activeSession) {
-    throw new Error('[map-calibration] Aktif segment oturumu yok. debug.ts mapCalibrationSegmentId ayarlayın.');
-  }
-  return activeSession;
-}
+let enabled = false;
+let mode: MapCalibrationMode = 'off';
+let activeSegmentId: string | null = null;
+let points: MapRoadPoint[] = [];
+let version = 0;
+const listeners = new Set<Listener>();
 
-export function startMapSegmentCalibration(segmentId: string): void {
-  const segment = getMapRoadSegmentById(segmentId);
-  if (!segment) {
-    console.warn('[map-calibration] segment not found:', segmentId);
-    return;
-  }
-  activeSession = { segmentId, points: [] };
-  console.log('[map-calibration] segment session started:', segmentId);
-  console.log('[map-calibration] commands: __mapCalibration.clear() | undo() | print() | finish()');
-}
-
-export function syncMapSegmentCalibration(segmentId: string | null | undefined): void {
-  if (!segmentId) {
-    activeSession = null;
-    return;
-  }
-  if (activeSession?.segmentId !== segmentId) {
-    startMapSegmentCalibration(segmentId);
+function emit(): void {
+  version += 1;
+  for (const listener of listeners) {
+    listener();
   }
 }
 
-export function appendMapSegmentCalibrationPoint(point: MapRoadPoint): MapRoadPoint[] {
-  const session = requireSession();
-  session.points.push(point);
-  console.log('[map-calibration] point added:', point, `(total=${session.points.length})`);
-  return [...session.points];
+function getSnapshot(): MapCalibrationSnapshot {
+  return {
+    mode,
+    enabled,
+    segmentId: activeSegmentId,
+    points,
+    version,
+  };
 }
 
-export function undoMapSegmentCalibrationPoint(): MapRoadPoint[] {
-  const session = requireSession();
-  session.points.pop();
-  console.log('[map-calibration] undo — total points:', session.points.length);
-  return [...session.points];
+let cachedSnapshot: MapCalibrationSnapshot = getSnapshot();
+
+function refreshSnapshot(): MapCalibrationSnapshot {
+  cachedSnapshot = getSnapshot();
+  emit();
+  return cachedSnapshot;
 }
 
-export function clearMapSegmentCalibrationPoints(): MapRoadPoint[] {
-  const session = requireSession();
-  session.points = [];
-  console.log('[map-calibration] points cleared');
-  return [];
+function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getServerSnapshot(): MapCalibrationSnapshot {
+  return cachedSnapshot;
+}
+
+export function useMapCalibrationSession(): MapCalibrationSnapshot {
+  return useSyncExternalStore(subscribe, () => cachedSnapshot, getServerSnapshot);
+}
+
+export function getMapCalibrationSnapshot(): MapCalibrationSnapshot {
+  return cachedSnapshot;
 }
 
 export function getMapSegmentCalibrationPoints(): MapRoadPoint[] {
-  return activeSession ? [...activeSession.points] : [];
+  return [...points];
+}
+
+export function getActiveCalibrationSegmentId(): string | null {
+  return activeSegmentId;
+}
+
+export function addCalibrationPoint(point: MapRoadPoint): MapRoadPoint[] {
+  if (!enabled) {
+    debugWarn(calibrationLogsEnabled(), '[map-calibration] ignored point — calibration disabled');
+    return [...points];
+  }
+
+  if (mode === 'city') {
+    debugLog(calibrationLogsEnabled(), '[map-calibration:city]', point);
+    debugCalibrationPointLine(
+      calibrationLogsEnabled(),
+      `paste into worldMapPositions.ts: { x: ${point.x.toFixed(4)}, y: ${point.y.toFixed(4)} }`,
+    );
+    points = [...points, point];
+    refreshSnapshot();
+    return [...points];
+  }
+
+  if (mode !== 'segment' || !activeSegmentId) {
+    debugWarn(calibrationLogsEnabled(), '[map-calibration] no active segment session');
+    return [...points];
+  }
+
+  points = [...points, point];
+  refreshSnapshot();
+
+  debugCalibrationPointLine(
+    calibrationLogsEnabled(),
+    `{ x: ${point.x.toFixed(4)}, y: ${point.y.toFixed(4)} },`,
+  );
+  debugLog(calibrationVerboseEnabled(), '[map-calibration:add]', {
+    index: points.length - 1,
+    point,
+    segmentId: activeSegmentId,
+    total: points.length,
+  });
+
+  return [...points];
+}
+
+export function undoMapSegmentCalibrationPoint(): MapRoadPoint[] {
+  if (points.length === 0) {
+    return [];
+  }
+  points = points.slice(0, -1);
+  refreshSnapshot();
+  debugLog(calibrationLogsEnabled(), '[map-calibration] undo — total points:', points.length);
+  return [...points];
+}
+
+export function clearMapSegmentCalibrationPoints(): MapRoadPoint[] {
+  points = [];
+  refreshSnapshot();
+  debugLog(calibrationLogsEnabled(), '[map-calibration] points cleared');
+  return [];
 }
 
 export function printMapSegmentCalibrationSegment(): void {
-  const session = requireSession();
-  const segment = getMapRoadSegmentById(session.segmentId);
+  if (!activeSegmentId) {
+    debugWarn(true, '[map-calibration] no active segment to print');
+    return;
+  }
+
+  const segment = getMapRoadSegmentById(activeSegmentId);
   if (!segment) {
-    console.warn('[map-calibration] segment not found:', session.segmentId);
+    debugWarn(true, `[map-calibration] Unknown segment: ${activeSegmentId}`);
     return;
   }
 
@@ -73,16 +156,106 @@ export function printMapSegmentCalibrationSegment(): void {
     fromCityId: segment.fromCityId,
     toCityId: segment.toCityId,
     isCalibrated: true,
-    points: session.points,
+    points: [...points],
   };
 
-  console.log('[map-calibration] paste into mapRoadNetwork.ts:');
-  console.log(JSON.stringify(payload, null, 2));
+  // Explicit __mapCalibration.print() — always emit in __DEV__
+  debugLog(true, '[map-calibration] paste into mapRoadNetwork.ts:');
+  debugLog(true, JSON.stringify(payload, null, 2));
 }
 
 export function finishMapSegmentCalibration(): void {
   printMapSegmentCalibrationSegment();
-  console.log('[map-calibration] session finished — copy output above into mapRoadNetwork.ts');
+  debugLog(true, '[map-calibration] session finished — copy output above into mapRoadNetwork.ts');
+}
+
+export function startMapSegmentCalibration(segmentId: string): boolean {
+  const segment = getMapRoadSegmentById(segmentId);
+  if (!segment) {
+    debugWarn(calibrationLogsEnabled(), `[map-calibration] Unknown segment: ${segmentId}`);
+    mode = 'off';
+    activeSegmentId = null;
+    refreshSnapshot();
+    return false;
+  }
+
+  if (activeSegmentId && activeSegmentId !== segmentId && points.length > 0) {
+    debugWarn(calibrationLogsEnabled(), '[map-calibration] switching segment — unsaved points discarded', {
+      previousSegmentId: activeSegmentId,
+      nextSegmentId: segmentId,
+      discardedPoints: points.length,
+    });
+  }
+
+  activeSegmentId = segmentId;
+  mode = 'segment';
+  points = [];
+  refreshSnapshot();
+  debugLog(calibrationLogsEnabled(), '[map-calibration] segment session started:', segmentId);
+  return true;
+}
+
+export function syncMapSegmentCalibration(params: {
+  enabled: boolean;
+  segmentId: string | null | undefined;
+}): void {
+  enabled = params.enabled;
+
+  if (!enabled) {
+    mode = 'off';
+    activeSegmentId = null;
+    points = [];
+    refreshSnapshot();
+    return;
+  }
+
+  const nextSegmentId = params.segmentId ?? null;
+
+  if (nextSegmentId) {
+    if (activeSegmentId !== nextSegmentId || mode !== 'segment') {
+      startMapSegmentCalibration(nextSegmentId);
+    } else {
+      mode = 'segment';
+      refreshSnapshot();
+    }
+    return;
+  }
+
+  if (mode === 'segment' && points.length > 0) {
+    debugWarn(calibrationLogsEnabled(), '[map-calibration] leaving segment mode — unsaved points discarded', {
+      previousSegmentId: activeSegmentId,
+      discardedPoints: points.length,
+    });
+  }
+
+  mode = 'city';
+  activeSegmentId = null;
+  points = [];
+  refreshSnapshot();
+  debugLog(calibrationLogsEnabled(), '[map-calibration] city center mode');
+}
+
+export function logMapCalibrationInit(params: {
+  enabled: boolean;
+  segmentId: string | null | undefined;
+}): void {
+  const segmentId = params.segmentId ?? null;
+  const segmentFound = segmentId ? getMapRoadSegmentById(segmentId) != null : false;
+  let resolvedMode: MapCalibrationMode = 'off';
+  if (params.enabled) {
+    resolvedMode = segmentId ? (segmentFound ? 'segment' : 'off') : 'city';
+  }
+
+  debugLog(calibrationLogsEnabled(), '[map-calibration:init]', {
+    enabled: params.enabled,
+    segmentId,
+    segmentFound,
+    mode: resolvedMode,
+  });
+
+  if (params.enabled && segmentId && !segmentFound) {
+    debugWarn(calibrationLogsEnabled(), `[map-calibration] Unknown segment: ${segmentId}`);
+  }
 }
 
 export function registerMapSegmentCalibrationDevTools(): void {
@@ -96,7 +269,9 @@ export function registerMapSegmentCalibrationDevTools(): void {
       undo: () => MapRoadPoint[];
       print: () => void;
       finish: () => void;
+      getPoints: () => MapRoadPoint[];
       points: () => MapRoadPoint[];
+      getActiveSegmentId: () => string | null;
     };
   };
 
@@ -105,6 +280,8 @@ export function registerMapSegmentCalibrationDevTools(): void {
     undo: undoMapSegmentCalibrationPoint,
     print: printMapSegmentCalibrationSegment,
     finish: finishMapSegmentCalibration,
+    getPoints: getMapSegmentCalibrationPoints,
     points: getMapSegmentCalibrationPoints,
+    getActiveSegmentId: getActiveCalibrationSegmentId,
   };
 }

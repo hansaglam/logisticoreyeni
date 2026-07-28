@@ -17,6 +17,7 @@ export const gameIcons = {
   city: 'city-variant-outline',
   company: 'office-building-outline',
   fuel: 'gas-station-outline',
+  speedometer: 'speedometer',
   time: 'clock-outline',
   distance: 'map-marker-distance',
   inventory: 'package-variant-closed',

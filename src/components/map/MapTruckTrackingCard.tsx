@@ -3,8 +3,9 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { getTruckArtwork } from '../../assets/fleetAssets';
 import { stripLeaseSuffixFromTruckName } from '../fleet/fleetTheme';
-import type { Delivery, Truck, TruckTransfer } from '../../types/game';
+import type { Delivery, Driver, Truck, TruckTransfer } from '../../types/game';
 import { getCityName } from '../../utils/entityLookup';
+import { getTruckTrackingMetrics } from '../../utils/truckTrackingMetrics';
 import { GameIcon, StatusBadge, type StatusBadgeVariant } from '../ui';
 import {
   MAP_BORDER,
@@ -81,10 +82,17 @@ function buildLocationLine(
   return cityName;
 }
 
+function fuelTone(percent: number): string {
+  if (percent <= 20) return '#F87171';
+  if (percent <= 40) return '#FBBF24';
+  return '#E8EEF7';
+}
+
 export interface MapTruckTrackingCardProps {
   truck: Truck;
   delivery?: Delivery;
   transfer?: TruckTransfer;
+  driver?: Driver;
   homeCityId?: string;
   currentTime?: number;
   onPress?: () => void;
@@ -94,6 +102,7 @@ function MapTruckTrackingCard({
   truck,
   delivery,
   transfer,
+  driver,
   homeCityId,
   currentTime,
   onPress,
@@ -108,11 +117,28 @@ function MapTruckTrackingCard({
   const isActiveDelivery = activeDelivery != null;
   const locationLine = buildLocationLine(activeDelivery, cityName);
   const statusLine = buildStatusLine(truck, activeDelivery, transfer, currentTime);
-  const condition = Math.round(truck.condition ?? 100);
   const showProgressBar = isActiveDelivery && typeof activeDelivery.progress === 'number';
   const progressPct = showProgressBar
     ? Math.round(Math.max(0, Math.min(1, activeDelivery.progress)) * 100)
     : 0;
+
+  const metrics = useMemo(
+    () =>
+      getTruckTrackingMetrics({
+        truck,
+        delivery: activeDelivery,
+        transfer,
+        driver,
+      }),
+    [truck, activeDelivery, transfer, driver],
+  );
+
+  const kmLabel = metrics.isMoving
+    ? `${metrics.remainingDistanceKm} km`
+    : '0 km';
+  const speedLabel = metrics.isMoving
+    ? `${metrics.currentSpeedKmh} km/sa`
+    : '0 km/sa';
 
   const CardWrapper = onPress ? TouchableOpacity : View;
 
@@ -141,18 +167,49 @@ function MapTruckTrackingCard({
               </View>
             ) : null}
           </View>
-          <Text style={[styles.cityLine, isActiveDelivery && styles.routeLine]} numberOfLines={1}>
-            {locationLine}
-          </Text>
-          <Text style={styles.statusLine} numberOfLines={1}>
-            {statusLine}
-          </Text>
+          <View style={styles.locationRow}>
+            <GameIcon name="map" size={11} color={MAP_MUTED} />
+            <Text style={[styles.cityLine, isActiveDelivery && styles.routeLine]} numberOfLines={1}>
+              {locationLine}
+            </Text>
+          </View>
+          <View style={styles.statusRow}>
+            <View
+              style={[
+                styles.statusDot,
+                truck.status === 'idle' ? styles.statusDotReady : styles.statusDotBusy,
+              ]}
+            />
+            <Text style={styles.statusLine} numberOfLines={1}>
+              {statusLine}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.metricsCol}>
+          <View style={styles.metricItem}>
+            <GameIcon name="fuel" size={14} color={fuelTone(metrics.fuelPercent)} />
+            <Text style={[styles.metricValue, { color: fuelTone(metrics.fuelPercent) }]}>
+              %{metrics.fuelPercent}
+            </Text>
+          </View>
+          <View style={styles.metricDivider} />
+          <View style={styles.metricItem}>
+            <GameIcon
+              name={metrics.isMoving ? 'distance' : 'speedometer'}
+              size={14}
+              color={MAP_MUTED}
+            />
+            <Text style={styles.metricValue}>
+              {metrics.isMoving ? kmLabel : speedLabel}
+            </Text>
+            {metrics.isMoving ? (
+              <Text style={styles.metricSubValue}>{speedLabel}</Text>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.rightCol}>
-          <Text style={styles.statLine} numberOfLines={1}>
-            Kond. {condition}%
-          </Text>
           <StatusBadge label={badge.label} variant={badge.variant} size="sm" />
           <GameIcon name="chevronRight" size={16} color={MAP_MUTED} />
         </View>
@@ -171,9 +228,13 @@ function arePropsEqual(prev: MapTruckTrackingCardProps, next: MapTruckTrackingCa
   if (prev.truck !== next.truck) return false;
   if (prev.delivery !== next.delivery) return false;
   if (prev.transfer !== next.transfer) return false;
+  if (prev.driver !== next.driver) return false;
   if (prev.homeCityId !== next.homeCityId) return false;
   if (prev.onPress !== next.onPress) return false;
   if (next.delivery != null && prev.currentTime !== next.currentTime) return false;
+  if (next.transfer != null && next.transfer.status === 'active' && prev.currentTime !== next.currentTime) {
+    return false;
+  }
   return true;
 }
 
@@ -181,7 +242,7 @@ export default memo(MapTruckTrackingCard, arePropsEqual);
 
 const styles = StyleSheet.create({
   card: {
-    height: MAP_TRUCK_CARD_HEIGHT,
+    minHeight: MAP_TRUCK_CARD_HEIGHT,
     borderRadius: MAP_TRUCK_CARD_RADIUS,
     backgroundColor: MAP_SURFACE,
     borderWidth: 1,
@@ -191,25 +252,25 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   cardDelivery: {
-    height: MAP_TRUCK_CARD_HEIGHT_DELIVERY,
+    minHeight: MAP_TRUCK_CARD_HEIGHT_DELIVERY,
     paddingBottom: 8,
   },
   cardRow: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
   artworkBox: {
-    width: 72,
-    height: 56,
+    width: 64,
+    height: 52,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   artwork: {
-    width: 72,
-    height: 56,
+    width: 64,
+    height: 52,
   },
   mainCol: {
     flex: 1,
@@ -243,7 +304,14 @@ const styles = StyleSheet.create({
     color: '#F59E0B',
     letterSpacing: 0.3,
   },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minWidth: 0,
+  },
   cityLine: {
+    flexShrink: 1,
     fontSize: 11,
     fontWeight: '600',
     color: MAP_MUTED,
@@ -252,23 +320,68 @@ const styles = StyleSheet.create({
     color: '#7FA8CC',
     fontWeight: '700',
   },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minWidth: 0,
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    flexShrink: 0,
+  },
+  statusDotReady: {
+    borderColor: '#34D399',
+    backgroundColor: 'transparent',
+  },
+  statusDotBusy: {
+    borderColor: '#60A5FA',
+    backgroundColor: 'rgba(96,165,250,0.35)',
+  },
   statusLine: {
+    flexShrink: 1,
     fontSize: 10.5,
     fontWeight: '600',
     color: '#7FA8CC',
   },
+  metricsCol: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 6,
+    flexShrink: 0,
+  },
+  metricItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    minWidth: 36,
+  },
+  metricDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(148,163,184,0.28)',
+    marginVertical: 2,
+  },
+  metricValue: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#E8EEF7',
+    letterSpacing: 0.1,
+  },
+  metricSubValue: {
+    fontSize: 8.5,
+    fontWeight: '600',
+    color: MAP_MUTED,
+  },
   rightCol: {
     alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    alignSelf: 'stretch',
-    gap: 4,
+    justifyContent: 'center',
+    gap: 6,
     flexShrink: 0,
-    minWidth: 72,
-  },
-  statLine: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: MAP_MUTED,
   },
   progressTrack: {
     height: 4,

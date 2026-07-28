@@ -23,12 +23,10 @@ import MapFilterTabs from '../components/map/MapFilterTabs';
 import MapHeader from '../components/map/MapHeader';
 import MapStatsStrip from '../components/map/MapStatsStrip';
 import MapTruckTrackingSection from '../components/map/MapTruckTrackingSection';
-import SelectedCityPanel from '../components/map/SelectedCityPanel';
 import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
 import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
 import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
 import { GameIcon } from '../components/ui';
-import { normalizeCityId } from '../data/networkPositions';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
@@ -47,7 +45,6 @@ import type {
   DeliveryStatus,
   Driver,
   Player,
-  ProductId,
   Truck,
 } from '../types/game';
 
@@ -97,7 +94,10 @@ function buildMapRecommendationSubtitle(params: {
   availableContracts: Contract[];
   trucks: Truck[];
   drivers: Driver[];
+  trailers?: import('../types/game').Trailer[];
   playerLevel: number;
+  playerReputation?: number;
+  homeCityId?: string;
   runningDeliveries: Delivery[];
   idleTruckCountByCity: Record<string, number>;
 }): string {
@@ -105,13 +105,25 @@ function buildMapRecommendationSubtitle(params: {
     availableContracts,
     trucks,
     drivers,
+    trailers,
     playerLevel,
+    playerReputation = 0,
+    homeCityId,
     runningDeliveries,
     idleTruckCountByCity,
   } = params;
 
   const startable = availableContracts.filter((contract) =>
-    getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
+    getContractAvailability(
+      contract,
+      trucks,
+      drivers,
+      playerLevel,
+      0,
+      playerReputation,
+      homeCityId,
+      trailers,
+    ).canStart,
   );
 
   if (startable.length === 0) {
@@ -196,16 +208,13 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
-  const openMarketFromAlert = useGameStore((state) => state.openMarketFromAlert);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
   const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Map');
   const onboardingHint = useActiveOnboardingHint(['track_delivery']);
 
-  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
-  const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
   const [selectedMapFilter, setSelectedMapFilter] = useState<NetworkFilterKey>('all');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [mapGestureActive, setMapGestureActive] = useState(false);
@@ -255,11 +264,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     return keys.size;
   }, [routes]);
 
-  const depotCityIds = useMemo(
-    () => (player?.warehouses ?? []).map((warehouse) => warehouse.cityId),
-    [player?.warehouses],
-  );
-
   const idleTrucks = useMemo(
     () => (player?.trucks ?? []).filter((truck) => isTruckIdle(truck.status)),
     [player?.trucks],
@@ -269,20 +273,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     () => buildIdleTruckCountByCity(player?.trucks, player?.homeCityId),
     [player?.trucks, player?.homeCityId],
   );
-
-  const userSelectedContract = useMemo(() => {
-    if (!selectedContractId) return null;
-    return availableContracts.find((c) => c.id === selectedContractId) ?? null;
-  }, [availableContracts, selectedContractId]);
-
-  const featuredContract: Contract | undefined = useMemo(() => {
-    if (runningDeliveries.length > 0) return undefined;
-    if (selectedContractId) {
-      const picked = availableContracts.find((c) => c.id === selectedContractId);
-      if (picked) return picked;
-    }
-    return [...availableContracts].sort((a, b) => b.payment - a.payment)[0];
-  }, [availableContracts, runningDeliveries.length, selectedContractId]);
 
   const marketOpportunities = useMemo(
     () => findMarketOpportunities(cities, routes, products, 5, player?.level ?? player?.companyLevel ?? 1),
@@ -333,36 +323,24 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   const trucks = player?.trucks ?? [];
 
-  const selectedCityPanelData = useMemo(() => {
-    if (!selectedCityId) return null;
-    const cityNorm = normalizeCityId(selectedCityId);
-    const cityName = getCityName(selectedCityId);
-    const truckCount = trucks.filter(
-      (truck) => normalizeCityId(resolveMapTruckCityId(truck, player?.homeCityId)) === cityNorm,
-    ).length;
-    const depotCount = depotCityIds.filter((id) => normalizeCityId(id) === cityNorm).length;
-    const jobCount = availableContracts.filter(
-      (contract) => normalizeCityId(contract.originCityId) === cityNorm,
-    ).length;
-    const city = cities.find((item) => normalizeCityId(item.id) === cityNorm);
-    const firstProductId = city ? Object.keys(city.products)[0] : undefined;
-    return { cityName, truckCount, depotCount, jobCount, firstProductId };
-  }, [
-    availableContracts,
-    cities,
-    depotCityIds,
-    player?.homeCityId,
-    selectedCityId,
-    trucks,
-  ]);
   const drivers = player?.drivers ?? [];
+  const trailers = player?.trailers ?? [];
 
   const hasStartableContracts = useMemo(
     () =>
       availableContracts.some((contract) =>
-        getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
+        getContractAvailability(
+          contract,
+          trucks,
+          drivers,
+          playerLevel,
+          currentTime,
+          player?.reputation ?? 0,
+          player?.homeCityId,
+          trailers,
+        ).canStart,
       ),
-    [availableContracts, trucks, drivers, playerLevel],
+    [availableContracts, trucks, drivers, trailers, playerLevel, currentTime, player?.reputation, player?.homeCityId],
   );
 
   const recommendationSubtitle = useMemo(
@@ -371,7 +349,10 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         availableContracts,
         trucks,
         drivers,
+        trailers,
         playerLevel,
+        playerReputation: player?.reputation ?? 0,
+        homeCityId: player?.homeCityId,
         runningDeliveries,
         idleTruckCountByCity,
       }),
@@ -379,7 +360,10 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
       availableContracts,
       trucks,
       drivers,
+      trailers,
       playerLevel,
+      player?.reputation,
+      player?.homeCityId,
       runningDeliveries,
       idleTruckCountByCity,
     ],
@@ -434,36 +418,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const handleDeliveryPress = (deliveryId: string) => {
     setSelectedDeliveryId(deliveryId);
     setSelectedMapFilter('trucks');
-  };
-
-  const handleCityPress = (cityId: string) => {
-    setSelectedCityId(cityId);
-  };
-
-  const handleMapBackgroundPress = () => {
-    setSelectedCityId(null);
-  };
-
-  const handleFocusSelectedCity = () => {
-    mapRef.current?.resetToOperational();
-  };
-
-  const handleViewCityJobs = () => {
-    onOpenContracts?.();
-  };
-
-  const handleOpenCityDepot = () => {
-    if (!selectedCityId || !selectedCityPanelData?.firstProductId) return;
-    openMarketFromAlert({
-      cityId: selectedCityId,
-      productId: selectedCityPanelData.firstProductId as ProductId,
-    });
-  };
-
-  const handleContractPress = (contractId: string) => {
-    setSelectedContractId(contractId);
-    setSelectedMapFilter('opportunities');
-    setStatusMessage('Fırsat seçildi — alt kartta detayları gör');
   };
 
   const handleOpenFleet = () => {
@@ -551,45 +505,14 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           <WorldMapCanvas
             ref={mapRef}
             calibrationMode={debugConfig.mapCalibrationEnabled}
-            cities={cities}
-            contracts={contracts}
             activeDeliveries={activeDeliveries}
             activeTransfers={activeTransfers}
-            trucks={trucks}
-            homeCityId={player?.homeCityId}
-            depotCityIds={depotCityIds}
-            idleTruckCountByCity={idleTruckCountByCity}
             selectedFilter={selectedMapFilter}
-            selectedCityId={selectedCityId}
-            featuredContract={featuredContract}
-            selectedContract={userSelectedContract}
             selectedDeliveryId={selectedDeliveryId}
-            onCityPress={handleCityPress}
-            onBackgroundPress={handleMapBackgroundPress}
-            onContractPress={handleContractPress}
             onDeliveryPress={handleDeliveryPress}
             onMapGestureActiveChange={setMapGestureActive}
           />
         </TurkeyNetworkCard>
-
-        {selectedCityPanelData ? (
-          <SelectedCityPanel
-            cityName={selectedCityPanelData.cityName}
-            truckCount={selectedCityPanelData.truckCount}
-            depotCount={selectedCityPanelData.depotCount}
-            jobCount={selectedCityPanelData.jobCount}
-            onViewJobs={
-              selectedCityPanelData.jobCount > 0 ? handleViewCityJobs : undefined
-            }
-            onOpenDepot={
-              selectedCityPanelData.depotCount > 0 && selectedCityPanelData.firstProductId
-                ? handleOpenCityDepot
-                : undefined
-            }
-            onFocus={handleFocusSelectedCity}
-            onClose={handleMapBackgroundPress}
-          />
-        ) : null}
 
         {showRecommendedAction ? (
           <CompactRecommendedActionRow
@@ -600,6 +523,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
         <MapTruckTrackingSection
           trucks={trucks}
+          drivers={player.drivers ?? []}
           deliveries={activeDeliveries}
           transfers={activeTransfers}
           idleTruckCountByCity={idleTruckCountByCity}

@@ -5,6 +5,7 @@
 import { deliveryBalance, economyBalance } from '../config/balance';
 import { getRoute } from '../data/routes';
 import type { Driver, Route, Truck, TruckTransfer } from '../types/game';
+import { calculateTransferFuelLiters, normalizeTruckFuel } from '../utils/truckFuel';
 
 const MIN_TRANSFER_HOURS = 1;
 const DEFAULT_SPEED_KMH = deliveryBalance.defaultAverageSpeed;
@@ -112,6 +113,9 @@ export function createTruckTransfer(params: {
     fuelPrice: params.fuelPrice,
   });
 
+  const fuelLitersTotal = calculateTransferFuelLiters(params.truck, params.route, params.driver);
+  const fuelLitersAtStart = normalizeTruckFuel(params.truck).currentFuelL ?? fuelLitersTotal;
+
   return {
     id: `transfer_${Date.now()}_${params.sequence}`,
     truckId: params.truck.id,
@@ -123,6 +127,8 @@ export function createTruckTransfer(params: {
     estimatedArrivalAt: params.currentTime + durationHours,
     progress: 0,
     fuelCost: costs.fuelCost,
+    fuelLitersAtStart,
+    fuelLitersTotal,
     driverCost: costs.driverCost,
     totalCost: costs.totalCost,
     status: 'active',

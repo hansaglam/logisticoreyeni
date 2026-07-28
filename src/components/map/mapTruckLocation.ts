@@ -1,7 +1,7 @@
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
 import { normalizeCityId } from '../../data/networkPositions';
 import type { Delivery, Truck, TruckTransfer } from '../../types/game';
-import { resolveTruckCityId } from '../../simulation/delivery';
+import { resolveTruckCityId, isDeliveryProgressComplete } from '../../simulation/delivery';
 import {
   getRoadRoute,
   getTruckPositionAlongRoadRoute,
@@ -96,7 +96,10 @@ export function resolveTruckTrackingCityId(
   homeCityId?: string,
 ): string {
   if (isActiveRunningDelivery(delivery)) {
-    return normalizeCityId(delivery.destinationCityId);
+    if (isDeliveryProgressComplete(delivery.progress)) {
+      return normalizeCityId(delivery.destinationCityId);
+    }
+    return resolveTruckPersistentCityId(truck, homeCityId);
   }
   return resolveTruckPersistentCityId(truck, homeCityId);
 }

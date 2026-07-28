@@ -507,13 +507,18 @@ function InteractiveTurkeyMapInner(
     ],
   );
 
-  const mapTapGesture = useMemo(
+  const calibrationTapGesture = useMemo(
     () =>
       Gesture.Tap()
+        .numberOfTaps(1)
         .maxDuration(250)
-        .maxDistance(10)
-        .onEnd((event) => {
+        .maxDistance(8)
+        .enabled(calibrationMode)
+        .onEnd((event, success) => {
           'worklet';
+          if (!success) {
+            return;
+          }
           if (panGestureConsumed.value || pinchGestureActive.value) {
             return;
           }
@@ -527,33 +532,60 @@ function InteractiveTurkeyMapInner(
             width: contentWidthSv.value,
             height: contentHeightSv.value,
           };
-
-          if (calibrationMode) {
-            const mapped = viewportToNormalizedMapPoint(event.x, event.y, transform, bounds);
-            if (!mapped.isInsideContent) {
-              runOnJS(logCalibrationOutside)();
-              return;
-            }
-            runOnJS(dispatchCalibrationTap)({
-              ...mapped,
-              normalized: {
-                x: roundMapCoordinate(mapped.normalized.x, 4),
-                y: roundMapCoordinate(mapped.normalized.y, 4),
-              },
-            });
+          const mapped = viewportToNormalizedMapPoint(event.x, event.y, transform, bounds);
+          if (!mapped.isInsideContent) {
+            runOnJS(logCalibrationOutside)();
             return;
           }
-
-          const point = viewportToContentPoint(event.x, event.y, transform);
-          runOnJS(dispatchContentTap)(point.x, point.y);
+          runOnJS(dispatchCalibrationTap)({
+            ...mapped,
+            normalized: {
+              x: roundMapCoordinate(mapped.normalized.x, 4),
+              y: roundMapCoordinate(mapped.normalized.y, 4),
+            },
+          });
         }),
     [
       calibrationMode,
       contentHeightSv,
       contentWidthSv,
       dispatchCalibrationTap,
-      dispatchContentTap,
       logCalibrationOutside,
+      panGestureConsumed,
+      pinchGestureActive,
+      scale,
+      translateX,
+      translateY,
+    ],
+  );
+
+  const cityTapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .numberOfTaps(1)
+        .maxDuration(250)
+        .maxDistance(10)
+        .enabled(!calibrationMode)
+        .onEnd((event, success) => {
+          'worklet';
+          if (!success) {
+            return;
+          }
+          if (panGestureConsumed.value || pinchGestureActive.value) {
+            return;
+          }
+
+          const transform = {
+            scale: scale.value,
+            translateX: translateX.value,
+            translateY: translateY.value,
+          };
+          const point = viewportToContentPoint(event.x, event.y, transform);
+          runOnJS(dispatchContentTap)(point.x, point.y);
+        }),
+    [
+      calibrationMode,
+      dispatchContentTap,
       panGestureConsumed,
       pinchGestureActive,
       scale,
@@ -567,9 +599,9 @@ function InteractiveTurkeyMapInner(
       Gesture.Simultaneous(
         pinchGesture,
         panGesture,
-        Gesture.Exclusive(doubleTapGesture, mapTapGesture),
+        Gesture.Exclusive(doubleTapGesture, calibrationTapGesture, cityTapGesture),
       ),
-    [doubleTapGesture, mapTapGesture, panGesture, pinchGesture],
+    [calibrationTapGesture, cityTapGesture, doubleTapGesture, panGesture, pinchGesture],
   );
 
   const animatedContentStyle = useAnimatedStyle(() => ({

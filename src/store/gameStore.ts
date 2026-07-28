@@ -100,6 +100,21 @@ import {
 } from '../simulation/contracts';
 import { ensureStarterContracts } from '../simulation/starterContracts';
 import {
+  assertDebugAnkaraAdanaContract,
+  createDebugContractBatchId,
+  finalizeDebugContractTraces,
+  generateDebugContractsFromCurrentCity,
+  installDebugContractsInspector,
+  reportUncalibratedExtendedSegments,
+  resolveDebugOriginCityId,
+  type DebugContractGenerationResult,
+} from '../simulation/debugContractGeneration';
+import {
+  catalogNeedsCanonicalMerge,
+  mergeCanonicalCities,
+  mergeCanonicalRoutes,
+} from '../data/mergeCanonicalCatalog';
+import {
   availabilityReasonToStartDeliveryErrorCode,
   calculateDeliverySettlement,
   calculateFailurePenalty,
@@ -107,13 +122,17 @@ import {
   calculateTruckRepairCost,
   canTruckCarryContract,
   applyFleetArrivalForDelivery,
+  ensureFleetAtDeliveryDestination,
+  buildDeliveryStartCapacitySnapshot,
   createDelivery,
+  formatDeliveryCapacityFailureMessage,
   getContractAvailability,
   getContractCargoWeight,
   getHighestOwnedTruckCapacity,
   getMaxIdleTruckCapacity,
   isDeliveryProgressComplete,
   logDeliveryCompletionLocation,
+  logDeliveryStartCapacity,
   safeCompleteDelivery,
   DeliveryError,
   failDelivery as failDeliverySim,
@@ -211,6 +230,7 @@ import {
 } from '../utils/warehouseCalculations';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
+import { finalizeTruckFuelAfterJob, normalizeTruckFuel } from '../utils/truckFuel';
 import { contractBalance, contractGenerationBalance, economyBalance, buildTimeScaleDebugSnapshot, getEffectiveOfflineGameSpeed, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   applyAdRewardGrant,
@@ -1208,7 +1228,7 @@ export function createInitialGameState(): StoreGameState {
       failedDeliveries: 0,
       lateDeliveries: 0,
       diamonds: 0,
-      trucks: [structuredClone(STARTER_TRUCK)],
+      trucks: [normalizeTruckFuel(structuredClone(STARTER_TRUCK))],
       drivers: [structuredClone(STARTER_DRIVER)],
       trailers: [],
       warehouses: [
@@ -1369,6 +1389,8 @@ export interface GameStore extends StoreGameState {
   getContractRefreshRemainingSeconds: () => number;
   /** Debug: manuel sözleşme üretimi */
   generateNewContracts: () => void;
+  /** Debug — mevcut şehir origin, tüm ulaşılabilir hedeflere 1'er sözleşme */
+  debugGenerateContractsFromCurrentCity: () => DebugContractGenerationResult;
   expireContracts: () => void;
   startDelivery: (contractId: string, truckId: string, driverId: string) => StartDeliveryResult;
   startDeliveryAutoAssign: (contractId: string) => StartDeliveryResult;
@@ -2790,6 +2812,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({
         ...saved,
         player: normalizeLoadedPlayer(saved.player),
+        cities: mergeCanonicalCities(saved.cities),
+        routes: mergeCanonicalRoutes(saved.routes),
         monetization: normalizeMonetizationState(saved.monetization, saved.currentTime ?? 0),
         contractGenerationDebug: createEmptyContractGenerationDebug(saved.currentTime ?? 0),
         deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
@@ -3939,6 +3963,90 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
+  debugGenerateContractsFromCurrentCity: () => {
+    const state = get();
+    const empty: DebugContractGenerationResult = {
+      batchId: 'none',
+      originCityId: 'unknown',
+      createdDestinations: [],
+      skippedDestinations: [],
+      createdCount: 0,
+      storedCount: 0,
+      storedDestinations: [],
+      contracts: [],
+      forceUnlockCities: true,
+      traces: [],
+    };
+
+    if (!state.player) {
+      return empty;
+    }
+
+    // Patch old saves missing expanded cities/routes into live store (no schema change).
+    const cities = mergeCanonicalCities(state.cities);
+    const routes = mergeCanonicalRoutes(state.routes);
+    if (catalogNeedsCanonicalMerge(state.cities, state.routes)) {
+      set({ cities, routes });
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[debug-contract-catalog-merge]', {
+          citiesBefore: state.cities.length,
+          citiesAfter: cities.length,
+          routesBefore: state.routes.length,
+          routesAfter: routes.length,
+        });
+      }
+    }
+
+    const live = get();
+    const playerLevel = Math.max(1, live.player?.level ?? live.player?.companyLevel ?? 1);
+    const batchId = createDebugContractBatchId(live.currentTime);
+    const storeContractsBefore = live.contracts;
+
+    const generated = generateDebugContractsFromCurrentCity({
+      cities: live.cities,
+      routes: live.routes,
+      products: live.products,
+      globalEconomy: live.globalEconomy,
+      trucks: live.player!.trucks,
+      homeCityId: live.player!.homeCityId,
+      playerLevel,
+      playerReputation: live.player!.reputation ?? 0,
+      currentTime: live.currentTime,
+      maxTruckCapacity:
+        getHighestOwnedTruckCapacity(live.player!.trucks) ||
+        getMaxContractTonnageForLevel(playerLevel),
+      // Debug force: unlock + uncalibrated destinations still get list jobs.
+      respectCityUnlockRules: false,
+      batchId,
+      storeCountBefore: storeContractsBefore.length,
+    });
+
+    reportUncalibratedExtendedSegments(generated.originCityId);
+
+    // Single store update — never per-destination set() with stale snapshots.
+    if (generated.contracts.length > 0) {
+      const merged = mergeContractsWithDedupe(storeContractsBefore, generated.contracts);
+      set({ contracts: merged });
+      get().markSaveDirty();
+      get().autoSave('contracts_generated');
+    }
+
+    const storeContractsAfter = get().contracts;
+    const finalized = finalizeDebugContractTraces({
+      result: generated,
+      storeContractsBefore,
+      storeContractsAfter,
+    });
+
+    assertDebugAnkaraAdanaContract({
+      originCityId: finalized.originCityId,
+      storeContracts: storeContractsAfter,
+      batchId,
+    });
+
+    return finalized;
+  },
+
   expireContracts: () => {
     const state = get();
     const expired = expireOldContracts(state.contracts, state.currentTime);
@@ -4047,11 +4155,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const trailers = state.player.trailers ?? [];
 
     if (!canTruckCarryContract(truck, contract, product, trailers)) {
-      const effectiveCapacity = getTruckEffectiveCapacityTons(truck, trailers);
+      const capacitySnapshot = buildDeliveryStartCapacitySnapshot({
+        contract,
+        truck,
+        trailers,
+        product,
+      });
       return {
         success: false,
         errorCode: 'CAPACITY_INSUFFICIENT',
-        message: `Bu iş için ${cargoWeight.toFixed(1)} ton kapasite gerekiyor. Seçilen kamyon ${effectiveCapacity.toFixed(1)} ton taşıyabiliyor.`,
+        message: formatDeliveryCapacityFailureMessage({
+          cargoWeight: capacitySnapshot.requiredTonnage,
+          effectiveCapacity: capacitySnapshot.effectiveCapacity,
+          truckName: truck.name,
+        }),
       };
     }
 
@@ -4086,6 +4203,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let delivery: Delivery;
     try {
+      logDeliveryStartCapacity({ contract, truck, trailers, product });
       delivery = createDelivery({
         contract,
         truck,
@@ -4095,6 +4213,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         globalEconomy: state.globalEconomy,
         currentTime: state.currentTime,
         sequence: state.activeDeliveries.length + 1,
+        trailers,
       });
     } catch (error) {
       const message =
@@ -4127,7 +4246,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const updatedDrivers = state.player.drivers.map((d) =>
       d.id === driverId
-        ? { ...d, status: 'driving' as const, assignedTruckId: truckId }
+        ? {
+            ...d,
+            status: 'driving' as const,
+            assignedTruckId: truckId,
+            currentCityId: resolveTruckCityId(truck, state.player.homeCityId),
+          }
         : d,
     );
 
@@ -4353,28 +4477,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return updated;
     });
 
-    let nextTrucks = state.player.trucks;
-    let nextDrivers = state.player.drivers;
-
-    if (deliveriesToComplete.length > 0) {
-      const completingDeliveries = updatedDeliveries.filter((delivery) =>
-        deliveriesToComplete.includes(delivery.id),
-      );
-
-      for (const delivery of completingDeliveries) {
-        const arrival = applyFleetArrivalForDelivery(nextTrucks, nextDrivers, delivery);
-        nextTrucks = arrival.trucks;
-        nextDrivers = arrival.drivers;
-      }
-    }
-
     set({
       activeDeliveries: updatedDeliveries,
-      player: {
-        ...state.player,
-        trucks: nextTrucks,
-        drivers: nextDrivers,
-      },
     });
 
     for (const { id, reason } of deliveriesToFail) {
@@ -4614,15 +4718,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const toCityName = getCityName(transfer.toCityId);
     const completedTransfer: TruckTransfer = { ...transfer, status: 'completed', progress: 1 };
 
-    const updatedTrucks = state.player.trucks.map((candidate) =>
-      candidate.id === transfer.truckId
-        ? {
-            ...candidate,
-            status: 'idle' as const,
-            currentCityId: transfer.toCityId,
-          }
-        : candidate,
-    );
+    const updatedTrucks = state.player.trucks.map((candidate) => {
+      if (candidate.id !== transfer.truckId) {
+        return candidate;
+      }
+      const arrived = {
+        ...candidate,
+        status: 'idle' as const,
+        currentCityId: transfer.toCityId,
+      };
+      if (transfer.fuelLitersAtStart == null || transfer.fuelLitersTotal == null) {
+        return normalizeTruckFuel(arrived);
+      }
+      return finalizeTruckFuelAfterJob({
+        truck: arrived,
+        fuelLitersAtStart: transfer.fuelLitersAtStart,
+        fuelLitersTotal: transfer.fuelLitersTotal,
+        distanceKm: transfer.distanceKm,
+      });
+    });
 
     const updatedDrivers = state.player.drivers.map((candidate) => {
       if (transfer.driverId && candidate.id === transfer.driverId) {
@@ -4682,13 +4796,43 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   completeDeliveryById: (deliveryId: string) => {
     const state = get();
-    const deliveryEventId = `event_delivery_complete_${deliveryId}`;
+    const deliveryRecord = state.activeDeliveries.find((d) => d.id === deliveryId);
 
-    if (
+    if (!deliveryRecord) {
+      console.warn('[delivery] complete skipped: delivery not found', deliveryId);
+      return;
+    }
+
+    const deliveryEventId = `event_delivery_complete_${deliveryId}`;
+    const alreadySettled =
       completedDeliveryNotificationIds.has(deliveryId) ||
       state.eventLog.some((event) => event.id === deliveryEventId) ||
-      hasDeliveryCompletionLedgerEntry(state.financeLedger, deliveryId)
-    ) {
+      hasDeliveryCompletionLedgerEntry(state.financeLedger, deliveryId) ||
+      deliveryRecord.status === 'completed' ||
+      deliveryRecord.status === 'failed' ||
+      deliveryRecord.settledAt != null;
+
+    if (alreadySettled) {
+      const repair = ensureFleetAtDeliveryDestination(
+        state.player.trucks,
+        state.player.drivers,
+        deliveryRecord,
+      );
+      if (repair.changed) {
+        set({
+          player: {
+            ...state.player,
+            trucks: repair.trucks,
+            drivers: repair.drivers,
+            trailers: syncTrailersWithTruckLocation(
+              state.player.trailers ?? [],
+              deliveryRecord.truckId,
+              resolveDeliveryDestinationCityId(deliveryRecord),
+              'idle',
+            ),
+          },
+        });
+      }
       return;
     }
 
@@ -4696,7 +4840,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const delivery = simState.deliveries.find((d) => d.id === deliveryId);
 
     if (!delivery) {
-      console.warn('[delivery] complete skipped: delivery not found', deliveryId);
+      console.warn('[delivery] complete skipped: delivery not found in sim', deliveryId);
       return;
     }
 
@@ -4809,20 +4953,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const notificationMessage = `${locationToastMessage} Net kâr: ${formatNotificationMoney(netProfit)}`;
     const eventMessage = `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
     const completedTruck = newSimState.trucks.find((t) => t.id === delivery.truckId);
-    const truckCityAfter = completedTruck
-      ? resolveTruckCityId(completedTruck, state.player.homeCityId)
-      : 'unknown';
-
-    logDeliveryCompletionLocation({
-      deliveryId: delivery.id,
-      truckId: delivery.truckId,
-      originCityId: delivery.originCityId,
-      destinationCityId,
-      truckCityBefore,
-      truckCityAfter,
-      truckStatusAfter: completedTruck?.status ?? 'idle',
-      activeDeliveryCleared: true,
-    });
     const driverXpGain = calculateDriverDeliveryXp({
       contract,
       distanceKm,
@@ -4859,6 +4989,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       return xpResult.driver;
     });
+    const syncedTrailers = syncTrailersWithTruckLocation(
+      state.player.trailers ?? [],
+      delivery.truckId,
+      destinationCityId,
+      'idle',
+    );
+    const completedDriver = updatedDrivers.find((d) => d.id === delivery.driverId);
+    const truckCityAfter = completedTruck
+      ? resolveTruckCityId(completedTruck, state.player.homeCityId)
+      : 'unknown';
+    logDeliveryCompletionLocation({
+      deliveryId: delivery.id,
+      truckId: delivery.truckId,
+      originCityId: delivery.originCityId,
+      destinationCityId,
+      truckCityBefore,
+      truckCityAfter,
+      driverCityAfter: completedDriver?.currentCityId,
+      trailerCityAfter: syncedTrailers.find((trailer) => trailer.attachedTruckId === delivery.truckId)
+        ?.city,
+      truckStatusAfter: completedTruck?.status ?? 'idle',
+      deliveryStatusAfter: 'completed',
+      activeDeliveryCleared: true,
+    });
     const settledAt = state.currentTime;
     const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
       item.id === deliveryId ? { ...item, settledAt } : item,
@@ -4891,12 +5045,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         trucks: merged.player!.trucks,
         drivers: updatedDrivers,
         warehouses: merged.player!.warehouses,
-        trailers: syncTrailersWithTruckLocation(
-          state.player.trailers ?? [],
-          delivery.truckId,
-          delivery.destinationCityId,
-          'idle',
-        ),
+        trailers: syncedTrailers,
         money: moneyAfterComplete,
         completedContracts: state.player.completedContracts + 1,
         lateDeliveries: isLateDelivery
@@ -5123,7 +5272,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const instanceId = `${catalogId}-${Date.now()}`;
-    const newTruck: Truck = {
+    const newTruck: Truck = normalizeTruckFuel({
       id: instanceId,
       catalogId,
       name: template.name,
@@ -5139,7 +5288,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       currentCityId: state.player.homeCityId ?? 'izmir',
       homeCityId: state.player.homeCityId ?? 'izmir',
       status: 'idle',
-    };
+    });
 
     set({
       player: {
@@ -5315,7 +5464,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       const instanceId = `${catalogId}-lease-${Date.now()}`;
       const leaseExpiresAt = state.currentTime + operatingCostBalance.leaseDurationHours;
-      const newTruck: Truck = {
+      const newTruck: Truck = normalizeTruckFuel({
         id: instanceId,
         catalogId,
         name: `${template.name} (Kiralık)`,
@@ -5337,7 +5486,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         currentCityId: state.player.homeCityId ?? 'izmir',
         homeCityId: state.player.homeCityId ?? 'izmir',
         status: 'idle',
-      };
+      });
 
       set({
         player: {
@@ -5831,19 +5980,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         (current.status === 'on_route' || current.status === 'preparing') &&
         isDeliveryProgressComplete(current.progress)
       ) {
-        const boostState = get();
-        const arrival = applyFleetArrivalForDelivery(
-          boostState.player.trucks,
-          boostState.player.drivers,
-          current,
-        );
-        set({
-          player: {
-            ...boostState.player,
-            trucks: arrival.trucks,
-            drivers: arrival.drivers,
-          },
-        });
         get().completeDeliveryById(boostedDeliveryToComplete);
       }
     }
@@ -5940,24 +6076,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().autoSave('delivery_incident');
 
     if (isDeliveryProgressComplete(result.delivery.progress)) {
-      const completionState = get();
-      const completingDelivery = completionState.activeDeliveries.find(
-        (item) => item.id === deliveryId,
-      );
-      if (completingDelivery) {
-        const arrival = applyFleetArrivalForDelivery(
-          completionState.player.trucks,
-          completionState.player.drivers,
-          completingDelivery,
-        );
-        set({
-          player: {
-            ...completionState.player,
-            trucks: arrival.trucks,
-            drivers: arrival.drivers,
-          },
-        });
-      }
       get().completeDeliveryById(deliveryId);
     }
 
@@ -6863,6 +6981,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 }));
+
+if (typeof __DEV__ !== 'undefined' && __DEV__) {
+  installDebugContractsInspector(
+    () => useGameStore.getState().contracts,
+    () => {
+      const state = useGameStore.getState();
+      if (!state.player) return null;
+      return resolveDebugOriginCityId(state.player.trucks, state.player.homeCityId);
+    },
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Örnek kullanım (yorum — çalıştırılmaz)

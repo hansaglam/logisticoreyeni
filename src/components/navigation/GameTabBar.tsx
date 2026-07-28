@@ -64,6 +64,9 @@ function useTabBadges(): Partial<Record<TabKey, number>> {
   const contracts = useGameStore((state) => state.contracts);
   const trucks = useGameStore((state) => state.player.trucks);
   const drivers = useGameStore((state) => state.player.drivers);
+  const trailers = useGameStore((state) => state.player.trailers);
+  const homeCityId = useGameStore((state) => state.player.homeCityId);
+  const playerReputation = useGameStore((state) => state.player.reputation ?? 0);
   const playerLevel = useGameStore(
     (state) => Math.max(1, state.player.level ?? state.player.companyLevel ?? 1),
   );
@@ -75,7 +78,16 @@ function useTabBadges(): Partial<Record<TabKey, number>> {
     const playableCount = contracts.filter(
       (contract) =>
         contract.status === 'available' &&
-        getContractAvailability(contract, trucks, drivers, playerLevel).canStart,
+        getContractAvailability(
+          contract,
+          trucks,
+          drivers,
+          playerLevel,
+          0,
+          playerReputation,
+          homeCityId,
+          trailers,
+        ).canStart,
     ).length;
     if (playableCount > 0) {
       badges.contracts = playableCount;
@@ -87,7 +99,7 @@ function useTabBadges(): Partial<Record<TabKey, number>> {
     }
 
     return badges;
-  }, [contracts, trucks, drivers, playerLevel, marketAlerts]);
+  }, [contracts, trucks, drivers, trailers, homeCityId, playerReputation, playerLevel, marketAlerts]);
 }
 
 const TabBadge = React.memo(function TabBadge({ count }: { count: number }) {

@@ -2,12 +2,26 @@ import {
   getDirectRoadSegment,
   getRoadRoute,
   getTruckPositionAlongRoadRoute,
+  MAP_ROAD_ENDPOINT_TOLERANCE,
   normalizeMapDeliveryProgress,
 } from '../src/components/map/mapRoadUtils';
+import { getWorldMapCityPosition } from '../src/data/worldMapPositions';
+
+function distanceToCity(point: { x: number; y: number }, cityId: string): number {
+  const city = getWorldMapCityPosition(cityId);
+  if (!city) return Infinity;
+  const dx = point.x - city.x;
+  const dy = point.y - city.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 
 const cases = [
   { from: 'istanbul', to: 'bursa', progresses: [0, 0.05, 0.5, 1] },
   { from: 'bursa', to: 'istanbul', progresses: [0, 0.5, 1] },
+  { from: 'ankara', to: 'antalya', progresses: [0, 0.5, 1] },
+  { from: 'antalya', to: 'ankara', progresses: [0, 0.5, 1] },
+  { from: 'ankara', to: 'trabzon', progresses: [0, 0.5, 1] },
+  { from: 'trabzon', to: 'ankara', progresses: [0, 0.5, 1] },
 ];
 
 let pass = 0;
@@ -33,6 +47,24 @@ for (const { from, to, progresses } of cases) {
     Math.abs(direct[direct.length - 1].y - roadRoute[roadRoute.length - 1].y) < 0.0001;
 
   console.log(`${from} → ${to} (points=${roadRoute.length}, reverse=${reversedOk ? 'ok' : 'check'})`);
+
+  const fromPos = getWorldMapCityPosition(from);
+  const toPos = getWorldMapCityPosition(to);
+  if (fromPos && toPos) {
+    const startNearOrigin =
+      distanceToCity(roadRoute[0], from) <= MAP_ROAD_ENDPOINT_TOLERANCE;
+    const endNearDest =
+      distanceToCity(roadRoute[roadRoute.length - 1], to) <= MAP_ROAD_ENDPOINT_TOLERANCE;
+    if (startNearOrigin && endNearDest) {
+      pass += 1;
+      console.log(`  ✓ endpoints near ${from} / ${to}`);
+    } else {
+      fail += 1;
+      console.log(
+        `  ✗ endpoint mismatch start=${distanceToCity(roadRoute[0], from).toFixed(4)} end=${distanceToCity(roadRoute[roadRoute.length - 1], to).toFixed(4)}`,
+      );
+    }
+  }
 
   for (const progress of progresses) {
     const normalized = normalizeMapDeliveryProgress(progress);

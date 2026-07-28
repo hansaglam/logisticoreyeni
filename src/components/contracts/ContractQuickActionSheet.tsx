@@ -186,6 +186,9 @@ export default function ContractQuickActionSheet({
   const { height: windowHeight } = useWindowDimensions();
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
+  const trailers = useGameStore((state) => state.player?.trailers ?? []);
+  const homeCityId = useGameStore((state) => state.player?.homeCityId);
+  const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
 
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
@@ -196,8 +199,8 @@ export default function ContractQuickActionSheet({
   const isExpired = contract ? currentTime >= (contract.expiresAt ?? 0) : false;
 
   const truckOptions = useMemo(
-    () => buildTruckOptions(trucks, cargoWeight, contract?.originCityId ?? ''),
-    [trucks, cargoWeight, contract?.originCityId],
+    () => buildTruckOptions(trucks, cargoWeight, contract?.originCityId ?? '', trailers),
+    [trucks, cargoWeight, contract?.originCityId, trailers],
   );
 
   const driverOptions = useMemo(() => buildDriverOptions(drivers), [drivers]);
@@ -214,19 +217,25 @@ export default function ContractQuickActionSheet({
       contract,
       globalEconomy: globalEconomy ?? undefined,
       trucks,
+      trailers,
       drivers,
       companyLevel: playerLevel,
       truck: selectedTruckOption?.truck,
       driver: selectedDriverOption?.driver,
+      playerReputation,
+      homeCityId,
     });
   }, [
     contract,
     globalEconomy,
     trucks,
+    trailers,
     drivers,
     playerLevel,
     selectedTruckOption?.truck,
     selectedDriverOption?.driver,
+    playerReputation,
+    homeCityId,
   ]);
 
   useEffect(() => {

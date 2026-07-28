@@ -25,8 +25,13 @@ import {
   getContractAvailability,
   getContractCargoWeight,
   isTruckAtContractOrigin,
-  resolveTruckCityId,
 } from '../simulation/delivery';
+import {
+  evaluateDriverOption,
+  evaluateTruckOption,
+  type DriverOption,
+  type TruckOption,
+} from '../utils/assignmentOptions';
 import { useGameStore } from '../store/gameStore';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney } from '../theme/format';
@@ -47,8 +52,6 @@ import TutorialOverlay from './tutorial/TutorialOverlay';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
 
-const MIN_TRUCK_CONDITION = 30;
-const LOW_CONDITION_WARNING = 50;
 const START_BUTTON_HEIGHT = 50;
 const FOOTER_SCROLL_EXTRA = 40;
 const FOOTER_CONTENT_HEIGHT = 120;
@@ -63,31 +66,6 @@ export type ContractAssignmentModalProps = {
   onConfirm: (truckId: string, driverId: string) => void;
   onGoToFleet?: (subTab?: 'trucks' | 'drivers' | 'shop') => void;
 };
-
-type TruckIssue =
-  | 'eligible'
-  | 'on_route'
-  | 'maintenance'
-  | 'wrong_city'
-  | 'capacity'
-  | 'condition_blocked'
-  | 'condition_warning';
-
-type DriverIssue = 'eligible' | 'on_route' | 'resting';
-
-interface TruckOption {
-  truck: Truck;
-  issue: TruckIssue;
-  label: string;
-  selectable: boolean;
-}
-
-interface DriverOption {
-  driver: Driver;
-  issue: DriverIssue;
-  label: string;
-  selectable: boolean;
-}
 
 interface ContractSummaryFinancials {
   expense: number;
@@ -132,78 +110,6 @@ function getConditionColor(condition: number): string {
   if (condition >= 70) return colors.success;
   if (condition >= 40) return colors.accentAmber;
   return colors.danger;
-}
-
-function evaluateTruckOption(
-  truck: Truck,
-  cargoWeight: number,
-  originCityId: string,
-): TruckOption {
-  const capacity = truck.capacity ?? 0;
-  const condition = truck.condition ?? 100;
-
-  if (truck.status === 'on_route') {
-    return { truck, issue: 'on_route', label: 'Teslimatta', selectable: false };
-  }
-  if (truck.status === 'transferring') {
-    return { truck, issue: 'on_route', label: 'Yönlendiriliyor', selectable: false };
-  }
-  if (truck.status === 'maintenance') {
-    return { truck, issue: 'maintenance', label: 'Bakım gerekli', selectable: false };
-  }
-  if (truck.status !== 'idle') {
-    return { truck, issue: 'on_route', label: 'Müsait değil', selectable: false };
-  }
-
-  const truckCityId = resolveTruckCityId(truck);
-  if (originCityId && truckCityId !== originCityId) {
-    const cityName = getCityName(truckCityId);
-    return {
-      truck,
-      issue: 'wrong_city',
-      label: `${cityName}'da · çıkış şehrinde değil`,
-      selectable: false,
-    };
-  }
-
-  if (capacity < cargoWeight) {
-    return {
-      truck,
-      issue: 'capacity',
-      label: `${cargoWeight.toFixed(1)}t gerekli / ${capacity.toFixed(1)}t mevcut`,
-      selectable: false,
-    };
-  }
-  if (condition < MIN_TRUCK_CONDITION) {
-    return {
-      truck,
-      issue: 'condition_blocked',
-      label: 'Kondisyon çok düşük',
-      selectable: false,
-    };
-  }
-  if (condition < LOW_CONDITION_WARNING) {
-    return {
-      truck,
-      issue: 'condition_warning',
-      label: 'Kondisyon düşük, risk artar',
-      selectable: true,
-    };
-  }
-  return { truck, issue: 'eligible', label: 'Uygun', selectable: true };
-}
-
-function evaluateDriverOption(driver: Driver): DriverOption {
-  if (driver.status === 'driving') {
-    return { driver, issue: 'on_route', label: 'Şu anda teslimatta', selectable: false };
-  }
-  if (driver.status === 'resting') {
-    return { driver, issue: 'resting', label: 'Dinleniyor', selectable: false };
-  }
-  if (driver.status !== 'idle') {
-    return { driver, issue: 'on_route', label: 'Müsait değil', selectable: false };
-  }
-  return { driver, issue: 'eligible', label: 'Uygun', selectable: true };
 }
 
 function getTruckBadge(option: TruckOption): { label: string; variant: StatusBadgeVariant } {
@@ -445,6 +351,9 @@ export default function ContractAssignmentModal({
   const bottomInset = getBottomInset(insets);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
+  const trailers = useGameStore((state) => state.player?.trailers ?? []);
+  const homeCityId = useGameStore((state) => state.player?.homeCityId);
+  const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
 
@@ -460,15 +369,24 @@ export default function ContractAssignmentModal({
     if (!contract) {
       return null;
     }
-    return getContractAvailability(contract, safeTrucks, safeDrivers, playerLevel, currentTime);
-  }, [contract, safeTrucks, safeDrivers, playerLevel, currentTime]);
+    return getContractAvailability(
+      contract,
+      safeTrucks,
+      safeDrivers,
+      playerLevel,
+      currentTime,
+      playerReputation,
+      homeCityId,
+      trailers,
+    );
+  }, [contract, safeTrucks, safeDrivers, playerLevel, currentTime, playerReputation, homeCityId, trailers]);
 
   const truckOptions = useMemo(
     () =>
       safeTrucks.map((truck) =>
-        evaluateTruckOption(truck, cargoWeight, contract?.originCityId ?? ''),
+        evaluateTruckOption(truck, cargoWeight, contract?.originCityId ?? '', trailers),
       ),
-    [safeTrucks, cargoWeight, contract?.originCityId],
+    [safeTrucks, cargoWeight, contract?.originCityId, trailers],
   );
 
   const driverOptions = useMemo(
@@ -489,10 +407,13 @@ export default function ContractAssignmentModal({
       contract,
       globalEconomy: globalEconomy ?? undefined,
       trucks: safeTrucks,
+      trailers,
       drivers: safeDrivers,
       companyLevel: playerLevel,
       truck: selectedTruckOption?.truck,
       driver: selectedDriverOption?.driver,
+      playerReputation,
+      homeCityId,
     });
 
     return {
@@ -503,10 +424,13 @@ export default function ContractAssignmentModal({
     contract,
     globalEconomy,
     safeTrucks,
+    trailers,
     safeDrivers,
     playerLevel,
     selectedTruckOption?.truck,
     selectedDriverOption?.driver,
+    playerReputation,
+    homeCityId,
   ]);
 
   const canConfirm =

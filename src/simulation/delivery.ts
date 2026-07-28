@@ -21,6 +21,12 @@ import type {
   Truck,
 } from '../types/game';
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
+import { debugConfig } from '../config/debug';
+import {
+  calculateDeliveryFuelLiters,
+  finalizeTruckFuelAfterJob,
+  normalizeTruckFuel,
+} from '../utils/truckFuel';
 import { getSafeFuelPrice } from './economy';
 import { getCargoWeightCostMultiplier } from './contractEconomics';
 import { meetsDriverLevelRequirement } from './driverProgress';
@@ -36,9 +42,13 @@ import {
   canTruckCarryCargo,
   canTruckCarryContract as canTruckCarryContractWithTrailers,
   getMaxFleetCapacityTons,
+  getTrailerCapacityBonus,
   getTruckEffectiveCapacityTons,
+  hasEnoughCargoCapacity,
   resolveCapacityDisabledReasonKind,
 } from './capacity';
+import { logContractFleetEligibility } from './contractTruckEligibility';
+import { getAttachedTrailerForTruck } from './trailerAttachment';
 
 const isDevBuild = typeof __DEV__ !== 'undefined' && __DEV__;
 
@@ -205,6 +215,23 @@ export function applyTruckArrivalAtCity(truck: Truck, destinationCityId: string)
   };
 }
 
+export function resolveDriverCityId(
+  driver: Pick<Driver, 'currentCityId' | 'assignedTruckId'>,
+  trucks: Truck[] | undefined,
+  fallbackHomeCityId?: string,
+): string {
+  if (driver.currentCityId) {
+    return normalizeCityId(driver.currentCityId);
+  }
+  if (driver.assignedTruckId) {
+    const truck = (trucks ?? []).find((item) => item.id === driver.assignedTruckId);
+    if (truck) {
+      return resolveTruckCityId(truck, fallbackHomeCityId);
+    }
+  }
+  return normalizeCityId(fallbackHomeCityId ?? DEFAULT_TRUCK_CITY_ID);
+}
+
 export function applyFleetArrivalForDelivery(
   trucks: Truck[],
   drivers: Driver[],
@@ -218,9 +245,58 @@ export function applyFleetArrivalForDelivery(
         : truck,
     ),
     drivers: drivers.map((driver) =>
-      driver.id === delivery.driverId ? { ...driver, status: 'idle' as const } : driver,
+      driver.id === delivery.driverId
+        ? {
+            ...driver,
+            status: 'idle' as const,
+            currentCityId: destinationCityId,
+          }
+        : driver,
     ),
   };
+}
+
+/** Idempotent repair — teslimat hedefinde filo konumunu doğrular. */
+export function ensureFleetAtDeliveryDestination(
+  trucks: Truck[],
+  drivers: Driver[],
+  delivery: Pick<Delivery, 'truckId' | 'driverId' | 'destinationCityId'>,
+): { trucks: Truck[]; drivers: Driver[]; changed: boolean } {
+  const destinationCityId = resolveDeliveryDestinationCityId(delivery);
+  let changed = false;
+
+  const nextTrucks = trucks.map((truck) => {
+    if (truck.id !== delivery.truckId) {
+      return truck;
+    }
+    const atDestination =
+      normalizeCityId(truck.currentCityId) === destinationCityId && truck.status === 'idle';
+    if (atDestination) {
+      return truck;
+    }
+    changed = true;
+    return applyTruckArrivalAtCity(truck, destinationCityId);
+  });
+
+  const nextDrivers = drivers.map((driver) => {
+    if (driver.id !== delivery.driverId) {
+      return driver;
+    }
+    const atDestination =
+      normalizeCityId(driver.currentCityId ?? '') === destinationCityId &&
+      driver.status === 'idle';
+    if (atDestination) {
+      return driver;
+    }
+    changed = true;
+    return {
+      ...driver,
+      status: 'idle' as const,
+      currentCityId: destinationCityId,
+    };
+  });
+
+  return { trucks: nextTrucks, drivers: nextDrivers, changed };
 }
 
 export interface DeliveryCompletionLocationLog {
@@ -230,14 +306,28 @@ export interface DeliveryCompletionLocationLog {
   destinationCityId: string;
   truckCityBefore: string;
   truckCityAfter: string;
+  driverCityAfter?: string;
+  trailerCityAfter?: string;
   truckStatusAfter: Truck['status'];
+  deliveryStatusAfter: Delivery['status'];
   activeDeliveryCleared: boolean;
 }
 
 export function logDeliveryCompletionLocation(log: DeliveryCompletionLocationLog): void {
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    console.log('[delivery-complete-location]', log);
+  if (typeof __DEV__ === 'undefined' || !__DEV__ || !debugConfig.deliveryCompletionLogsEnabled) {
+    return;
   }
+
+  console.log('[delivery-completion]', {
+    deliveryId: log.deliveryId,
+    originCityId: log.originCityId,
+    destinationCityId: log.destinationCityId,
+    truckCityBefore: log.truckCityBefore,
+    truckCityAfter: log.truckCityAfter,
+    driverCityAfter: log.driverCityAfter,
+    trailerCityAfter: log.trailerCityAfter,
+    deliveryStatusAfter: log.deliveryStatusAfter,
+  });
 }
 
 export function normalizeTruckCity(truck: Truck, fallbackHomeCityId?: string): Truck {
@@ -425,6 +515,9 @@ function buildUnavailableContractAvailability(
     maxIdleTruckCapacity: context.maxIdleTruckCapacity,
     requiredLevel: context.requiredLevel,
     playerLevel: context.playerLevel,
+    capacityDisabledReasonKind: context.capacityDisabledReasonKind,
+    bestAvailableTruckCapacity: context.bestAvailableTruckCapacity,
+    maxFleetCapacityTons: context.maxFleetCapacityTons,
     ...((isDevBuild && context.debug) ? { debug: context.debug } : {}),
   };
 }
@@ -570,6 +663,17 @@ export function getContractAvailability(
   const trucksWithCapacityAtOrigin = idleTrucksAtOrigin.filter((truck) =>
     canTruckCarryContract(truck, contract, product ?? undefined, trailerList),
   );
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    logContractFleetEligibility({
+      contract,
+      trucks: idleTrucksAtOrigin,
+      trailers: trailerList,
+      drivers: driverList,
+      product: product ?? undefined,
+      fallbackHomeCityId,
+    });
+  }
 
   if (trucksWithCapacityAtOrigin.length === 0) {
     const capacityContext = buildCapacityDisabledReasonInput(
@@ -1187,6 +1291,78 @@ export interface CreateDeliveryParams {
   globalEconomy: GlobalEconomy;
   currentTime: number;
   sequence?: number;
+  /** Bağlı dorse dahil kapasite doğrulaması için — startDelivery güncel store'dan geçirir */
+  trailers?: Trailer[];
+}
+
+export interface DeliveryStartCapacitySnapshot {
+  contractId: string;
+  requiredTonnage: number;
+  truckId: string;
+  truckName: string;
+  rawTruckCapacity: number;
+  trailerId: string | null;
+  trailerType: string | null;
+  trailerCapacity: number;
+  effectiveCapacity: number;
+  capacityEnough: boolean;
+}
+
+/** __DEV__ — teslimat başlatma kapasite doğrulaması */
+export function buildDeliveryStartCapacitySnapshot(params: {
+  contract: Contract;
+  truck: Truck;
+  trailers?: Trailer[];
+  product?: Product;
+}): DeliveryStartCapacitySnapshot {
+  const { contract, truck, trailers, product } = params;
+  const trailer = getAttachedTrailerForTruck(truck.id, trailers);
+  const requiredTonnage = getContractCargoWeight(contract, product);
+  const rawTruckCapacity = getTruckEffectiveCapacityTons(truck, []);
+  const trailerCapacity = getTrailerCapacityBonus(trailer);
+  const effectiveCapacity = getTruckEffectiveCapacityTons(truck, trailers);
+  const capacityEnough = hasEnoughCargoCapacity(effectiveCapacity, requiredTonnage);
+
+  return {
+    contractId: contract.id,
+    requiredTonnage,
+    truckId: truck.id,
+    truckName: truck.name,
+    rawTruckCapacity,
+    trailerId: trailer?.id ?? null,
+    trailerType: trailer?.type ?? null,
+    trailerCapacity,
+    effectiveCapacity,
+    capacityEnough,
+  };
+}
+
+export function logDeliveryStartCapacity(params: {
+  contract: Contract;
+  truck: Truck;
+  trailers?: Trailer[];
+  product?: Product;
+}): DeliveryStartCapacitySnapshot {
+  const snapshot = buildDeliveryStartCapacitySnapshot(params);
+  if (
+    typeof __DEV__ !== 'undefined' &&
+    __DEV__ &&
+    debugConfig.deliveryStartLogsEnabled
+  ) {
+    console.log('[delivery-start-capacity]', snapshot);
+  }
+  return snapshot;
+}
+
+export function formatDeliveryCapacityFailureMessage(params: {
+  cargoWeight: number;
+  effectiveCapacity: number;
+  truckName: string;
+}): string {
+  return (
+    `Bu kombinasyon yükü taşıyamaz: ${params.cargoWeight.toFixed(1)} t yük / ` +
+    `${params.effectiveCapacity.toFixed(1)} t efektif kapasite (${params.truckName})`
+  );
 }
 
 /**
@@ -1203,18 +1379,38 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     globalEconomy,
     currentTime,
     sequence = randomIntBetween(1, 999_999),
+    trailers = [],
   } = params;
 
-  if (!canTruckCarryContract(truck, contract, product)) {
-    const cargoWeight = calculateCargoWeight(contract, product);
+  const capacitySnapshot = buildDeliveryStartCapacitySnapshot({
+    contract,
+    truck,
+    trailers,
+    product,
+  });
+
+  if (!canTruckCarryContract(truck, contract, product, trailers)) {
+    const cargoWeight = capacitySnapshot.requiredTonnage;
     throw new DeliveryError(
-      `Kamyon "${truck.name}" bu yükü taşıyamaz: ${cargoWeight.toFixed(1)} ton / ${truck.capacity} ton kapasite`,
+      formatDeliveryCapacityFailureMessage({
+        cargoWeight,
+        effectiveCapacity: capacitySnapshot.effectiveCapacity,
+        truckName: truck.name,
+      }),
       'capacity_exceeded',
     );
   }
 
   const travelHours = calculateTravelHours(contract, truck, driver, route, product);
   const fuelCost = calculateFuelCost(contract, truck, driver, route, product, globalEconomy);
+  const fuelLitersTotal = calculateDeliveryFuelLiters({
+    contract,
+    truck,
+    driver,
+    route,
+    product,
+  });
+  const fuelLitersAtStart = normalizeTruckFuel(truck).currentFuelL ?? fuelLitersTotal;
   const maintenanceCost = calculateMaintenanceCost(truck, route, contract, product);
   const conditionLoss = calculateConditionLoss(contract, truck, driver, route, product);
   const breakdownChance = calculateBreakdownChance(contract, truck, driver, route, product);
@@ -1241,6 +1437,8 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     estimatedArrivalTime,
     deadlineTime,
     fuelCost,
+    fuelLitersAtStart,
+    fuelLitersTotal,
     maintenanceCost,
     estimatedProfit,
     travelHours,
@@ -1528,14 +1726,27 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
 
   const conditionLoss = resolveDeliveryConditionLoss(delivery);
 
-  const updatedTrucks = updateById(gameState.trucks, delivery.truckId, (truck) => ({
-    ...applyTruckArrivalAtCity(truck, delivery.destinationCityId),
-    condition: clamp((truck.condition ?? 100) - conditionLoss, 0, 100),
-  }));
+  const updatedTrucks = updateById(gameState.trucks, delivery.truckId, (truck) => {
+    const arrived = applyTruckArrivalAtCity(truck, delivery.destinationCityId);
+    const fueled =
+      delivery.fuelLitersAtStart != null && delivery.fuelLitersTotal != null
+        ? finalizeTruckFuelAfterJob({
+            truck: arrived,
+            fuelLitersAtStart: delivery.fuelLitersAtStart,
+            fuelLitersTotal: delivery.fuelLitersTotal,
+            distanceKm: delivery.distanceKm ?? 0,
+          })
+        : normalizeTruckFuel(arrived);
+    return {
+      ...fueled,
+      condition: clamp((truck.condition ?? 100) - conditionLoss, 0, 100),
+    };
+  });
 
   const updatedDrivers = updateById(gameState.drivers, delivery.driverId, (driver) => ({
     ...driver,
     status: 'idle' as const,
+    currentCityId: normalizeCityId(delivery.destinationCityId),
   }));
 
   const updatedCities = applyDeliveryStockChange(gameState.cities, delivery);
@@ -1585,12 +1796,23 @@ export function failDelivery(
 
   const conditionLoss = resolveDeliveryConditionLoss(delivery);
 
-  const updatedTrucks = updateById(gameState.trucks, delivery.truckId, (truck) => ({
-    ...truck,
-    status: 'idle' as const,
-    condition: clamp((truck.condition ?? 100) - conditionLoss * 0.5, 0, 100),
-    currentCityId: normalizeCityId(delivery.originCityId),
-  }));
+  const updatedTrucks = updateById(gameState.trucks, delivery.truckId, (truck) => {
+    const returned = {
+      ...truck,
+      status: 'idle' as const,
+      currentCityId: normalizeCityId(delivery.originCityId),
+      condition: clamp((truck.condition ?? 100) - conditionLoss * 0.5, 0, 100),
+    };
+    if (delivery.fuelLitersAtStart == null || delivery.fuelLitersTotal == null) {
+      return normalizeTruckFuel(returned);
+    }
+    return finalizeTruckFuelAfterJob({
+      truck: returned,
+      fuelLitersAtStart: delivery.fuelLitersAtStart,
+      fuelLitersTotal: Math.round(delivery.fuelLitersTotal * clamp(delivery.progress, 0, 1)),
+      distanceKm: Math.round((delivery.distanceKm ?? 0) * clamp(delivery.progress, 0, 1)),
+    });
+  });
 
   const updatedDrivers = updateById(gameState.drivers, delivery.driverId, (driver) => ({
     ...driver,

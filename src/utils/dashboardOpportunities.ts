@@ -41,6 +41,7 @@ export interface BuildDashboardOpportunitiesInput {
   contracts: Contract[];
   trucks: Truck[];
   drivers: Driver[];
+  trailers?: import('../types/game').Trailer[];
   playerLevel: number;
   currentTime: number;
   globalEconomy?: GlobalEconomy;
@@ -48,6 +49,8 @@ export interface BuildDashboardOpportunitiesInput {
   cities: City[];
   routes: Route[];
   products: Product[];
+  homeCityId?: string;
+  playerReputation?: number;
   limit?: number;
 }
 
@@ -212,6 +215,7 @@ export function buildDashboardOpportunities(
     contracts,
     trucks,
     drivers,
+    trailers,
     playerLevel,
     currentTime,
     globalEconomy,
@@ -219,6 +223,8 @@ export function buildDashboardOpportunities(
     cities,
     routes,
     products,
+    homeCityId,
+    playerReputation,
     limit = 3,
   } = input;
 
@@ -231,10 +237,13 @@ export function buildDashboardOpportunities(
     const preview = buildContractPreview({
       contract,
       trucks,
+      trailers,
       drivers,
       companyLevel: safeLevel,
       currentTime,
       globalEconomy,
+      homeCityId,
+      playerReputation,
     });
     previewById.set(contract.id, preview);
     if (preview.availability.canStart) {

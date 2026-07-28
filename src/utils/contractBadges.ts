@@ -89,7 +89,7 @@ function getAvailabilityBadge(availability: ContractAvailability): ContractCardB
   const label =
     availability.title ??
     getContractAvailabilityLabel(availability.reason, {
-      capacityDisabledReasonKind: undefined,
+      capacityDisabledReasonKind: availability.capacityDisabledReasonKind,
     });
   if (!label) {
     return null;

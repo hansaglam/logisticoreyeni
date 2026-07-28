@@ -140,6 +140,7 @@ function selectPreviewTruckAndDriver(
   explicitDriver?: Driver,
   currentTime = 0,
   fallbackHomeCityId?: string,
+  trailers?: import('../types/game').Trailer[],
 ): { truck?: Truck; driver?: Driver } {
   if (explicitTruck && explicitDriver) {
     return { truck: explicitTruck, driver: explicitDriver };
@@ -148,7 +149,14 @@ function selectPreviewTruckAndDriver(
   const truck =
     explicitTruck ??
     (trucks.length > 0
-      ? selectIdleTruckForContract(trucks, contract, product, currentTime, fallbackHomeCityId)
+      ? selectIdleTruckForContract(
+          trucks,
+          contract,
+          product,
+          currentTime,
+          fallbackHomeCityId,
+          trailers,
+        )
       : undefined);
   const driver = explicitDriver ?? getIdleDrivers(drivers)[0];
 
@@ -286,6 +294,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     input.driver,
     currentTime,
     input.homeCityId,
+    input.trailers,
   );
 
   let estimatedTravelHours = 0;

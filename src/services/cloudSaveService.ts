@@ -28,6 +28,11 @@ import {
   buildCloudSaveSummaryFromPayload,
   type CloudSaveSummary,
 } from '../utils/cloudSaveSummary';
+import {
+  CLOUD_SAVE_SIZE_WARN_RATIO,
+  estimateCloudSaveDocumentBytes,
+  MAX_SAVE_SIZE_BYTES,
+} from '../utils/cloudSaveSize';
 import { findUnexpectedUndefinedPaths, sanitizeForFirestore } from '../utils/sanitizeForFirestore';
 import { getWeeklySeasonDocId } from '../utils/leaderboardSeason';
 import { getFirestoreSafe, isFirebaseEnabled, resetFirebaseFirestoreCache } from './firebase';
@@ -66,7 +71,8 @@ export type { CloudSaveSummary };
 
 const CURRENT_SAVE_DOC_ID = 'current';
 const META_STATUS_DOC_ID = 'status';
-const MAX_SAVE_SIZE_BYTES = 900_000;
+
+export { MAX_SAVE_SIZE_BYTES, CLOUD_SAVE_SIZE_WARN_RATIO, estimateCloudSaveDocumentBytes } from '../utils/cloudSaveSize';
 
 export function resetCloudFirestoreCache(): void {
   resetFirebaseFirestoreCache();
@@ -340,24 +346,21 @@ export async function saveGameToCloud(
   const sanitizedSummary = sanitizeForFirestore(summary);
   const deviceUpdatedAt = savePayload.meta?.savedAt ?? Date.now();
 
-  const sizeProbe = sanitizeForFirestore({
-    schemaVersion: 1,
-    version: savePayload.version ?? 1,
-    saveVersion: savePayload.meta?.saveVersion ?? savePayload.version ?? 1,
-    updatedAt: deviceUpdatedAt,
-    deviceUpdatedAt,
-    gameState: sanitizedGameState,
-    summary: sanitizedSummary,
-  });
-
   let estimatedSize = 0;
   try {
-    estimatedSize = JSON.stringify(sizeProbe).length;
+    estimatedSize = estimateCloudSaveDocumentBytes(savePayload);
   } catch {
     estimatedSize = MAX_SAVE_SIZE_BYTES + 1;
   }
 
   devCloudLog('[cloud-save] estimated save size', estimatedSize);
+  if (__DEV__ && estimatedSize >= MAX_SAVE_SIZE_BYTES * CLOUD_SAVE_SIZE_WARN_RATIO) {
+    console.warn('[cloud-save] payload approaching size limit', {
+      estimatedSize,
+      limitBytes: MAX_SAVE_SIZE_BYTES,
+      ratio: Math.round((estimatedSize / MAX_SAVE_SIZE_BYTES) * 100),
+    });
+  }
   if (estimatedSize > MAX_SAVE_SIZE_BYTES) {
     await updateCloudSyncMeta(uid, 'failed', {
       code: 'save-too-large',

@@ -185,6 +185,12 @@ export interface Truck {
   capacity: number;
   /** km başına yakıt tüketimi (L/km) */
   fuelConsumptionPerKm: number;
+  /** Yakıt tank kapasitesi (L) — eski kayıtlarda otomatik atanır */
+  fuelTankCapacityL?: number;
+  /** Mevcut yakıt (L) */
+  currentFuelL?: number;
+  /** Kümülatif kilometre */
+  totalMileageKm?: number;
   /** Temel sürüş hızı (km/saat) */
   speed: number;
   /** Güvenilirlik (0–100) — düşük değer arıza riskini artırır */
@@ -311,6 +317,8 @@ export interface Driver {
   /** Atandığı kamyon; boştaysa null */
   assignedTruckId: string | null;
   status: DriverStatus;
+  /** Kalıcı şehir konumu — teslimat/transfer sonrası güncellenir */
+  currentCityId?: string;
   /** Şoför XP — teslimatlarla kazanılır */
   xp?: number;
   /** Şoför seviyesi (1–5) */
@@ -497,6 +505,10 @@ export interface Delivery {
   deadlineTime: number;
   /** Toplam yakıt maliyeti ($) */
   fuelCost: number;
+  /** Teslimat başında tanktaki yakıt (L) */
+  fuelLitersAtStart?: number;
+  /** Bu teslimat için tahmini toplam yakıt (L) */
+  fuelLitersTotal?: number;
   /** Toplam bakım maliyeti ($) */
   maintenanceCost: number;
   /** Tahmini net kâr ($) — ceza hariç */
@@ -539,6 +551,10 @@ export interface TruckTransfer {
   estimatedArrivalAt: number;
   progress: number;
   fuelCost: number;
+  /** Transfer başında tanktaki yakıt (L) */
+  fuelLitersAtStart?: number;
+  /** Transfer için tahmini toplam yakıt (L) */
+  fuelLitersTotal?: number;
   driverCost: number;
   totalCost: number;
   status: TruckTransferStatus;
@@ -1298,6 +1314,18 @@ export interface ContractAvailability {
   requiredCapacity?: number;
   requiredLevel?: number;
   playerLevel?: number;
+  /** Capacity sub-reason when reason is NO_TRUCK_WITH_CAPACITY */
+  capacityDisabledReasonKind?:
+    | 'beyond_system'
+    | 'trailer_required'
+    | 'refrigerated_trailer_required'
+    | 'trailer_type_mismatch'
+    | 'heavy_haul_required'
+    | 'wrong_city'
+    | 'upgrade_possible'
+    | 'insufficient';
+  bestAvailableTruckCapacity?: number;
+  maxFleetCapacityTons?: number;
   debug?: ContractAvailabilityDebug;
 }
 

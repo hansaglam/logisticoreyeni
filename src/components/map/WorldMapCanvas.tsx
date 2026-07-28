@@ -1,5 +1,6 @@
 /**
  * WorldMapCanvas — gömülü etiketli lojistik harita üzerine yalnızca dinamik katmanlar.
+ * Legacy şehir/depo/fırsat/badge marker’ları kaldırıldı; aktif teslimat + kalibrasyon kalır.
  */
 
 import React, {
@@ -15,6 +16,7 @@ import React, {
 import {
   Image,
   StyleSheet,
+  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -22,19 +24,16 @@ import { Asset } from 'expo-asset';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import AnimatedDeliveryTruckMarker from './AnimatedDeliveryTruckMarker';
-import { resolveTruckMapLocation } from './mapTruckLocation';
+import CalibrationDebugMarker from './CalibrationDebugMarker';
 
 import {
   getTurkeyLogisticsNetworkMap,
   getTurkeyLogisticsNetworkMapModule,
 } from '../../assets/mapAssets';
-import { debugConfig } from '../../config/debug';
+import { debugConfig, getResolvedMapDebugFlags } from '../../config/debug';
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
-import { normalizeCityId } from '../../data/networkPositions';
-import type { City, Contract, Delivery, Route, Truck, TruckTransfer } from '../../types/game';
+import type { Delivery, TruckTransfer } from '../../types/game';
 import { GameIcon } from '../ui';
-import IdleTruckCountBadge from './IdleTruckCountBadge';
-import { getCityOverlayOffsets } from './mapCityOverlayOffsets';
 import { getMapLayerOpacity, isMapLayerVisible, type MapOverlayLayer } from './mapLayerVisibility';
 import InteractiveTurkeyMap, {
   type InteractiveTurkeyMapHandle,
@@ -45,11 +44,13 @@ import type { NetworkFilterKey } from './mapTypes';
 
 export type { NetworkFilterKey };
 import type { MapRoadPoint } from '../../data/mapRoadNetwork';
+import { getMapRoadSegmentById } from '../../data/mapRoadNetwork';
 import {
-  appendMapSegmentCalibrationPoint,
-  getMapSegmentCalibrationPoints,
+  addCalibrationPoint,
+  logMapCalibrationInit,
   registerMapSegmentCalibrationDevTools,
   syncMapSegmentCalibration,
+  useMapCalibrationSession,
 } from './mapSegmentCalibration';
 import {
   getRoadRoute,
@@ -63,11 +64,9 @@ import {
 import { normalizedToContentPoint, roundMapCoordinate } from './mapCoordinateUtils';
 import { computeMapContentSize } from './mapTransformUtils';
 import {
-  MAP_ACCENT,
   MAP_DELIVERY_DESTINATION,
   MAP_DELIVERY_DESTINATION_GLOW,
   MAP_DELIVERY_ORIGIN,
-  MAP_MARKER_HIT_RADIUS,
   MAP_ROUTE_COMPLETED,
   MAP_ROUTE_COMPLETED_GLOW,
   MAP_ROUTE_COMPLETED_GLOW_WIDTH,
@@ -98,24 +97,10 @@ const MAP_ASPECT_RATIO = resolveMapAspectRatio();
 export type WorldMapCanvasHandle = InteractiveTurkeyMapHandle;
 
 export type WorldMapCanvasProps = {
-  cities?: City[];
-  routes?: Route[];
-  contracts?: Contract[];
   activeDeliveries?: Delivery[];
   activeTransfers?: TruckTransfer[];
-  trucks?: Truck[];
-  homeCityId?: string;
-  depotCityIds?: string[];
-  idleTruckCountByCity?: Record<string, number>;
   selectedFilter: NetworkFilterKey;
-  selectedCityId?: string | null;
-  featuredContract?: Contract | null;
-  selectedContract?: Contract | null;
   selectedDeliveryId?: string | null;
-  onCityPress?: (cityId: string) => void;
-  onBackgroundPress?: () => void;
-  onRoutePress?: (routeId: string) => void;
-  onContractPress?: (contractId: string) => void;
   onDeliveryPress?: (deliveryId: string) => void;
   onMapGestureActiveChange?: (active: boolean) => void;
   calibrationMode?: boolean;
@@ -156,28 +141,7 @@ function normToPixel(xNorm: number, yNorm: number, bounds: MapBounds) {
   return { x: xNorm * bounds.width, y: yNorm * bounds.height };
 }
 
-function routeTouchesCity(
-  originCityId: string,
-  destinationCityId: string,
-  cityId: string | null | undefined,
-): boolean {
-  if (!cityId) return true;
-  const normalized = normalizeCityId(cityId);
-  return (
-    normalizeCityId(originCityId) === normalized ||
-    normalizeCityId(destinationCityId) === normalized
-  );
-}
-
-function SelectedCityRing({ cx, cy }: { cx: number; cy: number }) {
-  return (
-    <>
-      <Circle cx={cx} cy={cy} r={18} fill="none" stroke={MAP_ACCENT} strokeWidth={1.4} strokeOpacity={0.35} />
-      <Circle cx={cx} cy={cy} r={14} fill="none" stroke={MAP_ACCENT} strokeWidth={2} strokeOpacity={0.92} />
-    </>
-  );
-}
-
+/** Aktif teslimat başlangıç göstergesi — legacy city ring kullanılmaz. */
 function DeliveryOriginMarker({ cx, cy, opacity }: { cx: number; cy: number; opacity: number }) {
   return (
     <>
@@ -204,6 +168,7 @@ function DeliveryOriginMarker({ cx, cy, opacity }: { cx: number; cy: number; opa
   );
 }
 
+/** Aktif teslimat hedef göstergesi — legacy city ring kullanılmaz. */
 function DeliveryDestinationMarker({ cx, cy, opacity }: { cx: number; cy: number; opacity: number }) {
   return (
     <>
@@ -253,7 +218,7 @@ function logTruckPositionDebug(params: {
   routeEnd: { x: number; y: number };
   calculatedTruckPoint: { x: number; y: number };
 }) {
-  if (!__DEV__) return;
+  if (!getResolvedMapDebugFlags().truck) return;
   console.log('[map-truck]', {
     originCityId: params.originCityId,
     destinationCityId: params.destinationCityId,
@@ -266,33 +231,19 @@ function logTruckPositionDebug(params: {
 }
 
 function logMissingRoadRoute(originCityId: string, destinationCityId: string) {
-  if (__DEV__) {
-    console.warn('[map-road] route not found', {
-      from: originCityId,
-      to: destinationCityId,
-    });
-  }
+  if (!getResolvedMapDebugFlags().roadWarnings) return;
+  console.warn('[map-road] route not found', {
+    from: originCityId,
+    to: destinationCityId,
+  });
 }
 
 function WorldMapCanvasInner(
   {
-    cities = [],
-    contracts = [],
     activeDeliveries = [],
     activeTransfers = [],
-    trucks = [],
-    homeCityId,
-    depotCityIds = [],
-    idleTruckCountByCity,
     selectedFilter,
-    selectedCityId,
-    featuredContract,
-    selectedContract: _selectedContract,
     selectedDeliveryId,
-    onCityPress,
-    onBackgroundPress,
-    onRoutePress: _onRoutePress,
-    onContractPress: _onContractPress,
     onDeliveryPress,
     onMapGestureActiveChange,
     calibrationMode = false,
@@ -309,7 +260,25 @@ function WorldMapCanvasInner(
   const isCompact = screenWidth < COMPACT_BREAKPOINT;
   const viewportHeight = isCompact ? MAP_VIEWPORT_HEIGHT_COMPACT : MAP_VIEWPORT_HEIGHT;
   const [mapImageReady, setMapImageReady] = React.useState(false);
-  const [calibrationDots, setCalibrationDots] = useState<MapRoadPoint[]>([]);
+  const calibrationSession = useMapCalibrationSession();
+  const calibrationDots = calibrationSession.points;
+  const savedCalibrationPointCount = useMemo(() => {
+    if (calibrationSession.mode !== 'segment' || !calibrationSession.segmentId) {
+      return null;
+    }
+    return getMapRoadSegmentById(calibrationSession.segmentId)?.points.length ?? 0;
+  }, [calibrationSession.mode, calibrationSession.segmentId]);
+  const showCalibrationUi = __DEV__ && MAP_CALIBRATION_ENABLED;
+  const segmentPointDebugOverlay = useMemo(() => {
+    if (!__DEV__ || !debugConfig.mapRoadSegmentPointDebugEnabled) {
+      return [];
+    }
+    const segment = getMapRoadSegmentById('ankara-trabzon');
+    if (!segment) {
+      return [];
+    }
+    return segment.points.map((point, index) => ({ point, index: index + 1 }));
+  }, []);
 
   const contentSize = useMemo<MapBounds>(
     () => computeMapContentSize(viewportHeight, MAP_ASPECT_RATIO),
@@ -317,17 +286,36 @@ function WorldMapCanvasInner(
   );
 
   useEffect(() => {
-    if (__DEV__ && MAP_CALIBRATION_ENABLED) {
-      registerMapSegmentCalibrationDevTools();
-      syncMapSegmentCalibration(debugConfig.mapCalibrationSegmentId);
+    if (!__DEV__) {
+      return;
     }
+
+    logMapCalibrationInit({
+      enabled: MAP_CALIBRATION_ENABLED,
+      segmentId: debugConfig.mapCalibrationSegmentId,
+    });
+
+    if (!MAP_CALIBRATION_ENABLED) {
+      return;
+    }
+
+    registerMapSegmentCalibrationDevTools();
+    syncMapSegmentCalibration({
+      enabled: true,
+      segmentId: debugConfig.mapCalibrationSegmentId,
+    });
   }, []);
 
   useEffect(() => {
-    if (__DEV__ && MAP_CALIBRATION_ENABLED) {
-      syncMapSegmentCalibration(debugConfig.mapCalibrationSegmentId);
-      setCalibrationDots(getMapSegmentCalibrationPoints());
+    if (!__DEV__ || !MAP_CALIBRATION_ENABLED) {
+      return;
     }
+
+    registerMapSegmentCalibrationDevTools();
+    syncMapSegmentCalibration({
+      enabled: true,
+      segmentId: debugConfig.mapCalibrationSegmentId,
+    });
   }, [debugConfig.mapCalibrationSegmentId]);
 
   useEffect(() => {
@@ -351,34 +339,6 @@ function WorldMapCanvasInner(
   }, []);
 
   const mapBounds = contentSize;
-  const normalizedDepotIds = useMemo(
-    () => new Set(depotCityIds.map(normalizeCityId)),
-    [depotCityIds],
-  );
-
-  const opportunityCityIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const contract of contracts) {
-      if (contract.status !== 'available') continue;
-      ids.add(normalizeCityId(contract.originCityId));
-    }
-    if (featuredContract?.originCityId) {
-      ids.add(normalizeCityId(featuredContract.originCityId));
-    }
-    return ids;
-  }, [contracts, featuredContract]);
-
-  const tappableCities = useMemo(() => {
-    return cities.filter((city) => {
-      const pos = getWorldMapCityPosition(city.id);
-      if (!pos) return false;
-      const cityNorm = normalizeCityId(city.id);
-      const isDepot = normalizedDepotIds.has(cityNorm);
-      if (selectedFilter === 'depots') return isDepot;
-      if (selectedFilter === 'opportunities') return opportunityCityIds.has(cityNorm);
-      return true;
-    });
-  }, [cities, normalizedDepotIds, opportunityCityIds, selectedFilter]);
 
   const runningDeliveries = useMemo(
     () => activeDeliveries.filter((d) => d.status === 'preparing' || d.status === 'on_route'),
@@ -400,110 +360,53 @@ function WorldMapCanvasInner(
     [activeTransfers],
   );
 
-  const featuredCityId = useMemo(
-    () => (featuredContract?.originCityId ? normalizeCityId(featuredContract.originCityId) : null),
-    [featuredContract],
-  );
-
-  const showRoutes =
-    selectedFilter === 'all' ||
-    selectedFilter === 'trucks' ||
-    selectedFilter === 'routes';
-
   const layerVisible = useCallback(
-    (layer: MapOverlayLayer, cityId?: string, isFeaturedOpportunity = false) =>
+    (layer: MapOverlayLayer) =>
       isMapLayerVisible({
         layer,
         detailLevel,
         filter: selectedFilter,
-        selectedCityId,
-        cityId,
-        isFeaturedOpportunity,
       }),
-    [detailLevel, selectedCityId, selectedFilter],
+    [detailLevel, selectedFilter],
   );
 
   const layerOpacity = useCallback(
-    (layer: MapOverlayLayer, cityId?: string, isFeaturedOpportunity = false) =>
+    (layer: MapOverlayLayer) =>
       getMapLayerOpacity({
         layer,
         detailLevel,
         filter: selectedFilter,
-        selectedCityId,
-        cityId,
-        isFeaturedOpportunity,
       }),
-    [detailLevel, selectedCityId, selectedFilter],
+    [detailLevel, selectedFilter],
   );
 
   const handleCalibrationTap = useCallback(
     (result: MapCalibrationTapResult) => {
-      if (!MAP_CALIBRATION_ENABLED || mapBounds.width === 0 || !result.isInsideContent) return;
+      if (!MAP_CALIBRATION_ENABLED || mapBounds.width === 0 || !result.isInsideContent) {
+        return;
+      }
 
       const point: MapRoadPoint = {
         x: roundMapCoordinate(result.normalized.x, 4),
         y: roundMapCoordinate(result.normalized.y, 4),
       };
 
-      if (__DEV__ && debugConfig.mapCalibrationSegmentId) {
-        const nextPoints = appendMapSegmentCalibrationPoint(point);
-        setCalibrationDots(nextPoints);
-        return;
-      }
-
-      console.log('[Map calibration] city center');
-      console.log('normalized:', point);
-      console.log('paste into worldMapPositions.ts:', `{ x: ${point.x}, y: ${point.y} }`);
-
-      if (__DEV__) {
-        setCalibrationDots((prev) => [...prev, point]);
-      }
+      addCalibrationPoint(point);
     },
     [mapBounds.width],
   );
 
-  const handleCityPressAtContentPoint = useCallback(
-    (contentX: number, contentY: number) => {
-      let nearestCityId: string | null = null;
-      let nearestDistance = MAP_MARKER_HIT_RADIUS * MAP_MARKER_HIT_RADIUS;
-
-      for (const city of tappableCities) {
-        const pos = getWorldMapCityPosition(city.id);
-        if (!pos) continue;
-        const pixel = normToPixel(pos.x, pos.y, mapBounds);
-        const dx = pixel.x - contentX;
-        const dy = pixel.y - contentY;
-        const distanceSq = dx * dx + dy * dy;
-        if (distanceSq <= nearestDistance) {
-          nearestDistance = distanceSq;
-          nearestCityId = city.id;
-        }
-      }
-
-      if (nearestCityId) {
-        onCityPress?.(nearestCityId);
-      } else {
-        onBackgroundPress?.();
-      }
-    },
-    [mapBounds, onBackgroundPress, onCityPress, tappableCities],
-  );
-
   const resolveRouteOpacity = useCallback(
-    (originCityId: string, destinationCityId: string, isSelectedDelivery: boolean) => {
+    (isSelectedDelivery: boolean) => {
       const base = isSelectedDelivery ? 1 : 0.92;
-      const routeDim = layerOpacity('route');
-      if (!selectedCityId) return base * routeDim;
-      if (routeTouchesCity(originCityId, destinationCityId, selectedCityId)) {
-        return base;
-      }
-      return 0.18 * routeDim;
+      return base * layerOpacity('route');
     },
-    [layerOpacity, selectedCityId],
+    [layerOpacity],
   );
 
+  /** Tümü / Kamyonlar / Depolar — aktif teslimat overlay’leri her filtrede görünür. */
   const deliveryRouteRenderData = useMemo((): DeliveryRouteRenderItem[] => {
-    if (!showRoutes || runningDeliveries.length === 0 || mapBounds.width === 0) return [];
+    if (runningDeliveries.length === 0 || mapBounds.width === 0) return [];
     if (!layerVisible('route')) return [];
 
     const roadBounds: RoadMapBounds = mapBounds;
@@ -517,11 +420,7 @@ function WorldMapCanvasInner(
 
       const origin = normToPixel(from.x, from.y, mapBounds);
       const destination = normToPixel(to.x, to.y, mapBounds);
-      const opacity = resolveRouteOpacity(
-        delivery.originCityId,
-        delivery.destinationCityId,
-        delivery.id === selectedDeliveryId,
-      );
+      const opacity = resolveRouteOpacity(delivery.id === selectedDeliveryId);
       if (opacity <= 0) continue;
 
       const roadPoints = getRoadRoute(delivery.originCityId, delivery.destinationCityId);
@@ -578,7 +477,6 @@ function WorldMapCanvasInner(
 
     return items;
   }, [
-    showRoutes,
     runningDeliveries,
     runningDeliveryProgressKey,
     mapBounds,
@@ -587,54 +485,33 @@ function WorldMapCanvasInner(
     selectedDeliveryId,
   ]);
 
-  const idleTruckMarkers = useMemo(() => {
-    if (!showRoutes || trucks.length === 0 || mapBounds.width === 0) return [];
-    if (!layerVisible('truck')) return [];
-
-    const onRouteTruckIds = new Set<string>();
-    for (const delivery of runningDeliveries) {
-      onRouteTruckIds.add(delivery.truckId);
-    }
-    for (const transfer of runningTransfers) {
-      onRouteTruckIds.add(transfer.truckId);
-    }
-
-    return trucks
-      .filter((truck) => !onRouteTruckIds.has(truck.id))
-      .map((truck) => {
-        const location = resolveTruckMapLocation({ truck, mapBounds, homeCityId });
-        if (location.kind !== 'city' || !location.pixelPoint) {
-          return null;
-        }
-        const opacity = layerOpacity('truck') * 0.82;
-        if (opacity <= 0) {
-          return null;
-        }
-        return { truck, location, opacity };
-      })
-      .filter((item): item is NonNullable<typeof item> => item != null);
-  }, [
-    showRoutes,
-    trucks,
-    runningDeliveries,
-    runningTransfers,
-    mapBounds,
-    layerVisible,
-    layerOpacity,
-    homeCityId,
-  ]);
-
   const handleDetailLevelChange = useCallback((level: MapDetailLevel) => {
     setDetailLevel(level);
   }, []);
 
   return (
     <View style={styles.wrapper}>
+      {showCalibrationUi ? (
+        <View style={styles.calibrationBadge} pointerEvents="none">
+          <Text style={styles.calibrationBadgeText}>
+            CAL:{' '}
+            {calibrationSession.mode === 'segment'
+              ? calibrationSession.segmentId ?? 'segment'
+              : calibrationSession.mode === 'city'
+                ? 'city'
+                : 'off'}{' '}
+            · Oturum {calibrationDots.length}
+            {savedCalibrationPointCount != null
+              ? ` · Kayıtlı ${savedCalibrationPointCount}`
+              : ''}
+          </Text>
+        </View>
+      ) : null}
+
       <InteractiveTurkeyMap
         ref={mapRef}
         viewportHeight={viewportHeight}
         contentSize={contentSize}
-        onCityPressAtContentPoint={handleCityPressAtContentPoint}
         onCalibrationTap={handleCalibrationTap}
         onDetailLevelChange={handleDetailLevelChange}
         onMapGestureActiveChange={onMapGestureActiveChange}
@@ -708,25 +585,39 @@ function WorldMapCanvasInner(
           </Svg>
         ) : null}
 
-        {__DEV__ && MAP_CALIBRATION_ENABLED && calibrationDots.length > 0 ? (
-          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill} pointerEvents="none">
+        {showCalibrationUi && calibrationDots.length > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
             {calibrationDots.map((point, index) => {
               const pixel = normalizedToContentPoint(point.x, point.y, mapBounds);
               return (
-                <Circle
+                <CalibrationDebugMarker
                   key={`calibration-${index}`}
-                  cx={pixel.x}
-                  cy={pixel.y}
-                  r={4}
-                  fill="#FF4D6D"
-                  fillOpacity={0.9}
+                  pixelX={pixel.x}
+                  pixelY={pixel.y}
+                  index={index + 1}
                 />
               );
             })}
-          </Svg>
+          </View>
         ) : null}
 
-        {mapBounds.width > 0 && showRoutes && runningTransfers.length > 0 ? (
+        {segmentPointDebugOverlay.length > 0 ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {segmentPointDebugOverlay.map(({ point, index }) => {
+              const pixel = normalizedToContentPoint(point.x, point.y, mapBounds);
+              return (
+                <CalibrationDebugMarker
+                  key={`segment-debug-ankara-trabzon-${index}`}
+                  pixelX={pixel.x}
+                  pixelY={pixel.y}
+                  index={index}
+                />
+              );
+            })}
+          </View>
+        ) : null}
+
+        {mapBounds.width > 0 && runningTransfers.length > 0 ? (
           <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
             {runningTransfers.map((transfer) => {
               const from = getWorldMapCityPosition(transfer.fromCityId);
@@ -735,7 +626,7 @@ function WorldMapCanvasInner(
               const p1 = normToPixel(from.x, from.y, mapBounds);
               const p2 = normToPixel(to.x, to.y, mapBounds);
               const { d, cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
-              const opacity = resolveRouteOpacity(transfer.fromCityId, transfer.toCityId, false);
+              const opacity = resolveRouteOpacity(false);
               if (!layerVisible('route')) return null;
               const truckPos = pointOnQuadratic(
                 Math.max(0, Math.min(1, transfer.progress ?? 0)),
@@ -774,120 +665,7 @@ function WorldMapCanvasInner(
           </Svg>
         ) : null}
 
-        {mapBounds.width > 0 ? (
-          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
-            {tappableCities.map((city) => {
-              const pos = getWorldMapCityPosition(city.id);
-              if (!pos) return null;
-              const isSelected =
-                normalizeCityId(city.id) === normalizeCityId(selectedCityId ?? '');
-              const pixel = normToPixel(pos.x, pos.y, mapBounds);
-              return (
-                <React.Fragment key={city.id}>
-                  <Circle
-                    cx={pixel.x}
-                    cy={pixel.y}
-                    r={MAP_MARKER_HIT_RADIUS}
-                    fill="transparent"
-                    onPress={() => onCityPress?.(city.id)}
-                  />
-                  {isSelected ? <SelectedCityRing cx={pixel.x} cy={pixel.y} /> : null}
-                </React.Fragment>
-              );
-            })}
-          </Svg>
-        ) : null}
-
-        {mapBounds.width > 0 ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            {tappableCities.map((city) => {
-              const pos = getWorldMapCityPosition(city.id);
-              if (!pos) return null;
-              const idleCount = idleTruckCountByCity?.[normalizeCityId(city.id)] ?? 0;
-              if (idleCount <= 0) return null;
-              if (!layerVisible('badge', city.id)) return null;
-              const pixel = normToPixel(pos.x, pos.y, mapBounds);
-              const offsets = getCityOverlayOffsets(normalizeCityId(city.id));
-              const opacity = layerOpacity('badge', city.id);
-              if (opacity <= 0) return null;
-              return (
-                <IdleTruckCountBadge
-                  key={`idle-${city.id}`}
-                  count={idleCount}
-                  opacity={opacity}
-                  prominent={selectedFilter === 'trucks'}
-                  style={{
-                    position: 'absolute',
-                    left: pixel.x + offsets.countBadge.x,
-                    top: pixel.y + offsets.countBadge.y,
-                  }}
-                />
-              );
-            })}
-          </View>
-        ) : null}
-
-        {mapBounds.width > 0 ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            {tappableCities
-              .filter((city) => normalizedDepotIds.has(normalizeCityId(city.id)))
-              .map((city) => {
-                if (!layerVisible('depot', city.id)) return null;
-                const pos = getWorldMapCityPosition(city.id);
-                if (!pos) return null;
-                const pixel = normToPixel(pos.x, pos.y, mapBounds);
-                const offsets = getCityOverlayOffsets(normalizeCityId(city.id));
-                const opacity = layerOpacity('depot', city.id);
-                if (opacity <= 0) return null;
-                return (
-                  <View
-                    key={`depot-${city.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: pixel.x + offsets.depot.x - 7,
-                      top: pixel.y + offsets.depot.y - 7,
-                      opacity,
-                    }}
-                  >
-                    <GameIcon name="warehouse" size={13} color={MAP_ACCENT} />
-                  </View>
-                );
-              })}
-          </View>
-        ) : null}
-
-        {mapBounds.width > 0 ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            {tappableCities
-              .filter((city) => opportunityCityIds.has(normalizeCityId(city.id)))
-              .map((city) => {
-                const cityNorm = normalizeCityId(city.id);
-                const isFeatured = featuredCityId === cityNorm;
-                if (!layerVisible('opportunity', city.id, isFeatured)) return null;
-                const pos = getWorldMapCityPosition(city.id);
-                if (!pos) return null;
-                const pixel = normToPixel(pos.x, pos.y, mapBounds);
-                const offsets = getCityOverlayOffsets(cityNorm);
-                const opacity = layerOpacity('opportunity', city.id, isFeatured);
-                if (opacity <= 0) return null;
-                return (
-                  <View
-                    key={`opp-${city.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: pixel.x + offsets.opportunity.x - 7,
-                      top: pixel.y + offsets.opportunity.y - 7,
-                      opacity,
-                    }}
-                  >
-                    <GameIcon name="market" size={13} color="#F59E0B" />
-                  </View>
-                );
-              })}
-          </View>
-        ) : null}
-
-        {mapBounds.width > 0 && showRoutes && layerVisible('truck') && deliveryRouteRenderData.length > 0 ? (
+        {mapBounds.width > 0 && layerVisible('truck') && deliveryRouteRenderData.length > 0 ? (
           <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
             {deliveryRouteRenderData.map(
               ({ delivery, hasRoute, truckPixel, truckAngle, normalizedProgress, opacity }) =>
@@ -906,22 +684,7 @@ function WorldMapCanvasInner(
           </View>
         ) : null}
 
-        {mapBounds.width > 0 && showRoutes && layerVisible('truck') && idleTruckMarkers.length > 0 ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-            {idleTruckMarkers.map(({ truck, location, opacity }) => (
-              <AnimatedDeliveryTruckMarker
-                key={`idle-truck-${truck.id}`}
-                pixelX={location.pixelPoint!.x}
-                pixelY={location.pixelPoint!.y}
-                angleRadians={location.angleRadians ?? 0}
-                progress={1}
-                opacity={opacity}
-              />
-            ))}
-          </View>
-        ) : null}
-
-        {mapBounds.width > 0 && showRoutes && layerVisible('truck') && runningTransfers.length > 0 ? (
+        {mapBounds.width > 0 && layerVisible('truck') && runningTransfers.length > 0 ? (
           <View style={StyleSheet.absoluteFill} pointerEvents="none">
             {runningTransfers.map((transfer) => {
               const from = getWorldMapCityPosition(transfer.fromCityId);
@@ -932,8 +695,7 @@ function WorldMapCanvasInner(
               const { cx, cy } = buildCurvePath(p1.x, p1.y, p2.x, p2.y);
               const progress = Math.max(0, Math.min(1, transfer.progress ?? 0));
               const truckPos = pointOnQuadratic(progress, p1.x, p1.y, cx, cy, p2.x, p2.y);
-              const opacity =
-                layerOpacity('truck') * resolveRouteOpacity(transfer.fromCityId, transfer.toCityId, false);
+              const opacity = layerOpacity('truck') * resolveRouteOpacity(false);
               if (opacity <= 0) return null;
               return (
                 <View
@@ -964,4 +726,21 @@ export default WorldMapCanvas;
 const styles = StyleSheet.create({
   wrapper: { width: '100%' },
   fallback: { ...StyleSheet.absoluteFillObject, backgroundColor: MAP_VIEWPORT_BACKGROUND },
+  calibrationBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    zIndex: 20,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 7,
+    backgroundColor: 'rgba(3, 18, 37, 0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 77, 109, 0.7)',
+  },
+  calibrationBadgeText: {
+    color: '#FF8FAB',
+    fontSize: 9.5,
+    fontWeight: '700',
+  },
 });

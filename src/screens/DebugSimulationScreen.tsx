@@ -483,7 +483,9 @@ export default function DebugSimulationScreen() {
   const resumeGame = useGameStore((state) => state.resumeGame);
   const advanceTime = useGameStore((state) => state.advanceTime);
   const runEconomyTick = useGameStore((state) => state.runEconomyTick);
-  const generateNewContracts = useGameStore((state) => state.generateNewContracts);
+  const debugGenerateContractsFromCurrentCity = useGameStore(
+    (state) => state.debugGenerateContractsFromCurrentCity,
+  );
   const refreshContractsFromMarket = useGameStore((state) => state.refreshContractsFromMarket);
   const forceGeneratePlayableContracts = useGameStore(
     (state) => state.forceGeneratePlayableContracts,
@@ -757,10 +759,40 @@ export default function DebugSimulationScreen() {
 
   const handleGenerateContracts = () => {
     try {
-      const before = useGameStore.getState().contracts.filter((c) => c.status === 'available').length;
-      generateNewContracts();
-      const after = useGameStore.getState().contracts.filter((c) => c.status === 'available').length;
-      setSuccess(`Generated contracts. Available: ${before} → ${after}`);
+      const result = debugGenerateContractsFromCurrentCity();
+      const originName = getCityName(result.originCityId);
+      if (result.storedCount <= 0) {
+        const skipped = result.skippedDestinations
+          .map((s) => `${getCityName(s.destinationCityId)}:${s.reason}`)
+          .join(', ');
+        const lost = result.traces
+          .filter((t) => t.result === 'lost-in-store' || t.result === 'hidden-in-ui')
+          .map((t) => `${getCityName(t.destinationCityId)}:${t.result}`)
+          .join(', ');
+        setError(
+          [
+            `${originName} çıkışlı sözleşme havuza eklenemedi`,
+            skipped ? `atlanan: ${skipped}` : null,
+            lost ? `kayıp: ${lost}` : null,
+            result.createdCount > 0
+              ? `üretilen ${result.createdCount} aday store'da görünmedi`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        );
+        return;
+      }
+
+      const stored = result.storedDestinations.map((id) => getCityName(id)).join(', ');
+      const skipped = result.skippedDestinations
+        .map((s) => `${getCityName(s.destinationCityId)}:${s.reason}`)
+        .join(', ');
+      setSuccess(
+        skipped
+          ? `${originName} → ${stored} (${result.storedCount} iş eklendi) · atlanan: ${skipped}`
+          : `${originName} → ${stored} (${result.storedCount} iş oluşturuldu ve sözleşme havuzuna eklendi)`,
+      );
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Generate contracts failed');
     }

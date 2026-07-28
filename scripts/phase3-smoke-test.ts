@@ -118,29 +118,54 @@ function sampleSelectedDistribution(
   playerReputation: number,
   targetCount = 800,
 ): { counts: Record<string, number>; total: number } {
-  let counts: Record<string, number> = {};
+  /**
+   * Deterministik örnekleme — generateContracts içindeki Math.random'a bağlı değil.
+   * Tip atama üretim algoritması (applyContractTypeToContract / spawn weights) sabit
+   * fixture + sequence ile tekrarlanabilir biçimde ölçülür.
+   */
+  const cityIds = ['izmir', 'istanbul', 'ankara', 'bursa', 'antalya'] as const;
+  const products = PRODUCTS;
+  const counts: Record<string, number> = {};
   let total = 0;
-  let batch = 0;
-  while (total < targetCount && batch < 200) {
-    const batchContracts = generateContracts(
-      genBase.cities,
-      genBase.routes,
-      genBase.products,
-      genBase.globalEconomy,
-      [],
-      {
-        currentTime: genBase.currentTime + batch,
-        maxNewContracts: genBase.maxNewContracts,
-        playerLevel,
-        playerReputation,
-        idleTruckOriginCityIds: genBase.idleTruckOriginCityIds,
-        ownedMaxTruckCapacity: 25,
-      },
-    );
-    counts = mergeCounts(counts, countTypes(batchContracts));
-    total += batchContracts.length;
-    batch += 1;
+
+  for (let i = 0; i < targetCount; i += 1) {
+    const originCityId = cityIds[i % cityIds.length]!;
+    const candidateDestination = cityIds[(i * 3 + 1) % cityIds.length]!;
+    const destinationCityId =
+      originCityId === candidateDestination
+        ? originCityId === 'ankara'
+          ? 'izmir'
+          : 'ankara'
+        : candidateDestination;
+    const product = products[i % products.length]!;
+    const base = normalizeContract({
+      ...makeLegacyContract(),
+      id: `dist_${playerLevel}_${i}`,
+      originCityId,
+      destinationCityId,
+      productId: product.id,
+      amount: 10 + (i % 8),
+      cargoWeight: 10 + (i % 8),
+      payment: 4000 + (i % 20) * 100,
+      deadlineHours: 18 + (i % 12),
+      urgency: 0.2 + (i % 5) * 0.1,
+      createdAt: 48 + i,
+      expiresAt: 99999,
+      requiredLevel: Math.max(1, playerLevel - (i % 2)),
+    });
+
+    const typed = applyContractTypeToContract({
+      contract: base,
+      product,
+      playerLevel,
+      playerReputation,
+      sequence: i + 1,
+    });
+    const type = normalizeContractType(typed);
+    counts[type] = (counts[type] ?? 0) + 1;
+    total += 1;
   }
+
   return { counts, total };
 }
 

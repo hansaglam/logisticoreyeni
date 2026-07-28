@@ -1,7 +1,7 @@
 import React, { memo, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import type { Delivery, Truck, TruckTransfer } from '../../types/game';
+import type { Delivery, Driver, Truck, TruckTransfer } from '../../types/game';
 import { getCityName } from '../../utils/entityLookup';
 import { GameIcon } from '../ui';
 import MapTruckTrackingCard from './MapTruckTrackingCard';
@@ -43,8 +43,22 @@ function findTransferForTruck(truckId: string, transfers: TruckTransfer[]): Truc
   return transfers.find((transfer) => transfer.truckId === truckId && transfer.status === 'active');
 }
 
+function findDriverForTruck(
+  truck: Truck,
+  delivery: Delivery | undefined,
+  transfer: TruckTransfer | undefined,
+  drivers: Driver[],
+): Driver | undefined {
+  const driverId = delivery?.driverId ?? transfer?.driverId;
+  if (driverId) {
+    return drivers.find((driver) => driver.id === driverId);
+  }
+  return drivers.find((driver) => driver.assignedTruckId === truck.id);
+}
+
 export interface MapTruckTrackingSectionProps {
   trucks: Truck[];
+  drivers: Driver[];
   deliveries: Delivery[];
   transfers: TruckTransfer[];
   idleTruckCountByCity: Record<string, number>;
@@ -56,6 +70,7 @@ export interface MapTruckTrackingSectionProps {
 
 function MapTruckTrackingSection({
   trucks,
+  drivers,
   deliveries,
   transfers,
   idleTruckCountByCity,
@@ -125,14 +140,17 @@ function MapTruckTrackingSection({
 
       {previewTrucks.map((truck) => {
         const cardDelivery = findDeliveryForTruck(truck.id, deliveries);
+        const cardTransfer = findTransferForTruck(truck.id, transfers);
+        const isActiveJob = cardDelivery != null || cardTransfer != null;
         return (
           <MapTruckTrackingCard
             key={truck.id}
             truck={truck}
             delivery={cardDelivery}
-            transfer={findTransferForTruck(truck.id, transfers)}
+            transfer={cardTransfer}
+            driver={findDriverForTruck(truck, cardDelivery, cardTransfer, drivers)}
             homeCityId={homeCityId}
-            currentTime={cardDelivery ? currentTime : undefined}
+            currentTime={isActiveJob ? currentTime : undefined}
             onPress={onTruckPress ? () => onTruckPress(truck.id) : undefined}
           />
         );

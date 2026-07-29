@@ -112,6 +112,82 @@ export interface GlobalEconomy {
   priceSmoothing?: number;
 }
 
+export type GlobalMarketWorldStatus = 'stable' | 'volatile' | 'crisis';
+export type GlobalSupplyDemandStatus = 'shortage' | 'balanced' | 'surplus';
+
+export interface GlobalSupplyDemandEntry {
+  supply: number;
+  demand: number;
+  status: GlobalSupplyDemandStatus;
+}
+
+export interface GlobalMarketMovement {
+  cityId: CityId;
+  productId: ProductId;
+  price: number;
+  previousPrice: number;
+  movementPercent: number;
+  direction: 'up' | 'down' | 'flat';
+}
+
+export interface GlobalMarketOpportunity {
+  id: string;
+  fromCityId: CityId;
+  toCityId: CityId;
+  productId: ProductId;
+  buyPrice: number;
+  sellPrice: number;
+  marginPercent: number;
+}
+
+/** Backend tarafından epoch başına yalnız bir kez üretilen canonical dünya piyasası. */
+export interface GlobalEconomySnapshot {
+  version: number;
+  configVersion: number;
+  /** @deprecated configVersion kullanın. */
+  economyConfigVersion: number;
+  epoch: number;
+  generatedAt: number;
+  validUntil: number;
+  fuelPricePerLiter: number;
+  cityMarketPrices: Record<CityId, Partial<Record<ProductId, number>>>;
+  supplyDemandState: Record<
+    CityId,
+    Partial<Record<ProductId, GlobalSupplyDemandEntry>>
+  >;
+  marketMovements: GlobalMarketMovement[];
+  opportunities: GlobalMarketOpportunity[];
+  marketMovementCount: number;
+  globalOpportunityCount: number;
+  worldStatus: GlobalMarketWorldStatus;
+  activeEvents: WorldEvent[];
+  modifiers: {
+    fuelMultiplier: number;
+    maintenanceMultiplier: number;
+    demandMultiplier: number;
+  };
+}
+
+export interface GlobalMarketHistoryEntry {
+  epoch: number;
+  generatedAt: number;
+  cityId: CityId;
+  productId: ProductId;
+  price: number;
+  supply: number;
+  demand: number;
+  movementPercent: number;
+  activeEventIds: string[];
+  configVersion: number;
+}
+
+export type GlobalMarketSyncStatus =
+  | 'idle'
+  | 'syncing'
+  | 'online'
+  | 'offline-cache'
+  | 'error';
+
 /**
  * Günlük ekonomi güncellemesinde kullanılan rastgele çarpanlar.
  * Testlerde sabit değer verilerek deterministik sonuç üretilebilir.
@@ -169,7 +245,12 @@ export interface Route {
 // ---------------------------------------------------------------------------
 
 /** Kamyon durumu */
-export type TruckStatus = 'idle' | 'on_route' | 'maintenance' | 'transferring';
+export type TruckStatus =
+  | 'idle'
+  | 'on_route'
+  | 'maintenance'
+  | 'transferring'
+  | 'out_of_fuel';
 
 /** Kamyon sahiplik türü */
 export type TruckOwnershipType = 'owned' | 'leased';
@@ -426,9 +507,17 @@ export interface Contract {
 export type DeliveryStatus =
   | 'preparing'
   | 'on_route'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'cancelled';
+
+export type JobPausedReason = 'out-of-fuel';
+export type FuelWarningKey =
+  | 'low-fuel'
+  | 'critical-fuel'
+  | 'insufficient-range'
+  | 'out-of-fuel';
 
 /** Teslimat başarısızlık nedenleri */
 export type DeliveryFailureReason =
@@ -509,6 +598,17 @@ export interface Delivery {
   fuelLitersAtStart?: number;
   /** Bu teslimat için tahmini toplam yakıt (L) */
   fuelLitersTotal?: number;
+  /** Tick'lerde gerçekten tüketilmiş yakıt (L) */
+  fuelConsumedL?: number;
+  /** Yakıt hesabının işlendiği son progress */
+  lastFuelProcessedProgress?: number;
+  /** Aynı oyun tick'inin ikinci kez işlenmesini önleyen zaman anahtarı */
+  lastFuelProcessedAt?: number;
+  /** Mileage'a işlenmiş gerçek mesafe (km) */
+  distanceTraveledKm?: number;
+  pausedReason?: JobPausedReason;
+  fuelWarningsEmitted?: FuelWarningKey[];
+  roadsideAssistanceGrantedAt?: number;
   /** Toplam bakım maliyeti ($) */
   maintenanceCost: number;
   /** Tahmini net kâr ($) — ceza hariç */
@@ -548,7 +648,7 @@ export interface Delivery {
 // Boş kamyon transferi
 // ---------------------------------------------------------------------------
 
-export type TruckTransferStatus = 'active' | 'completed' | 'cancelled';
+export type TruckTransferStatus = 'active' | 'paused' | 'completed' | 'cancelled';
 
 /** Boş kamyon yönlendirme / geri çağırma görevi */
 export interface TruckTransfer {
@@ -566,6 +666,13 @@ export interface TruckTransfer {
   fuelLitersAtStart?: number;
   /** Transfer için tahmini toplam yakıt (L) */
   fuelLitersTotal?: number;
+  fuelConsumedL?: number;
+  lastFuelProcessedProgress?: number;
+  lastFuelProcessedAt?: number;
+  distanceTraveledKm?: number;
+  pausedReason?: JobPausedReason;
+  fuelWarningsEmitted?: FuelWarningKey[];
+  roadsideAssistanceGrantedAt?: number;
   driverCost: number;
   totalCost: number;
   status: TruckTransferStatus;
@@ -578,6 +685,7 @@ export interface TruckTransfer {
 export type WarehouseStockTransferStatus =
   | 'pending'
   | 'active'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -607,6 +715,13 @@ export interface WarehouseStockTransfer {
   completedAt?: number;
   fuelLitersAtStart: number;
   fuelLitersTotal: number;
+  fuelConsumedL?: number;
+  lastFuelProcessedProgress?: number;
+  lastFuelProcessedAt?: number;
+  distanceTraveledKm?: number;
+  pausedReason?: JobPausedReason;
+  fuelWarningsEmitted?: FuelWarningKey[];
+  roadsideAssistanceGrantedAt?: number;
   fuelCost: number;
   driverCost: number;
   totalCost: number;
@@ -722,6 +837,7 @@ export interface FinanceLedgerEntry {
   amount: number;
   title?: string;
   description?: string;
+  source?: 'roadside-emergency' | string;
   breakdown?: FinanceLedgerBreakdown;
   /** Teslimat tamamlama gibi ilişkili kayıtların çift yazılmasını önlemek için */
   relatedDeliveryId?: string;
@@ -762,7 +878,8 @@ export type WarehouseActionReason =
   | 'upgrade-maxed'
   | 'level-required'
   | 'upgrade-in-progress'
-  | 'invalid-upgrade-config';
+  | 'invalid-upgrade-config'
+  | 'market-offline';
 
 /** Ticaret / depo işlemi sonucu */
 export interface TradeActionResult {
@@ -781,6 +898,7 @@ export interface TradeActionResult {
     | 'INSUFFICIENT_FUNDS'
     | 'INSUFFICIENT_INVENTORY'
     | 'INCOMPATIBLE_WAREHOUSE'
+    | 'MARKET_OFFLINE'
     | 'CITY_NOT_FOUND';
 }
 
@@ -928,6 +1046,8 @@ export interface MarketPriceAlert {
   isActive: boolean;
   createdAt: number;
   triggeredAt?: number;
+  /** Aynı global epoch içinde tekrar bildirim üretmesini engeller. */
+  lastTriggeredMarketEpoch?: number;
   expiresAt?: number;
   notificationId?: string;
 }
@@ -1138,6 +1258,8 @@ export interface MissionsState {
   activeMissionIds: string[];
   completedMissionIds: string[];
   claimedMissionRewardIds: string[];
+  /** Görev ilk kez tamamlandığında kaydedilen oyun saati; yalnız sunum amaçlıdır. */
+  completedAtByMissionId: Record<string, number>;
   flags: {
     marketOpened: boolean;
     deliveryStarted: boolean;
@@ -1307,6 +1429,14 @@ export interface StoreGameState {
   /** Tamamlanan / iptal / failed stok transferleri (sınırlı) */
   completedWarehouseStockTransfers?: WarehouseStockTransfer[];
   globalEconomy: GlobalEconomy;
+  /** Küçük, doğrulanmış current snapshot cache'i; global geçmiş save'e yazılmaz. */
+  cachedGlobalEconomySnapshot?: GlobalEconomySnapshot;
+  /** Yalnız backend source sonucunda true olur; eski/local cache production'da trusted sayılmaz. */
+  cachedGlobalEconomySnapshotTrusted?: boolean;
+  /** Runtime-only backend history. serializeGameState bu alanı kaydetmez. */
+  globalMarketHistory?: GlobalMarketHistoryEntry[];
+  globalMarketSyncStatus?: GlobalMarketSyncStatus;
+  globalMarketLastSyncedAtMs?: number;
   marketNews: MarketNews[];
   /** Oyuncu ve geliştirici olay günlüğü */
   eventLog: GameEvent[];
@@ -1356,6 +1486,10 @@ export interface StoreGameState {
   appliedEconomyPeriodKeys?: string[];
   /** Son acil operasyon sözleşmesi üretim zamanı (ms) */
   lastEmergencyContractAtMs?: number;
+  /** Son ücretsiz yol yardımı zamanı (oyun saati). */
+  lastRoadsideFuelAssistanceAt?: number;
+  /** Başarılı yakıt transaction retry anahtarları; save sırasında son N kayıt tutulur. */
+  fuelTransactionKeys?: string[];
 }
 
 /**
@@ -1386,6 +1520,7 @@ export type StartDeliveryErrorCode =
   | 'CAPACITY_INSUFFICIENT'
   | 'TRUCK_CONDITION_TOO_LOW'
   | 'ROUTE_NOT_FOUND'
+  | 'INSUFFICIENT_FUEL'
   | 'INSUFFICIENT_FUNDS'
   | 'DELIVERY_CREATE_FAILED'
   | 'TRUCK_NOT_AT_ORIGIN'
@@ -1461,6 +1596,7 @@ export type StartTruckTransferErrorCode =
   | 'CITY_NOT_FOUND'
   | 'ROUTE_NOT_FOUND'
   | 'NO_IDLE_DRIVER'
+  | 'INSUFFICIENT_FUEL'
   | 'INSUFFICIENT_FUNDS'
   | 'TRANSFER_CREATE_FAILED';
 

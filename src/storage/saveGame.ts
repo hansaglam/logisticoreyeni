@@ -18,6 +18,7 @@ import { PRODUCTS } from '../data/products';
 import { ROUTES } from '../data/routes';
 import { STARTER_TRUCK } from '../data/trucks';
 import { normalizeGlobalEconomy } from '../simulation/economy';
+import { materializeSnapshotCities } from '../simulation/globalMarketSnapshot';
 import { normalizeTruckCity } from '../simulation/delivery';
 import { normalizeDelivery } from '../simulation/deliveryIncidents';
 import { normalizePlayerTrailers } from '../simulation/trailerOps';
@@ -27,7 +28,7 @@ import { normalizeTruckFuel } from '../utils/truckFuel';
 import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/leveling';
 import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
-import { ensureFinanceTotals } from '../utils/financeLedger';
+import { ensureFinanceTotals, FINANCE_LEDGER_MAX_COUNT } from '../utils/financeLedger';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
 import { normalizeRetentionState } from '../simulation/retentionProgress';
 import { gameDayFromTime, normalizeWorldEventsState } from '../simulation/worldEvents';
@@ -44,7 +45,6 @@ import {
   normalizeMonetizationState,
 } from '../simulation/adRewardGrants';
 import { migratePlayerTruckNames } from '../utils/truckDisplayNames';
-import { PRODUCT_PRICE_HISTORY_MAX } from '../utils/priceHistoryCore';
 import type {
   City,
   Contract,
@@ -52,7 +52,9 @@ import type {
   GameEvent,
   FinanceLedgerEntry,
   FinanceTotals,
+  FuelWarningKey,
   GlobalEconomy,
+  GlobalEconomySnapshot,
   MarketNews,
   MissionsState,
   ProductId,
@@ -149,8 +151,12 @@ export interface SaveGamePayload {
   lastSeenMarketEpoch?: number;
   cachedSnapshotVersion?: number;
   cachedSnapshotGeneratedAt?: number;
+  cachedGlobalEconomySnapshot?: GlobalEconomySnapshot;
+  cachedGlobalEconomySnapshotTrusted?: boolean;
   appliedEconomyPeriodKeys?: string[];
   lastEmergencyContractAtMs?: number;
+  lastRoadsideFuelAssistanceAt?: number;
+  fuelTransactionKeys?: string[];
 }
 
 export interface SaveBackupStatus {
@@ -317,6 +323,145 @@ function normalizeLoadedContracts(contracts: Contract[] | undefined): Contract[]
 
 function normalizeActiveDeliveries(deliveries: Delivery[] | undefined): Delivery[] {
   return (deliveries ?? []).map((delivery) => normalizeDelivery(delivery));
+}
+
+const VALID_FUEL_WARNING_KEYS = new Set<FuelWarningKey>([
+  'low-fuel',
+  'critical-fuel',
+  'insufficient-range',
+  'out-of-fuel',
+]);
+
+function finiteNonNegative(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(0, Number(value)) : Math.max(0, fallback);
+}
+
+function normalizeFuelJobFields<
+  T extends {
+    truckId: string;
+    status: string;
+    progress: number;
+    pausedReason?: 'out-of-fuel';
+    fuelLitersAtStart?: number;
+    fuelLitersTotal?: number;
+    fuelConsumedL?: number;
+    lastFuelProcessedProgress?: number;
+    lastFuelProcessedAt?: number;
+    distanceTraveledKm?: number;
+    fuelWarningsEmitted?: FuelWarningKey[];
+    roadsideAssistanceGrantedAt?: number;
+  },
+>(
+  job: T,
+  activeStatus: T['status'],
+  trucks: Player['trucks'],
+  currentTime: number,
+  distanceKm: number,
+): T {
+  const progress = Math.max(0, Math.min(1, Number(job.progress) || 0));
+  const truck = trucks.find((candidate) => candidate.id === job.truckId);
+  const truckFuel = finiteNonNegative(truck?.currentFuelL, 0);
+  const totalFuel = finiteNonNegative(job.fuelLitersTotal, 0);
+  const consumedFuel = Math.min(
+    totalFuel,
+    finiteNonNegative(job.fuelConsumedL, totalFuel * progress),
+  );
+  const processedProgress = Math.max(
+    0,
+    Math.min(progress, Number.isFinite(job.lastFuelProcessedProgress)
+      ? Number(job.lastFuelProcessedProgress)
+      : progress),
+  );
+  const shouldInferOutOfFuel = progress < 1 && truckFuel <= 1e-6;
+  const pausedWithoutReason = job.status === 'paused' && job.pausedReason !== 'out-of-fuel';
+  const status =
+    shouldInferOutOfFuel
+      ? ('paused' as T['status'])
+      : pausedWithoutReason
+        ? activeStatus
+        : job.status;
+  const pausedReason =
+    status === 'paused' && (job.pausedReason === 'out-of-fuel' || shouldInferOutOfFuel)
+      ? 'out-of-fuel'
+      : undefined;
+  const warningKeys = Array.isArray(job.fuelWarningsEmitted)
+    ? job.fuelWarningsEmitted
+        .filter((key): key is FuelWarningKey => VALID_FUEL_WARNING_KEYS.has(key))
+        .slice(-4)
+    : [];
+
+  return {
+    ...job,
+    status,
+    progress,
+    pausedReason,
+    fuelLitersAtStart: finiteNonNegative(
+      job.fuelLitersAtStart,
+      truckFuel + consumedFuel,
+    ),
+    fuelLitersTotal: totalFuel,
+    fuelConsumedL: consumedFuel,
+    lastFuelProcessedProgress: processedProgress,
+    lastFuelProcessedAt: Number.isFinite(job.lastFuelProcessedAt)
+      ? Number(job.lastFuelProcessedAt)
+      : currentTime,
+    distanceTraveledKm: Math.min(
+      Math.max(0, distanceKm),
+      finiteNonNegative(job.distanceTraveledKm, distanceKm * processedProgress),
+    ),
+    fuelWarningsEmitted: warningKeys,
+    roadsideAssistanceGrantedAt: Number.isFinite(job.roadsideAssistanceGrantedAt)
+      ? Number(job.roadsideAssistanceGrantedAt)
+      : undefined,
+  };
+}
+
+function normalizeDeliveryFuelJobs(
+  deliveries: Delivery[] | undefined,
+  trucks: Player['trucks'],
+  currentTime: number,
+): Delivery[] {
+  return normalizeActiveDeliveries(deliveries).map((delivery) =>
+    normalizeFuelJobFields(
+      delivery,
+      'on_route',
+      trucks,
+      currentTime,
+      finiteNonNegative(delivery.distanceKm, 0),
+    ),
+  );
+}
+
+function normalizeTruckTransferFuelJobs(
+  transfers: TruckTransfer[] | undefined,
+  trucks: Player['trucks'],
+  currentTime: number,
+): TruckTransfer[] {
+  return (transfers ?? []).map((transfer) =>
+    normalizeFuelJobFields(
+      transfer,
+      'active',
+      trucks,
+      currentTime,
+      finiteNonNegative(transfer.distanceKm, 0),
+    ),
+  );
+}
+
+function normalizeWarehouseTransferFuelJobs(
+  transfers: WarehouseStockTransfer[] | undefined,
+  trucks: Player['trucks'],
+  currentTime: number,
+): WarehouseStockTransfer[] {
+  return (transfers ?? []).map((transfer) =>
+    normalizeFuelJobFields(
+      transfer,
+      'active',
+      trucks,
+      currentTime,
+      finiteNonNegative(transfer.routeDistanceKm, 0),
+    ),
+  );
 }
 
 export function normalizeLoadedPlayer(player: Player): Player {
@@ -548,14 +693,33 @@ export function normalizeSavePayload(
     products: withFallbacks.products as Product[],
     routes: withFallbacks.routes as Route[],
     contracts: withFallbacks.contracts as Contract[],
-    activeDeliveries: normalizeActiveDeliveries(withFallbacks.activeDeliveries as Delivery[]),
-    activeTransfers: withFallbacks.activeTransfers as TruckTransfer[],
-    completedTransfers: withFallbacks.completedTransfers as TruckTransfer[],
+    activeDeliveries: normalizeDeliveryFuelJobs(
+      withFallbacks.activeDeliveries as Delivery[],
+      player.trucks,
+      currentTime,
+    ),
+    activeTransfers: normalizeTruckTransferFuelJobs(
+      withFallbacks.activeTransfers as TruckTransfer[],
+      player.trucks,
+      currentTime,
+    ),
+    completedTransfers: normalizeTruckTransferFuelJobs(
+      withFallbacks.completedTransfers as TruckTransfer[],
+      player.trucks,
+      currentTime,
+    ),
     activeWarehouseStockTransfers:
-      (withFallbacks.activeWarehouseStockTransfers as WarehouseStockTransfer[] | undefined) ?? [],
+      normalizeWarehouseTransferFuelJobs(
+        withFallbacks.activeWarehouseStockTransfers as WarehouseStockTransfer[] | undefined,
+        player.trucks,
+        currentTime,
+      ),
     completedWarehouseStockTransfers:
-      (withFallbacks.completedWarehouseStockTransfers as WarehouseStockTransfer[] | undefined) ??
-      [],
+      normalizeWarehouseTransferFuelJobs(
+        withFallbacks.completedWarehouseStockTransfers as WarehouseStockTransfer[] | undefined,
+        player.trucks,
+        currentTime,
+      ),
     globalEconomy: normalizeGlobalEconomy(withFallbacks.globalEconomy, { logFallback: true }),
     marketNews: withFallbacks.marketNews as MarketNews[],
     eventLog: withFallbacks.eventLog as GameEvent[],
@@ -590,6 +754,51 @@ export function normalizeSavePayload(
         : undefined,
       currentTime,
     ),
+    lastSeenRealTimeMs: Number.isFinite(withFallbacks.lastSeenRealTimeMs)
+      ? Number(withFallbacks.lastSeenRealTimeMs)
+      : undefined,
+    lastSimulatedRealTimeMs: Number.isFinite(withFallbacks.lastSimulatedRealTimeMs)
+      ? Number(withFallbacks.lastSimulatedRealTimeMs)
+      : undefined,
+    lastOfflineProgressAppliedAt: Number.isFinite(withFallbacks.lastOfflineProgressAppliedAt)
+      ? Number(withFallbacks.lastOfflineProgressAppliedAt)
+      : undefined,
+    offlineProgressVersion: Number.isFinite(withFallbacks.offlineProgressVersion)
+      ? Number(withFallbacks.offlineProgressVersion)
+      : 1,
+    lastSimulationGameSpeed: Number.isFinite(withFallbacks.lastSimulationGameSpeed)
+      ? Number(withFallbacks.lastSimulationGameSpeed)
+      : undefined,
+    lastProcessedEconomyAt: Number.isFinite(withFallbacks.lastProcessedEconomyAt)
+      ? Number(withFallbacks.lastProcessedEconomyAt)
+      : undefined,
+    lastSeenMarketEpoch: Number.isFinite(withFallbacks.lastSeenMarketEpoch)
+      ? Number(withFallbacks.lastSeenMarketEpoch)
+      : undefined,
+    cachedSnapshotVersion: Number.isFinite(withFallbacks.cachedSnapshotVersion)
+      ? Number(withFallbacks.cachedSnapshotVersion)
+      : undefined,
+    cachedSnapshotGeneratedAt: Number.isFinite(withFallbacks.cachedSnapshotGeneratedAt)
+      ? Number(withFallbacks.cachedSnapshotGeneratedAt)
+      : undefined,
+    appliedEconomyPeriodKeys: Array.isArray(withFallbacks.appliedEconomyPeriodKeys)
+      ? withFallbacks.appliedEconomyPeriodKeys
+          .filter((key): key is string => typeof key === 'string')
+          .slice(-48)
+      : [],
+    lastEmergencyContractAtMs: Number.isFinite(withFallbacks.lastEmergencyContractAtMs)
+      ? Number(withFallbacks.lastEmergencyContractAtMs)
+      : undefined,
+    lastRoadsideFuelAssistanceAt: Number.isFinite(
+      withFallbacks.lastRoadsideFuelAssistanceAt,
+    )
+      ? Number(withFallbacks.lastRoadsideFuelAssistanceAt)
+      : undefined,
+    fuelTransactionKeys: Array.isArray(withFallbacks.fuelTransactionKeys)
+      ? withFallbacks.fuelTransactionKeys
+          .filter((key): key is string => typeof key === 'string' && key.length > 0)
+          .slice(-32)
+      : [],
   };
 }
 
@@ -977,7 +1186,8 @@ function trimCityProductsForSave(products: City['products']): City['products'] {
   for (const [productId, state] of Object.entries(products)) {
     trimmed[productId as ProductId] = {
       ...state,
-      priceHistory: state.priceHistory?.slice(-PRODUCT_PRICE_HISTORY_MAX),
+      // Global chart history belongs to globalMarketHistory, not player save.
+      priceHistory: undefined,
     };
   }
   return trimmed;
@@ -1089,7 +1299,9 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     globalEconomy: normalizeGlobalEconomy(state.globalEconomy),
     marketNews: structuredClone(state.marketNews),
     eventLog: structuredClone(state.eventLog),
-    financeLedger: structuredClone(state.financeLedger ?? []),
+    financeLedger: structuredClone(
+      (state.financeLedger ?? []).slice(0, FINANCE_LEDGER_MAX_COUNT),
+    ),
     financeTotals: structuredClone(state.financeTotals),
     gameSpeed: state.gameSpeed,
     isPaused: state.isPaused,
@@ -1122,8 +1334,15 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastSeenMarketEpoch: state.lastSeenMarketEpoch,
     cachedSnapshotVersion: state.cachedSnapshotVersion,
     cachedSnapshotGeneratedAt: state.cachedSnapshotGeneratedAt,
+    cachedGlobalEconomySnapshot: state.cachedGlobalEconomySnapshot
+      ? structuredClone(state.cachedGlobalEconomySnapshot)
+      : undefined,
+    cachedGlobalEconomySnapshotTrusted:
+      state.cachedGlobalEconomySnapshotTrusted === true,
     appliedEconomyPeriodKeys: state.appliedEconomyPeriodKeys?.slice(-48),
     lastEmergencyContractAtMs: state.lastEmergencyContractAtMs,
+    lastRoadsideFuelAssistanceAt: state.lastRoadsideFuelAssistanceAt,
+    fuelTransactionKeys: state.fuelTransactionKeys?.slice(-32),
   };
 }
 
@@ -1139,6 +1358,27 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     }),
     payload.activeDeliveries ?? [],
   );
+  const cachedSnapshotCandidate =
+    payload.cachedGlobalEconomySnapshot &&
+    Number.isFinite(payload.cachedGlobalEconomySnapshot.epoch) &&
+    Number.isFinite(payload.cachedGlobalEconomySnapshot.fuelPricePerLiter)
+      ? structuredClone(payload.cachedGlobalEconomySnapshot)
+      : undefined;
+  const cachedSnapshotTrusted =
+    payload.cachedGlobalEconomySnapshotTrusted === true;
+  const cachedSnapshot =
+    cachedSnapshotCandidate &&
+    (cachedSnapshotTrusted || (typeof __DEV__ !== 'undefined' && __DEV__))
+      ? cachedSnapshotCandidate
+      : undefined;
+  const hydratedCities = cachedSnapshot
+    ? materializeSnapshotCities(CITIES, cachedSnapshot)
+    : mergeCanonicalCities(payload.cities);
+  const hydratedEconomy = normalizeGlobalEconomy({
+    ...payload.globalEconomy,
+    fuelPrice:
+      cachedSnapshot?.fuelPricePerLiter ?? payload.globalEconomy?.fuelPrice,
+  });
 
   return {
     currentTime: safeCurrentTime,
@@ -1152,19 +1392,39 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     lastPlayableContractGeneratedTime: payload.lastPlayableContractGeneratedTime ?? 0,
     lastManualContractRefreshTime: payload.lastManualContractRefreshTime ?? 0,
     player,
-    cities: mergeCanonicalCities(payload.cities),
+    cities: hydratedCities,
     products:
       isArray(payload.products) && payload.products.length > 0
         ? (payload.products as Product[])
         : structuredClone(PRODUCTS),
     routes: mergeCanonicalRoutes(payload.routes),
     contracts: normalizeLoadedContracts(payload.contracts ?? []),
-    activeDeliveries: normalizeActiveDeliveries(payload.activeDeliveries),
-    activeTransfers: payload.activeTransfers ?? [],
-    completedTransfers: payload.completedTransfers ?? [],
-    activeWarehouseStockTransfers: payload.activeWarehouseStockTransfers ?? [],
-    completedWarehouseStockTransfers: payload.completedWarehouseStockTransfers ?? [],
-    globalEconomy: normalizeGlobalEconomy(payload.globalEconomy),
+    activeDeliveries: normalizeDeliveryFuelJobs(
+      payload.activeDeliveries,
+      player.trucks,
+      safeCurrentTime,
+    ),
+    activeTransfers: normalizeTruckTransferFuelJobs(
+      payload.activeTransfers,
+      player.trucks,
+      safeCurrentTime,
+    ),
+    completedTransfers: normalizeTruckTransferFuelJobs(
+      payload.completedTransfers,
+      player.trucks,
+      safeCurrentTime,
+    ),
+    activeWarehouseStockTransfers: normalizeWarehouseTransferFuelJobs(
+      payload.activeWarehouseStockTransfers,
+      player.trucks,
+      safeCurrentTime,
+    ),
+    completedWarehouseStockTransfers: normalizeWarehouseTransferFuelJobs(
+      payload.completedWarehouseStockTransfers,
+      player.trucks,
+      safeCurrentTime,
+    ),
+    globalEconomy: hydratedEconomy,
     marketNews: payload.marketNews,
     eventLog: payload.eventLog,
     financeLedger: payload.financeLedger ?? [],
@@ -1234,6 +1494,12 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       Number.isFinite(payload.cachedSnapshotGeneratedAt)
         ? payload.cachedSnapshotGeneratedAt
         : undefined,
+    cachedGlobalEconomySnapshot: cachedSnapshot,
+    cachedGlobalEconomySnapshotTrusted: cachedSnapshotTrusted && !!cachedSnapshot,
+    globalMarketHistory: [],
+    globalMarketSyncStatus: cachedSnapshot
+      ? 'offline-cache'
+      : 'idle',
     appliedEconomyPeriodKeys: Array.isArray(payload.appliedEconomyPeriodKeys)
       ? payload.appliedEconomyPeriodKeys.filter((k): k is string => typeof k === 'string').slice(-48)
       : undefined,
@@ -1242,6 +1508,16 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       Number.isFinite(payload.lastEmergencyContractAtMs)
         ? payload.lastEmergencyContractAtMs
         : undefined,
+    lastRoadsideFuelAssistanceAt:
+      payload.lastRoadsideFuelAssistanceAt != null &&
+      Number.isFinite(payload.lastRoadsideFuelAssistanceAt)
+        ? payload.lastRoadsideFuelAssistanceAt
+        : undefined,
+    fuelTransactionKeys: Array.isArray(payload.fuelTransactionKeys)
+      ? payload.fuelTransactionKeys
+          .filter((key): key is string => typeof key === 'string' && key.length > 0)
+          .slice(-32)
+      : [],
   };
 }
 

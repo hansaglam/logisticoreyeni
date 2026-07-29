@@ -44,7 +44,12 @@ export function missionsProgressUnchanged(
   next: MissionsState,
 ): boolean {
   if (!prev) return false;
-  return stringSetEqual(prev.completedMissionIds, next.completedMissionIds);
+  if (!stringSetEqual(prev.completedMissionIds, next.completedMissionIds)) return false;
+  const previousTimes = prev.completedAtByMissionId ?? {};
+  const nextTimes = next.completedAtByMissionId ?? {};
+  const nextEntries = Object.entries(nextTimes);
+  if (Object.keys(previousTimes).length !== nextEntries.length) return false;
+  return nextEntries.every(([missionId, completedAt]) => previousTimes[missionId] === completedAt);
 }
 
 export function retentionProgressUnchanged(

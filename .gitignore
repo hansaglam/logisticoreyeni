@@ -5,6 +5,10 @@ node_modules/
 .expo/
 dist/
 web-build/
+backend/lib/
+firestore-debug.log
+firebase-debug.log
+.firebase/
 
 # Native build outputs
 android/app/build/

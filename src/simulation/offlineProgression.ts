@@ -199,7 +199,10 @@ export function createOfflineProgressSnapshot(state: Pick<
     Object.values(city.products ?? {}).map((product) => product.currentPrice ?? 0),
   );
   const activeRouteDeliveries = state.activeDeliveries.filter(
-    (delivery) => delivery.status === 'on_route' || delivery.status === 'preparing',
+    (delivery) =>
+      delivery.status === 'on_route' ||
+      delivery.status === 'preparing' ||
+      delivery.status === 'paused',
   );
   return {
     money: state.player.money ?? 0,
@@ -273,7 +276,10 @@ export function countOfflineCompletedDeliveries(
   const afterActiveIds = new Set(
     after.activeDeliveries
       .filter(
-        (delivery) => delivery.status === 'on_route' || delivery.status === 'preparing',
+        (delivery) =>
+          delivery.status === 'on_route' ||
+          delivery.status === 'preparing' ||
+          delivery.status === 'paused',
       )
       .map((delivery) => delivery.id),
   );
@@ -471,11 +477,18 @@ export function summarizeOfflineWorldEventDayAdvance(
 
 export function countActiveRouteDeliveries(trucks: Truck[], deliveries: Delivery[]): number {
   const busyTruckIds = new Set(
-    trucks.filter((truck) => truck.status === 'on_route').map((truck) => truck.id),
+    trucks
+      .filter(
+        (truck) =>
+          truck.status === 'on_route' || truck.status === 'out_of_fuel',
+      )
+      .map((truck) => truck.id),
   );
   return deliveries.filter(
     (delivery) =>
-      (delivery.status === 'on_route' || delivery.status === 'preparing') &&
+      (delivery.status === 'on_route' ||
+        delivery.status === 'preparing' ||
+        delivery.status === 'paused') &&
       busyTruckIds.has(delivery.truckId),
   ).length;
 }

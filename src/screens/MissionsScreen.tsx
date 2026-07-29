@@ -1,37 +1,45 @@
 /**
- * LogistiCore - Görevler ekranı (More > Görevler)
+ * LogistiCore — Görevler ekranı (More > Görevler)
  * Retention Pack V1: Görevler · Haftalık · Başarılar
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
-  ActionButton,
-  AppCard,
-  ProgressBar,
-  ScreenHeader,
-  SectionTitle,
-  StatusBadge,
-} from '../components/ui';
-import { CAREER_MISSIONS, STARTER_MISSIONS, createDefaultMissionsState, getMissionById } from '../config/missions';
+  MissionHeroHeader,
+  MissionSectionHeader,
+  MissionSummaryBar,
+  MissionTabs,
+  PremiumMissionCard,
+  type MissionsTabKey,
+  type PremiumMissionStatus,
+} from '../components/missions/MissionPresentation';
+import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { AppCard, GameIcon } from '../components/ui';
+import {
+  CAREER_MISSIONS,
+  STARTER_MISSIONS,
+  createDefaultMissionsState,
+  getMissionById,
+} from '../config/missions';
 import { MILESTONE_DEFINITIONS } from '../data/milestones';
 import { getWeeklyObjectiveDefinitions } from '../data/weeklyObjectives';
-import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
-import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
+import {
+  useActiveOnboardingHint,
+  useOnboardingScreenVisit,
+} from '../hooks/useOnboardingScreenVisit';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { useGameStore } from '../store/gameStore';
 import { createDefaultRetentionState } from '../simulation/retentionProgress';
+import { useGameStore } from '../store/gameStore';
+import { colors, formatMoney, spacing, typography } from '../theme';
+import type { RetentionReward } from '../types/game';
+import { getWeeklySeasonKey, getWeeklySeasonLabel } from '../utils/leaderboardSeason';
 import {
   getMissionDisplayStatus,
   sortMissionIdsForDisplay,
   type MissionProgressResult,
 } from '../utils/missionProgress';
-import { getWeeklySeasonKey, getWeeklySeasonLabel } from '../utils/leaderboardSeason';
-import type { RetentionReward } from '../types/game';
-import { colors, formatMoney, spacing, typography } from '../theme';
-
-type MissionsTab = 'missions' | 'weekly' | 'achievements';
 
 function formatMissionReward(missionId: string): string {
   const mission = getMissionById(missionId);
@@ -55,9 +63,9 @@ function formatRetentionReward(reward: RetentionReward): string {
   return parts.join(' · ');
 }
 
-function formatProgressValue(current: number, target: number, missionId: string): string {
+function formatMissionProgress(current: number, target: number, missionId: string): string {
   if (missionId === 'reach_company_score_150k') {
-    return `${Math.floor(current).toLocaleString('en-US')} / ${target.toLocaleString('en-US')}`;
+    return `${Math.floor(current).toLocaleString('tr-TR')} / ${target.toLocaleString('tr-TR')}`;
   }
   if (missionId === 'first_profit') {
     return `${formatMoney(current)} / ${formatMoney(target)} sözleşme geliri`;
@@ -78,168 +86,29 @@ function formatRetentionProgress(current: number, target: number, useMoney = fal
   return `${Math.floor(current)} / ${target}`;
 }
 
-function MissionStatusBadge({
-  status,
-}: {
-  status: ReturnType<typeof getMissionDisplayStatus>;
-}) {
-  if (status === 'claimed') {
-    return <StatusBadge label="Tamamlandı" variant="success" size="sm" />;
-  }
-  if (status === 'ready') {
-    return <StatusBadge label="Hazır" variant="amber" size="sm" />;
-  }
-  return <StatusBadge label="Devam Ediyor" variant="blue" size="sm" />;
+function toPremiumMissionStatus(
+  status: ReturnType<typeof getMissionDisplayStatus>,
+): PremiumMissionStatus {
+  if (status === 'claimed') return 'completed';
+  if (status === 'ready') return 'ready';
+  return 'in_progress';
 }
 
-function RetentionStatusBadge({ isClaimed, isReady }: { isClaimed: boolean; isReady: boolean }) {
-  if (isClaimed) {
-    return <StatusBadge label="Alındı" variant="success" size="sm" />;
-  }
-  if (isReady) {
-    return <StatusBadge label="Hazır" variant="amber" size="sm" />;
-  }
-  return <StatusBadge label="Devam Ediyor" variant="blue" size="sm" />;
+function getRetentionStatus(isClaimed: boolean, isReady: boolean): PremiumMissionStatus {
+  if (isClaimed) return 'completed';
+  if (isReady) return 'ready';
+  return 'in_progress';
 }
-
-const TabButton = React.memo(function TabButton({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.tabButton, active && styles.tabButtonActive]}
-    >
-      <Text style={[styles.tabButtonText, active && styles.tabButtonTextActive]}>{label}</Text>
-    </Pressable>
-  );
-});
-
-const MissionCard = React.memo(function MissionCard({
-  missionId,
-  progress,
-  missions,
-  onClaim,
-}: {
-  missionId: string;
-  progress: MissionProgressResult;
-  missions: NonNullable<ReturnType<typeof useGameStore.getState>['missions']>;
-  onClaim: () => void;
-}) {
-  const mission = getMissionById(missionId);
-  if (!mission) return null;
-
-  const status = getMissionDisplayStatus(missionId, missions, progress);
-  const ratio = progress.target > 0 ? progress.current / progress.target : 0;
-  const isCompact = status === 'claimed';
-
-  return (
-    <AppCard style={[styles.card, isCompact ? styles.cardCompact : null]} padded>
-      <View style={styles.cardHeader}>
-        <Text style={styles.title} numberOfLines={1}>
-          {mission.title}
-        </Text>
-        <MissionStatusBadge status={status} />
-      </View>
-      <Text style={styles.description} numberOfLines={2}>
-        {mission.description}
-      </Text>
-      {status !== 'claimed' ? (
-        <>
-          <ProgressBar progress={ratio} color={colors.accentBlue} height={5} />
-          <Text style={styles.progressLabel}>
-            {formatProgressValue(progress.current, progress.target, missionId)}
-          </Text>
-        </>
-      ) : null}
-      <Text style={styles.reward} numberOfLines={1}>
-        Ödül: {formatMissionReward(missionId)}
-      </Text>
-      {status === 'ready' ? (
-        <ActionButton
-          label="Ödülü Al"
-          onPress={onClaim}
-          variant="primary"
-          compact
-          style={styles.claimButton}
-        />
-      ) : null}
-    </AppCard>
-  );
-});
-
-const RetentionObjectiveCard = React.memo(function RetentionObjectiveCard({
-  title,
-  description,
-  progress,
-  target,
-  reward,
-  isClaimed,
-  isReady,
-  useMoney,
-  onClaim,
-}: {
-  title: string;
-  description: string;
-  progress: number;
-  target: number;
-  reward: RetentionReward;
-  isClaimed: boolean;
-  isReady: boolean;
-  useMoney?: boolean;
-  onClaim: () => void;
-}) {
-  const ratio = target > 0 ? progress / target : 0;
-
-  return (
-    <AppCard style={[styles.card, isClaimed ? styles.cardCompact : null]} padded>
-      <View style={styles.cardHeader}>
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
-        </Text>
-        <RetentionStatusBadge isClaimed={isClaimed} isReady={isReady} />
-      </View>
-      <Text style={styles.description} numberOfLines={2}>
-        {description}
-      </Text>
-      {!isClaimed ? (
-        <>
-          <ProgressBar progress={ratio} color={colors.accentBlue} height={5} />
-          <Text style={styles.progressLabel}>
-            {formatRetentionProgress(progress, target, useMoney)}
-          </Text>
-        </>
-      ) : null}
-      <Text style={styles.reward} numberOfLines={1}>
-        Ödül: {formatRetentionReward(reward)}
-      </Text>
-      {isReady ? (
-        <ActionButton
-          label="Ödülü Al"
-          onPress={onClaim}
-          variant="primary"
-          compact
-          style={styles.claimButton}
-        />
-      ) : null}
-    </AppCard>
-  );
-});
 
 interface MissionsScreenProps {
   onBack: () => void;
 }
 
 export default function MissionsScreen({ onBack }: MissionsScreenProps) {
-  const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
-  const [activeTab, setActiveTab] = useState<MissionsTab>('missions');
+  const { contentBottomPadding, scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+  const [activeTab, setActiveTab] = useState<MissionsTabKey>('missions');
 
+  const currentTime = useGameStore((state) => state.currentTime);
   const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
   const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
@@ -251,7 +120,6 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
 
   useOnboardingScreenVisit('Missions');
   const onboardingHint = useActiveOnboardingHint(['claim_first_reward']);
-
   const seasonKey = useMemo(() => getWeeklySeasonKey(), []);
   const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);
 
@@ -289,8 +157,8 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
         if (!entry.isClaimed) return 1;
         return 3;
       };
-      const diff = score(aEntry, a.target) - score(bEntry, b.target);
-      if (diff !== 0) return diff;
+      const difference = score(aEntry, a.target) - score(bEntry, b.target);
+      if (difference !== 0) return difference;
       return a.title.localeCompare(b.title, 'tr');
     });
   }, [retention.milestones]);
@@ -305,8 +173,8 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
         if (!entry.isClaimed) return 1;
         return 3;
       };
-      const diff = score(aEntry, a.target) - score(bEntry, b.target);
-      if (diff !== 0) return diff;
+      const difference = score(aEntry, a.target) - score(bEntry, b.target);
+      if (difference !== 0) return difference;
       return a.slot.localeCompare(b.slot);
     });
   }, [weeklyObjectives, retention.weeklyObjectives]);
@@ -320,64 +188,86 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     return map;
   }, [starterMissionIds, careerMissionIds, getMissionProgressValue]);
 
+  const summary = useMemo(() => {
+    if (activeTab === 'weekly') {
+      let completed = 0;
+      let ready = 0;
+      for (const objective of sortedWeekly) {
+        const entry = retention.weeklyObjectives[objective.id];
+        if (entry?.isClaimed) completed += 1;
+        else if ((entry?.progress ?? 0) >= objective.target) ready += 1;
+      }
+      return { total: sortedWeekly.length, completed, ready };
+    }
+
+    if (activeTab === 'achievements') {
+      let completed = 0;
+      let ready = 0;
+      for (const milestone of sortedMilestones) {
+        const entry = retention.milestones[milestone.id];
+        if (entry?.isClaimed) completed += 1;
+        else if ((entry?.progress ?? 0) >= milestone.target) ready += 1;
+      }
+      return { total: sortedMilestones.length, completed, ready };
+    }
+
+    const ids = [...starterMissionIds, ...careerMissionIds];
+    let completed = 0;
+    let ready = 0;
+    for (const missionId of ids) {
+      const status = getMissionDisplayStatus(
+        missionId,
+        missions,
+        missionProgressById.get(missionId) ?? { current: 0, target: 1, isComplete: false },
+      );
+      if (status === 'claimed') completed += 1;
+      else if (status === 'ready') ready += 1;
+    }
+    return { total: ids.length, completed, ready };
+  }, [
+    activeTab,
+    careerMissionIds,
+    missionProgressById,
+    missions,
+    retention.milestones,
+    retention.weeklyObjectives,
+    sortedMilestones,
+    sortedWeekly,
+    starterMissionIds,
+  ]);
+
   const handleClaimMissionReward = useCallback(
-    (missionId: string) => {
-      claimMissionReward(missionId);
-    },
+    (missionId: string) => claimMissionReward(missionId),
     [claimMissionReward],
   );
-
   const handleClaimWeeklyObjective = useCallback(
-    (objectiveId: string) => {
-      claimWeeklyObjectiveReward(objectiveId);
-    },
+    (objectiveId: string) => claimWeeklyObjectiveReward(objectiveId),
     [claimWeeklyObjectiveReward],
   );
-
   const handleClaimMilestone = useCallback(
-    (milestoneId: string) => {
-      claimMilestoneReward(milestoneId);
-    },
+    (milestoneId: string) => claimMilestoneReward(milestoneId),
     [claimMilestoneReward],
   );
-
-  const handleSelectMissionsTab = useCallback(() => setActiveTab('missions'), []);
-  const handleSelectWeeklyTab = useCallback(() => setActiveTab('weekly'), []);
-  const handleSelectAchievementsTab = useCallback(() => setActiveTab('achievements'), []);
 
   return (
     <ScrollView
       style={styles.root}
       contentContainerStyle={[
         styles.content,
-        { paddingTop: screenTopPadding, paddingBottom: contentBottomPadding },
+        {
+          paddingTop: screenTopPadding,
+          paddingBottom: Math.max(
+            contentBottomPadding ?? 0,
+            scrollBottomPadding ?? 0,
+            spacing.xxl,
+          ),
+        },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <ScreenHeader
-        title="Görevler"
-        subtitle="Başlangıç, haftalık sezon ve kariyer başarıları"
-        onBack={onBack}
-        compact
-      />
-
-      <View style={styles.tabRow}>
-        <TabButton
-          label="Görevler"
-          active={activeTab === 'missions'}
-          onPress={handleSelectMissionsTab}
-        />
-        <TabButton
-          label="Haftalık"
-          active={activeTab === 'weekly'}
-          onPress={handleSelectWeeklyTab}
-        />
-        <TabButton
-          label="Başarılar"
-          active={activeTab === 'achievements'}
-          onPress={handleSelectAchievementsTab}
-        />
-      </View>
+      <MissionHeroHeader onBack={onBack} />
+      <MissionTabs activeTab={activeTab} onChange={setActiveTab} />
+      <MissionSummaryBar {...summary} />
 
       {onboardingHint && activeTab === 'missions' ? (
         <OnboardingHintCard
@@ -392,60 +282,117 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
 
       {activeTab === 'missions' ? (
         <>
-          <SectionTitle title="Başlangıç Görevleri" compact />
-          {starterMissionIds.map((missionId) => (
-            <MissionCard
-              key={missionId}
-              missionId={missionId}
-              progress={missionProgressById.get(missionId) ?? { current: 0, target: 1, isComplete: false }}
-              missions={missions}
-              onClaim={() => handleClaimMissionReward(missionId)}
-            />
-          ))}
+          <MissionSectionHeader title="Başlangıç Görevleri" icon="contract" />
+          {starterMissionIds.map((missionId) => {
+            const mission = getMissionById(missionId);
+            if (!mission) return null;
+            const progress =
+              missionProgressById.get(missionId) ??
+              ({ current: 0, target: 1, isComplete: false } satisfies MissionProgressResult);
+            const status = toPremiumMissionStatus(
+              getMissionDisplayStatus(missionId, missions, progress),
+            );
+            return (
+              <PremiumMissionCard
+                key={missionId}
+                id={missionId}
+                category={mission.category}
+                title={mission.title}
+                description={mission.description}
+                progress={progress.target > 0 ? progress.current / progress.target : 0}
+                progressLabel={formatMissionProgress(
+                  progress.current,
+                  progress.target,
+                  missionId,
+                )}
+                rewardLabel={formatMissionReward(missionId)}
+                status={status}
+                completedAt={missions.completedAtByMissionId[missionId]}
+                currentTime={currentTime}
+                onClaim={() => handleClaimMissionReward(missionId)}
+              />
+            );
+          })}
 
-          <SectionTitle title="Kariyer Hedefleri" compact style={styles.sectionSpaced} />
-          {careerMissionIds.map((missionId) => (
-            <MissionCard
-              key={missionId}
-              missionId={missionId}
-              progress={missionProgressById.get(missionId) ?? { current: 0, target: 1, isComplete: false }}
-              missions={missions}
-              onClaim={() => handleClaimMissionReward(missionId)}
-            />
-          ))}
+          <MissionSectionHeader
+            title="Kariyer Hedefleri"
+            icon="trophy"
+            style={styles.sectionSpaced}
+          />
+          {careerMissionIds.map((missionId) => {
+            const mission = getMissionById(missionId);
+            if (!mission) return null;
+            const progress =
+              missionProgressById.get(missionId) ??
+              ({ current: 0, target: 1, isComplete: false } satisfies MissionProgressResult);
+            const status = toPremiumMissionStatus(
+              getMissionDisplayStatus(missionId, missions, progress),
+            );
+            return (
+              <PremiumMissionCard
+                key={missionId}
+                id={missionId}
+                category={mission.category}
+                title={mission.title}
+                description={mission.description}
+                progress={progress.target > 0 ? progress.current / progress.target : 0}
+                progressLabel={formatMissionProgress(
+                  progress.current,
+                  progress.target,
+                  missionId,
+                )}
+                rewardLabel={formatMissionReward(missionId)}
+                status={status}
+                completedAt={missions.completedAtByMissionId[missionId]}
+                currentTime={currentTime}
+                onClaim={() => handleClaimMissionReward(missionId)}
+              />
+            );
+          })}
         </>
       ) : null}
 
       {activeTab === 'weekly' ? (
         <>
           <AppCard variant="soft" style={styles.seasonCard} padded>
-            <Text style={styles.seasonTitle}>Haftalık Sezon</Text>
-            <Text style={styles.seasonDates}>{seasonLabel}</Text>
+            <View style={styles.seasonHeader}>
+              <View style={styles.seasonIcon}>
+                <GameIcon name="time" size={19} color={colors.primaryLight} />
+              </View>
+              <View style={styles.seasonCopy}>
+                <Text style={styles.seasonTitle}>Haftalık Sezon</Text>
+                <Text style={styles.seasonDates}>{seasonLabel}</Text>
+              </View>
+            </View>
             <Text style={styles.seasonHint}>
               Leaderboard ile aynı haftayı takip eder. Yeni hafta başladığında görevler yenilenir.
             </Text>
           </AppCard>
 
-          <SectionTitle title="Bu Haftanın Görevleri" compact />
+          <MissionSectionHeader title="Bu Haftanın Görevleri" icon="time" />
           {sortedWeekly.map((objective) => {
             const entry = retention.weeklyObjectives[objective.id] ?? {
               progress: 0,
               isClaimed: false,
             };
             const isReady = !entry.isClaimed && entry.progress >= objective.target;
-            const useMoney = objective.metric === 'weekly_trade_profit';
-
             return (
-              <RetentionObjectiveCard
+              <PremiumMissionCard
                 key={objective.id}
+                id={objective.id}
+                category={objective.category}
                 title={objective.title}
                 description={objective.description}
-                progress={entry.progress}
-                target={objective.target}
-                reward={objective.reward}
-                isClaimed={entry.isClaimed}
-                isReady={isReady}
-                useMoney={useMoney}
+                progress={objective.target > 0 ? entry.progress / objective.target : 0}
+                progressLabel={formatRetentionProgress(
+                  entry.progress,
+                  objective.target,
+                  objective.metric === 'weekly_trade_profit',
+                )}
+                rewardLabel={formatRetentionReward(objective.reward)}
+                status={getRetentionStatus(entry.isClaimed, isReady)}
+                completedAt={entry.completedAt}
+                currentTime={currentTime}
                 onClaim={() => handleClaimWeeklyObjective(objective.id)}
               />
             );
@@ -455,7 +402,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
 
       {activeTab === 'achievements' ? (
         <>
-          <SectionTitle title="Kariyer Başarıları" compact />
+          <MissionSectionHeader title="Kariyer Başarıları" icon="trophy" />
           {sortedMilestones.map((milestone) => {
             const entry = retention.milestones[milestone.id] ?? {
               progress: 0,
@@ -467,18 +414,23 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
               milestone.metric.type === 'trade_profit_product' ||
               milestone.metric.type === 'cash' ||
               milestone.metric.type === 'company_score';
-
             return (
-              <RetentionObjectiveCard
+              <PremiumMissionCard
                 key={milestone.id}
+                id={milestone.id}
+                category={milestone.category}
                 title={milestone.title}
                 description={milestone.description}
-                progress={entry.progress}
-                target={milestone.target}
-                reward={milestone.reward}
-                isClaimed={entry.isClaimed}
-                isReady={isReady}
-                useMoney={useMoney}
+                progress={milestone.target > 0 ? entry.progress / milestone.target : 0}
+                progressLabel={formatRetentionProgress(
+                  entry.progress,
+                  milestone.target,
+                  useMoney,
+                )}
+                rewardLabel={formatRetentionReward(milestone.reward)}
+                status={getRetentionStatus(entry.isClaimed, isReady)}
+                completedAt={entry.completedAt}
+                currentTime={currentTime}
                 onClaim={() => handleClaimMilestone(milestone.id)}
               />
             );
@@ -492,9 +444,11 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
+    backgroundColor: colors.background,
   },
   content: {
-    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   tabRow: {
     flexDirection: 'row',
@@ -526,66 +480,47 @@ const styles = StyleSheet.create({
   tabButtonTextActive: {
     color: colors.accentBlue,
   },
+  sectionSpaced: {
+    marginTop: spacing.sm,
+  },
   seasonCard: {
-    marginBottom: spacing.sm,
-    gap: spacing.xs,
-    borderColor: 'rgba(56, 189, 248, 0.25)',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    borderColor: 'rgba(35,136,255,0.3)',
+    backgroundColor: '#081628',
+  },
+  seasonHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  seasonIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentBlueSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(57,160,255,0.34)',
+  },
+  seasonCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   seasonTitle: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.accentBlue,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    ...typography.cardTitle,
+    color: colors.primaryLight,
   },
   seasonDates: {
-    ...typography.bodySmall,
+    ...typography.caption,
+    marginTop: 2,
+    color: colors.textPrimary,
     fontWeight: '700',
   },
   seasonHint: {
     ...typography.caption,
     color: colors.textSecondary,
     lineHeight: 16,
-  },
-  sectionSpaced: {
-    marginTop: spacing.sm,
-  },
-  card: {
-    marginBottom: spacing.sm,
-    gap: spacing.xs,
-  },
-  cardCompact: {
-    paddingVertical: spacing.sm,
-    opacity: 0.88,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  title: {
-    ...typography.cardTitle,
-    flex: 1,
-    minWidth: 0,
-  },
-  description: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    lineHeight: 16,
-  },
-  progressLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-    textAlign: 'right',
-  },
-  reward: {
-    ...typography.caption,
-    color: colors.accentAmber,
-    fontWeight: '700',
-  },
-  claimButton: {
-    alignSelf: 'flex-start',
-    marginTop: spacing.xs,
   },
 });

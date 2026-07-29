@@ -5,13 +5,12 @@
 
 import { deliveryBalance, economyBalance, tradingBalance } from '../config/balance';
 import { getCityName, getProductByIdSafe } from '../utils/entityLookup';
-import { normalizeTruckFuel } from '../utils/truckFuel';
-import { clamp } from '../utils/math';
 import {
-  calculateDriverFuelSkillMultiplier,
-  calculateLoadWeightMultiplier,
-  calculateRouteFuelMultiplier,
-} from '../utils/deliveryMetrics';
+  advanceFuelConstrainedProgress,
+  getFuelRequiredForJob,
+  normalizeTruckFuel,
+} from '../utils/truckFuel';
+import { clamp } from '../utils/math';
 import {
   getTruckEffectiveCapacityTons,
   getAttachedTrailerForTruck,
@@ -114,7 +113,10 @@ export function getActiveWarehouseStockTransfers(
   transfers: WarehouseStockTransfer[] | undefined,
 ): WarehouseStockTransfer[] {
   return (transfers ?? []).filter(
-    (transfer) => transfer.status === 'active' || transfer.status === 'pending',
+    (transfer) =>
+      transfer.status === 'active' ||
+      transfer.status === 'pending' ||
+      transfer.status === 'paused',
   );
 }
 
@@ -158,18 +160,13 @@ export function calculateStockTransferFuelLiters(params: {
   driver: Driver;
   route: Route;
 }): number {
-  const loadMultiplier = calculateLoadWeightMultiplier(
-    Math.max(0, params.quantityTons),
-    Math.max(1, params.truck.capacity),
-  );
-  const driverFuelMultiplier = calculateDriverFuelSkillMultiplier(params.driver);
-  const routeFuelMultiplier = calculateRouteFuelMultiplier(params.route);
-  const liters =
-    params.route.distanceKm *
-    params.truck.fuelConsumptionPerKm *
-    loadMultiplier *
-    driverFuelMultiplier *
-    routeFuelMultiplier;
+  const liters = getFuelRequiredForJob({
+    distanceKm: params.route.distanceKm,
+    truck: params.truck,
+    cargoWeightTons: Math.max(0, params.quantityTons),
+    routeDifficulty: params.route.difficulty,
+    driverFuelSaving: params.driver.fuelSaving,
+  });
   return Math.max(0, Math.round(liters));
 }
 
@@ -212,6 +209,8 @@ export interface ValidateWarehouseStockTransferParams {
   playerMoney?: number;
   fuelPrice?: number;
   skipAffordabilityCheck?: boolean;
+  /** UI ön kontrolü gerekli litreyi gösterebilsin; store başlangıç validasyonunda kullanılmaz. */
+  skipFuelCheck?: boolean;
 }
 
 function isTruckOnActiveDelivery(
@@ -221,7 +220,9 @@ function isTruckOnActiveDelivery(
   return (deliveries ?? []).some(
     (delivery) =>
       delivery.truckId === truckId &&
-      (delivery.status === 'preparing' || delivery.status === 'on_route'),
+      (delivery.status === 'preparing' ||
+        delivery.status === 'on_route' ||
+        delivery.status === 'paused'),
   );
 }
 
@@ -382,8 +383,11 @@ export function validateWarehouseStockTransfer(
   });
   const fuelNorm = normalizeTruckFuel(truck);
   const fuelAtStart = fuelNorm.currentFuelL ?? 0;
-  if (fuelAtStart + 1e-6 < fuelLiters) {
-    return tradeFail('insufficient-fuel', getWarehouseStockTransferReasonMessage('insufficient-fuel'));
+  if (!params.skipFuelCheck && fuelAtStart + 1e-6 < fuelLiters) {
+    return tradeFail(
+      'insufficient-fuel',
+      `Bu rota için ${Math.ceil(fuelLiters)} L yakıt gerekiyor. Kamyonda ${Math.floor(fuelAtStart)} L var.`,
+    );
   }
 
   const fuelPrice = params.fuelPrice ?? economyBalance.baseFuelPrice;
@@ -456,6 +460,11 @@ export function createWarehouseStockTransfer(params: {
     estimatedCompletionAt: currentTime + validated.durationHours,
     fuelLitersAtStart: validated.fuelLitersAtStart,
     fuelLitersTotal: validated.fuelLiters,
+    fuelConsumedL: 0,
+    lastFuelProcessedProgress: 0,
+    lastFuelProcessedAt: currentTime,
+    distanceTraveledKm: 0,
+    fuelWarningsEmitted: [],
     fuelCost: validated.costs.fuelCost,
     driverCost: validated.costs.driverCost,
     totalCost: validated.costs.totalCost,
@@ -482,6 +491,94 @@ export function updateWarehouseStockTransferProgress(
     ...transfer,
     status: 'active',
     progress: clamp(updated.progress, 0, 1),
+  };
+}
+
+export function updateWarehouseStockTransferProgressWithFuel(
+  transfer: WarehouseStockTransfer,
+  truck: Truck,
+  hoursPassed: number,
+  processedAt?: number,
+): { transfer: WarehouseStockTransfer; truck: Truck } {
+  if (hoursPassed <= 0) {
+    return { transfer, truck };
+  }
+  if (
+    processedAt != null &&
+    transfer.lastFuelProcessedAt != null &&
+    transfer.lastFuelProcessedAt === processedAt
+  ) {
+    return { transfer, truck };
+  }
+
+  if (transfer.status === 'paused' && transfer.pausedReason === 'out-of-fuel') {
+    return {
+      transfer: {
+        ...transfer,
+        estimatedCompletionAt: transfer.estimatedCompletionAt + hoursPassed,
+        lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
+      },
+      truck: {
+        ...normalizeTruckFuel(truck),
+        currentFuelL: 0,
+        status: 'out_of_fuel',
+      },
+    };
+  }
+
+  if (transfer.status !== 'active' && transfer.status !== 'pending') {
+    return { transfer, truck };
+  }
+
+  const normalizedTruck = normalizeTruckFuel(truck);
+  const travelHours = Math.max(
+    1,
+    transfer.estimatedCompletionAt - transfer.startedAt,
+  );
+  const requestedProgressDelta = Math.min(
+    Math.max(0, 1 - transfer.progress),
+    hoursPassed / travelHours,
+  );
+  const result = advanceFuelConstrainedProgress({
+    currentProgress: transfer.progress,
+    requestedProgressDelta,
+    fuelLitersAtStart: transfer.fuelLitersAtStart,
+    fuelLitersTotal: transfer.fuelLitersTotal,
+    currentFuelL: normalizedTruck.currentFuelL ?? 0,
+    fuelConsumedL: transfer.fuelConsumedL,
+    lastFuelProcessedProgress: transfer.lastFuelProcessedProgress,
+    distanceKm: transfer.routeDistanceKm,
+    distanceTraveledKm: transfer.distanceTraveledKm,
+  });
+
+  return {
+    transfer: {
+      ...transfer,
+      progress: result.progress,
+      status: result.outOfFuel ? 'paused' : 'active',
+      pausedReason: result.outOfFuel ? 'out-of-fuel' : undefined,
+      fuelConsumedL: result.fuelConsumedL,
+      lastFuelProcessedProgress: result.lastFuelProcessedProgress,
+      lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
+      distanceTraveledKm: result.distanceTraveledKm,
+      estimatedCompletionAt: result.outOfFuel
+        ? transfer.estimatedCompletionAt +
+          hoursPassed *
+            Math.max(
+              0,
+              1 -
+                result.actualProgressDelta /
+                  Math.max(requestedProgressDelta, Number.EPSILON),
+            )
+        : transfer.estimatedCompletionAt,
+    },
+    truck: {
+      ...normalizedTruck,
+      currentFuelL: result.currentFuelL,
+      totalMileageKm:
+        (normalizedTruck.totalMileageKm ?? 0) + result.mileageDeltaKm,
+      status: result.outOfFuel ? 'out_of_fuel' : normalizedTruck.status,
+    },
   };
 }
 

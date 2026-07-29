@@ -13,6 +13,8 @@ import type { Delivery, Driver, Route, Truck, TruckTransfer } from '../types/gam
 import {
   applyFuelConsumptionForProgress,
   getFuelPercent,
+  getFuelRequiredForDistance,
+  getTruckFuelConsumptionPerKm,
   getTruckFuelSnapshot,
   normalizeTruckFuel,
   toFuelNumber,
@@ -43,11 +45,22 @@ function resolveFuelState(
   truck: Truck,
   fuelLitersAtStart: number | undefined,
   fuelLitersTotal: number | undefined,
+  fuelConsumedL: number | undefined,
   progress: number,
   distanceKm?: number,
 ): { currentFuelL: number; fuelTankCapacityL: number; fuelPercent: number } {
   const snapshot = getTruckFuelSnapshot(truck);
   const fuelTankCapacityL = snapshot.capacityLiters;
+  const normalized = normalizeTruckFuel(truck);
+
+  if (fuelConsumedL != null) {
+    const currentFuelL = toFuelNumber(normalized.currentFuelL) ?? snapshot.currentLiters;
+    return {
+      currentFuelL,
+      fuelTankCapacityL,
+      fuelPercent: getFuelPercent(currentFuelL, fuelTankCapacityL),
+    };
+  }
 
   const startFuel = toFuelNumber(fuelLitersAtStart);
   const totalFuel = toFuelNumber(fuelLitersTotal);
@@ -64,8 +77,12 @@ function resolveFuelState(
   // Eski job kayıtları: mesafeden tahmini tüketim (yalnızca UI)
   const distance = toFuelNumber(distanceKm);
   if (distance != null && distance > 0 && progress > 0) {
-    const consumption = toFuelNumber(truck.fuelConsumptionPerKm) ?? 0.32;
-    const estimatedBurn = Math.round(distance * consumption * progress);
+    const estimatedBurn = Math.round(
+      getFuelRequiredForDistance({
+        distanceKm: distance * progress,
+        fuelConsumptionPerKm: getTruckFuelConsumptionPerKm(truck),
+      }),
+    );
     const currentFuelL = Math.max(0, snapshot.currentLiters - estimatedBurn);
     return {
       currentFuelL,
@@ -116,7 +133,9 @@ export function getTruckTrackingMetrics(
   const { truck, delivery, transfer, driver } = params;
   const activeDelivery = isActiveRunningDelivery(delivery) ? delivery : undefined;
   const activeTransfer =
-    transfer != null && transfer.status === 'active' ? transfer : undefined;
+    transfer != null && (transfer.status === 'active' || transfer.status === 'paused')
+      ? transfer
+      : undefined;
 
   if (activeDelivery) {
     const progress = normalizeProgress(activeDelivery.progress);
@@ -124,6 +143,7 @@ export function getTruckTrackingMetrics(
       truck,
       activeDelivery.fuelLitersAtStart,
       activeDelivery.fuelLitersTotal,
+      activeDelivery.fuelConsumedL,
       progress,
       activeDelivery.distanceKm,
     );
@@ -131,7 +151,7 @@ export function getTruckTrackingMetrics(
       0,
       Math.round((activeDelivery.distanceKm ?? 0) * (1 - progress)),
     );
-    const isMoving = progress < 1;
+    const isMoving = progress < 1 && activeDelivery.status !== 'paused';
     const route = resolveJobRoute(
       activeDelivery.originCityId,
       activeDelivery.destinationCityId,
@@ -152,6 +172,7 @@ export function getTruckTrackingMetrics(
       truck,
       activeTransfer.fuelLitersAtStart,
       activeTransfer.fuelLitersTotal,
+      activeTransfer.fuelConsumedL,
       progress,
       activeTransfer.distanceKm,
     );
@@ -159,7 +180,7 @@ export function getTruckTrackingMetrics(
       0,
       Math.round(activeTransfer.distanceKm * (1 - progress)),
     );
-    const isMoving = progress < 1;
+    const isMoving = progress < 1 && activeTransfer.status !== 'paused';
     const route = resolveJobRoute(
       activeTransfer.fromCityId,
       activeTransfer.toCityId,

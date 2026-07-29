@@ -10,6 +10,9 @@
     "verify:ios-apple-auth": "tsx scripts/verify-ios-apple-auth-config.ts",
     "verify:ios-firebase": "tsx scripts/verify-ios-firebase-runtime-config.ts",
     "verify": "tsx scripts/apple-auth-audit-test.ts && tsx scripts/apple-auth-release-regression-test.ts && tsx scripts/verify-ios-apple-auth-config.ts && tsx scripts/verify-ios-firebase-runtime-config.ts && tsx scripts/ios-firebase-config-regression-test.ts && tsx scripts/apple-auth-unavailable-regression-test.ts && tsx scripts/management-account-navigation-regression-test.ts && tsx scripts/ios-tabbar-safe-area-regression-test.ts && tsx scripts/ios-layout-regression-test.ts && tsx scripts/ios-map-truck-fuel-display-regression-test.ts && tsx scripts/market-buy-cash-preview-regression-test.ts && tsx scripts/apple-cloud-save-link-regression-test.ts && tsx scripts/market-product-card-layout-regression-test.ts && tsx scripts/offline-operating-cost-disabled-regression-test.ts && tsx scripts/offline-delivery-progress-regression-test.ts && tsx scripts/warehouse-upgrade-regression-test.ts",
+    "backend:build": "npm --prefix backend run build",
+    "test:firebase": "npm --prefix backend test",
+    "firebase:emulators:test": "firebase emulators:exec --only firestore \"npm run backend:build && npm run test:firebase\"",
     "android": "expo run:android",
     "android:usb": "adb reverse tcp:8081 tcp:8081 && expo run:android",
     "ios": "expo run:ios"
@@ -41,7 +44,9 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.3",
     "@types/react": "~19.1.0",
+    "firebase-tools": "^14.27.0",
     "tsx": "^4.23.6",
     "typescript": "^5.7.3"
   }

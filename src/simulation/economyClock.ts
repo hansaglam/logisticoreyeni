@@ -75,6 +75,47 @@ export class LocalEconomyClock implements EconomyClock {
   }
 }
 
+/**
+ * Authoritative server clock. A server response anchors wall time once; all
+ * following reads advance with the monotonic clock and ignore device changes.
+ */
+export class ServerEconomyClock implements EconomyClock {
+  private serverAnchorMs: number | null = null;
+  private monotonicAnchorMs: number | null = null;
+  private lastValueMs = 0;
+
+  constructor(serverTimestampMs?: number) {
+    if (serverTimestampMs != null) this.syncFromServer(serverTimestampMs);
+  }
+
+  now(): number {
+    if (this.serverAnchorMs == null || this.monotonicAnchorMs == null) {
+      return this.lastValueMs;
+    }
+    const elapsed = Math.max(0, readMonotonicMs() - this.monotonicAnchorMs);
+    this.lastValueMs = Math.max(
+      this.lastValueMs,
+      Math.round(this.serverAnchorMs + elapsed),
+    );
+    return this.lastValueMs;
+  }
+
+  lastSyncedAt(): number | null {
+    return this.serverAnchorMs;
+  }
+
+  isTrusted(): boolean {
+    return this.serverAnchorMs != null;
+  }
+
+  syncFromServer(serverTimestampMs: number): void {
+    if (!Number.isFinite(serverTimestampMs) || serverTimestampMs <= 0) return;
+    this.serverAnchorMs = Math.round(serverTimestampMs);
+    this.monotonicAnchorMs = readMonotonicMs();
+    this.lastValueMs = this.serverAnchorMs;
+  }
+}
+
 let activeClock: EconomyClock = new LocalEconomyClock();
 
 export function setEconomyClock(clock: EconomyClock): void {

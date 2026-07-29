@@ -280,6 +280,8 @@ function getDeliveryStatusVariant(status: Delivery['status']): 'blue' | 'amber' 
       return 'blue';
     case 'preparing':
       return 'amber';
+    case 'paused':
+      return 'danger';
     case 'completed':
       return 'success';
     default:
@@ -293,6 +295,8 @@ function getDeliveryStatusLabel(status: Delivery['status']): string {
       return 'Yolda';
     case 'preparing':
       return 'Hazırlanıyor';
+    case 'paused':
+      return 'Yakıt Bitti';
     case 'completed':
       return 'Tamamlandı';
     default:
@@ -656,7 +660,9 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
   );
   const canShowBoost =
     isAdProviderAvailable() &&
-    (delivery.status === 'on_route' || delivery.status === 'preparing') &&
+    (delivery.status === 'on_route' ||
+      delivery.status === 'preparing' ||
+      delivery.status === 'paused') &&
     delivery.progress < 1 &&
     !alreadyBoosted &&
     boostEligibility.ok;
@@ -854,7 +860,13 @@ export default function ContractsScreen() {
   }, [contracts, trucks, player?.homeCityId]);
 
   const runningDeliveries = useMemo(
-    () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
+    () =>
+      activeDeliveries.filter(
+        (d) =>
+          d.status === 'on_route' ||
+          d.status === 'preparing' ||
+          d.status === 'paused',
+      ),
     [activeDeliveries],
   );
 

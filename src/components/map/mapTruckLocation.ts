@@ -9,14 +9,18 @@ import {
   type MapBounds,
 } from './mapRoadUtils';
 
-const ACTIVE_DELIVERY_STATUSES = new Set<Delivery['status']>(['preparing', 'on_route']);
+const ACTIVE_DELIVERY_STATUSES = new Set<Delivery['status']>([
+  'preparing',
+  'on_route',
+  'paused',
+]);
 
 export function isActiveRunningDelivery(delivery?: Delivery | null): delivery is Delivery {
   return delivery != null && ACTIVE_DELIVERY_STATUSES.has(delivery.status);
 }
 
 export function isActiveRunningTransfer(transfer?: TruckTransfer | null): transfer is TruckTransfer {
-  return transfer != null && transfer.status === 'active';
+  return transfer != null && (transfer.status === 'active' || transfer.status === 'paused');
 }
 
 /** Kalıcı kamyon şehri — origin fallback kullanmaz. */
@@ -49,7 +53,10 @@ export function resolveTruckMapLocation(params: {
   if (isActiveRunningDelivery(activeDelivery)) {
     const roadRoute = getRoadRoute(activeDelivery.originCityId, activeDelivery.destinationCityId);
     if (roadRoute && roadRoute.length >= 2) {
-      const sample = getTruckPositionAlongRoadRoute(roadRoute, activeDelivery.progress);
+      const sample = getTruckPositionAlongRoadRoute(roadRoute, activeDelivery.progress, {
+        coordinateScaleX: mapBounds?.width,
+        coordinateScaleY: mapBounds?.height,
+      });
       return {
         kind: 'route',
         cityId: normalizeCityId(activeDelivery.destinationCityId),
@@ -63,7 +70,10 @@ export function resolveTruckMapLocation(params: {
   if (isActiveRunningTransfer(activeTransfer)) {
     const roadRoute = getRoadRoute(activeTransfer.fromCityId, activeTransfer.toCityId);
     if (roadRoute && roadRoute.length >= 2) {
-      const sample = getTruckPositionAlongRoadRoute(roadRoute, activeTransfer.progress);
+      const sample = getTruckPositionAlongRoadRoute(roadRoute, activeTransfer.progress, {
+        coordinateScaleX: mapBounds?.width,
+        coordinateScaleY: mapBounds?.height,
+      });
       return {
         kind: 'route',
         cityId: normalizeCityId(activeTransfer.toCityId),

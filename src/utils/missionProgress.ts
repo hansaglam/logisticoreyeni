@@ -79,6 +79,18 @@ function migrateMissionIdList(ids: string[]): string[] {
   return [...new Set(migrated)];
 }
 
+function normalizeMissionCompletionTimes(
+  value: MissionsState['completedAtByMissionId'] | undefined,
+): Record<string, number> {
+  if (!value || typeof value !== 'object') return {};
+  const normalized: Record<string, number> = {};
+  for (const [rawMissionId, completedAt] of Object.entries(value)) {
+    if (!Number.isFinite(completedAt) || completedAt < 0) continue;
+    normalized[migrateLegacyMissionId(rawMissionId)] = completedAt;
+  }
+  return normalized;
+}
+
 export function normalizeMissionsState(raw?: Partial<MissionsState> | null): MissionsState {
   const defaults = createDefaultMissionsState();
   if (!raw) {
@@ -96,6 +108,7 @@ export function normalizeMissionsState(raw?: Partial<MissionsState> | null): Mis
     activeMissionIds,
     completedMissionIds: migrateMissionIdList(safeStringArray(raw.completedMissionIds)),
     claimedMissionRewardIds: migrateMissionIdList(safeStringArray(raw.claimedMissionRewardIds)),
+    completedAtByMissionId: normalizeMissionCompletionTimes(raw.completedAtByMissionId),
     flags: {
       marketOpened: flags.marketOpened === true,
       deliveryStarted: flags.deliveryStarted === true,
@@ -434,10 +447,14 @@ export function syncMissionsState(
   state: MissionProgressState,
 ): MissionsState {
   const completed = new Set(missions.completedMissionIds);
+  const completedAtByMissionId = { ...missions.completedAtByMissionId };
 
   for (const missionId of missions.activeMissionIds) {
     const progress = getMissionProgress(missionId, { ...state, missions });
     if (progress.isComplete) {
+      if (!completed.has(missionId) && completedAtByMissionId[missionId] == null) {
+        completedAtByMissionId[missionId] = state.currentTime;
+      }
       completed.add(missionId);
     }
   }
@@ -445,5 +462,6 @@ export function syncMissionsState(
   return {
     ...missions,
     completedMissionIds: [...completed],
+    completedAtByMissionId,
   };
 }

@@ -1,0 +1,84 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    // Private player profile, cloud save and sync metadata.
+    match /users/{userId} {
+      allow read, create, update, delete: if isOwner(userId);
+
+      match /saves/{saveId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /meta/{docId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      // Personal alarms observe global prices but never mutate global market data.
+      match /marketAlerts/{alertId} {
+        allow read, create, update, delete: if isOwner(userId)
+          && (!('ownerUid' in request.resource.data)
+            || request.resource.data.ownerUid == userId);
+      }
+    }
+
+    // Authenticated players may read the authoritative world market.
+    // Admin SDK bypasses rules; normal clients can never write these paths.
+    match /globalEconomy/{documentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /globalEconomySnapshots/{snapshotId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /globalMarketHistory/{historyId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Existing leaderboard policy: authenticated reads, non-anonymous owner writes.
+    match /leaderboards/{seasonId}/entries/{entryId} {
+      allow read: if signedIn();
+
+      allow create, update: if signedIn()
+        && request.auth.uid == entryId
+        && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && request.resource.data.uid == entryId
+        && request.resource.data.seasonKey == seasonId
+        && request.resource.data.companyName is string
+        && request.resource.data.companyName.size() >= 1
+        && request.resource.data.companyName.size() <= 64
+        && request.resource.data.companyScore is number
+        && request.resource.data.companyScore >= 0
+        && request.resource.data.companyScore <= 100000000
+        && request.resource.data.level is number
+        && request.resource.data.level >= 1
+        && request.resource.data.level <= 999
+        && request.resource.data.reputation is number
+        && request.resource.data.reputation >= 0
+        && request.resource.data.reputation <= 100
+        && request.resource.data.completedContracts is number
+        && request.resource.data.completedContracts >= 0
+        && request.resource.data.completedContracts <= 1000000;
+
+      allow delete: if signedIn()
+        && request.auth.uid == entryId
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

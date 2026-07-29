@@ -71,16 +71,14 @@ export const MAP_ROUTE_GLOW_WIDTH = 7;
 /** Transfer rotaları — mavi kalır. */
 export const MAP_TRANSFER_ROUTE = '#39A0FF';
 
-export const MAP_DELIVERY_ORIGIN = '#39A0FF';
-export const MAP_DELIVERY_DESTINATION = '#34D399';
-export const MAP_DELIVERY_DESTINATION_GLOW = 'rgba(52, 211, 153, 0.25)';
-
 export const MAP_TRUCK_MARKER_SIZE = 28;
 export const MAP_TRUCK_MARKER_MIN_SCREEN = 22;
 export const MAP_TRUCK_MARKER_MAX_SCREEN = 30;
 export const MAP_TRUCK_MARKER_BORDER = '#5DD4FF';
 export const MAP_TRUCK_MARKER_FILL = '#031225';
 export const MAP_TRUCK_MARKER_ANIM_MS = 750;
+/** MaterialCommunityIcons truck glyph'i varsayılan olarak sola bakar. */
+export const TRUCK_ASSET_HEADING_OFFSET_DEG = 180;
 
 export const MAP_DELIVERY_PROGRESS_TRACK = '#132238';
 export const MAP_DELIVERY_PROGRESS_FILL = '#39A0FF';

@@ -137,6 +137,14 @@ export const economyBalance = {
   fuelVolatility: 0.08,
   /** Tek seferde maksimum yakıt fiyat değişim oranı (refuelOrUpdateFuelPrice) */
   maxDailyFuelChange: 0.04,
+  /** Yol kenarı tedarik litre fiyatı; istasyon fiyatına göre sınırlı premium. */
+  roadsideFuelPriceMultiplier: 1.2,
+  /** Yol yardım aracının sabit servis bedeli ($). */
+  roadsideFuelServiceBaseFee: 75,
+  /** Soft-lock yardımı ve acil dolum için minimum anlamlı yakıt miktarı. */
+  minimumEmergencyFuelLiters: 15,
+  /** Ücretsiz sınırlı yardımın global oyun zamanı cooldown'ı. */
+  roadsideAssistanceCooldownHours: 24,
   /** Oyun başlangıcı küresel talep çarpanı */
   globalDemandDefault: 1,
   /** Oyun başlangıcı küresel üretim çarpanı */

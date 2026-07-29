@@ -21,6 +21,7 @@ import {
   isTruckAtContractOrigin,
 } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
+import { getSnapshotFuelPrice } from '../../simulation/globalMarketSnapshot';
 import {
   buildDriverOptions,
   buildTruckOptions,
@@ -184,7 +185,15 @@ export default function ContractQuickActionSheet({
 }: ContractQuickActionSheetProps) {
   const insets = useAppSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const globalEconomyState = useGameStore((state) => state.globalEconomy);
+  const snapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
+  const globalEconomy = useMemo(
+    () => ({
+      ...globalEconomyState,
+      fuelPrice: getSnapshotFuelPrice(snapshot, globalEconomyState),
+    }),
+    [globalEconomyState, snapshot],
+  );
   const currentTime = useGameStore((state) => state.currentTime);
   const trailers = useGameStore((state) => state.player?.trailers ?? []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId);

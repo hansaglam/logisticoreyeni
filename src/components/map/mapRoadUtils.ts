@@ -14,6 +14,7 @@ import { normalizeCityId } from '../../data/networkPositions';
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
 
 const POINT_EPS = 0.0001;
+export const DEFAULT_ROUTE_HEADING_LOOK_AHEAD_DISTANCE = 0.008;
 
 function pointDistance(a: MapRoadPoint, b: MapRoadPoint): number {
   const dx = a.x - b.x;
@@ -44,8 +45,9 @@ export function normalizeMapDeliveryProgress(progress: number | undefined | null
 export function getTruckPositionAlongRoadRoute(
   roadRoute: MapRoadPoint[],
   progress: number | undefined | null,
+  options?: RouteSamplingOptions,
 ): PointAlongPolylineResult {
-  return getPointAlongPolyline(roadRoute, normalizeMapDeliveryProgress(progress));
+  return getPointAlongPolyline(roadRoute, normalizeMapDeliveryProgress(progress), options);
 }
 
 export function getPolylineSegmentLengths(points: MapRoadPoint[]): number[] {
@@ -63,55 +65,170 @@ export function getPolylineTotalLength(points: MapRoadPoint[]): number {
 export interface PointAlongPolylineResult {
   point: MapRoadPoint;
   angleRadians: number;
+  headingDeg: number;
   segmentIndex: number;
+}
+
+interface PolylineMetrics {
+  segmentLengths: number[];
+  totalLength: number;
+}
+
+function getPolylineMetrics(points: MapRoadPoint[]): PolylineMetrics {
+  const segmentLengths = getPolylineSegmentLengths(points);
+  return {
+    segmentLengths,
+    totalLength: segmentLengths.reduce((sum, length) => sum + length, 0),
+  };
+}
+
+function getPointAtPolylineDistance(
+  points: MapRoadPoint[],
+  metrics: PolylineMetrics,
+  distance: number,
+): Pick<PointAlongPolylineResult, 'point' | 'segmentIndex'> {
+  if (points.length === 0) {
+    return { point: { x: 0, y: 0 }, segmentIndex: 0 };
+  }
+  if (points.length === 1 || metrics.totalLength <= POINT_EPS) {
+    return { point: points[0], segmentIndex: 0 };
+  }
+
+  const targetDistance = Math.max(0, Math.min(metrics.totalLength, distance));
+  const firstValidSegment = metrics.segmentLengths.findIndex((length) => length > POINT_EPS);
+  let lastValidSegment = firstValidSegment >= 0 ? firstValidSegment : 0;
+  for (let index = metrics.segmentLengths.length - 1; index >= 0; index -= 1) {
+    if (metrics.segmentLengths[index] > POINT_EPS) {
+      lastValidSegment = index;
+      break;
+    }
+  }
+
+  if (targetDistance <= 0) {
+    return { point: points[0], segmentIndex: firstValidSegment >= 0 ? firstValidSegment : 0 };
+  }
+  if (targetDistance >= metrics.totalLength) {
+    return { point: points[points.length - 1], segmentIndex: lastValidSegment };
+  }
+
+  let traversed = 0;
+  for (let index = 0; index < metrics.segmentLengths.length; index += 1) {
+    const segmentLength = metrics.segmentLengths[index];
+    if (segmentLength <= POINT_EPS) continue;
+
+    if (targetDistance <= traversed + segmentLength) {
+      const ratio = Math.max(0, Math.min(1, (targetDistance - traversed) / segmentLength));
+      const start = points[index];
+      const end = points[index + 1];
+      return {
+        point: {
+          x: start.x + (end.x - start.x) * ratio,
+          y: start.y + (end.y - start.y) * ratio,
+        },
+        segmentIndex: index,
+      };
+    }
+    traversed += segmentLength;
+  }
+
+  return { point: points[points.length - 1], segmentIndex: lastValidSegment };
+}
+
+function normalizeHeadingDegrees(headingDeg: number): number {
+  if (!Number.isFinite(headingDeg)) return 0;
+  let normalized = headingDeg;
+  while (normalized > 180) normalized -= 360;
+  while (normalized <= -180) normalized += 360;
+  return normalized;
+}
+
+export interface RouteHeadingAtProgressParams {
+  points: MapRoadPoint[];
+  progress: number | undefined | null;
+  lookAheadDistance?: number;
+  fallbackHeadingDeg?: number;
+  coordinateScaleX?: number;
+  coordinateScaleY?: number;
+}
+
+export type RouteSamplingOptions = Omit<RouteHeadingAtProgressParams, 'points' | 'progress'>;
+
+function getRouteHeadingWithMetrics(
+  params: RouteHeadingAtProgressParams,
+  metrics: PolylineMetrics,
+): number {
+  const fallbackHeadingDeg = normalizeHeadingDegrees(params.fallbackHeadingDeg ?? 0);
+  if (params.points.length < 2 || metrics.totalLength <= POINT_EPS) {
+    return fallbackHeadingDeg;
+  }
+
+  const progress = normalizeMapDeliveryProgress(params.progress);
+  const centerDistance = progress * metrics.totalLength;
+  const requestedLookAhead = Number(params.lookAheadDistance);
+  const lookAheadDistance =
+    Number.isFinite(requestedLookAhead) && requestedLookAhead > POINT_EPS
+      ? requestedLookAhead
+      : DEFAULT_ROUTE_HEADING_LOOK_AHEAD_DISTANCE;
+  const beforeDistance = Math.max(0, centerDistance - lookAheadDistance);
+  const afterDistance = Math.min(metrics.totalLength, centerDistance + lookAheadDistance);
+  const previous = getPointAtPolylineDistance(params.points, metrics, beforeDistance).point;
+  const next = getPointAtPolylineDistance(params.points, metrics, afterDistance).point;
+  const coordinateScaleX =
+    Number.isFinite(params.coordinateScaleX) && Number(params.coordinateScaleX) > 0
+      ? Number(params.coordinateScaleX)
+      : 1;
+  const coordinateScaleY =
+    Number.isFinite(params.coordinateScaleY) && Number(params.coordinateScaleY) > 0
+      ? Number(params.coordinateScaleY)
+      : 1;
+  const dx = (next.x - previous.x) * coordinateScaleX;
+  const dy = (next.y - previous.y) * coordinateScaleY;
+
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) <= POINT_EPS) {
+    return fallbackHeadingDeg;
+  }
+
+  // React Native ekran koordinatlarında Y aşağı doğru arttığı için atan2(dy, dx) doğrudur.
+  const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallbackHeadingDeg;
+}
+
+export function getRouteHeadingAtProgress(params: RouteHeadingAtProgressParams): number {
+  return getRouteHeadingWithMetrics(params, getPolylineMetrics(params.points));
 }
 
 export function getPointAlongPolyline(
   points: MapRoadPoint[],
   progress: number,
+  options?: RouteSamplingOptions,
 ): PointAlongPolylineResult {
   if (points.length === 0) {
-    return { point: { x: 0, y: 0 }, angleRadians: 0, segmentIndex: 0 };
+    const headingDeg = normalizeHeadingDegrees(options?.fallbackHeadingDeg ?? 0);
+    return { point: { x: 0, y: 0 }, angleRadians: (headingDeg * Math.PI) / 180, headingDeg, segmentIndex: 0 };
   }
   if (points.length === 1) {
-    return { point: points[0], angleRadians: 0, segmentIndex: 0 };
+    const headingDeg = normalizeHeadingDegrees(options?.fallbackHeadingDeg ?? 0);
+    return { point: points[0], angleRadians: (headingDeg * Math.PI) / 180, headingDeg, segmentIndex: 0 };
   }
 
   const t = normalizeMapDeliveryProgress(progress);
-  const segmentLengths = getPolylineSegmentLengths(points);
-  const totalLength = segmentLengths.reduce((sum, len) => sum + len, 0);
-
-  if (totalLength <= 0) {
-    return { point: points[0], angleRadians: 0, segmentIndex: 0 };
-  }
-
-  let remaining = t * totalLength;
-
-  for (let i = 0; i < segmentLengths.length; i++) {
-    const segLen = segmentLengths[i];
-    if (remaining <= segLen || i === segmentLengths.length - 1) {
-      const ratio = segLen > 0 ? remaining / segLen : 0;
-      const p0 = points[i];
-      const p1 = points[i + 1];
-      return {
-        point: {
-          x: p0.x + (p1.x - p0.x) * ratio,
-          y: p0.y + (p1.y - p0.y) * ratio,
-        },
-        angleRadians: Math.atan2(p1.y - p0.y, p1.x - p0.x),
-        segmentIndex: i,
-      };
-    }
-    remaining -= segLen;
-  }
-
-  const lastIdx = points.length - 1;
-  const p0 = points[lastIdx - 1];
-  const p1 = points[lastIdx];
+  const metrics = getPolylineMetrics(points);
+  const position = getPointAtPolylineDistance(points, metrics, t * metrics.totalLength);
+  const headingDeg = getRouteHeadingWithMetrics(
+    {
+      points,
+      progress: t,
+      lookAheadDistance: options?.lookAheadDistance,
+      fallbackHeadingDeg: options?.fallbackHeadingDeg,
+      coordinateScaleX: options?.coordinateScaleX,
+      coordinateScaleY: options?.coordinateScaleY,
+    },
+    metrics,
+  );
   return {
-    point: points[lastIdx],
-    angleRadians: Math.atan2(p1.y - p0.y, p1.x - p0.x),
-    segmentIndex: lastIdx - 1,
+    ...position,
+    angleRadians: (headingDeg * Math.PI) / 180,
+    headingDeg,
   };
 }
 

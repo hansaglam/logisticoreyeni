@@ -58,6 +58,10 @@ export const debugConfig = {
    */
   mapTruckLogsEnabled: false,
   /**
+   * [map-marker-audit] — render edilen dinamik marker kaynağını raporlar.
+   */
+  mapMarkerAuditEnabled: false,
+  /**
    * [map-road] route not found / endpoint mismatch / invalid point uyarıları.
    */
   mapRoadWarningsEnabled: false,

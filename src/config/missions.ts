@@ -155,6 +155,7 @@ export function createDefaultMissionsState(): MissionsState {
     ]),
     completedMissionIds: [],
     claimedMissionRewardIds: [],
+    completedAtByMissionId: {},
     flags: {
       marketOpened: false,
       deliveryStarted: false,

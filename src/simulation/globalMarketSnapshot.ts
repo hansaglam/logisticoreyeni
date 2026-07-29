@@ -1,44 +1,44 @@
 /**
- * Global market epoch + deterministic snapshot — ortak canlı piyasa.
+ * Canonical global market snapshot.
+ *
+ * IMPORTANT: generation only depends on the global epoch/config/catalog/event
+ * inputs. Player saves, installation time, level and Math.random are forbidden.
  */
 
-import type { City, GlobalEconomy, ProductId, WorldEvent } from '../types/game';
+import { CITIES } from '../data/cities';
+import type {
+  City,
+  GlobalEconomy,
+  GlobalEconomySnapshot,
+  GlobalMarketHistoryEntry,
+  ProductId,
+  WorldEvent,
+} from '../types/game';
 import {
+  ECONOMY_CONFIG_VERSION,
   getEconomyNow,
   getMarketEpoch,
+  getMarketEpochStartMs,
   getNextMarketTickAt,
   MARKET_TICK_INTERVAL_MS,
-  ECONOMY_CONFIG_VERSION,
 } from './economyClock';
 import {
+  DEFAULT_GLOBAL_ECONOMY,
   FUEL_PRICE_MAX_PER_LITER,
   FUEL_PRICE_MIN_PER_LITER,
-  getSafeFuelPrice,
   normalizeGlobalEconomy,
   sanitizeFuelPricePerLiter,
 } from './economy';
 import { clampPrice } from './marketEconomyCalculations';
 
-export const GLOBAL_MARKET_SEED = 'logisticore-global-market-v1';
+export const GLOBAL_MARKET_SEED = 'logisticore-global-market-v2';
 export { ECONOMY_CONFIG_VERSION };
-
-export { FUEL_PRICE_MAX_PER_LITER, FUEL_PRICE_MIN_PER_LITER, sanitizeFuelPricePerLiter };
-
-export interface GlobalEconomySnapshot {
-  version: number;
-  epoch: number;
-  generatedAt: number;
-  validUntil: number;
-  fuelPricePerLiter: number;
-  cityMarketPrices: Record<string, Partial<Record<ProductId, number>>>;
-  activeEvents: WorldEvent[];
-  modifiers: {
-    fuelMultiplier: number;
-    maintenanceMultiplier: number;
-    demandMultiplier: number;
-  };
-  economyConfigVersion: number;
-}
+export type { GlobalEconomySnapshot, GlobalMarketHistoryEntry };
+export {
+  FUEL_PRICE_MAX_PER_LITER,
+  FUEL_PRICE_MIN_PER_LITER,
+  sanitizeFuelPricePerLiter,
+};
 
 function hashString(input: string): number {
   let hash = 2166136261;
@@ -49,7 +49,7 @@ function hashString(input: string): number {
   return hash >>> 0;
 }
 
-/** Deterministik 0–1 RNG — kişisel Math.random yok */
+/** Deterministic 0..1 RNG. Never replace with Math.random for global data. */
 export function createMarketSeededRng(seed: string): () => number {
   let state = hashString(seed) || 1;
   return () => {
@@ -62,8 +62,9 @@ export function buildMarketSeed(
   epoch: number,
   cityId: string,
   productId: string,
+  configVersion = ECONOMY_CONFIG_VERSION,
 ): string {
-  return `${GLOBAL_MARKET_SEED}|${epoch}|${cityId}|${productId}`;
+  return `${GLOBAL_MARKET_SEED}|${configVersion}|${epoch}|${cityId}|${productId}`;
 }
 
 export function resolveActiveEventModifiers(events: WorldEvent[] | undefined): {
@@ -77,65 +78,296 @@ export function resolveActiveEventModifiers(events: WorldEvent[] | undefined): {
   for (const event of events ?? []) {
     if (!event.isActive) continue;
     const impact = event.impact;
-    if (!impact) continue;
-    if (typeof impact.fuelPriceMultiplier === 'number' && Number.isFinite(impact.fuelPriceMultiplier)) {
-      fuelMultiplier *= Math.max(1, Math.min(1.35, impact.fuelPriceMultiplier));
+    if (Number.isFinite(impact?.fuelPriceMultiplier)) {
+      fuelMultiplier *= Math.max(0.75, Math.min(1.35, impact.fuelPriceMultiplier!));
     }
-    if (
-      typeof impact.maintenanceCostMultiplier === 'number' &&
-      Number.isFinite(impact.maintenanceCostMultiplier)
-    ) {
-      maintenanceMultiplier *= Math.max(0.5, Math.min(1.5, impact.maintenanceCostMultiplier));
+    if (Number.isFinite(impact?.maintenanceCostMultiplier)) {
+      maintenanceMultiplier *= Math.max(
+        0.5,
+        Math.min(1.5, impact.maintenanceCostMultiplier!),
+      );
     }
-    if (
-      typeof impact.productDemandMultiplier === 'number' &&
-      Number.isFinite(impact.productDemandMultiplier)
-    ) {
-      demandMultiplier *= Math.max(0.5, Math.min(1.5, impact.productDemandMultiplier));
+    if (Number.isFinite(impact?.productDemandMultiplier)) {
+      demandMultiplier *= Math.max(
+        0.5,
+        Math.min(1.5, impact.productDemandMultiplier!),
+      );
     }
   }
   return { fuelMultiplier, maintenanceMultiplier, demandMultiplier };
 }
 
+/**
+ * Global event schedule. Event windows are a pure function of epoch/config.
+ * A backend can replace this policy while keeping the repository contract.
+ */
+export function buildGlobalEventsForEpoch(
+  epoch: number,
+  configVersion = ECONOMY_CONFIG_VERSION,
+): WorldEvent[] {
+  const cycleStart = epoch - (epoch % 24);
+  const slot = hashString(`${GLOBAL_MARKET_SEED}|event|${configVersion}|${cycleStart}`) % 5;
+  if (slot > 1 || epoch - cycleStart >= 6) return [];
+
+  const isFuelCrisis = slot === 0;
+  const startsAt = getMarketEpochStartMs(cycleStart);
+  const endsAt = getMarketEpochStartMs(cycleStart + 6);
+  return [{
+    id: `global-${configVersion}-${cycleStart}-${isFuelCrisis ? 'fuel' : 'demand'}`,
+    type: isFuelCrisis ? 'fuel_crisis' : 'city_demand_boom',
+    title: isFuelCrisis ? 'Küresel Yakıt Baskısı' : 'Küresel Talep Dalgası',
+    description: isFuelCrisis
+      ? 'Dünya genelinde yakıt tedariki geçici baskı altında.'
+      : 'Dünya piyasalarında ürün talebi yükseliyor.',
+    startsAtDay: cycleStart,
+    endsAtDay: cycleStart + 6,
+    durationDays: 1,
+    startsAt,
+    endsAt,
+    globalEpoch: cycleStart,
+    economyConfigVersion: configVersion,
+    impact: isFuelCrisis
+      ? { fuelPriceMultiplier: 1.12 }
+      : { productDemandMultiplier: 1.08 },
+    severity: isFuelCrisis ? 'high' : 'medium',
+    isActive: true,
+  }];
+}
+
+function getCatalog(cities?: City[]): City[] {
+  // Callers may pass a catalog subset for focused tests. Runtime state values
+  // (currentPrice, stock, history) are intentionally ignored below.
+  return cities?.length ? cities : CITIES;
+}
+
+function getDeterministicPrice(
+  epoch: number,
+  configVersion: number,
+  cityId: string,
+  productId: ProductId,
+  basePrice: number,
+  eventMultiplier: number,
+): number {
+  const rng = createMarketSeededRng(buildMarketSeed(epoch, cityId, productId, configVersion));
+  const slowWave = Math.sin((epoch + (hashString(cityId) % 31)) / 13) * 0.075;
+  const productWave = Math.sin((epoch + (hashString(productId) % 17)) / 5) * 0.04;
+  const jitter = (rng() - 0.5) * 0.035;
+  return clampPrice(basePrice * (1 + slowWave + productWave + jitter) * eventMultiplier, basePrice);
+}
+
 export function buildGlobalEconomySnapshot(params: {
+  /** Deprecated compatibility input; runtime values do not influence generation. */
   globalEconomy?: GlobalEconomy | null;
+  /** Catalog or catalog subset. currentPrice/stock/history are ignored. */
   cities?: City[];
+  /** Backend supplied global events; omitted means deterministic global schedule. */
   activeEvents?: WorldEvent[];
   nowMs?: number;
-}): GlobalEconomySnapshot {
+  epoch?: number;
+  configVersion?: number;
+} = {}): GlobalEconomySnapshot {
   const nowMs = params.nowMs ?? getEconomyNow();
-  const epoch = getMarketEpoch(nowMs);
-  const economy = normalizeGlobalEconomy(params.globalEconomy ?? {});
-  const modifiers = resolveActiveEventModifiers(params.activeEvents);
+  const epoch = params.epoch ?? getMarketEpoch(nowMs);
+  const configVersion = params.configVersion ?? ECONOMY_CONFIG_VERSION;
+  const generatedAt = getMarketEpochStartMs(epoch);
+  const validUntil = getMarketEpochStartMs(epoch + 1);
+  const activeEvents = (
+    params.activeEvents ?? buildGlobalEventsForEpoch(epoch, configVersion)
+  ).filter((event) => event.isActive);
+  const modifiers = resolveActiveEventModifiers(activeEvents);
+
+  // The canonical base is config-owned, never player-save-owned.
+  const baseEconomy = normalizeGlobalEconomy(DEFAULT_GLOBAL_ECONOMY);
+  const fuelRng = createMarketSeededRng(
+    `${GLOBAL_MARKET_SEED}|fuel|${configVersion}|${epoch}`,
+  );
+  const fuelWave = Math.sin(epoch / 11) * 0.045 + (fuelRng() - 0.5) * 0.025;
   const fuelPricePerLiter = sanitizeFuelPricePerLiter(
-    getSafeFuelPrice(economy) * modifiers.fuelMultiplier,
+    baseEconomy.fuelPrice * (1 + fuelWave) * modifiers.fuelMultiplier,
   );
 
   const cityMarketPrices: GlobalEconomySnapshot['cityMarketPrices'] = {};
-  for (const city of params.cities ?? []) {
-    const productPrices: Partial<Record<ProductId, number>> = {};
-    for (const [productId, state] of Object.entries(city.products ?? {})) {
-      const base = state.basePrice ?? state.currentPrice ?? 1;
-      const current = state.currentPrice ?? base;
-      const rng = createMarketSeededRng(buildMarketSeed(epoch, city.id, productId));
-      // Epoch içi küçük deterministik sapma (±1.5%) — ortak piyasa hissi
-      const wobble = 1 + (rng() - 0.5) * 0.03;
-      productPrices[productId as ProductId] = clampPrice(current * wobble, base);
+  const supplyDemandState: GlobalEconomySnapshot['supplyDemandState'] = {};
+  const marketMovements: GlobalEconomySnapshot['marketMovements'] = [];
+  const catalog = getCatalog(params.cities);
+
+  for (const city of catalog) {
+    cityMarketPrices[city.id] = {};
+    supplyDemandState[city.id] = {};
+    for (const [rawProductId, product] of Object.entries(city.products)) {
+      const productId = rawProductId as ProductId;
+      const basePrice = Math.max(0.01, product.basePrice || 1);
+      const eventMultiplier = activeEvents.some(
+        (event) =>
+          (!event.cityId || event.cityId === city.id) &&
+          (!event.productId || event.productId === productId),
+      )
+        ? modifiers.demandMultiplier
+        : 1;
+      const price = getDeterministicPrice(
+        epoch,
+        configVersion,
+        city.id,
+        productId,
+        basePrice,
+        eventMultiplier,
+      );
+      const previousPrice = getDeterministicPrice(
+        epoch - 1,
+        configVersion,
+        city.id,
+        productId,
+        basePrice,
+        eventMultiplier,
+      );
+      const sdRng = createMarketSeededRng(
+        `${GLOBAL_MARKET_SEED}|supply|${configVersion}|${epoch}|${city.id}|${productId}`,
+      );
+      const supply = Math.max(
+        0,
+        Math.round(product.targetStock * (0.65 + sdRng() * 0.8)),
+      );
+      const demand = Math.max(
+        1,
+        Math.round(
+          (product.consumptionPerDay || product.targetStock * 0.08) *
+            (0.8 + sdRng() * 0.5) *
+            eventMultiplier,
+        ),
+      );
+      const ratio = supply / Math.max(1, product.targetStock);
+      const movementPercent =
+        previousPrice > 0 ? ((price - previousPrice) / previousPrice) * 100 : 0;
+
+      cityMarketPrices[city.id]![productId] = price;
+      supplyDemandState[city.id]![productId] = {
+        supply,
+        demand,
+        status: ratio < 0.7 ? 'shortage' : ratio > 1.2 ? 'surplus' : 'balanced',
+      };
+      marketMovements.push({
+        cityId: city.id,
+        productId,
+        price,
+        previousPrice,
+        movementPercent,
+        direction: movementPercent > 0.15 ? 'up' : movementPercent < -0.15 ? 'down' : 'flat',
+      });
     }
-    cityMarketPrices[city.id] = productPrices;
   }
 
+  const opportunities: GlobalEconomySnapshot['opportunities'] = [];
+  const productIds = Array.from(
+    new Set(catalog.flatMap((city) => Object.keys(city.products) as ProductId[])),
+  );
+  for (const productId of productIds) {
+    const prices = catalog
+      .map((city) => ({ cityId: city.id, price: cityMarketPrices[city.id]?.[productId] }))
+      .filter((entry): entry is { cityId: string; price: number } => Number.isFinite(entry.price));
+    if (prices.length < 2) continue;
+    prices.sort((a, b) => a.price - b.price);
+    const low = prices[0]!;
+    const high = prices[prices.length - 1]!;
+    const marginPercent = ((high.price - low.price) / Math.max(0.01, low.price)) * 100;
+    if (marginPercent >= 4) {
+      opportunities.push({
+        id: `${epoch}-${productId}-${low.cityId}-${high.cityId}`,
+        fromCityId: low.cityId,
+        toCityId: high.cityId,
+        productId,
+        buyPrice: low.price,
+        sellPrice: high.price,
+        marginPercent,
+      });
+    }
+  }
+  opportunities.sort((a, b) => b.marginPercent - a.marginPercent);
+  const significantMovements = marketMovements.filter(
+    (movement) => Math.abs(movement.movementPercent) >= 1,
+  ).length;
+  const worldStatus = activeEvents.some((event) => event.severity === 'high')
+    ? 'crisis'
+    : significantMovements > marketMovements.length * 0.45
+      ? 'volatile'
+      : 'stable';
+
   return {
-    version: 1,
+    version: 2,
+    configVersion,
+    economyConfigVersion: configVersion,
     epoch,
-    generatedAt: nowMs,
-    validUntil: getNextMarketTickAt(nowMs),
+    generatedAt,
+    validUntil,
     fuelPricePerLiter,
     cityMarketPrices,
-    activeEvents: (params.activeEvents ?? []).filter((event) => event.isActive),
+    supplyDemandState,
+    marketMovements,
+    opportunities,
+    marketMovementCount: significantMovements,
+    globalOpportunityCount: opportunities.length,
+    worldStatus,
+    activeEvents,
     modifiers,
-    economyConfigVersion: ECONOMY_CONFIG_VERSION,
   };
+}
+
+export function buildGlobalMarketHistoryEntries(
+  snapshot: GlobalEconomySnapshot,
+): GlobalMarketHistoryEntry[] {
+  return snapshot.marketMovements.map((movement) => {
+    const supplyDemand =
+      snapshot.supplyDemandState[movement.cityId]?.[movement.productId];
+    return {
+      epoch: snapshot.epoch,
+      generatedAt: snapshot.generatedAt,
+      cityId: movement.cityId,
+      productId: movement.productId,
+      price: movement.price,
+      supply: supplyDemand?.supply ?? 0,
+      demand: supplyDemand?.demand ?? 0,
+      movementPercent: movement.movementPercent,
+      activeEventIds: snapshot.activeEvents.map((event) => event.id),
+      configVersion: snapshot.configVersion,
+    };
+  });
+}
+
+/** Converts the global snapshot/history into the legacy City view model. */
+export function materializeSnapshotCities(
+  catalog: City[],
+  snapshot: GlobalEconomySnapshot,
+  history: GlobalMarketHistoryEntry[] = [],
+): City[] {
+  return catalog.map((city) => ({
+    ...city,
+    products: Object.fromEntries(
+      Object.entries(city.products).map(([rawProductId, product]) => {
+        const productId = rawProductId as ProductId;
+        const sd = snapshot.supplyDemandState[city.id]?.[productId];
+        const prices = history
+          .filter((entry) => entry.cityId === city.id && entry.productId === productId)
+          .sort((a, b) => a.epoch - b.epoch)
+          .map((entry) => entry.price);
+        return [productId, {
+          ...product,
+          stock: sd?.supply ?? product.stock,
+          currentPrice:
+            snapshot.cityMarketPrices[city.id]?.[productId] ?? product.basePrice,
+          priceHistory: prices,
+        }];
+      }),
+    ) as City['products'],
+  }));
+}
+
+export function getSnapshotFuelPrice(
+  snapshot: GlobalEconomySnapshot | null | undefined,
+  fallbackEconomy?: GlobalEconomy | null,
+): number {
+  return sanitizeFuelPricePerLiter(
+    snapshot?.fuelPricePerLiter ??
+      normalizeGlobalEconomy(fallbackEconomy ?? DEFAULT_GLOBAL_ECONOMY).fuelPrice,
+  );
 }
 
 export function applyFuelPriceSanitizationToEconomy(

@@ -21,6 +21,7 @@ import type {
   WorldEvent,
 } from '../types/game';
 import { clamp } from '../utils/math';
+import { getFuelRequiredForDistance } from '../utils/truckFuel';
 import { sanitizeFuelPricePerLiter } from './economy';
 import { resolveActiveEventModifiers } from './globalMarketSnapshot';
 
@@ -109,6 +110,17 @@ function resolveFuelPrice(globalEconomy: GlobalEconomy): number {
   return sanitizeFuelPricePerLiter(globalEconomy.fuelPrice);
 }
 
+function estimateContractFuelLiters(input: ContractTripCostInput): number {
+  const fuelPerKm =
+    input.fuelConsumptionPerKm ??
+    contractBalance.estimateFuelPerKm;
+  return getFuelRequiredForDistance({
+    distanceKm: input.route.distanceKm,
+    fuelConsumptionPerKm: fuelPerKm,
+    loadMultiplier: getCargoWeightCostMultiplier(input.amount),
+  });
+}
+
 /**
  * Tahmini sefer maliyeti — şoför maaşı dahil değil (periyodik sabit gider).
  * NOT: weightMultiplier ile amount/40 çift uygulanmaz.
@@ -122,11 +134,7 @@ export function estimateContractTripCostBreakdown(
   const urgency = clamp(input.urgency ?? 0, 0, 1);
   const weightMultiplier = getCargoWeightCostMultiplier(amount);
   const fuelPrice = resolveFuelPrice(input.globalEconomy);
-  const fuelPerKm =
-    input.fuelConsumptionPerKm ??
-    contractBalance.estimateFuelPerKm;
-
-  const fuelLiters = distanceKm * fuelPerKm * weightMultiplier;
+  const fuelLiters = estimateContractFuelLiters(input);
   const fuelCost = Math.round(
     fuelLiters * fuelPrice * deliveryCostBalance.fuelCostMultiplier,
   );
@@ -372,10 +380,11 @@ export function calculateContractEconomics(params: {
   const profitMarginPercent =
     revenue > 0 ? Math.round((estimatedProfit / revenue) * 1000) / 10 : 0;
 
-  const fuelLiters =
-    params.contract.distanceKm *
-    fuelPerKm *
-    getCargoWeightCostMultiplier(params.contract.amount);
+  const fuelLiters = getFuelRequiredForDistance({
+    distanceKm: params.contract.distanceKm,
+    fuelConsumptionPerKm: fuelPerKm,
+    loadMultiplier: getCargoWeightCostMultiplier(params.contract.amount),
+  });
 
   return {
     revenue,

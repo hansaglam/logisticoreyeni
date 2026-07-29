@@ -242,7 +242,13 @@ export default function ProductMarketDetailModal({
               />
             </View>
 
-            <ProductDetailTrendChart trend={viewModel.trend} />
+            {viewModel.priceHistory.length >= 2 ? (
+              <ProductDetailTrendChart trend={viewModel.trend} />
+            ) : (
+              <Text style={styles.trendLine}>
+                Yeterli piyasa geçmişi bulunmuyor
+              </Text>
+            )}
 
             <View style={styles.detailedAnalysisCard}>
               <View style={styles.detailedAnalysisHeader}>

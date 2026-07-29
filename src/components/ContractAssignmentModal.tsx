@@ -15,7 +15,8 @@ import {
 import { useAppDialog } from './AppDialogProvider';
 
 import { getBottomInset } from '../constants/layout';
-import { getCityName, getProductName } from '../utils/entityLookup';
+import { getCityName, getProductByIdSafe, getProductName } from '../utils/entityLookup';
+import { getRoute as findRoute } from '../data/routes';
 import {
   buildContractPreview,
   CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT,
@@ -26,6 +27,7 @@ import {
   getContractCargoWeight,
   isTruckAtContractOrigin,
 } from '../simulation/delivery';
+import { calculateDeliveryFuelLiters, getTruckFuelReadiness } from '../utils/truckFuel';
 import {
   evaluateDriverOption,
   evaluateTruckOption,
@@ -33,6 +35,7 @@ import {
   type TruckOption,
 } from '../utils/assignmentOptions';
 import { useGameStore } from '../store/gameStore';
+import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney } from '../theme/format';
 import type { GameIconName } from '../theme/icons';
@@ -49,6 +52,7 @@ import {
 import type { StatusBadgeVariant } from './ui';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import TutorialOverlay from './tutorial/TutorialOverlay';
+import TruckRefuelSheet from './TruckRefuelSheet';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
 
@@ -349,13 +353,22 @@ export default function ContractAssignmentModal({
   const { alert: showAlert } = useAppDialog();
   const insets = useAppSafeAreaInsets();
   const bottomInset = getBottomInset(insets);
-  const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const globalEconomyState = useGameStore((state) => state.globalEconomy);
+  const snapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
+  const globalEconomy = useMemo(
+    () => ({
+      ...globalEconomyState,
+      fuelPrice: getSnapshotFuelPrice(snapshot, globalEconomyState),
+    }),
+    [globalEconomyState, snapshot],
+  );
   const currentTime = useGameStore((state) => state.currentTime);
   const trailers = useGameStore((state) => state.player?.trailers ?? []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+  const [refuelVisible, setRefuelVisible] = useState(false);
 
   const safeTrucks = trucks ?? [];
   const safeDrivers = drivers ?? [];
@@ -399,6 +412,24 @@ export default function ContractAssignmentModal({
 
   const selectedTruckOption = truckOptions.find((option) => option.truck.id === selectedTruckId);
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
+  const fuelReadiness = useMemo(() => {
+    if (!contract || !selectedTruckOption?.truck || !selectedDriverOption?.driver) return null;
+    const route = findRoute(contract.originCityId, contract.destinationCityId);
+    const product = getProductByIdSafe(contract.productId);
+    if (!route || !product) return null;
+    const requiredFuelL = calculateDeliveryFuelLiters({
+      contract,
+      truck: selectedTruckOption.truck,
+      driver: selectedDriverOption.driver,
+      route,
+      product,
+    });
+    return getTruckFuelReadiness(
+      selectedTruckOption.truck,
+      requiredFuelL,
+      globalEconomy?.fuelPrice ?? 0,
+    );
+  }, [contract, globalEconomy?.fuelPrice, selectedDriverOption?.driver, selectedTruckOption?.truck]);
 
   const summaryFinancials = useMemo((): ContractSummaryFinancials | null => {
     if (!contract) return null;
@@ -735,26 +766,66 @@ export default function ContractAssignmentModal({
 
         <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
           <Text style={styles.selectionSummary}>{selectionSummary}</Text>
+          {canConfirm && fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel ? (
+            <View style={styles.fuelWarning}>
+              <Text style={styles.fuelWarningText}>
+                Bu rota için {Math.ceil(fuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda{' '}
+                {Math.floor(fuelReadiness.currentFuelL)} L var.
+              </Text>
+              <View style={styles.fuelWarningActions}>
+                <ActionButton
+                  label="Yakıt Al"
+                  icon="fuel"
+                  onPress={() => setRefuelVisible(true)}
+                  compact
+                  style={styles.fuelWarningButton}
+                />
+                <ActionButton
+                  label="Vazgeç"
+                  onPress={onClose}
+                  variant="secondary"
+                  compact
+                  style={styles.fuelWarningButton}
+                />
+              </View>
+            </View>
+          ) : null}
           {!canConfirm ? (
             <Text style={styles.footerHint}>Başlamak için uygun kamyon ve şoför seç.</Text>
           ) : null}
           <TutorialTarget
             id="assignment-start-button"
             onTutorialPress={() => {
-              if (selectedTruckId && selectedDriverId && canConfirm) {
+              if (
+                selectedTruckId &&
+                selectedDriverId &&
+                canConfirm &&
+                fuelReadiness?.canCompleteWithoutRefuel !== false
+              ) {
                 onConfirm(selectedTruckId, selectedDriverId);
               }
             }}
           >
             <ActionButton
-              label="Teslimatı Başlat"
+              label={
+                fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel
+                  ? 'Yakıt gerekli'
+                  : 'Teslimatı Başlat'
+              }
               icon="truck"
               onPress={() => {
-                if (selectedTruckId && selectedDriverId && canConfirm) {
+                if (
+                  selectedTruckId &&
+                  selectedDriverId &&
+                  canConfirm &&
+                  fuelReadiness?.canCompleteWithoutRefuel !== false
+                ) {
                   onConfirm(selectedTruckId, selectedDriverId);
                 }
               }}
-              disabled={!canConfirm}
+              disabled={
+                !canConfirm || (fuelReadiness != null && !fuelReadiness.canCompleteWithoutRefuel)
+              }
               fullWidth
               variant="primary"
               style={styles.startButton}
@@ -762,6 +833,11 @@ export default function ContractAssignmentModal({
           </TutorialTarget>
         </View>
       </View>
+      <TruckRefuelSheet
+        visible={refuelVisible}
+        truck={selectedTruckOption?.truck ?? null}
+        onClose={() => setRefuelVisible(false)}
+      />
       <TutorialOverlay layer="modal" />
     </Modal>
   );
@@ -999,6 +1075,29 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.background,
+  },
+  fuelWarning: {
+    width: '100%',
+    padding: spacing.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.accentAmber,
+    backgroundColor: colors.warningSoft,
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  fuelWarningText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  fuelWarningActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  fuelWarningButton: {
+    flex: 1,
+    minHeight: 44,
   },
   selectionSummary: {
     ...typography.bodySmall,

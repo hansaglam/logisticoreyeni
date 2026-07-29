@@ -61,12 +61,13 @@ import {
   splitPolylineAtProgress,
   type MapBounds as RoadMapBounds,
 } from './mapRoadUtils';
+import {
+  ACTIVE_DELIVERY_ROUTE_LINE_ENABLED,
+  shouldRenderActiveDeliveryMarker,
+} from './mapDeliveryOverlayPolicy';
 import { normalizedToContentPoint, roundMapCoordinate } from './mapCoordinateUtils';
 import { computeMapContentSize } from './mapTransformUtils';
 import {
-  MAP_DELIVERY_DESTINATION,
-  MAP_DELIVERY_DESTINATION_GLOW,
-  MAP_DELIVERY_ORIGIN,
   MAP_ROUTE_COMPLETED,
   MAP_ROUTE_COMPLETED_GLOW,
   MAP_ROUTE_COMPLETED_GLOW_WIDTH,
@@ -141,68 +142,12 @@ function normToPixel(xNorm: number, yNorm: number, bounds: MapBounds) {
   return { x: xNorm * bounds.width, y: yNorm * bounds.height };
 }
 
-/** Aktif teslimat başlangıç göstergesi — legacy city ring kullanılmaz. */
-function DeliveryOriginMarker({ cx, cy, opacity }: { cx: number; cy: number; opacity: number }) {
-  return (
-    <>
-      <Circle
-        cx={cx}
-        cy={cy}
-        r={11}
-        fill="none"
-        stroke={MAP_DELIVERY_ORIGIN}
-        strokeWidth={1.5}
-        strokeOpacity={0.45 * opacity}
-      />
-      <Circle
-        cx={cx}
-        cy={cy}
-        r={7.5}
-        fill="none"
-        stroke={MAP_DELIVERY_ORIGIN}
-        strokeWidth={2}
-        strokeOpacity={opacity}
-      />
-      <Circle cx={cx} cy={cy} r={3} fill={MAP_DELIVERY_ORIGIN} fillOpacity={opacity} />
-    </>
-  );
-}
-
-/** Aktif teslimat hedef göstergesi — legacy city ring kullanılmaz. */
-function DeliveryDestinationMarker({ cx, cy, opacity }: { cx: number; cy: number; opacity: number }) {
-  return (
-    <>
-      <Circle
-        cx={cx}
-        cy={cy}
-        r={14}
-        fill="none"
-        stroke={MAP_DELIVERY_DESTINATION_GLOW}
-        strokeWidth={2}
-        strokeOpacity={opacity}
-      />
-      <Circle
-        cx={cx}
-        cy={cy}
-        r={10}
-        fill="none"
-        stroke={MAP_DELIVERY_DESTINATION}
-        strokeWidth={2.5}
-        strokeOpacity={opacity}
-      />
-      <Circle cx={cx} cy={cy} r={4} fill={MAP_DELIVERY_DESTINATION} fillOpacity={opacity} />
-    </>
-  );
-}
-
 interface DeliveryRouteRenderItem {
   delivery: Delivery;
   hasRoute: boolean;
   completedPath: string;
   remainingPath: string;
   completedGlowPath: string;
-  origin: { x: number; y: number };
-  destination: { x: number; y: number };
   truckPixel: { x: number; y: number };
   truckAngle: number;
   normalizedProgress: number;
@@ -251,6 +196,7 @@ function WorldMapCanvasInner(
   ref: React.ForwardedRef<WorldMapCanvasHandle>,
 ) {
   const mapRef = useRef<InteractiveTurkeyMapHandle>(null);
+  const lastValidHeadingByDeliveryId = useRef(new Map<string, number>());
   const [detailLevel, setDetailLevel] = useState<MapDetailLevel>('low');
   useImperativeHandle(ref, () => ({
     resetToOperational: () => mapRef.current?.resetToOperational(),
@@ -341,7 +287,10 @@ function WorldMapCanvasInner(
   const mapBounds = contentSize;
 
   const runningDeliveries = useMemo(
-    () => activeDeliveries.filter((d) => d.status === 'preparing' || d.status === 'on_route'),
+    () =>
+      activeDeliveries.filter(
+        (d) => d.status === 'preparing' || d.status === 'on_route' || d.status === 'paused',
+      ),
     [activeDeliveries],
   );
 
@@ -356,7 +305,10 @@ function WorldMapCanvasInner(
     [runningDeliveries],
   );
   const runningTransfers = useMemo(
-    () => (activeTransfers ?? []).filter((t) => t.status === 'active'),
+    () =>
+      (activeTransfers ?? []).filter(
+        (t) => t.status === 'active' || t.status === 'paused',
+      ),
     [activeTransfers],
   );
 
@@ -414,12 +366,6 @@ function WorldMapCanvasInner(
     const items: DeliveryRouteRenderItem[] = [];
 
     for (const delivery of runningDeliveries) {
-      const from = getWorldMapCityPosition(delivery.originCityId);
-      const to = getWorldMapCityPosition(delivery.destinationCityId);
-      if (!from || !to) continue;
-
-      const origin = normToPixel(from.x, from.y, mapBounds);
-      const destination = normToPixel(to.x, to.y, mapBounds);
       const opacity = resolveRouteOpacity(delivery.id === selectedDeliveryId);
       if (opacity <= 0) continue;
 
@@ -432,8 +378,6 @@ function WorldMapCanvasInner(
           completedPath: '',
           remainingPath: '',
           completedGlowPath: '',
-          origin,
-          destination,
           truckPixel: { x: 0, y: 0 },
           truckAngle: 0,
           normalizedProgress: 0,
@@ -447,7 +391,14 @@ function WorldMapCanvasInner(
         roadPoints,
         normalizedProgress,
       );
-      const truckSample = getTruckPositionAlongRoadRoute(roadPoints, delivery.progress);
+      const truckSample = getTruckPositionAlongRoadRoute(roadPoints, delivery.progress, {
+        fallbackHeadingDeg: lastValidHeadingByDeliveryId.current.get(delivery.id),
+        coordinateScaleX: roadBounds.width,
+        coordinateScaleY: roadBounds.height,
+      });
+      if (Number.isFinite(truckSample.headingDeg)) {
+        lastValidHeadingByDeliveryId.current.set(delivery.id, truckSample.headingDeg);
+      }
       const truckPixel = normalizedPointToPixel(truckSample.point, roadBounds);
 
       logTruckPositionDebug({
@@ -466,8 +417,6 @@ function WorldMapCanvasInner(
         completedPath: polylineToSvgPath(completedPoints, roadBounds),
         remainingPath: polylineToSvgPath(remainingPoints, roadBounds),
         completedGlowPath: polylineToSvgPath(completedPoints, roadBounds),
-        origin,
-        destination,
         truckPixel,
         truckAngle: truckSample.angleRadians,
         normalizedProgress,
@@ -484,6 +433,30 @@ function WorldMapCanvasInner(
     resolveRouteOpacity,
     selectedDeliveryId,
   ]);
+
+  useEffect(() => {
+    if (!__DEV__ || !debugConfig.mapMarkerAuditEnabled) return;
+    for (const item of deliveryRouteRenderData) {
+      if (!item.hasRoute) continue;
+      console.log('[map-marker-audit]', {
+        markerType: 'moving-truck',
+        sourceComponent: 'WorldMapCanvas/AnimatedDeliveryTruckMarker',
+        deliveryId: item.delivery.id,
+        cityId: item.delivery.destinationCityId,
+        x: item.truckPixel.x,
+        y: item.truckPixel.y,
+      });
+    }
+  }, [deliveryRouteRenderData]);
+
+  useEffect(() => {
+    const activeIds = new Set(runningDeliveries.map((delivery) => delivery.id));
+    for (const deliveryId of lastValidHeadingByDeliveryId.current.keys()) {
+      if (!activeIds.has(deliveryId)) {
+        lastValidHeadingByDeliveryId.current.delete(deliveryId);
+      }
+    }
+  }, [runningDeliveries]);
 
   const handleDetailLevelChange = useCallback((level: MapDetailLevel) => {
     setDetailLevel(level);
@@ -526,7 +499,9 @@ function WorldMapCanvasInner(
 
         {!mapImageReady ? <View style={styles.fallback} pointerEvents="none" /> : null}
 
-        {mapBounds.width > 0 && deliveryRouteRenderData.length > 0 ? (
+        {ACTIVE_DELIVERY_ROUTE_LINE_ENABLED &&
+        mapBounds.width > 0 &&
+        deliveryRouteRenderData.length > 0 ? (
           <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
             {deliveryRouteRenderData.map(
               ({
@@ -535,8 +510,6 @@ function WorldMapCanvasInner(
                 completedPath,
                 remainingPath,
                 completedGlowPath,
-                origin,
-                destination,
                 opacity,
               }) => (
                 <React.Fragment key={delivery.id}>
@@ -577,8 +550,6 @@ function WorldMapCanvasInner(
                       ) : null}
                     </>
                   ) : null}
-                  <DeliveryOriginMarker cx={origin.x} cy={origin.y} opacity={opacity} />
-                  <DeliveryDestinationMarker cx={destination.x} cy={destination.y} opacity={opacity} />
                 </React.Fragment>
               ),
             )}
@@ -665,7 +636,10 @@ function WorldMapCanvasInner(
           </Svg>
         ) : null}
 
-        {mapBounds.width > 0 && layerVisible('truck') && deliveryRouteRenderData.length > 0 ? (
+        {shouldRenderActiveDeliveryMarker('moving-truck') &&
+        mapBounds.width > 0 &&
+        layerVisible('truck') &&
+        deliveryRouteRenderData.length > 0 ? (
           <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
             {deliveryRouteRenderData.map(
               ({ delivery, hasRoute, truckPixel, truckAngle, normalizedProgress, opacity }) =>

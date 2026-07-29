@@ -6,6 +6,8 @@ import { stripLeaseSuffixFromTruckName } from '../fleet/fleetTheme';
 import type { Delivery, Driver, Truck, TruckTransfer } from '../../types/game';
 import { getCityName } from '../../utils/entityLookup';
 import { getTruckTrackingMetrics } from '../../utils/truckTrackingMetrics';
+import { getFuelWarningForJob } from '../../simulation/fuelWarnings';
+import { colors } from '../../theme';
 import { GameIcon, StatusBadge, type StatusBadgeVariant } from '../ui';
 import {
   MAP_BORDER,
@@ -28,6 +30,8 @@ function getStatusBadge(status: Truck['status']): { label: string; variant: Stat
       return { label: 'TRANSFERDE', variant: 'info' };
     case 'maintenance':
       return { label: 'BAKIMDA', variant: 'danger' };
+    case 'out_of_fuel':
+      return { label: 'YAKIT BİTTİ', variant: 'danger' };
     default:
       return { label: 'BOŞTA', variant: 'success' };
   }
@@ -50,8 +54,11 @@ function buildStatusLine(
   transfer: TruckTransfer | undefined,
   currentTime: number | undefined,
 ): string {
-  if (truck.status === 'on_route' && delivery) {
+  if ((truck.status === 'on_route' || truck.status === 'out_of_fuel') && delivery) {
     const parts: string[] = [];
+    if (truck.status === 'out_of_fuel') {
+      parts.push('Yakıt bitti');
+    }
     if (typeof delivery.progress === 'number') {
       const pct = Math.round(Math.max(0, Math.min(1, delivery.progress)) * 100);
       parts.push(`%${pct} tamamlandı`);
@@ -68,6 +75,9 @@ function buildStatusLine(
   }
   if (truck.status === 'maintenance') {
     return 'Bakımda';
+  }
+  if (truck.status === 'out_of_fuel') {
+    return 'Yakıt bitti · araç bekliyor';
   }
   return 'Yeni iş için hazır';
 }
@@ -96,6 +106,7 @@ export interface MapTruckTrackingCardProps {
   homeCityId?: string;
   currentTime?: number;
   onPress?: () => void;
+  onRoadsideFuel?: (jobId: string) => void;
 }
 
 function MapTruckTrackingCard({
@@ -106,6 +117,7 @@ function MapTruckTrackingCard({
   homeCityId,
   currentTime,
   onPress,
+  onRoadsideFuel,
 }: MapTruckTrackingCardProps) {
   const artwork = useMemo(() => getTruckArtwork(truck), [truck.id, truck.catalogId]);
   const badge = getStatusBadge(truck.status);
@@ -132,6 +144,8 @@ function MapTruckTrackingCard({
       }),
     [truck, activeDelivery, transfer, driver],
   );
+  const fuelJob = activeDelivery ?? transfer;
+  const fuelWarning = getFuelWarningForJob(fuelJob, truck);
 
   const kmLabel = metrics.isMoving
     ? `${metrics.remainingDistanceKm} km`
@@ -215,6 +229,30 @@ function MapTruckTrackingCard({
         </View>
       </View>
 
+      {fuelWarning ? (
+        <View
+          style={[
+            styles.fuelWarning,
+            fuelWarning.key === 'out-of-fuel' && styles.fuelWarningDanger,
+          ]}
+        >
+          <GameIcon
+            name="warning"
+            size={13}
+            color={fuelWarning.key === 'out-of-fuel' ? colors.danger : colors.accentAmber}
+          />
+          <Text style={styles.fuelWarningText}>{fuelWarning.message}</Text>
+          {fuelWarning.key === 'out-of-fuel' && fuelJob && onRoadsideFuel ? (
+            <TouchableOpacity
+              style={styles.roadsideButton}
+              onPress={() => onRoadsideFuel(fuelJob.id)}
+            >
+              <Text style={styles.roadsideButtonText}>Acil Yakıt</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
       {showProgressBar ? (
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
@@ -231,6 +269,7 @@ function arePropsEqual(prev: MapTruckTrackingCardProps, next: MapTruckTrackingCa
   if (prev.driver !== next.driver) return false;
   if (prev.homeCityId !== next.homeCityId) return false;
   if (prev.onPress !== next.onPress) return false;
+  if (prev.onRoadsideFuel !== next.onRoadsideFuel) return false;
   if (next.delivery != null && prev.currentTime !== next.currentTime) return false;
   if (next.transfer != null && next.transfer.status === 'active' && prev.currentTime !== next.currentTime) {
     return false;
@@ -383,6 +422,40 @@ const styles = StyleSheet.create({
     gap: 6,
     flexShrink: 0,
   },
+  fuelWarning: {
+    minHeight: 40,
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.accentAmber,
+    backgroundColor: colors.warningSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  fuelWarningDanger: {
+    borderColor: colors.danger,
+    backgroundColor: colors.dangerSoft,
+  },
+  fuelWarningText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 9.5,
+    lineHeight: 12,
+    fontWeight: '700',
+    color: MAP_TITLE_COLOR,
+  },
+  roadsideButton: {
+    minHeight: 44,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.danger,
+  },
+  roadsideButtonText: { fontSize: 9, fontWeight: '800', color: '#FFFFFF' },
   progressTrack: {
     height: 4,
     borderRadius: 999,

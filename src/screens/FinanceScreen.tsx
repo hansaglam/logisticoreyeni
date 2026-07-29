@@ -90,6 +90,8 @@ function getDeliveryStatusBadge(status: Delivery['status']): { label: string; va
       return { label: 'Yolda', variant: 'blue' };
     case 'preparing':
       return { label: 'Hazırlanıyor', variant: 'amber' };
+    case 'paused':
+      return { label: 'Yakıt Bitti', variant: 'danger' };
     case 'completed':
       return { label: 'Tamamlandı', variant: 'success' };
     case 'failed':

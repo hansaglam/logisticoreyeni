@@ -23,6 +23,7 @@ import MapFilterTabs from '../components/map/MapFilterTabs';
 import MapHeader from '../components/map/MapHeader';
 import MapStatsStrip from '../components/map/MapStatsStrip';
 import MapTruckTrackingSection from '../components/map/MapTruckTrackingSection';
+import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
 import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
 import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
 import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
@@ -72,7 +73,7 @@ function buildIdleTruckCountByCity(
   return counts;
 }
 
-const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
+const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route', 'paused'];
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
 
 const COLORS = {
@@ -218,6 +219,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const [selectedMapFilter, setSelectedMapFilter] = useState<NetworkFilterKey>('all');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [mapGestureActive, setMapGestureActive] = useState(false);
+  const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const mapRef = useRef<WorldMapCanvasHandle>(null);
 
@@ -531,8 +533,15 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           currentTime={currentTime}
           onOpenFleet={handleOpenFleet}
           onTruckPress={() => handleOpenFleet()}
+          onRoadsideFuel={setRoadsideFuelJobId}
         />
       </ScrollView>
+      <RoadsideFuelSheet
+        visible={roadsideFuelJobId != null}
+        jobId={roadsideFuelJobId}
+        onClose={() => setRoadsideFuelJobId(null)}
+        onSuccess={setStatusMessage}
+      />
     </View>
   );
 }

@@ -47,7 +47,9 @@ export function normalizeTrailer(
   let status: TrailerStatus = trailer.status ?? 'idle';
   if (attachedTruckId && linkedTruck) {
     status =
-      linkedTruck.status === 'on_route' || linkedTruck.status === 'transferring'
+      linkedTruck.status === 'on_route' ||
+      linkedTruck.status === 'transferring' ||
+      linkedTruck.status === 'out_of_fuel'
         ? 'in_use'
         : 'attached';
   } else if (attachedTruckId && !linkedTruck) {

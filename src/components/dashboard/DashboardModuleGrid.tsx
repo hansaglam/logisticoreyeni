@@ -2,25 +2,22 @@ import React from 'react';
 import {
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
 
 import type { TabKey } from '../../navigation/tabTypes';
+import { radius, spacing } from '../../theme';
 import { GameIcon } from '../ui';
 import { TRUCK_LOCATION_EDUCATION_MESSAGE } from '../../utils/truckLocationUx';
 import {
   DASHBOARD_MODULE_CARD_BG,
   DASHBOARD_MODULE_CARD_HEIGHT,
   DASHBOARD_MODULE_GAP,
-  DASHBOARD_MODULE_NARROW_BREAKPOINT,
-  DASHBOARD_MODULE_SCROLL_CARD_WIDTH,
 } from './dashboardTheme';
 
-export type DashboardModuleKey = 'contracts' | 'market' | 'fleet' | 'warehouse';
+export type DashboardModuleKey = 'market' | 'fleet' | 'warehouse';
 
 interface ModuleTheme {
   iconColor: string;
@@ -39,26 +36,14 @@ interface DashboardModule {
 
 const MODULES: DashboardModule[] = [
   {
-    key: 'contracts',
-    label: 'İşler',
-    icon: 'contract',
+    key: 'market',
+    label: 'Market',
+    icon: 'market',
     theme: {
       iconColor: '#2388FF',
       iconBackground: 'rgba(35, 136, 255, 0.16)',
       borderColor: 'rgba(35, 136, 255, 0.42)',
       shadowColor: '#2388FF',
-    },
-    tab: 'contracts',
-  },
-  {
-    key: 'market',
-    label: 'Piyasa',
-    icon: 'market',
-    theme: {
-      iconColor: '#11C96B',
-      iconBackground: 'rgba(17, 201, 107, 0.15)',
-      borderColor: 'rgba(17, 201, 107, 0.38)',
-      shadowColor: '#11C96B',
     },
     tab: 'market',
   },
@@ -90,8 +75,6 @@ const MODULES: DashboardModule[] = [
 interface DashboardModuleGridProps {
   onNavigate: (tab: TabKey) => void;
   onOpenWarehouse?: () => void;
-  contractsAvailable: number;
-  contractsOpen?: number;
   marketOpportunities: number;
   idleTrucks: number;
   activeDeliveries: number;
@@ -100,8 +83,6 @@ interface DashboardModuleGridProps {
 }
 
 interface ModuleStatusInput {
-  contractsAvailable: number;
-  contractsOpen?: number;
   marketOpportunities: number;
   idleTrucks: number;
   activeDeliveries: number;
@@ -110,18 +91,10 @@ interface ModuleStatusInput {
 
 function resolveModuleStatus(key: DashboardModuleKey, data: ModuleStatusInput): string {
   switch (key) {
-    case 'contracts':
-      if (data.contractsAvailable > 0) {
-        return `${data.contractsAvailable} uygun`;
-      }
-      if ((data.contractsOpen ?? 0) > 0) {
-        return `${data.contractsOpen} ilan`;
-      }
-      return 'Bekleniyor';
     case 'market':
       return data.marketOpportunities > 0
         ? `${data.marketOpportunities} fırsat`
-        : 'Fiyat & stok';
+        : 'Fiyat ve stok';
     case 'fleet':
       if (data.idleTrucks > 0) {
         return `${data.idleTrucks} boşta`;
@@ -143,17 +116,15 @@ interface ModuleCardProps {
   module: DashboardModule;
   statusLabel: string;
   onPress: () => void;
-  scrollLayout?: boolean;
 }
 
-function ModuleCard({ module, statusLabel, onPress, scrollLayout }: ModuleCardProps) {
+function ModuleCard({ module, statusLabel, onPress }: ModuleCardProps) {
   const { theme } = module;
 
   return (
     <Pressable
       style={({ pressed }) => [
         styles.moduleTile,
-        scrollLayout && styles.moduleTileScroll,
         {
           borderColor: theme.borderColor,
           shadowColor: theme.shadowColor,
@@ -161,6 +132,8 @@ function ModuleCard({ module, statusLabel, onPress, scrollLayout }: ModuleCardPr
         pressed && styles.moduleTilePressed,
       ]}
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${module.label}, ${statusLabel}`}
     >
       <View
         style={[StyleSheet.absoluteFillObject, styles.accentTint, { backgroundColor: theme.iconColor }]}
@@ -194,17 +167,12 @@ function ModuleCard({ module, statusLabel, onPress, scrollLayout }: ModuleCardPr
 export default function DashboardModuleGrid({
   onNavigate,
   onOpenWarehouse,
-  contractsAvailable,
-  contractsOpen,
   marketOpportunities,
   idleTrucks,
   activeDeliveries,
   warehouseFillRatio,
   showLocationHint = false,
 }: DashboardModuleGridProps) {
-  const { width } = useWindowDimensions();
-  const useScrollLayout = width < DASHBOARD_MODULE_NARROW_BREAKPOINT;
-
   const handlePress = (module: DashboardModule) => {
     if (module.key === 'warehouse') {
       onOpenWarehouse?.();
@@ -216,8 +184,6 @@ export default function DashboardModuleGrid({
   };
 
   const statusData: ModuleStatusInput = {
-    contractsAvailable,
-    contractsOpen,
     marketOpportunities,
     idleTrucks,
     activeDeliveries,
@@ -230,7 +196,6 @@ export default function DashboardModuleGrid({
       module={module}
       statusLabel={resolveModuleStatus(module.key, statusData)}
       onPress={() => handlePress(module)}
-      scrollLayout={useScrollLayout}
     />
   ));
 
@@ -249,17 +214,7 @@ export default function DashboardModuleGrid({
         </View>
       ) : null}
 
-      {useScrollLayout ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
-          {cards}
-        </ScrollView>
-      ) : (
-        <View style={styles.grid}>{cards}</View>
-      )}
+      <View style={styles.grid}>{cards}</View>
     </View>
   );
 }
@@ -275,18 +230,18 @@ const styles = StyleSheet.create({
     left: -8,
     right: -8,
     bottom: -6,
-    borderRadius: 20,
+    borderRadius: radius.xl,
     backgroundColor: 'rgba(40, 198, 232, 0.03)',
   },
   hintStrip: {
     height: 46,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 13,
-    marginBottom: 8,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
     backgroundColor: 'rgba(35, 136, 255, 0.06)',
     borderWidth: 1,
     borderColor: 'rgba(35, 136, 255, 0.28)',
@@ -312,20 +267,13 @@ const styles = StyleSheet.create({
     gap: DASHBOARD_MODULE_GAP,
     alignItems: 'stretch',
   },
-  scrollContent: {
-    flexDirection: 'row',
-    gap: DASHBOARD_MODULE_GAP,
-    paddingRight: 2,
-  },
   moduleTile: {
     flex: 1,
     minWidth: 0,
     height: DASHBOARD_MODULE_CARD_HEIGHT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 8,
-    borderRadius: 15,
+    justifyContent: 'space-between',
+    padding: spacing.sm,
+    borderRadius: radius.lg,
     borderWidth: 1,
     backgroundColor: DASHBOARD_MODULE_CARD_BG,
     overflow: 'hidden',
@@ -338,10 +286,6 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  moduleTileScroll: {
-    flex: 0,
-    width: DASHBOARD_MODULE_SCROLL_CARD_WIDTH,
-  },
   moduleTilePressed: {
     opacity: 0.94,
     transform: [{ scale: 0.985 }],
@@ -350,29 +294,28 @@ const styles = StyleSheet.create({
     opacity: 0.035,
   },
   iconWrap: {
-    width: 35,
-    height: 35,
-    borderRadius: 11,
+    width: 34,
+    height: 34,
+    borderRadius: radius.md,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
   textColumn: {
-    flex: 1,
+    width: '100%',
     minWidth: 0,
-    marginLeft: 6,
-    justifyContent: 'center',
+    marginTop: spacing.xs,
   },
   moduleLabel: {
-    fontSize: 12,
-    lineHeight: 15,
+    fontSize: 13,
+    lineHeight: 16,
     fontWeight: '800',
     color: '#F3F7FF',
   },
   moduleStatus: {
-    fontSize: 9,
-    lineHeight: 11,
+    fontSize: 10,
+    lineHeight: 13,
     fontWeight: '600',
-    marginTop: 2,
+    marginTop: 1,
   },
 });

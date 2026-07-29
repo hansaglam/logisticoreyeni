@@ -7,6 +7,10 @@
   "scripts": {
     "start": "expo start",
     "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npx tsx scripts/check-require-cycles.ts",
+    "backend:build": "npm --prefix backend run build",
+    "test:firebase": "npm --prefix backend test",
+    "firebase:emulators:test": "firebase emulators:exec --only firestore \"npm run backend:build && npm run test:firebase\"",
     "android": "expo run:android",
     "android:usb": "adb reverse tcp:8081 tcp:8081 && expo run:android",
     "ios": "expo run:ios"
@@ -34,7 +38,9 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.3",
     "@types/react": "~19.1.0",
+    "firebase-tools": "^14.27.0",
     "typescript": "^5.7.3"
   }
 }

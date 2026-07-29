@@ -28,12 +28,10 @@ import DashboardDailyOpsBonusCard from '../components/monetization/DashboardDail
 import { createDefaultMissionsState } from '../config/missions';
 import { createDefaultRetentionState } from '../simulation/retentionProgress';
 import { calculateCompanyScore } from '../simulation/companyScore';
-import { countPlayableContracts } from '../simulation/contracts';
-import { getSafeFuelPrice } from '../simulation/economy';
 import {
-  applyWorldEventImpactToFuelPrice,
   getWorldEventSummary,
 } from '../simulation/worldEvents';
+import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { getLevelProgress } from '../simulation/leveling';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -74,9 +72,9 @@ function getWarehouseFillRatio(player: Player, currentTime: number): number {
 
 export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
-  const contracts = useGameStore((state) => state.contracts) ?? [];
   const products = useGameStore((state) => state.products) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const globalSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
   const currentTime = useGameStore((state) => state.currentTime);
   const cities = useGameStore((state) => state.cities) ?? [];
   const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
@@ -103,26 +101,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const useSplitLayout = screenWidth >= DASHBOARD_SPLIT_MIN_WIDTH;
 
   useOnboardingScreenVisit('Dashboard');
-
-  const availableContracts = useMemo(
-    () => contracts.filter((c) => c.status === 'available'),
-    [contracts],
-  );
-
-  const playableContractCount = useMemo(
-    () =>
-      player
-        ? countPlayableContracts(
-            availableContracts,
-            player.trucks ?? [],
-            player.drivers ?? [],
-            Math.max(1, player.level ?? player.companyLevel ?? 1),
-            currentTime,
-            { playerMoney: player.money, globalEconomy },
-          )
-        : 0,
-    [availableContracts, player, currentTime, globalEconomy],
-  );
 
   const runningDeliveries = useMemo(
     () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
@@ -259,10 +237,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   }
 
   const levelProgress = getLevelProgress(player);
-  const fuelPrice = applyWorldEventImpactToFuelPrice(
-    getSafeFuelPrice(globalEconomy),
-    activeWorldEvents,
-  );
+  const fuelPrice = getSnapshotFuelPrice(globalSnapshot, globalEconomy);
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(player.completedContracts ?? 0);
@@ -402,8 +377,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         showLocationHint={showTruckLocationHint}
         onNavigate={handleNavigate}
         onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
-        contractsAvailable={playableContractCount}
-        contractsOpen={availableContracts.length}
         marketOpportunities={marketOpportunityCount}
         idleTrucks={fleetSnapshot.idleTrucks}
         activeDeliveries={runningDeliveries.length}

@@ -5,7 +5,7 @@
 import { fleetManagementBalance, operatingCostBalance } from '../config/balance';
 import type { Delivery, DeliveryStatus, Driver, Player, Truck, TruckTransfer } from '../types/game';
 
-const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
+const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route', 'paused'];
 
 export interface FleetManagementState {
   player: Pick<Player, 'trucks' | 'drivers' | 'money'>;
@@ -61,7 +61,9 @@ function isTruckOnActiveDelivery(truckId: string, deliveries: Delivery[] | undef
 
 function isTruckOnActiveTransfer(truckId: string, transfers: TruckTransfer[] | undefined): boolean {
   return (transfers ?? []).some(
-    (transfer) => transfer.truckId === truckId && transfer.status === 'active',
+    (transfer) =>
+      transfer.truckId === truckId &&
+      (transfer.status === 'active' || transfer.status === 'paused'),
   );
 }
 
@@ -111,6 +113,7 @@ export function canSellTruck(truckId: string, state: FleetManagementState): Truc
   if (
     truck.status === 'on_route' ||
     truck.status === 'transferring' ||
+    truck.status === 'out_of_fuel' ||
     isTruckOnActiveDelivery(truckId, state.activeDeliveries) ||
     isTruckOnActiveTransfer(truckId, state.activeTransfers)
   ) {

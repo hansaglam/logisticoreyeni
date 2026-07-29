@@ -22,7 +22,12 @@ import type {
 } from '../types/game';
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
 import { debugConfig } from '../config/debug';
-import { calculateDeliveryFuelLiters, finalizeTruckFuelAfterJob, normalizeTruckFuel } from '../utils/truckFuel';
+import {
+  advanceFuelConstrainedProgress,
+  calculateDeliveryFuelLiters,
+  finalizeTruckFuelAfterJob,
+  normalizeTruckFuel,
+} from '../utils/truckFuel';
 import {
   calculateCargoWeight,
   calculateFuelUsed,
@@ -135,7 +140,11 @@ export function isTruckLeaseActive(truck: Truck, currentTime: number): boolean {
   if (truck.leaseExpiresAt == null) {
     return true;
   }
-  if (truck.status === 'on_route' || truck.status === 'transferring') {
+  if (
+    truck.status === 'on_route' ||
+    truck.status === 'transferring' ||
+    truck.status === 'out_of_fuel'
+  ) {
     return true;
   }
   return truck.leaseExpiresAt > currentTime;
@@ -405,7 +414,11 @@ export function getActiveDeliveryDestinationCityIds(
 ): string[] {
   const ids = new Set<string>();
   for (const delivery of deliveries ?? []) {
-    if (delivery.status === 'on_route' || delivery.status === 'preparing') {
+    if (
+      delivery.status === 'on_route' ||
+      delivery.status === 'preparing' ||
+      delivery.status === 'paused'
+    ) {
       if (delivery.destinationCityId) {
         ids.add(delivery.destinationCityId);
       }
@@ -1384,6 +1397,11 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     fuelCost,
     fuelLitersAtStart,
     fuelLitersTotal,
+    fuelConsumedL: 0,
+    lastFuelProcessedProgress: 0,
+    lastFuelProcessedAt: currentTime,
+    distanceTraveledKm: 0,
+    fuelWarningsEmitted: [],
     maintenanceCost,
     estimatedProfit,
     travelHours,
@@ -1409,6 +1427,92 @@ export function updateDeliveryProgress(delivery: Delivery, hoursPassed: number):
   return {
     ...delivery,
     progress: newProgress,
+  };
+}
+
+export function updateDeliveryProgressWithFuel(
+  delivery: Delivery,
+  truck: Truck,
+  hoursPassed: number,
+  processedAt?: number,
+): { delivery: Delivery; truck: Truck } {
+  if (hoursPassed <= 0) {
+    return { delivery, truck };
+  }
+  if (
+    processedAt != null &&
+    delivery.lastFuelProcessedAt != null &&
+    delivery.lastFuelProcessedAt === processedAt
+  ) {
+    return { delivery, truck };
+  }
+
+  if (delivery.status === 'paused' && delivery.pausedReason === 'out-of-fuel') {
+    return {
+      delivery: {
+        ...delivery,
+        estimatedArrivalTime: delivery.estimatedArrivalTime + hoursPassed,
+        lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
+      },
+      truck: {
+        ...normalizeTruckFuel(truck),
+        currentFuelL: 0,
+        status: 'out_of_fuel',
+      },
+    };
+  }
+
+  if (delivery.status !== 'on_route' && delivery.status !== 'preparing') {
+    return { delivery, truck };
+  }
+
+  const normalizedTruck = normalizeTruckFuel(truck);
+  const safeTravelHours = Math.max(delivery.travelHours, 0.1);
+  const requestedProgressDelta = Math.min(
+    Math.max(0, 1 - delivery.progress),
+    hoursPassed / safeTravelHours,
+  );
+  const result = advanceFuelConstrainedProgress({
+    currentProgress: delivery.progress,
+    requestedProgressDelta,
+    fuelLitersAtStart:
+      delivery.fuelLitersAtStart ?? normalizedTruck.currentFuelL ?? 0,
+    fuelLitersTotal: delivery.fuelLitersTotal ?? 0,
+    currentFuelL: normalizedTruck.currentFuelL ?? 0,
+    fuelConsumedL: delivery.fuelConsumedL,
+    lastFuelProcessedProgress: delivery.lastFuelProcessedProgress,
+    distanceKm: delivery.distanceKm,
+    distanceTraveledKm: delivery.distanceTraveledKm,
+  });
+
+  return {
+    delivery: {
+      ...delivery,
+      progress: result.progress,
+      status: result.outOfFuel ? 'paused' : delivery.status,
+      pausedReason: result.outOfFuel ? 'out-of-fuel' : undefined,
+      fuelConsumedL: result.fuelConsumedL,
+      lastFuelProcessedProgress: result.lastFuelProcessedProgress,
+      lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
+      distanceTraveledKm: result.distanceTraveledKm,
+      estimatedArrivalTime: result.outOfFuel
+        ? delivery.estimatedArrivalTime +
+          hoursPassed *
+            Math.max(
+              0,
+              1 -
+                result.actualProgressDelta /
+                  Math.max(requestedProgressDelta, Number.EPSILON),
+            )
+        : delivery.estimatedArrivalTime,
+    },
+    truck: {
+      ...normalizedTruck,
+      currentFuelL: result.currentFuelL,
+      totalMileageKm:
+        (normalizedTruck.totalMileageKm ?? 0) + result.mileageDeltaKm,
+      status: result.outOfFuel ? 'out_of_fuel' : normalizedTruck.status,
+    },
   };
 }
 
@@ -1482,6 +1586,13 @@ export function isDeliveryProgressComplete(progress: number | undefined | null):
   return normalizeDeliveryProgress(progress) >= DELIVERY_COMPLETE_PROGRESS_THRESHOLD;
 }
 
+export function isDeliveryFuelProgressComplete(delivery: Delivery): boolean {
+  return (
+    delivery.lastFuelProcessedProgress == null ||
+    delivery.lastFuelProcessedProgress >= DELIVERY_COMPLETE_PROGRESS_THRESHOLD
+  );
+}
+
 export type CompleteDeliveryErrorCode =
   | 'DELIVERY_NOT_FOUND'
   | 'DELIVERY_NOT_READY'
@@ -1513,7 +1624,12 @@ export function getDeliveryIntegrityStats(
     contractIds?: Set<string>;
   } = {},
 ): DeliveryIntegrityStats {
-  const active = deliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing');
+  const active = deliveries.filter(
+    (d) =>
+      d.status === 'on_route' ||
+      d.status === 'preparing' ||
+      d.status === 'paused',
+  );
   let invalidProgressCount = 0;
   let missingTruckCount = 0;
   let missingDriverCount = 0;
@@ -1580,7 +1696,10 @@ export function safeCompleteDelivery(
     };
   }
 
-  if (!isDeliveryProgressComplete(delivery.progress)) {
+  if (
+    !isDeliveryProgressComplete(delivery.progress) ||
+    !isDeliveryFuelProgressComplete(delivery)
+  ) {
     console.warn(
       '[delivery] complete skipped: delivery not ready',
       deliveryId,
@@ -1632,7 +1751,10 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
     return gameState;
   }
 
-  if (!isDeliveryProgressComplete(delivery.progress)) {
+  if (
+    !isDeliveryProgressComplete(delivery.progress) ||
+    !isDeliveryFuelProgressComplete(delivery)
+  ) {
     throw new Error(`Teslimat henüz tamamlanmadı: progress=${delivery.progress}`);
   }
 
@@ -1674,7 +1796,9 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
   const updatedTrucks = updateById(gameState.trucks, delivery.truckId, (truck) => {
     const arrived = applyTruckArrivalAtCity(truck, delivery.destinationCityId);
     const fueled =
-      delivery.fuelLitersAtStart != null && delivery.fuelLitersTotal != null
+      delivery.fuelConsumedL != null
+        ? normalizeTruckFuel(arrived)
+        : delivery.fuelLitersAtStart != null && delivery.fuelLitersTotal != null
         ? finalizeTruckFuelAfterJob({
             truck: arrived,
             fuelLitersAtStart: delivery.fuelLitersAtStart,
@@ -1748,6 +1872,9 @@ export function failDelivery(
       currentCityId: normalizeCityId(delivery.originCityId),
       condition: clamp((truck.condition ?? 100) - conditionLoss * 0.5, 0, 100),
     };
+    if (delivery.fuelConsumedL != null) {
+      return normalizeTruckFuel(returned);
+    }
     if (delivery.fuelLitersAtStart == null || delivery.fuelLitersTotal == null) {
       return normalizeTruckFuel(returned);
     }

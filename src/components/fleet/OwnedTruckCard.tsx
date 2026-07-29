@@ -28,6 +28,8 @@ import { selectDriverForTransfer } from '../../simulation/truckTransfer';
 import { useGameStore } from '../../store/gameStore';
 import { colors, formatMoney } from '../../theme';
 import { getCityName } from '../../utils/entityLookup';
+import { getTruckFuelPercent, normalizeTruckFuel } from '../../utils/truckFuel';
+import { getFuelWarningForJob } from '../../simulation/fuelWarnings';
 import type { Delivery, Driver, Trailer, Truck, TruckTransfer } from '../../types/game';
 import type { MonetizationState } from '../../types/monetization';
 import {
@@ -75,6 +77,8 @@ function getTruckStatusPresentation(truck: Truck): { label: string; variant: Sta
       return { label: 'TRANSFERDE', variant: 'info' };
     case 'maintenance':
       return { label: 'BAKIMDA', variant: 'danger' };
+    case 'out_of_fuel':
+      return { label: 'YAKIT BİTTİ', variant: 'danger' };
     default:
       return { label: 'BOŞTA', variant: 'success' };
   }
@@ -93,6 +97,8 @@ export interface OwnedTruckCardProps {
   onRepair: (truck: Truck) => void;
   onManageUpgrades: (truck: Truck) => void;
   onTransfer: (truck: Truck, targetCityId?: string) => void;
+  onRefuel: (truck: Truck) => void;
+  onRoadsideFuel: (jobId: string) => void;
   onSell: (truck: Truck) => void;
   onShowSellBlocked: (reason: string) => void;
 }
@@ -110,6 +116,8 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   onRepair,
   onManageUpgrades,
   onTransfer,
+  onRefuel,
+  onRoadsideFuel,
   onSell,
   onShowSellBlocked,
 }: OwnedTruckCardProps) {
@@ -121,9 +129,19 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const isTransferring = truck.status === 'transferring';
   const isIdle = truck.status === 'idle';
   const isMaintenance = truck.status === 'maintenance';
+  const isOutOfFuel = truck.status === 'out_of_fuel';
   const isLeased = isActiveLeasedTruck(truck);
-  const needsLiveTime = isOnRoute || isTransferring || isLeased;
+  const needsLiveTime = isOnRoute || isTransferring || isOutOfFuel || isLeased;
   const currentTime = useGameStore((state) => (needsLiveTime ? state.currentTime : 0));
+  const warehouseTransfer = useGameStore((state) =>
+    state.activeWarehouseStockTransfers?.find(
+      (candidate) =>
+        candidate.truckId === truck.id &&
+        (candidate.status === 'active' ||
+          candidate.status === 'pending' ||
+          candidate.status === 'paused'),
+    ),
+  );
 
   const catalogId = getTruckCatalogId(truck);
   const artwork = useMemo(() => getTruckArtwork(truck), [truck.id, truck.catalogId]);
@@ -146,6 +164,10 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const capacityTons = getTruckEffectiveCapacityTons(truck, trailers);
   const capacityLabel = `${Math.round(capacityTons)} t`;
   const attachedTrailer = getAttachedTrailerForTruck(truck.id, trailers);
+  const normalizedFuelTruck = normalizeTruckFuel(truck);
+  const fuelPercent = getTruckFuelPercent(normalizedFuelTruck);
+  const fuelJob = delivery ?? transfer ?? warehouseTransfer;
+  const fuelWarning = getFuelWarningForJob(fuelJob, truck);
 
   const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
     monetization,
@@ -292,6 +314,52 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
         </View>
       </View>
 
+      <Pressable
+        style={styles.fuelDetail}
+        onPress={() => onRefuel(truck)}
+        accessibilityRole="button"
+        accessibilityLabel={`${truck.name} yakıt detayını aç`}
+      >
+        <GameIcon
+          name="fuel"
+          size={15}
+          color={fuelPercent <= 20 ? colors.danger : colors.accentBlue}
+        />
+        <View style={styles.fuelDetailText}>
+          <Text style={styles.fuelDetailLabel}>Yakıt</Text>
+          <Text style={styles.fuelDetailValue} numberOfLines={1} adjustsFontSizeToFit>
+            {Math.round(normalizedFuelTruck.currentFuelL ?? 0)} /{' '}
+            {Math.round(normalizedFuelTruck.fuelTankCapacityL ?? 0)} L · %{fuelPercent}
+          </Text>
+        </View>
+        <Text style={styles.fuelDetailAction}>Yakıt Al</Text>
+      </Pressable>
+
+      {fuelWarning ? (
+        <View
+          style={[
+            styles.fuelWarning,
+            fuelWarning.key === 'out-of-fuel' && styles.fuelWarningDanger,
+          ]}
+        >
+          <GameIcon
+            name="warning"
+            size={14}
+            color={fuelWarning.key === 'out-of-fuel' ? colors.danger : colors.accentAmber}
+          />
+          <Text style={styles.fuelWarningText}>{fuelWarning.message}</Text>
+          {fuelWarning.key === 'out-of-fuel' && fuelJob ? (
+            <Pressable
+              style={styles.roadsideButton}
+              onPress={() => onRoadsideFuel(fuelJob.id)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.roadsideButtonText}>Acil Yakıt</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
       <View style={styles.conditionBlock}>
         <View style={styles.conditionHeader}>
           <Text style={styles.conditionTitle}>Kondisyon</Text>
@@ -355,6 +423,11 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
 
       {moreOpen ? (
         <View style={styles.morePanel}>
+          <Pressable style={styles.moreAction} onPress={() => onRefuel(truck)}>
+            <Text style={styles.moreActionText} numberOfLines={1}>
+              Yakıt Detayı ve Dolum
+            </Text>
+          </Pressable>
           {showRecallIzmir && canTransfer ? (
             <Pressable style={styles.moreAction} onPress={() => onTransfer(truck, 'izmir')}>
               <Text style={styles.moreActionText} numberOfLines={1}>
@@ -532,6 +605,56 @@ const styles = StyleSheet.create({
     color: '#F3F7FF',
     lineHeight: 13,
   },
+  fuelDetail: {
+    minHeight: 44,
+    marginTop: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#0D1A2D',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  fuelDetailText: { flex: 1, minWidth: 0 },
+  fuelDetailLabel: { fontSize: 8.5, color: colors.textMuted },
+  fuelDetailValue: { fontSize: 11, fontWeight: '700', color: colors.textPrimary },
+  fuelDetailAction: { fontSize: 10.5, fontWeight: '800', color: colors.accentBlue },
+  fuelWarning: {
+    minHeight: 44,
+    marginTop: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.accentAmber,
+    backgroundColor: colors.warningSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  fuelWarningDanger: {
+    borderColor: colors.danger,
+    backgroundColor: colors.dangerSoft,
+  },
+  fuelWarningText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  roadsideButton: {
+    minHeight: 44,
+    paddingHorizontal: 9,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.danger,
+  },
+  roadsideButtonText: { fontSize: 9.5, fontWeight: '800', color: '#FFFFFF' },
   conditionBlock: {
     marginTop: 5,
     gap: 3,

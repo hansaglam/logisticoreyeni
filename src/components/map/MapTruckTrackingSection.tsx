@@ -35,12 +35,18 @@ function findDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery
   return deliveries.find(
     (delivery) =>
       delivery.truckId === truckId &&
-      (delivery.status === 'preparing' || delivery.status === 'on_route'),
+      (delivery.status === 'preparing' ||
+        delivery.status === 'on_route' ||
+        delivery.status === 'paused'),
   );
 }
 
 function findTransferForTruck(truckId: string, transfers: TruckTransfer[]): TruckTransfer | undefined {
-  return transfers.find((transfer) => transfer.truckId === truckId && transfer.status === 'active');
+  return transfers.find(
+    (transfer) =>
+      transfer.truckId === truckId &&
+      (transfer.status === 'active' || transfer.status === 'paused'),
+  );
 }
 
 function findDriverForTruck(
@@ -66,6 +72,7 @@ export interface MapTruckTrackingSectionProps {
   currentTime?: number;
   onOpenFleet: () => void;
   onTruckPress?: (truckId: string) => void;
+  onRoadsideFuel?: (jobId: string) => void;
 }
 
 function MapTruckTrackingSection({
@@ -78,6 +85,7 @@ function MapTruckTrackingSection({
   currentTime,
   onOpenFleet,
   onTruckPress,
+  onRoadsideFuel,
 }: MapTruckTrackingSectionProps) {
   const sortedTrucks = useMemo(
     () =>
@@ -152,6 +160,7 @@ function MapTruckTrackingSection({
             homeCityId={homeCityId}
             currentTime={isActiveJob ? currentTime : undefined}
             onPress={onTruckPress ? () => onTruckPress(truck.id) : undefined}
+            onRoadsideFuel={onRoadsideFuel}
           />
         );
       })}

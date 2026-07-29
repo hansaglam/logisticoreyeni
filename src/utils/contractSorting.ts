@@ -43,7 +43,11 @@ export function isRouteContractFilter(
 export function getActiveDeliveryDestinationCityIds(deliveries: Delivery[] | undefined): Set<string> {
   const ids = new Set<string>();
   for (const delivery of deliveries ?? []) {
-    if (delivery.status === 'on_route' || delivery.status === 'preparing') {
+    if (
+      delivery.status === 'on_route' ||
+      delivery.status === 'preparing' ||
+      delivery.status === 'paused'
+    ) {
       if (delivery.destinationCityId) {
         ids.add(delivery.destinationCityId);
       }

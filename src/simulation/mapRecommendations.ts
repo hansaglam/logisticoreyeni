@@ -232,7 +232,10 @@ function findNearestActiveDelivery(
   currentTime: number,
 ): Delivery | undefined {
   const active = deliveries.filter(
-    (delivery) => delivery.status === 'preparing' || delivery.status === 'on_route',
+    (delivery) =>
+      delivery.status === 'preparing' ||
+      delivery.status === 'on_route' ||
+      delivery.status === 'paused',
   );
   if (active.length === 0) return undefined;
 
@@ -333,7 +336,10 @@ export function getRecommendedMapAction(params: GetRecommendedMapActionParams): 
   const idleTrucks = getIdleTrucks(trucks);
   const idleDrivers = getIdleDrivers(drivers);
   const runningDeliveries = activeDeliveries.filter(
-    (delivery) => delivery.status === 'preparing' || delivery.status === 'on_route',
+    (delivery) =>
+      delivery.status === 'preparing' ||
+      delivery.status === 'on_route' ||
+      delivery.status === 'paused',
   );
 
   if (globalEconomy) {

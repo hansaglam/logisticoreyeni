@@ -23,7 +23,6 @@ import {
 } from '../components/fleet/fleetTheme';
 
 import {
-  ActionButton,
   AppCard,
   AppScreen,
   EmptyState,
@@ -53,13 +52,15 @@ import {
   type TruckSellCheck,
 } from '../simulation/fleetManagement';
 import TruckTransferModal from '../components/TruckTransferModal';
+import TruckRefuelSheet from '../components/TruckRefuelSheet';
+import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
 import UpgradesScreen from './UpgradesScreen';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatDisplayPercent, formatMoney, spacing, typography } from '../theme';
 import type { Delivery, DeliveryStatus, Driver, Trailer, Truck, TruckTransfer } from '../types/game';
 
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
-const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route'];
+const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route', 'paused'];
 
 type FleetTab = 'trucks' | 'drivers' | 'trailers';
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
@@ -214,10 +215,10 @@ export default function FleetScreen() {
   const [activeTab, setActiveTab] = useState<FleetTab>('trucks');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
   const [transferModalTruck, setTransferModalTruck] = useState<Truck | null>(null);
+  const [refuelSheetTruck, setRefuelSheetTruck] = useState<Truck | null>(null);
+  const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
   const [managingUpgradesTruckId, setManagingUpgradesTruckId] = useState<string | null>(null);
-
-  const [attachPickerTrailer, setAttachPickerTrailer] = useState<Trailer | null>(null);
 
   useEffect(() => {
     if (!pendingFleetSubTab) return;
@@ -247,7 +248,12 @@ export default function FleetScreen() {
   const fleetSummary = useMemo(
     () => ({
       idleTrucks: trucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
-      onRouteTrucks: trucks.filter((t) => t.status === 'on_route' || t.status === 'transferring').length,
+      onRouteTrucks: trucks.filter(
+        (t) =>
+          t.status === 'on_route' ||
+          t.status === 'transferring' ||
+          t.status === 'out_of_fuel',
+      ).length,
       idleDrivers: drivers.filter((d) => d.status === 'idle').length,
       averageCondition: calculateAverageCondition(trucks),
     }),
@@ -283,7 +289,7 @@ export default function FleetScreen() {
   const transferByTruckId = useMemo(() => {
     const map = new Map<string, TruckTransfer>();
     for (const transfer of activeTransfers) {
-      if (transfer.status === 'active') {
+      if (transfer.status === 'active' || transfer.status === 'paused') {
         map.set(transfer.truckId, transfer);
       }
     }
@@ -350,17 +356,46 @@ export default function FleetScreen() {
         );
         return;
       }
-      if (eligible.length === 1) {
-        const result = attachTrailerToTruck(trailer.id, eligible[0].id);
-        setStatusMessage({
-          type: result.success ? 'success' : 'error',
-          text: result.message ?? (result.success ? 'Bağlandı' : 'Bağlama başarısız'),
-        });
-        return;
-      }
-      setAttachPickerTrailer(trailer);
+
+      showDialog({
+        title: 'Araç Seç',
+        message: `${trailer.name} dorsesini hangi kamyona bağlamak istiyorsun?`,
+        variant: 'confirm',
+        details: [
+          { label: 'Dorse', value: getTrailerTypeLabel(trailer.type) },
+          { label: 'Bulunduğu şehir', value: getCityName(trailer.city) },
+          { label: 'Kapasite bonusu', value: `+${Math.round(trailer.capacityBonusTons)} t` },
+        ],
+        footerNote: 'Yalnızca aynı şehirdeki boş ve dorsesiz kamyonlar gösterilir.',
+        actions: [
+          ...eligible.map((truck) => {
+            const currentCapacity = getTruckEffectiveCapacityTons(truck, trailers);
+            const capacityAfterAttach = currentCapacity + Math.max(0, trailer.capacityBonusTons);
+            const condition = Math.round(truck.condition ?? 100);
+
+            return {
+              label: `${truck.name} · ${capacityAfterAttach.toFixed(1)} t · %${condition}`,
+              variant: 'primary' as const,
+              onPress: () => {
+                const result = attachTrailerToTruck(trailer.id, truck.id);
+                setStatusMessage({
+                  type: result.success ? 'success' : 'error',
+                  text:
+                    result.message ??
+                    (result.success ? `${trailer.name}, ${truck.name} aracına bağlandı.` : 'Bağlama başarısız'),
+                });
+              },
+            };
+          }),
+          {
+            label: 'Vazgeç',
+            variant: 'secondary' as const,
+            onPress: () => {},
+          },
+        ],
+      });
     },
-    [attachTrailerToTruck, eligibleTrucksForTrailer, showAlert],
+    [attachTrailerToTruck, eligibleTrucksForTrailer, showAlert, showDialog, trailers],
   );
 
   const handleDetachTrailer = useCallback(
@@ -768,6 +803,8 @@ export default function FleetScreen() {
                   onRepair={handleRepair}
                   onManageUpgrades={handleManageUpgrades}
                   onTransfer={handleOpenTransfer}
+                  onRefuel={setRefuelSheetTruck}
+                  onRoadsideFuel={setRoadsideFuelJobId}
                   onSell={handleSellTruck}
                   onShowSellBlocked={handleShowSellBlocked}
                 />
@@ -821,39 +858,6 @@ export default function FleetScreen() {
               />
             ))
           )}
-          {attachPickerTrailer ? (
-            <AppCard variant="highlighted" style={styles.tipCard} padded>
-              <Text style={styles.tipTitle}>
-                {attachPickerTrailer.name} — kamyon seç
-              </Text>
-              {eligibleTrucksForTrailer(attachPickerTrailer).map((truck) => (
-                <ActionButton
-                  key={truck.id}
-                  label={`${truck.name} · ${getTruckEffectiveCapacityTons(truck, trailers).toFixed(1)} t`}
-                  onPress={() => {
-                    const result = attachTrailerToTruck(attachPickerTrailer.id, truck.id);
-                    setAttachPickerTrailer(null);
-                    setStatusMessage({
-                      type: result.success ? 'success' : 'error',
-                      text: result.message ?? (result.success ? 'Bağlandı' : 'Bağlama başarısız'),
-                    });
-                  }}
-                  variant="secondary"
-                  compact
-                  fullWidth
-                  style={styles.shopAction}
-                />
-              ))}
-              <ActionButton
-                label="Vazgeç"
-                onPress={() => setAttachPickerTrailer(null)}
-                variant="secondary"
-                compact
-                fullWidth
-                style={styles.shopAction}
-              />
-            </AppCard>
-          ) : null}
         </View>
       ) : null}
 
@@ -909,6 +913,18 @@ export default function FleetScreen() {
         }}
         onStarted={(message) => setStatusMessage({ type: 'success', text: message })}
         onError={(message) => setStatusMessage({ type: 'error', text: message })}
+      />
+      <TruckRefuelSheet
+        visible={refuelSheetTruck != null}
+        truck={refuelSheetTruck}
+        onClose={() => setRefuelSheetTruck(null)}
+        onSuccess={(message) => setStatusMessage({ type: 'success', text: message })}
+      />
+      <RoadsideFuelSheet
+        visible={roadsideFuelJobId != null}
+        jobId={roadsideFuelJobId}
+        onClose={() => setRoadsideFuelJobId(null)}
+        onSuccess={(message) => setStatusMessage({ type: 'success', text: message })}
       />
       </View>
     </AppScreen>
@@ -1328,9 +1344,6 @@ const styles = StyleSheet.create({
   },
   shopActionHalf: {
     flex: 1,
-  },
-  shopAction: {
-    marginTop: 4,
   },
   shopSectionSpaced: {
     marginTop: spacing.md,

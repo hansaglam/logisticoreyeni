@@ -1,0 +1,26 @@
+{
+  "name": "logisticore-backend",
+  "version": "1.0.0",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "sync:canonical": "tsx scripts/syncCanonicalInputs.ts",
+    "build": "npm run sync:canonical && tsc",
+    "typecheck": "npm run sync:canonical && tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "3.0.3",
+    "@types/node": "^22.10.0",
+    "firebase": "10.12.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.3"
+  }
+}

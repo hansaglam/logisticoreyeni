@@ -1,0 +1,31 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "globalMarketHistory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "cityId", "order": "ASCENDING" },
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "epoch", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "globalMarketHistory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "epoch", "order": "ASCENDING" },
+        { "fieldPath": "configVersion", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "marketAlerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "productId", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

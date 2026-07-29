@@ -5,7 +5,12 @@
 
 import type { Contract, Driver, Product, Route, Truck } from '../types/game';
 import { getProductByIdSafe } from './entityLookup';
-import { clamp } from './math';
+import {
+  calculateFuelUsed as calculateCanonicalFuelUsed,
+  getFuelDriverMultiplier,
+  getFuelLoadMultiplier,
+  getFuelRouteMultiplier,
+} from './truckFuel';
 
 /**
  * Sözleşmenin kamyon kapasitesi için geçerli yük ağırlığı (ton).
@@ -35,18 +40,17 @@ export function calculateCargoWeight(contract: Contract, product?: Product): num
 
 /** Yük / kapasite oranı yakıt çarpanı */
 export function calculateLoadWeightMultiplier(cargoWeight: number, truckCapacity: number): number {
-  const safeCapacity = Math.max(truckCapacity, 1);
-  return 1 + (cargoWeight / safeCapacity) * 0.25;
+  return getFuelLoadMultiplier(cargoWeight, truckCapacity);
 }
 
 /** Rota zorluğu yakıt çarpanı */
 export function calculateRouteFuelMultiplier(route: Route): number {
-  return 1 + route.difficulty * 0.45;
+  return getFuelRouteMultiplier(route.difficulty);
 }
 
 /** Şoför yakıt tasarrufu çarpanı — yüksek fuelSaving = daha az yakıt */
 export function calculateDriverFuelSkillMultiplier(driver: Driver): number {
-  return clamp(1 - driver.fuelSaving / 100, 0.35, 1);
+  return getFuelDriverMultiplier(driver.fuelSaving);
 }
 
 /** Toplam yakıt tüketimini hesaplar (litre) */
@@ -57,18 +61,13 @@ export function calculateFuelUsed(
   route: Route,
   product: Product,
 ): number {
-  const cargoWeight = calculateCargoWeight(contract, product);
-  const loadMultiplier = calculateLoadWeightMultiplier(cargoWeight, truck.capacity);
-  const driverFuelMultiplier = calculateDriverFuelSkillMultiplier(driver);
-  const routeFuelMultiplier = calculateRouteFuelMultiplier(route);
-
-  return (
-    contract.distanceKm *
-    truck.fuelConsumptionPerKm *
-    loadMultiplier *
-    driverFuelMultiplier *
-    routeFuelMultiplier
-  );
+  return calculateCanonicalFuelUsed({
+    distanceKm: contract.distanceKm,
+    truck,
+    cargoWeightTons: calculateCargoWeight(contract, product),
+    routeDifficulty: route.difficulty,
+    driverFuelSaving: driver.fuelSaving,
+  });
 }
 
 /** Progress 0–1 aralığına normalize eder (yüzde girişi destekler) */
@@ -76,5 +75,5 @@ export function normalizeJobProgress(progress: number | undefined | null): numbe
   if (progress == null || !Number.isFinite(progress)) {
     return 0;
   }
-  return clamp(progress > 1 ? progress / 100 : progress, 0, 1);
+  return Math.min(1, Math.max(0, progress > 1 ? progress / 100 : progress));
 }

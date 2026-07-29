@@ -133,6 +133,7 @@ import {
   getHighestOwnedTruckCapacity,
   getMaxIdleTruckCapacity,
   isDeliveryProgressComplete,
+  isDeliveryFuelProgressComplete,
   logDeliveryCompletionLocation,
   logDeliveryStartCapacity,
   safeCompleteDelivery,
@@ -149,7 +150,7 @@ import {
   resolveDeliveryDestinationCityId,
   resolveTruckCityId,
   selectIdleTruckForContract,
-  updateDeliveryProgress,
+  updateDeliveryProgressWithFuel,
   type DeliverySettlementDebugSnapshot,
   type DeliverySettlementResult,
 } from '../simulation/delivery';
@@ -188,7 +189,7 @@ import {
   createTruckTransfer,
   resolveTransferRoute,
   selectDriverForTransfer,
-  updateTransferProgress,
+  updateTransferProgressWithFuel,
 } from '../simulation/truckTransfer';
 import {
   calculateTradeBuyCost,
@@ -224,7 +225,7 @@ import {
   getWarehouseStockTransferReasonMessage,
   markWarehouseStockTransferSettled,
   rollbackStockToSource,
-  updateWarehouseStockTransferProgress,
+  updateWarehouseStockTransferProgressWithFuel,
   validateWarehouseStockTransfer,
 } from '../simulation/warehouseStockTransfer';
 import {
@@ -248,7 +249,13 @@ import {
 } from '../utils/warehouseCalculations';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
-import { finalizeTruckFuelAfterJob, normalizeTruckFuel } from '../utils/truckFuel';
+import {
+  finalizeTruckFuelAfterJob,
+  getTruckFuelReadiness,
+  normalizeTruckFuel,
+  validateTruckRefuelRequest,
+} from '../utils/truckFuel';
+import type { TruckRefuelResult } from '../utils/truckFuel';
 import { contractBalance, contractGenerationBalance, economyBalance, buildTimeScaleDebugSnapshot, getEffectiveOfflineGameSpeed, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   applyAdRewardGrant,
@@ -317,13 +324,33 @@ import {
   processWorldEventsForDayRange,
   forceCreateWorldEvent,
 } from '../simulation/worldEvents';
-import { ensureEmergencyContractsForSoftLock } from '../simulation/softLockRecovery';
-import { getEconomyNow, getMarketEpoch } from '../simulation/economyClock';
+import {
+  ensureEmergencyContractsForSoftLock,
+  evaluateRoadsideFuelAssistance,
+} from '../simulation/softLockRecovery';
+import { evaluateFuelWarning } from '../simulation/fuelWarnings';
+import {
+  resumeRoadsideJob,
+  validateRoadsideFuelPurchase,
+  type RoadsideFuelJob,
+  type RoadsideFuelResult,
+} from '../simulation/roadsideFuel';
+import {
+  getEconomyClock,
+  getEconomyNow,
+  getMarketEpoch,
+} from '../simulation/economyClock';
 import {
   buildPeriodicCostDeductions,
   logOfflineEconomyAudit,
 } from '../simulation/periodicCosts';
-import { buildGlobalEconomySnapshot } from '../simulation/globalMarketSnapshot';
+import {
+  buildGlobalEconomySnapshot,
+  getSnapshotFuelPrice,
+  materializeSnapshotCities,
+} from '../simulation/globalMarketSnapshot';
+import { resolveGlobalMarketAvailability } from '../simulation/globalMarketAvailability';
+import { getGlobalEconomyRepository } from '../services/globalEconomyRepository';
 import type { WorldEventType } from '../types/game';
 import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
 import { getMissionById } from '../config/missions';
@@ -435,6 +462,7 @@ let gameInitPromise: Promise<void> | null = null;
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
 const completedDeliveryNotificationIds = new Set<string>();
 const completedTransferNotificationIds = new Set<string>();
+const hydratedOutOfFuelNotificationJobIds = new Set<string>();
 const settledWarehouseStockTransferIds = new Set<string>();
 
 let offlineProgressionActive = false;
@@ -562,6 +590,8 @@ export type AutoSaveReason =
   | 'transfer_started'
   | 'transfer_completed'
   | 'purchase'
+  | 'fuel_purchase'
+  | 'roadside_fuel'
   | 'level_up'
   | 'repair'
   | 'upgrade'
@@ -586,6 +616,8 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'transfer_started',
   'transfer_completed',
   'purchase',
+  'fuel_purchase',
+  'roadside_fuel',
   'level_up',
   'repair',
   'reset',
@@ -1161,10 +1193,38 @@ export function createInitialGlobalEconomy(): GlobalEconomy {
   return createDefaultGlobalEconomy();
 }
 
+function hasUsableGlobalMarketSnapshot(
+  state: Pick<
+    StoreGameState,
+    | 'cachedGlobalEconomySnapshot'
+    | 'cachedGlobalEconomySnapshotTrusted'
+    | 'globalMarketSyncStatus'
+  >,
+): boolean {
+  return resolveGlobalMarketAvailability({
+    snapshot: state.cachedGlobalEconomySnapshot,
+    trusted: state.cachedGlobalEconomySnapshotTrusted === true,
+    syncStatus: state.globalMarketSyncStatus,
+    development: typeof __DEV__ !== 'undefined' && __DEV__,
+  }).priceCriticalOperationsAllowed;
+}
+
 /** GDD Bölüm 6'ya göre başlangıç oyun durumu */
 export function createInitialGameState(): StoreGameState {
-  const globalEconomy = createInitialGlobalEconomy();
-  const cities = cloneInitialCities();
+  const developmentFallbackEnabled =
+    typeof __DEV__ !== 'undefined' && __DEV__;
+  const initialSnapshot = developmentFallbackEnabled
+    ? buildGlobalEconomySnapshot({ cities: CITIES })
+    : undefined;
+  const globalEconomy = normalizeGlobalEconomy({
+    ...createInitialGlobalEconomy(),
+    fuelPrice:
+      initialSnapshot?.fuelPricePerLiter ??
+      createInitialGlobalEconomy().fuelPrice,
+  });
+  const cities = initialSnapshot
+    ? materializeSnapshotCities(cloneInitialCities(), initialSnapshot)
+    : cloneInitialCities();
   const initialContractCount = randomIntBetween(
     contractGenerationBalance.initialContractsMin,
     contractGenerationBalance.initialContractsMax,
@@ -1281,6 +1341,10 @@ export function createInitialGameState(): StoreGameState {
     activeWarehouseStockTransfers: [],
     completedWarehouseStockTransfers: [],
     globalEconomy,
+    cachedGlobalEconomySnapshot: initialSnapshot,
+    cachedGlobalEconomySnapshotTrusted: false,
+    globalMarketHistory: [],
+    globalMarketSyncStatus: 'idle',
     marketNews: [
       {
         id: createNewsId(0, 'welcome'),
@@ -1309,7 +1373,7 @@ export function createInitialGameState(): StoreGameState {
     onboarding: createDefaultOnboardingState(),
     spotlightTutorial: createDefaultSpotlightTutorialState(),
     marketAlerts: [],
-    worldEvents: [],
+    worldEvents: initialSnapshot?.activeEvents ?? [],
     worldEventsVersion: 1,
     lastWorldEventGeneratedDay: 0,
     monetization: createDefaultMonetizationState(),
@@ -1402,7 +1466,11 @@ export interface GameStore extends StoreGameState {
   getContractGenerationDebug: () => ContractGenerationDebugSnapshot;
   getDeliverySettlementDebug: () => DeliverySettlementDebugSnapshot;
   /** Oyuncu ekranları: süresi dolmuş teklifleri temizler, yeni sözleşme üretmez */
-  refreshMarketSnapshot: () => void;
+  refreshMarketSnapshot: () => Promise<{
+    success: boolean;
+    source: 'backend' | 'development-fallback' | 'cache' | 'unavailable';
+    stale: boolean;
+  }>;
   refreshContractsFromMarket: (options?: { bypassCooldown?: boolean }) => void;
   applyAdReward: (
     slotId: AdRewardSlotId,
@@ -1451,6 +1519,19 @@ export interface GameStore extends StoreGameState {
   processExpiredLeases: () => void;
   repairTruck: (truckId: string) => void;
   upgradeTruck: (truckId: string, upgradeType: TruckUpgradeType) => void;
+  refuelTruck: (params: {
+    truckId: string;
+    liters: number;
+    expectedUnitPrice: number;
+    idempotencyKey?: string;
+  }) => TruckRefuelResult;
+  purchaseRoadsideFuel: (params: {
+    jobId: string;
+    liters: number;
+    expectedUnitPrice: number;
+    idempotencyKey?: string;
+  }) => RoadsideFuelResult;
+  requestRoadsideFuelAssistance: (jobId: string) => RoadsideFuelResult;
   refuelOrUpdateFuelPrice: () => void;
   addMarketNews: (news: Omit<MarketNews, 'id'> & { id?: string }) => void;
   clearOldMarketNews: () => void;
@@ -1582,7 +1663,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
       id: notification.id ?? createNotificationId(`${Math.random().toString(36).slice(2, 8)}`),
       autoDismissMs: resolveNotificationDismissMs(notification.type, notification.autoDismissMs),
     };
-    set({ notifications: [entry, ...get().notifications].slice(0, 8) });
+    set({
+      notifications: [
+        entry,
+        ...get().notifications.filter((candidate) => candidate.id !== entry.id),
+      ].slice(0, 8),
+    });
   },
 
   dismissNotification: (notificationId) => {
@@ -2126,11 +2212,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { sendInApp = true, sendLocal = true } = options;
     const state = get();
     const now = state.currentTime;
+    const marketEpoch = state.cachedGlobalEconomySnapshot?.epoch;
     const cleanedAlerts = cleanExpiredMarketAlerts(normalizeMarketAlerts(state.marketAlerts), now);
     const triggeredAlerts: MarketPriceAlert[] = [];
 
     const updatedAlerts = cleanedAlerts.map((alert) => {
-      if (!alert.isActive || alert.triggeredAt) {
+      if (
+        !alert.isActive ||
+        alert.triggeredAt ||
+        (marketEpoch != null && alert.lastTriggeredMarketEpoch === marketEpoch)
+      ) {
         return alert;
       }
 
@@ -2139,8 +2230,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       const market = getCityProductMarketState(city, alert.productId);
       if (!market) return alert;
+      const currentPrice =
+        state.cachedGlobalEconomySnapshot?.cityMarketPrices[alert.cityId]?.[
+          alert.productId
+        ] ?? market.currentPrice;
 
-      if (!evaluateMarketAlertCondition(alert, market.currentPrice, market.basePrice)) {
+      if (!evaluateMarketAlertCondition(alert, currentPrice, market.basePrice)) {
         return alert;
       }
 
@@ -2149,6 +2244,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ...alert,
         isActive: false,
         triggeredAt: now,
+        lastTriggeredMarketEpoch: marketEpoch,
       };
     });
 
@@ -2162,7 +2258,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const productName = getProductName(alert.productId);
       const city = getCityByIdSafe(alert.cityId);
       const market = city ? getCityProductMarketState(city, alert.productId) : null;
-      const currentPrice = market?.currentPrice ?? alert.targetPrice ?? 0;
+      const currentPrice =
+        state.cachedGlobalEconomySnapshot?.cityMarketPrices[alert.cityId]?.[
+          alert.productId
+        ] ?? market?.currentPrice ?? alert.targetPrice ?? 0;
       const message = buildTriggeredAlertMessage(alert, cityName, productName, currentPrice);
 
       void cancelMarketAlertNotification(alert.notificationId);
@@ -2690,6 +2789,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
             const loaded = await get().loadGame(loadResult);
             if (loaded) {
               hasHydratedGame = true;
+              await get().refreshMarketSnapshot();
               await get().refreshSaveStatus();
               return;
             }
@@ -2726,6 +2826,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         if (saveLoadFailed) {
           notifySaveLoadFailureOnce(get().currentTime, get().addNotification, get().saveError);
         }
+        await get().refreshMarketSnapshot();
         await get().saveGame();
         await get().refreshSaveStatus();
       } catch (error) {
@@ -2904,6 +3005,55 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().checkMarketPriceAlerts({ sendLocal: false });
       get().advanceOnboardingProgress();
       get().syncRetentionProgress();
+
+      const hydratedState = get();
+      const pausedFuelJobs = [
+        ...hydratedState.activeDeliveries,
+        ...(hydratedState.activeTransfers ?? []),
+        ...(hydratedState.activeWarehouseStockTransfers ?? []),
+      ].filter(
+        (job) => job.status === 'paused' && job.pausedReason === 'out-of-fuel',
+      );
+      if (pausedFuelJobs.length > 0) {
+        const pausedIds = new Set(pausedFuelJobs.map((job) => job.id));
+        const markHydratedFuelWarning = <
+          T extends { id: string; fuelWarningsEmitted?: import('../types/game').FuelWarningKey[] },
+        >(job: T): T =>
+          pausedIds.has(job.id)
+            ? {
+                ...job,
+                fuelWarningsEmitted: [
+                  ...new Set([
+                    ...(job.fuelWarningsEmitted ?? []),
+                    'low-fuel' as const,
+                    'critical-fuel' as const,
+                    'insufficient-range' as const,
+                    'out-of-fuel' as const,
+                  ]),
+                ],
+              }
+            : job;
+        set({
+          activeDeliveries: hydratedState.activeDeliveries.map(markHydratedFuelWarning),
+          activeTransfers: (hydratedState.activeTransfers ?? []).map(markHydratedFuelWarning),
+          activeWarehouseStockTransfers: (
+            hydratedState.activeWarehouseStockTransfers ?? []
+          ).map(markHydratedFuelWarning),
+        });
+        for (const job of pausedFuelJobs) {
+          if (hydratedOutOfFuelNotificationJobIds.has(job.id)) continue;
+          hydratedOutOfFuelNotificationJobIds.add(job.id);
+          get().addNotification({
+            id: `fuel-warning:${job.id}:out-of-fuel`,
+            time: hydratedState.currentTime,
+            type: 'error',
+            title: 'Yakıt bitti',
+            message: 'Yakıt bitti. Araç rota üzerinde durdu.',
+            actionLabel: 'Haritada Gör',
+            actionTarget: 'map',
+          });
+        }
+      }
 
       // Soft-lock recovery — bozuk save / -$5000 sonrası alınabilir acil işler
       const loaded = get();
@@ -3266,15 +3416,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       nowMs,
     });
 
-    const snapshot = buildGlobalEconomySnapshot({
-      globalEconomy: midState.globalEconomy,
-      cities: midState.cities,
-      activeEvents: getActiveWorldEvents(
-        midState.worldEvents ?? [],
-        getSharedWorldTimeIndex(nowMs),
-      ),
-      nowMs,
-    });
+    // Offline catch-up must not invent a new world snapshot/history. Keep the
+    // last backend-verified cache until the next successful connection.
+    const snapshot = midState.cachedGlobalEconomySnapshot;
 
     set({
       contracts: softLock.contracts,
@@ -3284,9 +3428,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
         nowMs,
       ),
       appliedEconomyPeriodKeys: mergedPeriodKeys,
-      lastSeenMarketEpoch: snapshot.epoch,
-      cachedSnapshotVersion: snapshot.version,
-      cachedSnapshotGeneratedAt: snapshot.generatedAt,
+      lastSeenMarketEpoch: snapshot?.epoch ?? midState.lastSeenMarketEpoch,
+      cachedSnapshotVersion: snapshot?.version ?? midState.cachedSnapshotVersion,
+      cachedSnapshotGeneratedAt:
+        snapshot?.generatedAt ?? midState.cachedSnapshotGeneratedAt,
+      globalMarketSyncStatus: snapshot ? 'offline-cache' : 'error',
       lastEmergencyContractAtMs:
         softLock.added.length > 0 ? nowMs : midState.lastEmergencyContractAtMs,
     });
@@ -3679,176 +3825,109 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
     }
   },
-
   runEconomyTick: () => {
-    if (offlineProgressionActive && offlineProgressCollector) {
-      offlineProgressCollector.marketUpdated = true;
-      offlineProgressCollector.worldEventsUpdated = true;
-    }
-
-    const state = get();
-    const safeEconomy = normalizeGlobalEconomy(state.globalEconomy);
-    const previousFuelPrice = getSafeFuelPrice(safeEconomy);
-    const previousCities = citiesToRecord(state.cities);
-    // Ortak market epoch — kişisel oyun günü değil
-    const tickEpoch = getSharedWorldTimeIndex();
-    const lastGeneratedDay = state.lastWorldEventGeneratedDay ?? 0;
-    const worldEventResult =
-      tickEpoch > lastGeneratedDay
-        ? processWorldEventsForDayRange({
-            worldEvents: state.worldEvents ?? [],
-            fromDay: lastGeneratedDay + 1,
-            toDay: tickEpoch,
-            seedKey: 'global',
-          })
-        : {
-            worldEvents: getActiveWorldEvents(state.worldEvents ?? [], tickEpoch),
-            lastWorldEventGeneratedDay: lastGeneratedDay,
-          };
-
-    const activeWorldEvents = getActiveWorldEvents(worldEventResult.worldEvents, tickEpoch);
-
-    // Şehir ekonomilerini güncelle
-    const updatedCitiesRecord = updateAllCitiesEconomy(
-      previousCities,
-      safeEconomy,
-    );
-
-    // Yakıt fiyatını küçük rastgele değişimle güncelle (sanitize korumalı)
-    const fuelChange = randomBetween(-0.06, 0.08);
-    let newFuelPrice = Math.max(0.8, previousFuelPrice * (1 + fuelChange));
-    newFuelPrice = applyWorldEventImpactToFuelPrice(newFuelPrice, activeWorldEvents);
-    const globalEconomy = normalizeGlobalEconomy({
-      ...safeEconomy,
-      fuelPrice: sanitizeFuelPricePerLiter(Number(newFuelPrice.toFixed(2))),
-    });
-
-    const expiredContracts = expireOldContracts(state.contracts, state.currentTime);
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-    const balancedContracts = balanceAvailableContractLevelMix(expiredContracts, playerLevel);
-
-    const news: MarketNews[] = [];
-    const gameEvents: Array<Omit<GameEvent, 'id'> & { id?: string }> = [];
-
-    // Yakıt haberi
-    const fuelDelta =
-      previousFuelPrice > 0
-        ? (globalEconomy.fuelPrice - previousFuelPrice) / previousFuelPrice
-        : 0;
-    if (Math.abs(fuelDelta) > FUEL_PRICE_CHANGE_THRESHOLD) {
-      const fuelTitle = fuelDelta > 0 ? 'Yakıt fiyatları arttı' : 'Yakıt fiyatları düştü';
-      const fuelMessage = `Yakıt ${(Math.abs(fuelDelta) * 100).toFixed(0)}% ${fuelDelta > 0 ? 'zamlan' : 'indirim'} yaptı. Yeni fiyat: $${globalEconomy.fuelPrice}/L`;
-      const fuelImportance = Math.abs(fuelDelta) > 0.1 ? 'high' as const : 'medium' as const;
-
-      news.push({
-        id: createNewsId(state.currentTime, `fuel_${Date.now()}`),
-        time: state.currentTime,
-        type: 'fuel',
-        title: fuelTitle,
-        message: fuelMessage,
-        importance: fuelImportance,
-      });
-      gameEvents.push({
-        time: state.currentTime,
-        type: 'market',
-        title: fuelTitle,
-        message: fuelMessage,
-        importance: fuelImportance,
-      });
-    }
-
-    const newActiveEvents = activeWorldEvents.filter(
-      (event) =>
-        event.globalEpoch === tickEpoch ||
-        event.startsAtDay === tickEpoch,
-    );
-    for (const worldEvent of newActiveEvents) {
-      news.push({
-        id: createNewsId(state.currentTime, `we_${worldEvent.id}`),
-        time: state.currentTime,
-        type: 'economy',
-        title: worldEvent.title,
-        message: worldEvent.description,
-        cityId: worldEvent.cityId,
-        productId: worldEvent.productId,
-        importance: worldEvent.severity === 'high' ? 'high' : 'medium',
-      });
-      gameEvents.push({
-        time: state.currentTime,
-        type: 'market',
-        title: worldEvent.title,
-        message: worldEvent.description,
-        importance: worldEvent.severity === 'high' ? 'high' : 'medium',
-      });
-    }
-
-    // Stok haberleri
-    for (const city of citiesFromRecord(updatedCitiesRecord)) {
-      for (const [productId, productState] of Object.entries(city.products)) {
-        const safeTarget = Math.max(productState.targetStock, 1);
-        const stockRatio = productState.stock / safeTarget;
-
-        if (stockRatio < 0.3) {
-          const productName = getProductName(productId);
-          const shortageTitle = `${city.name} — stok alarmı`;
-          const shortageMessage = `${productName} stoğu hedefin %30 altına düştü.`;
-
-          news.push({
-            id: createNewsId(state.currentTime, `short_${city.id}_${productId}`),
-            time: state.currentTime,
-            type: 'warning',
-            title: shortageTitle,
-            message: shortageMessage,
-            cityId: city.id,
-            productId: productId as ProductId,
-            importance: 'high',
-          });
-          gameEvents.push({
-            time: state.currentTime,
-            type: 'market',
-            title: shortageTitle,
-            message: shortageMessage,
-            importance: 'high',
-          });
-        } else if (stockRatio > 1.6) {
-          const productName = getProductName(productId);
-          news.push({
-            id: createNewsId(state.currentTime, `surp_${city.id}_${productId}`),
-            time: state.currentTime,
-            type: 'economy',
-            title: `${city.name} — stok fazlası`,
-            message: `${productName} stoğu hedefin %160 üzerine çıktı.`,
-            cityId: city.id,
-            productId: productId as ProductId,
-            importance: 'low',
-          });
-        }
-      }
-    }
-
-    set({
-      cities: citiesFromRecord(updatedCitiesRecord),
-      globalEconomy,
-      contracts: balancedContracts,
-      marketNews: [...news, ...state.marketNews].slice(0, MARKET_NEWS_MAX_COUNT),
-      eventLog: prependGameEvents(state.eventLog, gameEvents, state.currentTime),
-      worldEvents: worldEventResult.worldEvents,
-      worldEventsVersion: state.worldEventsVersion ?? 1,
-      lastWorldEventGeneratedDay: worldEventResult.lastWorldEventGeneratedDay,
-    });
-    get().markSaveDirty();
-    get().autoSave('economy_tick');
-    get().checkMarketPriceAlerts();
+    // Global prices/events are backend-owned. A simulation tick only requests
+    // the canonical current snapshot; it never rolls local market state.
+    void get().refreshMarketSnapshot();
   },
 
-  refreshMarketSnapshot: () => {
-    const state = get();
-    const playerLevel = Math.max(1, state.player?.level ?? state.player?.companyLevel ?? 1);
-    const expired = expireOldContracts(state.contracts ?? [], state.currentTime);
-    const balanced = balanceAvailableContractLevelMix(expired, playerLevel);
-    if (balanced !== state.contracts) {
-      set({ contracts: balanced });
+  refreshMarketSnapshot: async () => {
+    const before = get();
+    const canUseCachedSnapshot =
+      !!before.cachedGlobalEconomySnapshot &&
+      (before.cachedGlobalEconomySnapshotTrusted === true ||
+        (typeof __DEV__ !== 'undefined' && __DEV__));
+    set({ globalMarketSyncStatus: 'syncing' });
+    let repository = getGlobalEconomyRepository();
+    if (!repository) {
+      const [{ getFirestoreSafe }, { FirestoreGlobalEconomyRepository }] =
+        await Promise.all([
+          import('../services/firebase'),
+          import('../services/firestoreGlobalEconomyRepository'),
+        ]);
+      const firestore = getFirestoreSafe();
+      if (firestore) {
+        repository = new FirestoreGlobalEconomyRepository(firestore);
+      }
+    }
+    if (!repository) {
+      set({
+        globalMarketSyncStatus: canUseCachedSnapshot
+          ? 'offline-cache'
+          : 'error',
+      });
+      return {
+        success: canUseCachedSnapshot,
+        source: canUseCachedSnapshot ? 'cache' as const : 'unavailable' as const,
+        stale: true,
+      };
+    }
+
+    try {
+      const result = await repository.getCurrentSnapshot();
+      const snapshot = result.snapshot;
+      if (!snapshot) {
+        set({
+          globalMarketSyncStatus: canUseCachedSnapshot
+            ? 'offline-cache'
+            : 'error',
+        });
+        return {
+          success: canUseCachedSnapshot,
+          source: canUseCachedSnapshot ? 'cache' as const : 'unavailable' as const,
+          stale: true,
+        };
+      }
+
+      if (result.serverTimeMs != null) {
+        getEconomyClock().syncFromServer?.(result.serverTimeMs);
+      }
+      const epochsPerDay = Math.round(24 * 60 * 60 * 1000 / (snapshot.validUntil - snapshot.generatedAt));
+      const history = await repository.getHistory({
+        fromEpoch: Math.max(0, snapshot.epoch - epochsPerDay * 30),
+        toEpoch: snapshot.epoch,
+        limit: CITIES.length * PRODUCTS.length * epochsPerDay * 30,
+      });
+      const live = get();
+      const globalEconomy = normalizeGlobalEconomy({
+        ...live.globalEconomy,
+        fuelPrice: snapshot.fuelPricePerLiter,
+        globalDemandMultiplier: snapshot.modifiers.demandMultiplier,
+        eventMultiplier: snapshot.activeEvents.length > 0 ? 1.05 : 1,
+      });
+      set({
+        cachedGlobalEconomySnapshot: snapshot,
+        cachedGlobalEconomySnapshotTrusted: result.source === 'backend',
+        globalMarketHistory: history,
+        globalMarketSyncStatus:
+          result.source === 'backend' ? 'online' : 'offline-cache',
+        globalMarketLastSyncedAtMs: result.serverTimeMs ?? getEconomyNow(),
+        lastSeenMarketEpoch: snapshot.epoch,
+        cachedSnapshotVersion: snapshot.version,
+        cachedSnapshotGeneratedAt: snapshot.generatedAt,
+        globalEconomy,
+        cities: materializeSnapshotCities(CITIES, snapshot, history),
+        worldEvents: snapshot.activeEvents,
+      });
       get().markSaveDirty();
+      get().checkMarketPriceAlerts();
+      return {
+        success: true,
+        source: result.source,
+        stale: result.source !== 'backend',
+      };
+    } catch (error) {
+      console.warn('[global-market] snapshot sync failed', error);
+      set({
+        globalMarketSyncStatus: canUseCachedSnapshot
+          ? 'offline-cache'
+          : 'error',
+      });
+      return {
+        success: canUseCachedSnapshot,
+        source: canUseCachedSnapshot ? 'cache' as const : 'unavailable' as const,
+        stale: true,
+      };
     }
   },
 
@@ -4362,6 +4441,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    const deliveryFuelReadiness = getTruckFuelReadiness(
+      truck,
+      delivery.fuelLitersTotal ?? 0,
+      getSnapshotFuelPrice(state.cachedGlobalEconomySnapshot, state.globalEconomy),
+    );
+    if (!deliveryFuelReadiness.canCompleteWithoutRefuel) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUEL',
+        message: `Bu rota için ${Math.ceil(deliveryFuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda ${Math.floor(deliveryFuelReadiness.currentFuelL)} L var.`,
+      };
+    }
+
     if (!canAffordVoluntaryPurchase(state.player.money, delivery.fuelCost)) {
       return {
         success: false,
@@ -4550,10 +4642,44 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const deliveriesToComplete: string[] = [];
     const deliveriesToFail: { id: string; reason: DeliveryFailureReason }[] = [];
     const failedThisTick = new Set<string>();
+    const fuelWarningsToNotify: Array<{
+      jobId: string;
+      title: string;
+      message: string;
+      key: string;
+    }> = [];
     const contractById = new Map(state.contracts.map((contract) => [contract.id, contract]));
 
+    let updatedTrucks = state.player.trucks;
     const updatedDeliveries = state.activeDeliveries.map((delivery) => {
       if (delivery.status !== 'on_route' && delivery.status !== 'preparing') {
+        if (delivery.status === 'paused' && delivery.pausedReason === 'out-of-fuel') {
+          const truck = updatedTrucks.find((candidate) => candidate.id === delivery.truckId);
+          if (truck) {
+            const advanced = updateDeliveryProgressWithFuel(
+              delivery,
+              truck,
+              hoursPassed,
+              state.currentTime,
+            );
+            updatedTrucks = updatedTrucks.map((candidate) =>
+              candidate.id === truck.id ? advanced.truck : candidate,
+            );
+            const warningEvaluation = evaluateFuelWarning(advanced.delivery, advanced.truck);
+            if (warningEvaluation.warning) {
+              fuelWarningsToNotify.push({
+                jobId: delivery.id,
+                title: warningEvaluation.warning.title,
+                message: warningEvaluation.warning.message,
+                key: warningEvaluation.warning.key,
+              });
+            }
+            return {
+              ...advanced.delivery,
+              fuelWarningsEmitted: warningEvaluation.fuelWarningsEmitted,
+            };
+          }
+        }
         return delivery;
       }
 
@@ -4576,7 +4702,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
         }
       }
 
-      let updated = updateDeliveryProgress(delivery, hoursPassed);
+      const truck = updatedTrucks.find((candidate) => candidate.id === delivery.truckId);
+      if (!truck) {
+        return delivery;
+      }
+      const fuelUpdate = updateDeliveryProgressWithFuel(
+        delivery,
+        truck,
+        hoursPassed,
+        state.currentTime,
+      );
+      updatedTrucks = updatedTrucks.map((candidate) =>
+        candidate.id === truck.id ? fuelUpdate.truck : candidate,
+      );
+      let updated = fuelUpdate.delivery;
+      const warningEvaluation = evaluateFuelWarning(updated, fuelUpdate.truck);
+      if (warningEvaluation.warning) {
+        fuelWarningsToNotify.push({
+          jobId: delivery.id,
+          title: warningEvaluation.warning.title,
+          message: warningEvaluation.warning.message,
+          key: warningEvaluation.warning.key,
+        });
+      }
+      updated = {
+        ...updated,
+        fuelWarningsEmitted: warningEvaluation.fuelWarningsEmitted,
+      };
 
       if (
         !offlineProgressionActive &&
@@ -4612,7 +4764,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     set({
       activeDeliveries: updatedDeliveries,
+      player: {
+        ...state.player,
+        trucks: updatedTrucks,
+      },
     });
+
+    for (const warning of fuelWarningsToNotify) {
+      get().addNotification({
+        id: `fuel-warning:${warning.jobId}:${warning.key}`,
+        time: state.currentTime,
+        type: warning.key === 'out-of-fuel' ? 'error' : 'warning',
+        title: warning.title,
+        message: warning.message,
+        actionLabel: 'Haritada Gör',
+        actionTarget: 'map',
+      });
+    }
 
     for (const { id, reason } of deliveriesToFail) {
       get().failDeliveryById(id, reason);
@@ -4627,7 +4795,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (
         current &&
         (current.status === 'on_route' || current.status === 'preparing') &&
-        isDeliveryProgressComplete(current.progress)
+        isDeliveryProgressComplete(current.progress) &&
+        isDeliveryFuelProgressComplete(current)
       ) {
         get().completeDeliveryById(deliveryId);
       }
@@ -4641,24 +4810,80 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const state = get();
     const transfersToComplete: string[] = [];
+    const fuelWarningsToNotify: Array<{
+      jobId: string;
+      title: string;
+      message: string;
+      key: string;
+    }> = [];
 
+    let updatedTrucks = state.player.trucks;
     const updatedTransfers = (state.activeTransfers ?? []).map((transfer) => {
-      if (transfer.status !== 'active') {
+      if (transfer.status !== 'active' && transfer.status !== 'paused') {
         return transfer;
       }
 
-      const updated = updateTransferProgress(transfer, hoursPassed);
+      const truck = updatedTrucks.find((candidate) => candidate.id === transfer.truckId);
+      if (!truck) {
+        return transfer;
+      }
+      const fuelUpdate = updateTransferProgressWithFuel(
+        transfer,
+        truck,
+        hoursPassed,
+        state.currentTime,
+      );
+      const warningEvaluation = evaluateFuelWarning(fuelUpdate.transfer, fuelUpdate.truck);
+      const updated = {
+        ...fuelUpdate.transfer,
+        fuelWarningsEmitted: warningEvaluation.fuelWarningsEmitted,
+      };
+      if (warningEvaluation.warning) {
+        fuelWarningsToNotify.push({
+          jobId: transfer.id,
+          title: warningEvaluation.warning.title,
+          message: warningEvaluation.warning.message,
+          key: warningEvaluation.warning.key,
+        });
+      }
+      updatedTrucks = updatedTrucks.map((candidate) =>
+        candidate.id === truck.id ? fuelUpdate.truck : candidate,
+      );
       if (updated.progress >= 1) {
         transfersToComplete.push(updated.id);
       }
       return updated;
     });
 
-    set({ activeTransfers: updatedTransfers });
+    set({
+      activeTransfers: updatedTransfers,
+      player: {
+        ...state.player,
+        trucks: updatedTrucks,
+      },
+    });
+
+    for (const warning of fuelWarningsToNotify) {
+      get().addNotification({
+        id: `fuel-warning:${warning.jobId}:${warning.key}`,
+        time: state.currentTime,
+        type: warning.key === 'out-of-fuel' ? 'error' : 'warning',
+        title: warning.title,
+        message: warning.message,
+        actionLabel: 'Haritada Gör',
+        actionTarget: 'map',
+      });
+    }
 
     for (const transferId of transfersToComplete) {
       const current = get().activeTransfers.find((transfer) => transfer.id === transferId);
-      if (current && current.status === 'active' && current.progress >= 1) {
+      if (
+        current &&
+        current.status === 'active' &&
+        current.progress >= 1 &&
+        (current.lastFuelProcessedProgress == null ||
+          current.lastFuelProcessedProgress >= 0.999)
+      ) {
         get().completeTruckTransferById(transferId);
       }
     }
@@ -4741,7 +4966,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    const fuelPrice = state.globalEconomy?.fuelPrice ?? economyBalance.baseFuelPrice;
+    const fuelPrice = getSnapshotFuelPrice(
+      state.cachedGlobalEconomySnapshot,
+      state.globalEconomy,
+    );
     let transfer: TruckTransfer;
     try {
       transfer = createTruckTransfer({
@@ -4759,6 +4987,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
         success: false,
         errorCode: 'TRANSFER_CREATE_FAILED',
         message: 'Transfer oluşturulamadı.',
+      };
+    }
+
+    const transferFuelReadiness = getTruckFuelReadiness(
+      truck,
+      transfer.fuelLitersTotal ?? 0,
+      fuelPrice,
+    );
+    if (!transferFuelReadiness.canCompleteWithoutRefuel) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUEL',
+        message: `Bu rota için ${Math.ceil(transferFuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda ${Math.floor(transferFuelReadiness.currentFuelL)} L var.`,
       };
     }
 
@@ -4860,6 +5101,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         status: 'idle' as const,
         currentCityId: transfer.toCityId,
       };
+      if (transfer.fuelConsumedL != null) {
+        return normalizeTruckFuel(arrived);
+      }
       if (transfer.fuelLitersAtStart == null || transfer.fuelLitersTotal == null) {
         return normalizeTruckFuel(arrived);
       }
@@ -4990,7 +5234,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    if (!isDeliveryProgressComplete(delivery.progress)) {
+    if (
+      !isDeliveryProgressComplete(delivery.progress) ||
+      !isDeliveryFuelProgressComplete(delivery)
+    ) {
       console.warn(
         '[delivery] complete skipped: delivery not ready',
         deliveryId,
@@ -6461,6 +6708,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     warehouseId,
   }): TradeActionResult => {
     const state = get();
+    if (!hasUsableGlobalMarketSnapshot(state)) {
+      return tradeFail(
+        'market-offline',
+        'Fiyat kritik işlem için global piyasaya yeniden bağlanmalısın.',
+        'MARKET_OFFLINE',
+      );
+    }
 
     const quantityError = validateTradeQuantity(quantity);
     if (quantityError) {
@@ -6632,6 +6886,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     quantity,
   }): TradeActionResult => {
     const state = get();
+    if (!hasUsableGlobalMarketSnapshot(state)) {
+      return tradeFail(
+        'market-offline',
+        'Fiyat kritik işlem için global piyasaya yeniden bağlanmalısın.',
+        'MARKET_OFFLINE',
+      );
+    }
 
     const quantityError = validateTradeQuantity(quantity);
     if (quantityError) {
@@ -6765,19 +7026,73 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const state = get();
     const transfersToComplete: string[] = [];
+    const fuelWarningsToNotify: Array<{
+      jobId: string;
+      title: string;
+      message: string;
+      key: string;
+    }> = [];
 
+    let updatedTrucks = state.player.trucks;
     const updatedTransfers = (state.activeWarehouseStockTransfers ?? []).map((transfer) => {
-      if (transfer.status !== 'active' && transfer.status !== 'pending') {
+      if (
+        transfer.status !== 'active' &&
+        transfer.status !== 'pending' &&
+        transfer.status !== 'paused'
+      ) {
         return transfer;
       }
-      const updated = updateWarehouseStockTransferProgress(transfer, hoursPassed);
+      const truck = updatedTrucks.find((candidate) => candidate.id === transfer.truckId);
+      if (!truck) {
+        return transfer;
+      }
+      const fuelUpdate = updateWarehouseStockTransferProgressWithFuel(
+        transfer,
+        truck,
+        hoursPassed,
+        state.currentTime,
+      );
+      const warningEvaluation = evaluateFuelWarning(fuelUpdate.transfer, fuelUpdate.truck);
+      const updated = {
+        ...fuelUpdate.transfer,
+        fuelWarningsEmitted: warningEvaluation.fuelWarningsEmitted,
+      };
+      if (warningEvaluation.warning) {
+        fuelWarningsToNotify.push({
+          jobId: transfer.id,
+          title: warningEvaluation.warning.title,
+          message: warningEvaluation.warning.message,
+          key: warningEvaluation.warning.key,
+        });
+      }
+      updatedTrucks = updatedTrucks.map((candidate) =>
+        candidate.id === truck.id ? fuelUpdate.truck : candidate,
+      );
       if (updated.progress >= 1) {
         transfersToComplete.push(updated.id);
       }
       return updated;
     });
 
-    set({ activeWarehouseStockTransfers: updatedTransfers });
+    set({
+      activeWarehouseStockTransfers: updatedTransfers,
+      player: {
+        ...state.player,
+        trucks: updatedTrucks,
+      },
+    });
+
+    for (const warning of fuelWarningsToNotify) {
+      get().addNotification({
+        id: `fuel-warning:${warning.jobId}:${warning.key}`,
+        time: state.currentTime,
+        type: warning.key === 'out-of-fuel' ? 'error' : 'warning',
+        title: warning.title,
+        message: warning.message,
+        actionLabel: 'Haritada Gör',
+        actionTarget: 'map',
+      });
+    }
 
     for (const transferId of transfersToComplete) {
       const current = get().activeWarehouseStockTransfers.find((item) => item.id === transferId);
@@ -6785,6 +7100,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         current &&
         (current.status === 'active' || current.status === 'pending') &&
         current.progress >= 1 &&
+        (current.lastFuelProcessedProgress == null ||
+          current.lastFuelProcessedProgress >= 0.999) &&
         current.settledAt == null
       ) {
         get().completeWarehouseStockTransferById(transferId);
@@ -6818,7 +7135,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       activeDeliveries: state.activeDeliveries,
       homeCityId: state.player.homeCityId,
       playerMoney: state.player.money,
-      fuelPrice: state.globalEconomy?.fuelPrice ?? economyBalance.baseFuelPrice,
+      fuelPrice: getSnapshotFuelPrice(
+        state.cachedGlobalEconomySnapshot,
+        state.globalEconomy,
+      ),
     });
 
     if (!validation.success || !validation.validated) {
@@ -6936,6 +7256,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         status: 'idle' as const,
         currentCityId: transfer.destinationCityId,
       };
+      if (transfer.fuelConsumedL != null) {
+        return normalizeTruckFuel(arrived);
+      }
       return finalizeTruckFuelAfterJob({
         truck: arrived,
         fuelLitersAtStart: transfer.fuelLitersAtStart,
@@ -7140,18 +7463,318 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return tradeOk('Transfer geri alındı; stok kaynak depoya döndü.');
   },
 
-  refuelOrUpdateFuelPrice: () => {
+  refuelTruck: ({ truckId, liters, expectedUnitPrice, idempotencyKey }) => {
     const state = get();
-    const change = randomBetween(
-      -economyBalance.maxDailyFuelChange * 0.75,
-      economyBalance.maxDailyFuelChange,
+    if (!hasUsableGlobalMarketSnapshot(state)) {
+      return {
+        success: false,
+        reason: 'market-unavailable',
+        message: 'Piyasa verilerine ulaşılamıyor. Yakıt işlemi için yeniden bağlan.',
+      };
+    }
+    if (idempotencyKey && (state.fuelTransactionKeys ?? []).includes(idempotencyKey)) {
+      return {
+        success: true,
+        message: 'Yakıt işlemi daha önce uygulandı.',
+      };
+    }
+    const truck = state.player.trucks.find((candidate) => candidate.id === truckId);
+    if (!truck) {
+      return {
+        success: false,
+        reason: 'truck-not-found',
+        message: 'Kamyon bulunamadı.',
+      };
+    }
+    const unitPrice = getSnapshotFuelPrice(
+      state.cachedGlobalEconomySnapshot,
+      state.globalEconomy,
+    );
+    const validation = validateTruckRefuelRequest({
+      truck,
+      requestedLiters: liters,
+      currentMoney: state.player.money,
+      currentUnitPrice: unitPrice,
+      expectedUnitPrice,
+    });
+    if (!validation.result.success || !validation.quote) {
+      return validation.result;
+    }
+    const quote = validation.quote;
+
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === truck.id
+        ? normalizeTruckFuel({ ...candidate, currentFuelL: quote.newFuelL })
+        : candidate,
     );
     set({
-      globalEconomy: {
-        ...state.globalEconomy,
-        fuelPrice: Number(Math.max(0.8, state.globalEconomy.fuelPrice * (1 + change)).toFixed(2)),
+      player: {
+        ...state.player,
+        money: state.player.money - quote.totalCost,
+        trucks: updatedTrucks,
       },
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'fuel',
+        amount: quote.totalCost,
+        description: `${truck.name} · ${quote.litersToAdd.toFixed(1)} L yakıt alımı`,
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'finance',
+          title: 'Yakıt alındı',
+          message: `${truck.name} için ${quote.litersToAdd.toFixed(1)} L yakıt alındı.`,
+          importance: 'low',
+        },
+        state.currentTime,
+      ),
+      fuelTransactionKeys: idempotencyKey
+        ? [...(state.fuelTransactionKeys ?? []), idempotencyKey].slice(-32)
+        : state.fuelTransactionKeys ?? [],
     });
+    get().markSaveDirty();
+    get().autoSave('fuel_purchase');
+    return validation.result;
+  },
+
+  purchaseRoadsideFuel: ({ jobId, liters, expectedUnitPrice, idempotencyKey }) => {
+    const state = get();
+    if (!hasUsableGlobalMarketSnapshot(state)) {
+      return {
+        success: false,
+        reason: 'market-unavailable',
+        message: 'Piyasa verilerine ulaşılamıyor. Acil yakıt işlemi için yeniden bağlan.',
+      };
+    }
+    if (idempotencyKey && (state.fuelTransactionKeys ?? []).includes(idempotencyKey)) {
+      return {
+        success: true,
+        message: 'Acil yakıt işlemi daha önce uygulandı.',
+        source: 'roadside-emergency',
+      };
+    }
+    const delivery = state.activeDeliveries.find((job) => job.id === jobId);
+    const truckTransfer = (state.activeTransfers ?? []).find((job) => job.id === jobId);
+    const warehouseTransfer = (state.activeWarehouseStockTransfers ?? []).find(
+      (job) => job.id === jobId,
+    );
+    const job = (delivery ?? truckTransfer ?? warehouseTransfer) as RoadsideFuelJob | undefined;
+    const truck = job
+      ? state.player.trucks.find((candidate) => candidate.id === job.truckId)
+      : undefined;
+    const unitPrice = getSnapshotFuelPrice(
+      state.cachedGlobalEconomySnapshot,
+      state.globalEconomy,
+    );
+    const validation = validateRoadsideFuelPurchase({
+      job,
+      truck,
+      requestedLiters: liters,
+      currentMoney: state.player.money,
+      currentUnitPrice: unitPrice,
+      expectedUnitPrice,
+    });
+    if (!validation.result.success || !validation.quote || !job || !truck) {
+      return validation.result;
+    }
+    const quote = validation.quote;
+    const resumedTruckStatus = delivery ? 'on_route' as const : 'transferring' as const;
+    const updatedTrucks = state.player.trucks.map((candidate) =>
+      candidate.id === truck.id
+        ? normalizeTruckFuel({
+            ...candidate,
+            currentFuelL: quote.newFuelL,
+            status: resumedTruckStatus,
+          })
+        : candidate,
+    );
+    set({
+      player: {
+        ...state.player,
+        money: state.player.money - quote.totalCost,
+        trucks: updatedTrucks,
+      },
+      activeDeliveries: state.activeDeliveries.map((candidate) =>
+        candidate.id === jobId
+          ? resumeRoadsideJob(candidate, 'delivery', { litersAdded: quote.litersToAdd })
+          : candidate,
+      ),
+      activeTransfers: (state.activeTransfers ?? []).map((candidate) =>
+        candidate.id === jobId
+          ? resumeRoadsideJob(candidate, 'truck-transfer', { litersAdded: quote.litersToAdd })
+          : candidate,
+      ),
+      activeWarehouseStockTransfers: (state.activeWarehouseStockTransfers ?? []).map(
+        (candidate) =>
+          candidate.id === jobId
+            ? resumeRoadsideJob(candidate, 'warehouse-transfer', {
+                litersAdded: quote.litersToAdd,
+              })
+            : candidate,
+      ),
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'fuel',
+        amount: quote.totalCost,
+        title: 'Acil yol yakıtı',
+        description: `${truck.name} · ${quote.litersToAdd.toFixed(1)} L · servis ${formatNotificationMoney(quote.serviceFee)}`,
+        source: 'roadside-emergency',
+      }),
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'fleet',
+          title: 'Araç yeniden yola çıktı',
+          message: `${truck.name} için ${quote.litersToAdd.toFixed(1)} L acil yakıt teslim edildi.`,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+      fuelTransactionKeys: idempotencyKey
+        ? [...(state.fuelTransactionKeys ?? []), idempotencyKey].slice(-32)
+        : state.fuelTransactionKeys ?? [],
+    });
+    get().addNotification({
+      time: state.currentTime,
+      type: 'success',
+      title: 'Acil yakıt teslim edildi',
+      message: `${truck.name} kaldığı yerden devam ediyor.`,
+      actionLabel: 'Haritada Gör',
+      actionTarget: 'map',
+    });
+    get().markSaveDirty();
+    get().autoSave('roadside_fuel');
+    return validation.result;
+  },
+
+  requestRoadsideFuelAssistance: (jobId) => {
+    const state = get();
+    const delivery = state.activeDeliveries.find((job) => job.id === jobId);
+    const truckTransfer = (state.activeTransfers ?? []).find((job) => job.id === jobId);
+    const warehouseTransfer = (state.activeWarehouseStockTransfers ?? []).find(
+      (job) => job.id === jobId,
+    );
+    const job = (delivery ?? truckTransfer ?? warehouseTransfer) as RoadsideFuelJob | undefined;
+    if (!job || job.status !== 'paused' || job.pausedReason !== 'out-of-fuel') {
+      return {
+        success: false,
+        reason: 'job-not-out-of-fuel',
+        message: 'Sınırlı yardım yalnız yakıtsız kalan aktif iş için kullanılabilir.',
+      };
+    }
+    const truck = state.player.trucks.find((candidate) => candidate.id === job.truckId);
+    if (!truck) {
+      return { success: false, reason: 'truck-not-found', message: 'Kamyon bulunamadı.' };
+    }
+    const unitPrice = getSnapshotFuelPrice(
+      state.cachedGlobalEconomySnapshot,
+      state.globalEconomy,
+    );
+    const assistance = evaluateRoadsideFuelAssistance({
+      truck,
+      money: state.player.money,
+      fuelPrice: unitPrice,
+      currentTime: state.currentTime,
+      lastAssistanceAt: state.lastRoadsideFuelAssistanceAt,
+      jobAssistanceGrantedAt: job.roadsideAssistanceGrantedAt,
+    });
+    if (!assistance.allowed) {
+      const reason =
+        assistance.reason === 'already-used'
+          ? 'assistance-already-used'
+          : assistance.reason === 'cooldown'
+            ? 'assistance-cooldown'
+            : 'insufficient-funds';
+      const message =
+        assistance.reason === 'already-used'
+          ? 'Bu iş için sınırlı yol yardımı zaten kullanıldı.'
+          : assistance.reason === 'cooldown'
+            ? 'Sınırlı yol yardımı henüz tekrar kullanılamaz.'
+            : 'Sınırlı yardım koşulları karşılanmıyor.';
+      return { success: false, reason, message };
+    }
+
+    const normalized = normalizeTruckFuel(truck);
+    const capacity = normalized.fuelTankCapacityL ?? 0;
+    const currentFuel = normalized.currentFuelL ?? 0;
+    const litersAdded = Math.min(assistance.liters, Math.max(0, capacity - currentFuel));
+    const newFuelL = currentFuel + litersAdded;
+    const resumedTruckStatus = delivery ? 'on_route' as const : 'transferring' as const;
+    set({
+      player: {
+        ...state.player,
+        trucks: state.player.trucks.map((candidate) =>
+          candidate.id === truck.id
+            ? normalizeTruckFuel({
+                ...candidate,
+                currentFuelL: newFuelL,
+                status: resumedTruckStatus,
+              })
+            : candidate,
+        ),
+      },
+      activeDeliveries: state.activeDeliveries.map((candidate) =>
+        candidate.id === jobId
+          ? resumeRoadsideJob(candidate, 'delivery', {
+              litersAdded,
+              roadsideAssistanceGrantedAt: state.currentTime,
+            })
+          : candidate,
+      ),
+      activeTransfers: (state.activeTransfers ?? []).map((candidate) =>
+        candidate.id === jobId
+          ? resumeRoadsideJob(candidate, 'truck-transfer', {
+              litersAdded,
+              roadsideAssistanceGrantedAt: state.currentTime,
+            })
+          : candidate,
+      ),
+      activeWarehouseStockTransfers: (state.activeWarehouseStockTransfers ?? []).map(
+        (candidate) =>
+          candidate.id === jobId
+            ? resumeRoadsideJob(candidate, 'warehouse-transfer', {
+                litersAdded,
+                roadsideAssistanceGrantedAt: state.currentTime,
+              })
+            : candidate,
+      ),
+      lastRoadsideFuelAssistanceAt: state.currentTime,
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'fuel',
+        amount: 0,
+        title: 'Sınırlı yol yardımı',
+        description: `${truck.name} · ${litersAdded.toFixed(1)} L yardım · normal bedel ${formatNotificationMoney(assistance.avoidedCost)}`,
+        source: 'roadside-emergency',
+      }),
+    });
+    get().addNotification({
+      time: state.currentTime,
+      type: 'info',
+      title: 'Sınırlı yol yardımı',
+      message: `${litersAdded.toFixed(1)} L yakıt sağlandı. Bu yardım cooldown süresine tabidir.`,
+      actionLabel: 'Haritada Gör',
+      actionTarget: 'map',
+    });
+    get().markSaveDirty();
+    get().autoSave('roadside_fuel');
+    return {
+      success: true,
+      message: `${litersAdded.toFixed(1)} L sınırlı yol yardımı sağlandı.`,
+      litersAdded,
+      totalCost: 0,
+      source: 'roadside-emergency',
+    };
+  },
+
+  refuelOrUpdateFuelPrice: () => {
+    void get().refreshMarketSnapshot();
   },
 
   // TODO: Hide debug cash tools in production builds.

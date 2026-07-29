@@ -3,7 +3,7 @@
  * Bedava para vermez; düşük maliyetli, kısa rota, pozitif net kârlı işler üretir.
  */
 
-import { financeBalance, operatingCostBalance } from '../config/balance';
+import { economyBalance, financeBalance, operatingCostBalance } from '../config/balance';
 import type {
   Contract,
   GlobalEconomy,
@@ -13,6 +13,7 @@ import type {
 } from '../types/game';
 import { sanitizeFuelPricePerLiter } from './economy';
 import { estimateContractTripCostBreakdown } from './contractEconomics';
+import { calculateRoadsideFuelQuote } from './roadsideFuel';
 
 export type ContractAcceptanceBlockReason =
   | 'insufficient-cash'
@@ -200,4 +201,44 @@ export function ensureEmergencyContractsForSoftLock(params: {
     contracts: [...params.contracts, ...added],
     added,
   };
+}
+
+export type RoadsideAssistanceBlockReason =
+  | 'not-needed'
+  | 'can-afford'
+  | 'already-used'
+  | 'cooldown';
+
+export function evaluateRoadsideFuelAssistance(params: {
+  truck: Truck;
+  money: number;
+  fuelPrice: number;
+  currentTime: number;
+  lastAssistanceAt?: number | null;
+  jobAssistanceGrantedAt?: number | null;
+}): {
+  allowed: boolean;
+  reason?: RoadsideAssistanceBlockReason;
+  liters: number;
+  avoidedCost: number;
+} {
+  const liters = economyBalance.minimumEmergencyFuelLiters;
+  const quote = calculateRoadsideFuelQuote(params.truck, liters, params.fuelPrice);
+  if ((params.truck.currentFuelL ?? 0) > 1e-6) {
+    return { allowed: false, reason: 'not-needed', liters, avoidedCost: quote.totalCost };
+  }
+  if (params.money + 1e-6 >= quote.totalCost) {
+    return { allowed: false, reason: 'can-afford', liters, avoidedCost: quote.totalCost };
+  }
+  if (params.jobAssistanceGrantedAt != null) {
+    return { allowed: false, reason: 'already-used', liters, avoidedCost: quote.totalCost };
+  }
+  const lastAt = params.lastAssistanceAt;
+  if (
+    lastAt != null &&
+    params.currentTime - lastAt < economyBalance.roadsideAssistanceCooldownHours
+  ) {
+    return { allowed: false, reason: 'cooldown', liters, avoidedCost: quote.totalCost };
+  }
+  return { allowed: true, liters, avoidedCost: quote.totalCost };
 }

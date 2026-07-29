@@ -18,10 +18,13 @@ import {
   selectDriverForTransfer,
 } from '../simulation/truckTransfer';
 import { resolveTruckCityId } from '../simulation/delivery';
+import { calculateTransferFuelLiters, getTruckFuelReadiness } from '../utils/truckFuel';
 import { useGameStore } from '../store/gameStore';
+import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import { formatCityLocative } from '../theme/format';
 import type { Route, Truck } from '../types/game';
+import TruckRefuelSheet from './TruckRefuelSheet';
 
 const TRANSFER_CITY_IDS = CITY_IDS;
 const FOOTER_SUMMARY_HEIGHT = 72;
@@ -72,7 +75,7 @@ interface CityTransferOption {
 
 export default function TruckTransferModal({
   visible,
-  truck,
+  truck: truckProp,
   initialToCityId,
   onClose,
   onStarted,
@@ -83,10 +86,16 @@ export default function TruckTransferModal({
   const drivers = useGameStore((state) => state.player?.drivers) ?? [];
   const playerMoney = useGameStore((state) => state.player?.money) ?? 0;
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
-  const fuelPrice = useGameStore((state) => state.globalEconomy?.fuelPrice);
+  const fuelPrice = useGameStore((state) =>
+    getSnapshotFuelPrice(state.cachedGlobalEconomySnapshot, state.globalEconomy),
+  );
   const startTruckTransfer = useGameStore((state) => state.startTruckTransfer);
+  const truck = useGameStore((state) =>
+    truckProp ? state.player?.trucks.find((candidate) => candidate.id === truckProp.id) : undefined,
+  ) ?? truckProp;
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  const [refuelVisible, setRefuelVisible] = useState(false);
 
   const fromCityId = useMemo(() => {
     if (!truck) return 'izmir';
@@ -134,6 +143,14 @@ export default function TruckTransferModal({
   }, [truck, assignedDriver, routes, fromCityId, fuelPrice]);
 
   const selectedOption = cityOptions.find((option) => option.cityId === selectedCityId);
+  const fuelReadiness = useMemo(() => {
+    if (!truck || !assignedDriver || !selectedOption?.route) return null;
+    return getTruckFuelReadiness(
+      truck,
+      calculateTransferFuelLiters(truck, selectedOption.route, assignedDriver),
+      fuelPrice ?? 0,
+    );
+  }, [assignedDriver, fuelPrice, selectedOption?.route, truck]);
 
   useEffect(() => {
     if (!visible) {
@@ -144,7 +161,12 @@ export default function TruckTransferModal({
     const preferred =
       initialToCityId && initialToCityId !== fromCityId ? initialToCityId : null;
     const firstSelectable = cityOptions.find((option) => !option.disabled && option.route);
-    setSelectedCityId(preferred ?? firstSelectable?.cityId ?? null);
+    setSelectedCityId((current) => {
+      const currentStillValid = cityOptions.some(
+        (option) => option.cityId === current && !option.disabled && option.route,
+      );
+      return currentStillValid ? current : preferred ?? firstSelectable?.cityId ?? null;
+    });
   }, [visible, initialToCityId, fromCityId, cityOptions]);
 
   const canStart =
@@ -153,6 +175,7 @@ export default function TruckTransferModal({
     !!selectedOption &&
     !selectedOption.disabled &&
     !!selectedOption.route &&
+    fuelReadiness?.canCompleteWithoutRefuel !== false &&
     playerMoney >= selectedOption.totalCost;
 
   const buttonLabel = resolveTransferButtonLabel({
@@ -271,6 +294,30 @@ export default function TruckTransferModal({
           </ScrollView>
 
           <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
+            {fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel ? (
+              <View style={styles.fuelWarning}>
+                <Text style={styles.fuelWarningText}>
+                  Bu rota için {Math.ceil(fuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda{' '}
+                  {Math.floor(fuelReadiness.currentFuelL)} L var.
+                </Text>
+                <View style={styles.fuelWarningActions}>
+                  <ActionButton
+                    label="Yakıt Al"
+                    icon="fuel"
+                    onPress={() => setRefuelVisible(true)}
+                    compact
+                    style={styles.fuelWarningButton}
+                  />
+                  <ActionButton
+                    label="Vazgeç"
+                    onPress={onClose}
+                    variant="secondary"
+                    compact
+                    style={styles.fuelWarningButton}
+                  />
+                </View>
+              </View>
+            ) : null}
             {selectedOption?.route ? (
               <View style={styles.summaryRow}>
                 <View style={styles.summaryBlock}>
@@ -299,7 +346,11 @@ export default function TruckTransferModal({
             ) : null}
 
             <ActionButton
-              label={buttonLabel}
+              label={
+                fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel
+                  ? 'Yakıt gerekli'
+                  : buttonLabel
+              }
               onPress={handleStart}
               disabled={!canStart}
               icon="truck"
@@ -307,6 +358,11 @@ export default function TruckTransferModal({
               style={styles.startButton}
             />
           </View>
+          <TruckRefuelSheet
+            visible={refuelVisible}
+            truck={truck}
+            onClose={() => setRefuelVisible(false)}
+          />
         </View>
       </View>
     </Modal>
@@ -333,6 +389,22 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
     overflow: 'hidden',
   },
+  fuelWarning: {
+    padding: spacing.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.accentAmber,
+    backgroundColor: colors.warningSoft,
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  fuelWarningText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  fuelWarningActions: { flexDirection: 'row', gap: spacing.sm },
+  fuelWarningButton: { flex: 1, minHeight: 44 },
   handleWrap: {
     alignItems: 'center',
     paddingVertical: spacing.xs,

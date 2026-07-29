@@ -17,13 +17,13 @@ import {
   MAP_TRUCK_MARKER_MIN_SCREEN,
   MAP_TRUCK_MARKER_SIZE,
   MAP_TRUCK_MARKER_ANIM_MS,
+  TRUCK_ASSET_HEADING_OFFSET_DEG,
 } from './mapTheme';
 
-/** truck-outline (MaterialCommunityIcons) default orientation faces left. */
-const TRUCK_ICON_BASE_ROTATION = Math.PI;
-
 function toDisplayAngle(angleRadians: number): number {
-  return normalizeAngleRadians(angleRadians + TRUCK_ICON_BASE_ROTATION);
+  return normalizeAngleRadians(
+    angleRadians + (TRUCK_ASSET_HEADING_OFFSET_DEG * Math.PI) / 180,
+  );
 }
 
 export interface AnimatedDeliveryTruckMarkerProps {
@@ -51,7 +51,7 @@ function AnimatedDeliveryTruckMarkerInner({
 
   const animatedX = useSharedValue(pixelX);
   const animatedY = useSharedValue(pixelY);
-  const animatedAngle = useSharedValue(angleRadians);
+  const animatedAngle = useSharedValue(toDisplayAngle(angleRadians));
 
   useLayoutEffect(() => {
     const targetDisplayAngle = toDisplayAngle(angleRadians);

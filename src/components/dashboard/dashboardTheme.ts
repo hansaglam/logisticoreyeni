@@ -1,6 +1,6 @@
 import { Platform, StyleSheet, type ViewStyle } from 'react-native';
 
-import { colors, radius } from '../../theme';
+import { colors, radius, spacing } from '../../theme';
 
 /** Negatif nakit kırmızı, sıfır/pozitif yeşil */
 export function getDashboardMoneyColor(money: number): string {
@@ -20,12 +20,10 @@ export const DASHBOARD_SPLIT_MIN_WIDTH = 390;
 export const DASHBOARD_SPLIT_CARD_GAP = 10;
 export const DASHBOARD_SPLIT_CARD_HEIGHT = 150;
 
-/** Modül grid — kompakt yatay kartlar */
-export const DASHBOARD_MODULE_NARROW_BREAKPOINT = 360;
-export const DASHBOARD_MODULE_CARD_HEIGHT = 80;
-export const DASHBOARD_MODULE_GAP = 7;
+/** Modül grid — üç eşit hızlı erişim kartı */
+export const DASHBOARD_MODULE_CARD_HEIGHT = 92;
+export const DASHBOARD_MODULE_GAP = spacing.sm;
 export const DASHBOARD_MODULE_CARD_BG = '#081426';
-export const DASHBOARD_MODULE_SCROLL_CARD_WIDTH = 98;
 
 /** Üst bölüm — resource bar / hero / alert */
 export const DASHBOARD_RESOURCE_BAR_HEIGHT = 48;

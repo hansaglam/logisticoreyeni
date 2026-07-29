@@ -55,17 +55,14 @@ import {
 import type { StatusBadgeVariant } from '../components/ui';
 import type { GameIconName } from '../theme/icons';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { findMarketOpportunities } from '../simulation/contracts';
 import { countMarketContractMatches } from '../utils/marketContractMatch';
-import { getSafeFuelPrice } from '../simulation/economy';
 import {
-  applyWorldEventImpactToFuelPrice,
   gameDayFromTime,
-  getActiveWorldEvents,
   getEventsForProduct,
   getPrimaryWorldEventLabel,
   getProductPriceEventMultiplier,
 } from '../simulation/worldEvents';
+import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import {
   calculateStockRatio,
@@ -854,6 +851,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const routes = useGameStore((state) => state.routes) ?? [];
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
+  const globalSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
+  const marketSyncStatus = useGameStore((state) => state.globalMarketSyncStatus);
+  const marketLastSyncedAtMs = useGameStore(
+    (state) => state.globalMarketLastSyncedAtMs,
+  );
   const currentTime = useGameStore((state) => state.currentTime);
 
   const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
@@ -864,7 +866,6 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
   const notifyMarketScreenOpened = useGameStore((state) => state.notifyMarketScreenOpened);
   const marketAlerts = useGameStore((state) => state.marketAlerts) ?? [];
-  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const createMarketPriceAlert = useGameStore((state) => state.createMarketPriceAlert);
   const deleteMarketPriceAlert = useGameStore((state) => state.deleteMarketPriceAlert);
   const pendingMarketFocus = useGameStore((state) => state.pendingMarketFocus);
@@ -902,14 +903,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     [products, alertProductId],
   );
 
-  const activeWorldEvents = useMemo(
-    () => getActiveWorldEvents(worldEvents, gameDayFromTime(currentTime)),
-    [worldEvents, currentTime],
-  );
+  const activeWorldEvents = globalSnapshot?.activeEvents ?? [];
 
   const fuelPrice = useMemo(
-    () => applyWorldEventImpactToFuelPrice(getSafeFuelPrice(globalEconomy), activeWorldEvents),
-    [globalEconomy, activeWorldEvents],
+    () => getSnapshotFuelPrice(globalSnapshot, globalEconomy),
+    [globalEconomy, globalSnapshot],
   );
 
   useEffect(() => {
@@ -934,8 +932,39 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   );
 
   const opportunities = useMemo(
-    () => findMarketOpportunities(cities, routes, products, MAX_OPPORTUNITIES),
-    [cities, routes, products],
+    () => {
+      if (!globalSnapshot) return [];
+      return globalSnapshot.opportunities.slice(0, MAX_OPPORTUNITIES).map(
+        (opportunity): MarketOpportunity => {
+          const route = routes.find(
+            (candidate) =>
+              (candidate.fromCityId === opportunity.fromCityId &&
+                candidate.toCityId === opportunity.toCityId) ||
+              (candidate.fromCityId === opportunity.toCityId &&
+                candidate.toCityId === opportunity.fromCityId),
+          );
+          return {
+            id: opportunity.id,
+            fromCityId: opportunity.fromCityId,
+            toCityId: opportunity.toCityId,
+            productId: opportunity.productId,
+            fromCityName: getCityName(opportunity.fromCityId),
+            toCityName: getCityName(opportunity.toCityId),
+            productName: getProductName(opportunity.productId),
+            priceGap: opportunity.sellPrice - opportunity.buyPrice,
+            distanceKm: route?.distanceKm ?? 0,
+            score: opportunity.marginPercent,
+            demandLevel:
+              opportunity.marginPercent >= 15
+                ? 'high'
+                : opportunity.marginPercent >= 8
+                  ? 'medium'
+                  : 'low',
+          };
+        },
+      );
+    },
+    [globalSnapshot, routes],
   );
 
   const tradeOpportunities = useMemo(() => {
@@ -1067,15 +1096,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     [cities, products],
   );
 
-  const marketMood = useMemo(
-    () =>
-      getMarketMood(
-        marketHighlights.criticalCount,
-        opportunities.length,
-        marketVolatility.avgVolatility,
-      ),
-    [marketHighlights.criticalCount, opportunities.length, marketVolatility.avgVolatility],
-  );
+  const marketMood = useMemo((): MarketMood => {
+    if (globalSnapshot?.worldStatus === 'crisis') return 'Kriz';
+    if (globalSnapshot?.worldStatus === 'volatile') return 'Hareketli';
+    if ((globalSnapshot?.globalOpportunityCount ?? 0) > 0) return 'Fırsatlı';
+    return 'Sakin';
+  }, [globalSnapshot]);
 
   const selectedCityProductCards = useMemo(() => {
     if (!selectedCity || activeTab !== 'products') {
@@ -1409,9 +1435,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     closeTradeModal();
   };
 
-  const handleRefreshMarket = () => {
-    refreshMarketSnapshot();
-    setStatusMessage('Piyasa güncellendi');
+  const handleRefreshMarket = async () => {
+    const result = await refreshMarketSnapshot();
+    setStatusMessage(
+      !result.success
+        ? 'Piyasa verilerine ulaşılamıyor'
+        : result.stale
+        ? 'Çevrimdışı piyasa verisi gösteriliyor'
+        : 'Global piyasa senkronize edildi',
+    );
   };
 
   const handleOpenContractsForOpportunity = (opportunity: MarketOpportunity) => {
@@ -1481,6 +1513,34 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           </AppCard>
         ) : null}
 
+        {marketSyncStatus === 'offline-cache' ? (
+          <AppCard variant="highlighted" style={styles.statusBanner} padded>
+            <View style={styles.statusBannerRow}>
+              <GameIcon name="alert" size={14} color={colors.warning} />
+              <Text style={styles.statusBannerText}>
+                Çevrimdışı piyasa verisi
+                {marketLastSyncedAtMs
+                  ? ` · Son senkronizasyon ${Math.max(
+                      0,
+                      Math.round((Date.now() - marketLastSyncedAtMs) / 60_000),
+                    )} dk önce`
+                  : ''}
+              </Text>
+            </View>
+          </AppCard>
+        ) : null}
+
+        {marketSyncStatus === 'error' ? (
+          <AppCard variant="danger" style={styles.statusBanner} padded>
+            <View style={styles.statusBannerRow}>
+              <GameIcon name="alert" size={14} color={colors.danger} />
+              <Text style={styles.statusBannerText}>
+                Piyasa verilerine ulaşılamıyor
+              </Text>
+            </View>
+          </AppCard>
+        ) : null}
+
         <View style={styles.ruleBanner}>
           <GameIcon name="alert" size={13} color={colors.info} />
           <Text style={styles.ruleBannerText} numberOfLines={1}>
@@ -1492,13 +1552,13 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           fuelPrice={fuelPrice}
           currentTime={currentTime}
           criticalCount={marketHighlights.criticalCount}
-          opportunityCount={opportunities.length}
+          opportunityCount={globalSnapshot?.globalOpportunityCount ?? opportunities.length}
         />
 
         <MarketStatusSummary
           mood={marketMood}
           criticalCount={marketHighlights.criticalCount}
-          opportunityCount={opportunities.length}
+          opportunityCount={globalSnapshot?.globalOpportunityCount ?? opportunities.length}
         />
 
         <MarketWorldEventsStrip events={activeWorldEvents} />

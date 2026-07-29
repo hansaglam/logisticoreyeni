@@ -12,15 +12,15 @@ import {
 } from '../utils/truckFuel';
 import { clamp } from '../utils/math';
 import {
+  calculateActualSpeedKmh,
+  calculateVehicleSpeed,
+} from '../utils/vehiclePerformance';
+import {
   getTruckEffectiveCapacityTons,
   getAttachedTrailerForTruck,
   hasEnoughCargoCapacity,
 } from './capacity';
-import {
-  calculateAverageSpeed,
-  isDriverIdle,
-  resolveTruckCityId,
-} from './delivery';
+import { isDriverIdle, resolveTruckCityId } from './delivery';
 import {
   calculateTransferDurationHours,
   findActiveTransferForTruck,
@@ -373,7 +373,13 @@ export function validateWarehouseStockTransfer(
 
   const durationHours = calculateTransferDurationHours(
     route.distanceKm,
-    calculateAverageSpeed(truck, driver, route),
+    calculateVehicleSpeed({
+      truck,
+      driver,
+      route,
+      cargoWeightTons: quantity,
+      trailer,
+    }).effectiveSpeedKmh,
   );
   const fuelLiters = calculateStockTransferFuelLiters({
     quantityTons: quantity,
@@ -399,18 +405,6 @@ export function validateWarehouseStockTransfer(
     fuelPrice,
     fuelLiters,
   });
-
-  if (
-    !params.skipAffordabilityCheck &&
-    params.playerMoney != null &&
-    params.playerMoney < costs.totalCost
-  ) {
-    return tradeFail(
-      'insufficient-funds',
-      getWarehouseStockTransferReasonMessage('insufficient-funds'),
-      'INSUFFICIENT_FUNDS',
-    );
-  }
 
   return {
     ...tradeOk('Transfer hazır.'),
@@ -464,6 +458,7 @@ export function createWarehouseStockTransfer(params: {
     lastFuelProcessedProgress: 0,
     lastFuelProcessedAt: currentTime,
     distanceTraveledKm: 0,
+    currentSpeedKmh: 0,
     fuelWarningsEmitted: [],
     fuelCost: validated.costs.fuelCost,
     driverCost: validated.costs.driverCost,
@@ -491,6 +486,7 @@ export function updateWarehouseStockTransferProgress(
     ...transfer,
     status: 'active',
     progress: clamp(updated.progress, 0, 1),
+    currentSpeedKmh: updated.currentSpeedKmh,
   };
 }
 
@@ -517,6 +513,7 @@ export function updateWarehouseStockTransferProgressWithFuel(
         ...transfer,
         estimatedCompletionAt: transfer.estimatedCompletionAt + hoursPassed,
         lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
+        currentSpeedKmh: 0,
       },
       truck: {
         ...normalizeTruckFuel(truck),
@@ -561,6 +558,11 @@ export function updateWarehouseStockTransferProgressWithFuel(
       lastFuelProcessedProgress: result.lastFuelProcessedProgress,
       lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
       distanceTraveledKm: result.distanceTraveledKm,
+      currentSpeedKmh: calculateActualSpeedKmh({
+        distanceDeltaKm: result.mileageDeltaKm,
+        elapsedHoursDelta: hoursPassed,
+        paused: result.actualProgressDelta <= 0,
+      }),
       estimatedCompletionAt: result.outOfFuel
         ? transfer.estimatedCompletionAt +
           hoursPassed *

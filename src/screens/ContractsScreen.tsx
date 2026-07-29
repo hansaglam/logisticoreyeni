@@ -1111,30 +1111,6 @@ export default function ContractsScreen() {
   const handleQuickStartDelivery = (truckId: string, driverId: string) => {
     if (!quickSheetContract) return;
 
-    const truck = (player.trucks ?? []).find((item) => item.id === truckId);
-    const driver = (player.drivers ?? []).find((item) => item.id === driverId);
-    const preview = buildContractPreview({
-      contract: quickSheetContract,
-      globalEconomy,
-      trucks: player.trucks,
-      trailers: player.trailers,
-      drivers: player.drivers,
-      companyLevel: playerLevel,
-      currentTime,
-      truck,
-      driver,
-      route: findRoute(quickSheetContract.originCityId, quickSheetContract.destinationCityId),
-      product: getProductByIdSafe(quickSheetContract.productId) ?? undefined,
-      activeWorldEvents,
-      playerReputation,
-      homeCityId: player?.homeCityId,
-    });
-
-    if (player.money < preview.estimatedFuelCost) {
-      showAlert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
-      return;
-    }
-
     const result = startDelivery(quickSheetContract.id, truckId, driverId);
     if (!result.success) {
       showAlert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
@@ -1155,30 +1131,6 @@ export default function ContractsScreen() {
 
   const handleConfirmAssignment = (truckId: string, driverId: string) => {
     if (!assignmentContract) return;
-
-    const truck = (player.trucks ?? []).find((item) => item.id === truckId);
-    const driver = (player.drivers ?? []).find((item) => item.id === driverId);
-    const preview = buildContractPreview({
-      contract: assignmentContract,
-      globalEconomy,
-      trucks: player.trucks,
-      trailers: player.trailers,
-      drivers: player.drivers,
-      companyLevel: playerLevel,
-      currentTime,
-      truck,
-      driver,
-      route: findRoute(assignmentContract.originCityId, assignmentContract.destinationCityId),
-      product: getProductByIdSafe(assignmentContract.productId) ?? undefined,
-      activeWorldEvents,
-      playerReputation,
-      homeCityId: player?.homeCityId,
-    });
-
-    if (player.money < preview.estimatedFuelCost) {
-      showAlert('Nakit yetersiz', 'Bu teslimat için yeterli nakit bulunmuyor.');
-      return;
-    }
 
     const result = startDelivery(assignmentContract.id, truckId, driverId);
     if (!result.success) {

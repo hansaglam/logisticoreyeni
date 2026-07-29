@@ -35,10 +35,11 @@ import {
   createDelivery,
   failDelivery,
   getContractAvailability,
+  isDeliveryFuelProgressComplete,
   isDeliveryProgressComplete,
   safeCompleteDelivery,
   selectIdleTruckForContract,
-  updateDeliveryProgress,
+  updateDeliveryProgressWithFuel,
 } from '../../src/simulation/delivery';
 import type { SimulationGameState } from '../../src/types/game';
 import {
@@ -89,6 +90,7 @@ import type {
   StoreGameState,
 } from '../../src/types/game';
 import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../../src/utils/cashPolicy';
+import { normalizeTruckFuel } from '../../src/utils/truckFuel';
 import { calculateCompanyScore } from '../../src/simulation/companyScore';
 import { addFinanceLedgerEntries, createEmptyFinanceTotals } from '../../src/utils/financeLedger';
 import { getProductByIdSafe } from '../../src/utils/entityLookup';
@@ -513,9 +515,41 @@ export function startDeliveryHeadless(state: HeadlessSimState, contractId: strin
   const route = getRouteBetweenCities(state.routes, contract.originCityId, contract.destinationCityId);
   if (!route) return state;
 
+  const normalizedTruck = normalizeTruckFuel(truck);
+  const quoteDelivery = createDelivery({
+    contract,
+    truck: normalizedTruck,
+    driver,
+    route,
+    product,
+    globalEconomy: state.globalEconomy,
+    currentTime: state.currentTime,
+    sequence: state.deliverySequence + 1,
+    trailers: state.player.trailers ?? [],
+  });
+  const requiredFuelL = quoteDelivery.fuelLitersTotal ?? 0;
+  const tankCapacityL = normalizedTruck.fuelTankCapacityL ?? 0;
+  if (requiredFuelL > tankCapacityL + 1e-6) return state;
+  const litersToBuy = Math.max(
+    0,
+    requiredFuelL - (normalizedTruck.currentFuelL ?? 0),
+  );
+  const refuelCost = Number(
+    (litersToBuy * (state.globalEconomy.fuelPrice ?? 1.72)).toFixed(2),
+  );
+  if (
+    refuelCost > 0 &&
+    !canAffordVoluntaryPurchase(state.player.money, refuelCost)
+  ) {
+    return state;
+  }
+  const refueledTruck = {
+    ...normalizedTruck,
+    currentFuelL: (normalizedTruck.currentFuelL ?? 0) + litersToBuy,
+  };
   const delivery = createDelivery({
     contract,
-    truck,
+    truck: refueledTruck,
     driver,
     route,
     product,
@@ -525,16 +559,14 @@ export function startDeliveryHeadless(state: HeadlessSimState, contractId: strin
     trailers: state.player.trailers ?? [],
   });
 
-  if (!canAffordVoluntaryPurchase(state.player.money, delivery.fuelCost)) return state;
-
   let next: HeadlessSimState = {
     ...state,
     deliverySequence: state.deliverySequence + 1,
     player: {
       ...state.player,
-      money: state.player.money - delivery.fuelCost,
+      money: state.player.money - refuelCost,
       trucks: state.player.trucks.map((t) =>
-        t.id === truck.id ? { ...t, status: 'on_route' as const } : t,
+        t.id === truck.id ? { ...refueledTruck, status: 'on_route' as const } : t,
       ),
       drivers: state.player.drivers.map((d) =>
         d.id === driver.id ? { ...d, status: 'driving' as const, assignedTruckId: truck.id } : d,
@@ -545,13 +577,15 @@ export function startDeliveryHeadless(state: HeadlessSimState, contractId: strin
     ),
     activeDeliveries: [...state.activeDeliveries, delivery],
   };
-  next = patchLedger(next, {
-    time: next.currentTime,
-    type: 'expense',
-    category: 'fuel',
-    amount: delivery.fuelCost,
-    description: contractId,
-  });
+  if (refuelCost > 0) {
+    next = patchLedger(next, {
+      time: next.currentTime,
+      type: 'expense',
+      category: 'fuel',
+      amount: refuelCost,
+      description: contractId,
+    });
+  }
   return next;
 }
 
@@ -713,7 +747,7 @@ function updateDeliveriesHeadless(state: HeadlessSimState, hours: number): Headl
   let next = state;
   const toComplete: string[] = [];
   const toFail: string[] = [];
-
+  let updatedTrucks = next.player.trucks;
   const updated = next.activeDeliveries.map((delivery) => {
     if (delivery.status !== 'on_route' && delivery.status !== 'preparing') return delivery;
     const progressFraction = hours / Math.max(delivery.travelHours, 0.1);
@@ -725,12 +759,31 @@ function updateDeliveriesHeadless(state: HeadlessSimState, hours: number): Headl
       toFail.push(delivery.id);
       return delivery;
     }
-    const updatedDelivery = updateDeliveryProgress(delivery, hours);
-    if (isDeliveryProgressComplete(updatedDelivery.progress)) toComplete.push(updatedDelivery.id);
-    return updatedDelivery;
+    const truck = updatedTrucks.find((candidate) => candidate.id === delivery.truckId);
+    if (!truck) return delivery;
+    const tick = updateDeliveryProgressWithFuel(
+      delivery,
+      truck,
+      hours,
+      state.currentTime + hours,
+    );
+    updatedTrucks = updatedTrucks.map((candidate) =>
+      candidate.id === truck.id ? tick.truck : candidate,
+    );
+    if (
+      isDeliveryProgressComplete(tick.delivery.progress) &&
+      isDeliveryFuelProgressComplete(tick.delivery)
+    ) {
+      toComplete.push(tick.delivery.id);
+    }
+    return tick.delivery;
   });
 
-  next = { ...next, activeDeliveries: updated };
+  next = {
+    ...next,
+    player: { ...next.player, trucks: updatedTrucks },
+    activeDeliveries: updated,
+  };
   for (const id of toFail) next = failDeliveryHeadless(next, id, 'breakdown');
   for (const id of toComplete) {
     if (!toFail.includes(id)) next = completeDeliveryHeadless(next, id);
@@ -1036,6 +1089,14 @@ export interface SimRunMetrics {
 }
 
 function sumLedger(state: HeadlessSimState, category: string, type: 'income' | 'expense' = 'expense'): number {
+  const lifetimeTotals =
+    type === 'income'
+      ? state.financeTotals.incomeByCategory
+      : state.financeTotals.expenseByCategory;
+  const lifetimeAmount = lifetimeTotals[category];
+  if (Number.isFinite(lifetimeAmount)) {
+    return lifetimeAmount;
+  }
   return state.financeLedger
     .filter((e) => e.category === category && e.type === type)
     .reduce((s, e) => s + e.amount, 0);
@@ -1111,7 +1172,7 @@ export function runHeadlessSim(profile: SimPlayerProfile, days: number): SimRunM
   const cap = wh?.capacityTons ?? 100;
   const usage = cap > 0 ? ((wh?.usedCapacityTon ?? 0) / cap) * 100 : 0;
 
-  const deliveryIncome = sumLedger(state, 'delivery_income', 'income');
+  const deliveryIncome = sumLedger(state, 'contract_income', 'income');
   const fuel = sumLedger(state, 'fuel', 'expense');
   const maint = sumLedger(state, 'maintenance', 'expense');
   const completed = state.player.completedContracts ?? 0;

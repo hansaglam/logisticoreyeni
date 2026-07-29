@@ -95,6 +95,8 @@ export interface ApplyContractTypeParams {
   playerLevel: number;
   playerReputation: number;
   sequence?: number;
+  /** Bulk tipinin oyuncunun üretim kapasitesini aşmasını engeller. */
+  maxCargoTons?: number;
 }
 
 /** Base sözleşmeye tip özelliklerini uygular — payment/deadline/amount ayarlar */
@@ -175,9 +177,18 @@ export function applyContractTypeToContract(params: ApplyContractTypeParams): Co
       bonusMultiplier = randomMultiplier(1.1, 1.2, seed + 19);
       penaltyMultiplier = 1.1;
       const bulkFactor = randomBetween(1.15, 1.35);
-      amount = Math.round(amount * bulkFactor * 10) / 10;
+      const baseAmount = amount;
+      amount =
+        Math.round(
+          Math.min(
+            amount * bulkFactor,
+            params.maxCargoTons ?? Number.POSITIVE_INFINITY,
+          ) *
+            10,
+        ) / 10;
       cargoWeight = amount;
-      payment = Math.round(payment * bonusMultiplier * bulkFactor);
+      const appliedBulkFactor = baseAmount > 0 ? amount / baseAmount : 1;
+      payment = Math.round(payment * bonusMultiplier * appliedBulkFactor);
       deadlineHours = clamp(deadlineHours * 1.12, deadlineHours, 72);
       riskLevel = 'medium';
       specialRules.push('Yüksek tonaj — daha fazla yakıt ve bakım maliyeti.');

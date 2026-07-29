@@ -113,11 +113,16 @@ function getLedgerIcon(
 ): GameIconName {
   switch (category) {
     case 'trade_purchase':
+    case 'market_purchase':
     case 'trade_sale':
+    case 'market_sale':
       return 'market';
+    case 'contract_revenue':
     case 'contract_income':
     case 'delivery_income':
       return 'contract';
+    case 'fuel_purchase':
+    case 'roadside_fuel':
     case 'fuel':
     case 'delivery_expense':
       return 'fuel';
@@ -125,12 +130,15 @@ function getLedgerIcon(
       return 'repair';
     case 'penalty':
       return 'expense';
+    case 'vehicle_purchase':
+    case 'vehicle_sale':
     case 'truck_purchase':
     case 'fleet_purchase':
     case 'truck_lease':
     case 'truck_rental':
     case 'truck_transfer':
       return 'truck';
+    case 'warehouse_cost':
     case 'warehouse_open':
     case 'warehouse_operating':
     case 'warehouse_rent':

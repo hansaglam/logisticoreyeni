@@ -14,6 +14,7 @@ import type {
 import { sanitizeFuelPricePerLiter } from './economy';
 import { estimateContractTripCostBreakdown } from './contractEconomics';
 import { calculateRoadsideFuelQuote } from './roadsideFuel';
+import { applyCashTransaction, type CashTransactionResult } from '../utils/cashPolicy';
 
 export type ContractAcceptanceBlockReason =
   | 'insufficient-cash'
@@ -29,6 +30,7 @@ export type ContractAcceptanceBlockReason =
   | 'negative-profit-warning';
 
 export const EMERGENCY_CONTRACT_PREFIX = 'emergency_op_';
+export const CASH_RECOVERY_TRANSACTION_ID = 'recovery-assistance:v1';
 
 export function isSoftLockedCash(money: number): boolean {
   const threshold =
@@ -36,6 +38,50 @@ export function isSoftLockedCash(money: number): boolean {
     operatingCostBalance.softLockCashThreshold ??
     0;
   return Number.isFinite(money) && money < threshold;
+}
+
+export function evaluateSoftLockCashRecovery(params: {
+  money: number;
+  trucks: Truck[];
+  alreadyGrantedAtMs?: number | null;
+}): {
+  allowed: boolean;
+  reason?: 'not-at-floor' | 'already-used' | 'no-eligible-truck';
+  transaction?: CashTransactionResult;
+} {
+  if (params.alreadyGrantedAtMs != null) {
+    return { allowed: false, reason: 'already-used' };
+  }
+  if (
+    !Number.isFinite(params.money) ||
+    params.money > financeBalance.minCashBalance
+  ) {
+    return { allowed: false, reason: 'not-at-floor' };
+  }
+  const eligibleTruck = (params.trucks ?? []).find(
+    (truck) =>
+      truck.status === 'idle' &&
+      !truck.leaseExpired &&
+      (truck.currentFuelL ?? 0) <= 1e-6,
+  );
+  if (!eligibleTruck) {
+    return { allowed: false, reason: 'no-eligible-truck' };
+  }
+  const targetCash = Math.max(
+    0,
+    financeBalance.softLockRecoveryCashTarget,
+  );
+  const amount = targetCash - params.money;
+  const transaction = applyCashTransaction({
+    currentCash: params.money,
+    amount,
+    kind: 'income',
+    referenceId: CASH_RECOVERY_TRANSACTION_ID,
+    transactionId: CASH_RECOVERY_TRANSACTION_ID,
+  });
+  return transaction.ok
+    ? { allowed: true, transaction }
+    : { allowed: false, reason: 'already-used' };
 }
 
 export function isEmergencyContract(contract: Pick<Contract, 'id' | 'contractType'>): boolean {

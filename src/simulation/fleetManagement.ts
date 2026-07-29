@@ -3,7 +3,15 @@
  */
 
 import { fleetManagementBalance, operatingCostBalance } from '../config/balance';
-import type { Delivery, DeliveryStatus, Driver, Player, Truck, TruckTransfer } from '../types/game';
+import type {
+  Delivery,
+  DeliveryStatus,
+  Driver,
+  Player,
+  Trailer,
+  Truck,
+  TruckTransfer,
+} from '../types/game';
 
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route', 'paused'];
 
@@ -38,12 +46,8 @@ function resolveTruckPurchasePrice(truck: Truck): number {
 }
 
 function getConditionMultiplier(condition: number): number {
-  if (condition >= 90) return 1;
-  if (condition >= 75) return 0.9;
-  if (condition >= 60) return 0.75;
-  if (condition >= 40) return 0.55;
-  if (condition >= 20) return 0.35;
-  return 0.2;
+  const normalized = clamp(condition, 0, 100) / 100;
+  return 0.35 + normalized * 0.65;
 }
 
 function countOwnedTrucks(trucks: Truck[] | undefined): number {
@@ -74,25 +78,208 @@ function isDriverOnActiveDelivery(driverId: string, deliveries: Delivery[] | und
   );
 }
 
-export function calculateTruckResaleValue(truck: Truck): number {
-  if ((truck.ownershipType ?? 'owned') === 'leased') {
+export interface TruckResaleValueInput {
+  basePrice: number;
+  condition: number;
+  mileageKm?: number;
+  /** Simulation saati veya 0-1 arası doğrudan kullanım oranı. */
+  ageOrUsage?: number;
+  upgradeValue?: number;
+  rarity?: number;
+  marketModifier?: number;
+  isLeased?: boolean;
+}
+
+export interface TruckValueScore {
+  capacityValue: number;
+  speedValue: number;
+  fuelEfficiencyValue: number;
+  durabilityValue: number;
+  specialCapabilityValue: number;
+  valueScore: number;
+  pricePerValuePoint: number;
+}
+
+function resolveTruckResaleInput(input: Truck | TruckResaleValueInput): TruckResaleValueInput {
+  if ('basePrice' in input) {
+    return input;
+  }
+  return {
+    basePrice: resolveTruckPurchasePrice(input),
+    condition: input.condition,
+    mileageKm: input.totalMileageKm,
+    upgradeValue: calculateTruckUpgradeInvestmentValue(input),
+    isLeased: (input.ownershipType ?? 'owned') === 'leased',
+  };
+}
+
+export function calculateTruckUpgradeInvestmentValue(truck: Truck): number {
+  const levels = truck.upgrades ?? {
+    engine: 0,
+    fuelEfficiency: 0,
+    cargo: 0,
+    durability: 0,
+  };
+  const multipliers = {
+    engine: 0.08,
+    fuelEfficiency: 0.07,
+    cargo: 0.09,
+    durability: 0.06,
+  } as const;
+  let total = 0;
+  for (const key of Object.keys(multipliers) as (keyof typeof multipliers)[]) {
+    const level = clamp(Number(levels[key]) || 0, 0, 3);
+    for (let tier = 0; tier < level; tier += 1) {
+      total += truck.purchasePrice * multipliers[key] * (1 + tier * 0.75);
+    }
+  }
+  return Math.round(total);
+}
+
+export function calculateTruckResaleValue(input: Truck | TruckResaleValueInput): number {
+  const resale = resolveTruckResaleInput(input);
+  if (resale.isLeased) {
     return 0;
   }
 
-  const purchasePrice = resolveTruckPurchasePrice(truck);
+  const rawPurchasePrice = Number(resale.basePrice);
+  const purchasePrice = Number.isFinite(rawPurchasePrice)
+    ? Math.max(0, rawPurchasePrice)
+    : 0;
   if (purchasePrice <= 0) {
     return 0;
   }
 
-  const condition = clamp(truck.condition ?? 100, 0, 100);
+  const condition = clamp(Number(resale.condition) || 0, 0, 100);
   const conditionMultiplier = getConditionMultiplier(condition);
-  const { truckBaseResaleRate, minTruckResaleRate, maxTruckResaleRate } = fleetManagementBalance;
-
-  const rawPrice = purchasePrice * truckBaseResaleRate * conditionMultiplier;
+  const {
+    truckBaseResaleRate,
+    minTruckResaleRate,
+    maxTruckResaleRate,
+    mileageDepreciationReferenceKm,
+    maxMileageDepreciationRate,
+    maxAgeDepreciationRate,
+    upgradeRecoveryRate,
+    minMarketResaleModifier,
+    maxMarketResaleModifier,
+  } = fleetManagementBalance;
+  const mileageRatio = clamp(
+    (Math.max(0, Number(resale.mileageKm) || 0) / mileageDepreciationReferenceKm) *
+      maxMileageDepreciationRate,
+    0,
+    maxMileageDepreciationRate,
+  );
+  const rawUsage = Math.max(0, Number(resale.ageOrUsage) || 0);
+  const normalizedUsage = rawUsage <= 1 ? rawUsage : rawUsage / (24 * 365 * 5);
+  const ageDepreciation = clamp(
+    normalizedUsage * maxAgeDepreciationRate,
+    0,
+    maxAgeDepreciationRate,
+  );
+  const marketMultiplier = clamp(
+    (Number(resale.rarity) || 1) * (Number(resale.marketModifier) || 1),
+    minMarketResaleModifier,
+    maxMarketResaleModifier,
+  );
+  const recoveredUpgradeValue =
+    Math.max(0, Number(resale.upgradeValue) || 0) * upgradeRecoveryRate;
+  const rawPrice =
+    purchasePrice *
+      truckBaseResaleRate *
+      conditionMultiplier *
+      (1 - mileageRatio) *
+      (1 - ageDepreciation) *
+      marketMultiplier +
+    recoveredUpgradeValue;
   const minPrice = purchasePrice * minTruckResaleRate;
-  const maxPrice = purchasePrice * maxTruckResaleRate;
+  const maxPrice = Math.min(
+    purchasePrice * 0.95,
+    purchasePrice * maxTruckResaleRate + recoveredUpgradeValue,
+  );
 
   return Math.round(clamp(rawPrice, minPrice, maxPrice));
+}
+
+export function calculateTrailerResaleValue(
+  trailer: Pick<Trailer, 'purchasePrice' | 'condition' | 'createdAtGameTime' | 'isOwned'>,
+  params: { currentGameTime?: number; marketModifier?: number } = {},
+): number {
+  if (!trailer.isOwned) return 0;
+  const rawBasePrice = Number(trailer.purchasePrice);
+  const basePrice = Number.isFinite(rawBasePrice) ? Math.max(0, rawBasePrice) : 0;
+  if (basePrice <= 0) return 0;
+  const ageHours = Math.max(
+    0,
+    (Number(params.currentGameTime) || trailer.createdAtGameTime) -
+      trailer.createdAtGameTime,
+  );
+  const ageDepreciation = clamp(ageHours / (24 * 365 * 5), 0, 1) * 0.12;
+  const market = clamp(
+    Number(params.marketModifier) || 1,
+    fleetManagementBalance.minMarketResaleModifier,
+    fleetManagementBalance.maxMarketResaleModifier,
+  );
+  const raw =
+    basePrice *
+    fleetManagementBalance.trailerBaseResaleRate *
+    getConditionMultiplier(trailer.condition) *
+    (1 - ageDepreciation) *
+    market;
+  return Math.round(
+    clamp(
+      raw,
+      basePrice * fleetManagementBalance.minTrailerResaleRate,
+      basePrice * fleetManagementBalance.maxTrailerResaleRate,
+    ),
+  );
+}
+
+export function calculateTruckValueScore(
+  truck: Pick<
+    Truck,
+    | 'capacity'
+    | 'speed'
+    | 'fuelConsumptionPerKm'
+    | 'reliability'
+    | 'purchasePrice'
+    | 'catalogId'
+    | 'id'
+  >,
+): TruckValueScore {
+  const capacityValue = Math.max(0, truck.capacity) * 2.2;
+  const speedValue = Math.max(0, truck.speed) * 0.8;
+  const fuelEfficiencyValue = clamp(
+    (0.5 - Math.max(0, truck.fuelConsumptionPerKm)) * 140,
+    0,
+    42,
+  );
+  const durabilityValue = clamp(truck.reliability, 0, 100) * 0.55;
+  const catalogId = truck.catalogId ?? truck.id;
+  const specialCapabilityValue =
+    catalogId.includes('refrigerated') || catalogId.includes('cold')
+      ? 40
+      : catalogId.includes('heavy')
+        ? 22
+        : 0;
+  const valueScore =
+    Math.round(
+      (capacityValue +
+        speedValue +
+        fuelEfficiencyValue +
+        durabilityValue +
+        specialCapabilityValue) *
+        10,
+    ) / 10;
+  return {
+    capacityValue,
+    speedValue,
+    fuelEfficiencyValue,
+    durabilityValue,
+    specialCapabilityValue,
+    valueScore,
+    pricePerValuePoint:
+      valueScore > 0 ? Math.round(truck.purchasePrice / valueScore) : 0,
+  };
 }
 
 export function canSellTruck(truckId: string, state: FleetManagementState): TruckSellCheck {

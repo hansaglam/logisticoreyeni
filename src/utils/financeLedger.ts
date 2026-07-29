@@ -12,24 +12,34 @@ import type {
 export const FINANCE_LEDGER_MAX_COUNT = 200;
 
 const CATEGORY_ALIASES: Record<string, FinanceLedgerCategory> = {
+  contract_revenue: 'contract_revenue',
   contract: 'contract_income',
   delivery_income: 'contract_income',
   contract_income: 'contract_income',
+  market_sale: 'market_sale',
   trade_sale: 'trade_sale',
   bonus: 'bonus',
+  reward: 'reward',
+  recovery_assistance: 'recovery_assistance',
   other_income: 'other_income',
+  fuel_purchase: 'fuel_purchase',
+  roadside_fuel: 'roadside_fuel',
   fuel: 'fuel',
   delivery_expense: 'fuel',
   maintenance: 'maintenance',
   penalty: 'penalty',
+  market_purchase: 'market_purchase',
   trade_purchase: 'trade_purchase',
   driver_salary: 'driver_salary',
+  warehouse_cost: 'warehouse_cost',
   warehouse_rent: 'warehouse_operating',
   warehouse_operating: 'warehouse_operating',
   truck_rental: 'truck_lease',
   truck_lease: 'truck_lease',
   daily_operating_cost: 'daily_operating_cost',
   operations: 'daily_operating_cost',
+  vehicle_purchase: 'vehicle_purchase',
+  vehicle_sale: 'vehicle_sale',
   fleet_purchase: 'truck_purchase',
   truck_purchase: 'truck_purchase',
   truck_sale: 'truck_sale',
@@ -199,6 +209,17 @@ export function addFinanceLedgerEntries(
 
   let nextTotals = ensureFinanceTotals(ledger, totals);
   const normalizedEntries: FinanceLedgerEntry[] = [];
+  const appliedTransactionIds = new Set(
+    (ledger ?? [])
+      .map((entry) => entry.transactionId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  );
+  const appliedReferenceIds = new Set(
+    (ledger ?? [])
+      .map((entry) => entry.referenceId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  );
+  const appliedLedgerIds = new Set((ledger ?? []).map((entry) => entry.id));
 
   for (const entry of entries) {
     const normalized = normalizeFinanceLedgerEntry(entry);
@@ -206,14 +227,40 @@ export function addFinanceLedgerEntries(
       ...normalized,
       id: entry.id ?? createLedgerId(),
     };
+    if (
+      appliedLedgerIds.has(record.id) ||
+      (record.transactionId != null &&
+        appliedTransactionIds.has(record.transactionId)) ||
+      (record.referenceId != null &&
+        appliedReferenceIds.has(record.referenceId))
+    ) {
+      continue;
+    }
     normalizedEntries.push(record);
+    appliedLedgerIds.add(record.id);
+    if (record.transactionId) appliedTransactionIds.add(record.transactionId);
+    if (record.referenceId) appliedReferenceIds.add(record.referenceId);
     nextTotals = applyFinanceLedgerEntryToTotals(nextTotals, record);
+  }
+
+  if (normalizedEntries.length === 0) {
+    return {
+      financeLedger: ledger ?? [],
+      financeTotals: nextTotals,
+    };
   }
 
   return {
     financeLedger: prependFinanceLedgerEntries(ledger, normalizedEntries, maxCount),
     financeTotals: nextTotals,
   };
+}
+
+export function hasFinanceLedgerTransaction(
+  ledger: FinanceLedgerEntry[] | undefined,
+  transactionId: string,
+): boolean {
+  return (ledger ?? []).some((entry) => entry.transactionId === transactionId);
 }
 
 export function hasDeliveryCompletionLedgerEntry(
@@ -225,7 +272,7 @@ export function hasDeliveryCompletionLedgerEntry(
       return false;
     }
     const category = normalizeFinanceLedgerCategory(entry.category, entry.type);
-    return category === 'contract_income';
+    return category === 'contract_income' || category === 'contract_revenue';
   });
 }
 

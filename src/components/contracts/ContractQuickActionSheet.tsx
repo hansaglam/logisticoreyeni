@@ -177,7 +177,7 @@ export default function ContractQuickActionSheet({
   trucks,
   drivers,
   playerLevel = 1,
-  playerMoney = 0,
+  playerMoney: _playerMoney = 0,
   onClose,
   onStartDelivery,
   onOpenAdvancedAssignment,
@@ -275,10 +275,7 @@ export default function ContractQuickActionSheet({
     !!contract &&
     isTruckAtContractOrigin(selectedTruckOption!.truck, contract);
 
-  const hasFuelFunds =
-    assignmentPreview != null ? playerMoney >= assignmentPreview.estimatedFuelCost : true;
-
-  const canStart = canStartBase && hasFuelFunds;
+  const canStart = canStartBase;
 
   const startDisabledReason = (() => {
     if (isExpired) return 'Bu sözleşmenin süresi doldu.';
@@ -293,7 +290,6 @@ export default function ContractQuickActionSheet({
     if (!selectedTruckOption.selectable) return selectedTruckOption.label;
     if (!selectedDriverOption) return 'Şoför seç';
     if (!selectedDriverOption.selectable) return selectedDriverOption.label;
-    if (!hasFuelFunds) return 'Nakit yetersiz';
     return 'Müsait ekip yok';
   })();
 

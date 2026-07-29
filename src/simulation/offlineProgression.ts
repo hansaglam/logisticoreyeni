@@ -4,7 +4,7 @@
  */
 
 import { operatingCostBalance, realMsToGameHours } from '../config/balance';
-import { MS_PER_HOUR, MS_PER_MINUTE } from './economyClock';
+import { getEconomyNow, HOUR_MS, MINUTE_MS } from './economyClock';
 import {
   isDeliveryProgressComplete,
   updateDeliveryProgress,
@@ -21,10 +21,12 @@ import type {
 export { realMsToGameHours };
 
 export const OFFLINE_PROGRESS_VERSION = 1;
-/** Offline catch-up tavanı — saat (24 saat = 24 * 60 * 60 * 1000 ms). Saniye/dakika değil. */
+/** Offline catch-up için tüketilebilecek gerçek zaman penceresi. */
 export const MAX_OFFLINE_PROGRESS_HOURS = operatingCostBalance.maxOfflineProgressHours;
+export const MAX_OFFLINE_PROGRESS_MS = MAX_OFFLINE_PROGRESS_HOURS * HOUR_MS;
 /** Genel (teslimatsız) minimum — aktif teslimat varken düşürülür. */
 export const MIN_OFFLINE_PROGRESS_MINUTES = 5;
+export const MIN_OFFLINE_PROGRESS_MS = MIN_OFFLINE_PROGRESS_MINUTES * MINUTE_MS;
 
 export interface OfflineElapsedResult {
   elapsedMs: number;
@@ -32,6 +34,25 @@ export interface OfflineElapsedResult {
   capped: boolean;
   shouldApply: boolean;
   reason?: 'missing_last_seen' | 'non_positive' | 'below_minimum' | 'ready';
+}
+
+export interface OfflineSimulationResult {
+  rawSimulationHours: number;
+  appliedSimulationHours: number;
+  capped: boolean;
+}
+
+export interface TimeProgressionAudit {
+  trustedNow: number;
+  savedAt: number | null;
+  lastProcessedAt: number | null;
+  elapsedMs: number;
+  elapsedHours: number;
+  cappedProgressHours: number;
+  costPeriods: number;
+  deliveryTicksApplied: number;
+  transferTicksApplied: number;
+  processedUntil: number;
 }
 
 export interface OfflineProgressSummary {
@@ -74,14 +95,18 @@ export interface OfflineLedgerDeltaSummary {
 }
 
 const OFFLINE_SUMMARY_INCOME_CATEGORIES = new Set([
+  'contract_revenue',
   'contract_income',
   'delivery_income',
   'trade_sale',
+  'market_sale',
   'bonus',
   'other_income',
 ]);
 
 const OFFLINE_SUMMARY_EXPENSE_CATEGORIES = new Set([
+  'fuel_purchase',
+  'roadside_fuel',
   'fuel',
   'maintenance',
   'penalty',
@@ -165,9 +190,8 @@ export function calculateOfflineElapsed(
     };
   }
 
-  const maxMs = MAX_OFFLINE_PROGRESS_HOURS * MS_PER_HOUR;
-  const capped = rawElapsed > maxMs;
-  const appliedMs = capped ? maxMs : rawElapsed;
+  const capped = rawElapsed > MAX_OFFLINE_PROGRESS_MS;
+  const appliedMs = capped ? MAX_OFFLINE_PROGRESS_MS : rawElapsed;
 
   return {
     elapsedMs: rawElapsed,
@@ -178,8 +202,61 @@ export function calculateOfflineElapsed(
   };
 }
 
+/**
+ * Gerçek offline süre önce mevcut oyun hızına dönüştürülür, ardından ayrı
+ * simulation cap uygulanır. Böylece 24 gerçek saat yüzlerce oyun günü üretmez.
+ */
+export function calculateOfflineSimulationHours(
+  appliedRealMs: number,
+  gameSpeed: number,
+): OfflineSimulationResult {
+  const rawSimulationHours = Number.isFinite(appliedRealMs)
+    ? Math.max(0, realMsToGameHours(appliedRealMs, gameSpeed))
+    : 0;
+  const appliedSimulationHours = Math.min(
+    rawSimulationHours,
+    MAX_OFFLINE_PROGRESS_HOURS,
+  );
+  return {
+    rawSimulationHours,
+    appliedSimulationHours,
+    capped: rawSimulationHours > appliedSimulationHours,
+  };
+}
+
+export function buildTimeProgressionAudit(
+  params: TimeProgressionAudit,
+): TimeProgressionAudit {
+  const finiteOrZero = (value: number): number =>
+    Number.isFinite(value) ? value : 0;
+  return {
+    trustedNow: finiteOrZero(params.trustedNow),
+    savedAt:
+      params.savedAt != null && Number.isFinite(params.savedAt)
+        ? params.savedAt
+        : null,
+    lastProcessedAt:
+      params.lastProcessedAt != null && Number.isFinite(params.lastProcessedAt)
+        ? params.lastProcessedAt
+        : null,
+    elapsedMs: finiteOrZero(params.elapsedMs),
+    elapsedHours: finiteOrZero(params.elapsedHours),
+    cappedProgressHours: finiteOrZero(params.cappedProgressHours),
+    costPeriods: Math.max(0, Math.floor(finiteOrZero(params.costPeriods))),
+    deliveryTicksApplied: Math.max(
+      0,
+      Math.floor(finiteOrZero(params.deliveryTicksApplied)),
+    ),
+    transferTicksApplied: Math.max(
+      0,
+      Math.floor(finiteOrZero(params.transferTicksApplied)),
+    ),
+    processedUntil: finiteOrZero(params.processedUntil),
+  };
+}
+
 export function formatOfflineElapsedDuration(elapsedMs: number): string {
-  const totalMinutes = Math.max(0, Math.floor(elapsedMs / MS_PER_MINUTE));
+  const totalMinutes = Math.max(0, Math.floor(elapsedMs / MINUTE_MS));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   if (hours <= 0) {
@@ -239,7 +316,9 @@ export function summarizeOfflineLedgerDelta(
       earnings += amount;
       if (
         entry.relatedDeliveryId &&
-        (entry.category === 'contract_income' || entry.category === 'delivery_income')
+        (entry.category === 'contract_income' ||
+          entry.category === 'contract_revenue' ||
+          entry.category === 'delivery_income')
       ) {
         deliveryIncomeCount += 1;
       } else if (OFFLINE_SUMMARY_INCOME_CATEGORIES.has(entry.category)) {
@@ -452,7 +531,7 @@ export function shouldSkipDuplicateOfflineApply(
 
 export function normalizeOfflineProgressFields(
   state: Partial<StoreGameState>,
-  nowMs = Date.now(),
+  nowMs = getEconomyNow(),
 ): Pick<StoreGameState, 'lastSeenRealTimeMs' | 'lastOfflineProgressAppliedAt' | 'offlineProgressVersion'> {
   return {
     lastSeenRealTimeMs:

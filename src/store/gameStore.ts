@@ -182,7 +182,9 @@ import {
 } from '../simulation/deliveryOfflineProgress';
 import {
   buildOfflineProgressSummary,
+  buildTimeProgressionAudit,
   calculateOfflineElapsed,
+  calculateOfflineSimulationHours,
   createOfflineProgressSnapshot,
   OFFLINE_PROGRESS_VERSION,
   realMsToGameHours,
@@ -254,7 +256,10 @@ import {
   getWarehouseUpgradePreview,
   resolveWarehouseDailyOperatingCost,
 } from '../utils/warehouseCalculations';
-import { applyMandatoryCashDeduction, canAffordVoluntaryPurchase } from '../utils/cashPolicy';
+import {
+  applyCashTransaction,
+  canAffordVoluntaryPurchase,
+} from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
 import {
   finalizeTruckFuelAfterJob,
@@ -333,6 +338,7 @@ import {
 } from '../simulation/worldEvents';
 import {
   ensureEmergencyContractsForSoftLock,
+  evaluateSoftLockCashRecovery,
   evaluateRoadsideFuelAssistance,
 } from '../simulation/softLockRecovery';
 import { evaluateFuelWarning } from '../simulation/fuelWarnings';
@@ -343,13 +349,16 @@ import {
   type RoadsideFuelResult,
 } from '../simulation/roadsideFuel';
 import {
+  DAY_MS,
   getEconomyClock,
   getEconomyNow,
   getMarketEpoch,
+  HOUR_MS,
+  MINUTE_MS,
 } from '../simulation/economyClock';
 import {
   buildPeriodicCostDeductions,
-  logOfflineEconomyAudit,
+  logTimeProgressionAudit,
 } from '../simulation/periodicCosts';
 import {
   buildGlobalEconomySnapshot,
@@ -383,7 +392,6 @@ import {
 import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
-  computeElapsedOperatingDays,
   getSkippedOperatingDaysDueToCap,
   processExpiredTruckLeases,
   resolveOperatingCostElapsedDays,
@@ -766,7 +774,7 @@ function createEmptyContractGenerationDebug(currentTime = 0): ContractGeneration
   };
 }
 
-let lastContractMarketRefreshAt = Date.now();
+let lastContractMarketRefreshAt = getEconomyNow();
 let leaseTruckInFlight = false;
 
 function buildContractRefreshParams(state: StoreGameState) {
@@ -1053,10 +1061,12 @@ function buildDeliveryCompletionLedgerEntries(
     entries.push({
       time: currentTime,
       type: 'income',
-      category: 'contract_income',
+      category: 'contract_revenue',
       amount: settlement.grossRevenue,
       description: `Sözleşme ödemesi · ${routeLabel}`,
       relatedDeliveryId: deliveryId,
+      transactionId: `delivery:${deliveryId}:revenue`,
+      referenceId: `delivery:${deliveryId}:revenue`,
     });
   }
 
@@ -1068,6 +1078,8 @@ function buildDeliveryCompletionLedgerEntries(
       amount: settlement.maintenanceCost,
       description: `Bakım gideri · ${routeLabel}`,
       relatedDeliveryId: deliveryId,
+      transactionId: `delivery:${deliveryId}:maintenance`,
+      referenceId: `delivery:${deliveryId}:maintenance`,
     });
   }
 
@@ -1079,6 +1091,8 @@ function buildDeliveryCompletionLedgerEntries(
       amount: settlement.penaltyCost,
       description: `Gecikme cezası · ${routeLabel}`,
       relatedDeliveryId: deliveryId,
+      transactionId: `delivery:${deliveryId}:penalty`,
+      referenceId: `delivery:${deliveryId}:penalty`,
     });
   }
 
@@ -1124,6 +1138,8 @@ export interface ProcessDailyOperatingCostsOptions {
   reason?: DailyOperatingCostReason;
   currentTime?: number;
   lastDailyOperatingCostTime?: number;
+  transactionId?: string;
+  referenceId?: string;
 }
 
 function buildDailyOperatingCostDebugSnapshot(
@@ -1226,6 +1242,7 @@ function hasUsableGlobalMarketSnapshot(
 
 /** GDD Bölüm 6'ya göre başlangıç oyun durumu */
 export function createInitialGameState(): StoreGameState {
+  const initialEconomyNowMs = getEconomyNow();
   const developmentFallbackEnabled =
     typeof __DEV__ !== 'undefined' && __DEV__;
   const initialSnapshot = developmentFallbackEnabled
@@ -1392,8 +1409,10 @@ export function createInitialGameState(): StoreGameState {
     worldEventsVersion: 1,
     lastWorldEventGeneratedDay: 0,
     monetization: createDefaultMonetizationState(),
-    lastSeenRealTimeMs: Date.now(),
-    lastSimulatedRealTimeMs: Date.now(),
+    lastSeenRealTimeMs: initialEconomyNowMs,
+    lastSimulatedRealTimeMs: initialEconomyNowMs,
+    lastProcessedEconomyAt: initialEconomyNowMs,
+    appliedEconomyPeriodKeys: [],
     offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
   };
 }
@@ -2507,16 +2526,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const xpReward = mission.reward.xp ?? 0;
     const diamondReward = mission.reward.diamonds ?? 0;
     const reputationReward = mission.reward.reputation ?? 0;
+    const rewardTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: moneyReward,
+      kind: 'income',
+      referenceId: `mission:${missionId}:reward`,
+      transactionId: `mission-reward:${missionId}`,
+    });
 
     const ledgerPatch =
-      moneyReward > 0
+      rewardTransaction.amount > 0
         ? patchFinanceLedger(state, {
             time: state.currentTime,
             type: 'income',
-            category: 'mission_reward',
-            amount: moneyReward,
+            category: 'reward',
+            amount: rewardTransaction.amount,
             title: 'Görev Ödülü',
             description: mission.title,
+            transactionId: rewardTransaction.transactionId,
+            referenceId: rewardTransaction.referenceId,
           })
         : null;
 
@@ -2535,7 +2563,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       player: {
         ...state.player,
-        money: (state.player.money ?? 0) + moneyReward,
+        money: rewardTransaction.cashAfter,
         diamonds: (state.player.diamonds ?? 0) + diamondReward,
         reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
       },
@@ -2631,23 +2659,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const xpReward = milestone.reward.xp ?? 0;
     const diamondReward = milestone.reward.diamonds ?? 0;
     const reputationReward = milestone.reward.reputation ?? 0;
+    const rewardTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: moneyReward,
+      kind: 'income',
+      referenceId: `milestone:${milestoneId}:reward`,
+      transactionId: `milestone-reward:${milestoneId}`,
+    });
 
     const ledgerPatch =
-      moneyReward > 0
+      rewardTransaction.amount > 0
         ? patchFinanceLedger(state, {
             time: state.currentTime,
             type: 'income',
-            category: 'mission_reward',
-            amount: moneyReward,
+            category: 'reward',
+            amount: rewardTransaction.amount,
             title: 'Başarı Ödülü',
             description: milestone.title,
+            transactionId: rewardTransaction.transactionId,
+            referenceId: rewardTransaction.referenceId,
           })
         : null;
 
     set({
       player: {
         ...state.player,
-        money: (state.player.money ?? 0) + moneyReward,
+        money: rewardTransaction.cashAfter,
         diamonds: (state.player.diamonds ?? 0) + diamondReward,
         reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
       },
@@ -2705,23 +2742,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const xpReward = objective.reward.xp ?? 0;
     const diamondReward = objective.reward.diamonds ?? 0;
     const reputationReward = objective.reward.reputation ?? 0;
+    const rewardTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: moneyReward,
+      kind: 'income',
+      referenceId: `weekly:${seasonKey}:${objectiveId}:reward`,
+      transactionId: `weekly-reward:${seasonKey}:${objectiveId}`,
+    });
 
     const ledgerPatch =
-      moneyReward > 0
+      rewardTransaction.amount > 0
         ? patchFinanceLedger(state, {
             time: state.currentTime,
             type: 'income',
-            category: 'mission_reward',
-            amount: moneyReward,
+            category: 'reward',
+            amount: rewardTransaction.amount,
             title: 'Haftalık Görev Ödülü',
             description: objective.title,
+            transactionId: rewardTransaction.transactionId,
+            referenceId: rewardTransaction.referenceId,
           })
         : null;
 
     set({
       player: {
         ...state.player,
-        money: (state.player.money ?? 0) + moneyReward,
+        money: rewardTransaction.cashAfter,
         diamonds: (state.player.diamonds ?? 0) + diamondReward,
         reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
       },
@@ -3072,6 +3118,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       // Soft-lock recovery — bozuk save / -$5000 sonrası alınabilir acil işler
       const loaded = get();
+      const recoveryNowMs = getEconomyNow();
       const softLock = ensureEmergencyContractsForSoftLock({
         money: loaded.player.money ?? 0,
         contracts: loaded.contracts ?? [],
@@ -3082,12 +3129,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
         currentTime: loaded.currentTime,
         homeCityId: loaded.player.homeCityId,
         lastEmergencyContractAtMs: loaded.lastEmergencyContractAtMs,
-        nowMs: getEconomyNow(),
+        nowMs: recoveryNowMs,
       });
-      if (softLock.added.length > 0) {
+      const cashRecovery = evaluateSoftLockCashRecovery({
+        money: loaded.player.money ?? 0,
+        trucks: loaded.player.trucks ?? [],
+        alreadyGrantedAtMs: loaded.cashRecoveryAssistanceGrantedAtMs,
+      });
+      const recoveryLedgerPatch =
+        cashRecovery.allowed && cashRecovery.transaction
+          ? patchFinanceLedger(loaded, {
+              time: loaded.currentTime,
+              type: 'income',
+              category: 'recovery_assistance',
+              amount: cashRecovery.transaction.amount,
+              title: 'Operasyon kurtarma desteği',
+              description:
+                'Kredi tabanındaki şirketin yeniden iş alabilmesi için tek seferlik destek.',
+              transactionId: cashRecovery.transaction.transactionId,
+              referenceId: cashRecovery.transaction.referenceId,
+            })
+          : null;
+      if (softLock.added.length > 0 || cashRecovery.allowed) {
         set({
           contracts: softLock.contracts,
-          lastEmergencyContractAtMs: getEconomyNow(),
+          ...(cashRecovery.transaction
+            ? {
+                player: {
+                  ...loaded.player,
+                  money: cashRecovery.transaction.cashAfter,
+                },
+                ...recoveryLedgerPatch,
+                cashRecoveryAssistanceGrantedAtMs: recoveryNowMs,
+              }
+            : {}),
+          lastEmergencyContractAtMs: recoveryNowMs,
           globalEconomy: normalizeGlobalEconomy(loaded.globalEconomy),
         });
         get().markSaveDirty();
@@ -3375,19 +3451,40 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const beforeSnapshot = createOfflineProgressSnapshot(state);
-    const elapsedGameHours = realMsToGameHours(elapsed.appliedMs, simulationGameSpeed);
+    const simulation = calculateOfflineSimulationHours(
+      elapsed.appliedMs,
+      simulationGameSpeed,
+    );
     const deliveryCatchUpHours = computeRequiredDeliveryCatchUpGameHours({
       deliveries: state.activeDeliveries,
       nowMs,
       gameSpeed: simulationGameSpeed,
       baselineMs,
     });
-    const gameHours = Math.max(elapsedGameHours, deliveryCatchUpHours);
+    const gameHours = Math.max(
+      simulation.appliedSimulationHours,
+      deliveryCatchUpHours,
+    );
+    const deliveryTicksApplied =
+      gameHours > 0
+        ? state.activeDeliveries.filter(
+            (job) => job.status === 'on_route' || job.status === 'preparing',
+          ).length
+        : 0;
+    const transferTicksApplied =
+      gameHours > 0
+        ? [
+            ...(state.activeTransfers ?? []),
+            ...(state.activeWarehouseStockTransfers ?? []),
+          ].filter(
+            (job) => job.status === 'active' || job.status === 'pending',
+          ).length
+        : 0;
 
     if (__DEV__) {
       const scale = buildTimeScaleDebugSnapshot(simulationGameSpeed);
       console.log(
-        `[time-debug-offline] elapsedRealMs=${elapsed.appliedMs} appliedMs=${elapsed.appliedMs} gameSpeed=${scale.gameSpeed} msPerGameHour=${scale.msPerGameHour} gameHours=${gameHours.toFixed(2)} deliveryCatchUpHours=${deliveryCatchUpHours.toFixed(2)} gameHoursPerRealMinute=${scale.gameHoursPerRealMinute.toFixed(2)}`,
+        `[time-debug-offline] elapsedRealMs=${elapsed.elapsedMs} appliedRealMs=${elapsed.appliedMs} gameSpeed=${scale.gameSpeed} rawGameHours=${simulation.rawSimulationHours.toFixed(2)} cappedGameHours=${gameHours.toFixed(2)} deliveryCatchUpHours=${deliveryCatchUpHours.toFixed(2)} gameHoursPerRealMinute=${scale.gameHoursPerRealMinute.toFixed(2)}`,
       );
     }
 
@@ -3426,31 +3523,56 @@ export const useGameStore = create<GameStore>((set, get) => ({
       offlineProgressApplying = false;
     }
 
-    const midState = get();
+    const progressedState = get();
     // Offline sabit işletme gideri tamamen kapalı — period deduction üretme.
     const periodic = buildPeriodicCostDeductions({
-      player: midState.player,
+      player: progressedState.player,
       economyNowMs: nowMs,
-      lastProcessedEconomyAt: midState.lastProcessedEconomyAt ?? baselineMs,
-      alreadyAppliedPeriodKeys: midState.appliedEconomyPeriodKeys ?? [],
+      lastProcessedEconomyAt:
+        progressedState.lastProcessedEconomyAt ?? baselineMs,
+      alreadyAppliedPeriodKeys:
+        progressedState.appliedEconomyPeriodKeys ?? [],
       maxOfflineCostPeriods: 0,
     });
+
+    if (periodic.periodsCharged > 0) {
+      offlineProgressionActive = true;
+      try {
+        get().processDailyOperatingCosts({
+          days: periodic.periodsCharged,
+          elapsedDays: periodic.periodsElapsed,
+          reason: 'offline_catchup',
+          currentTime: progressedState.currentTime,
+          lastDailyOperatingCostTime: progressedState.currentTime,
+          transactionId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
+          referenceId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
+        });
+      } finally {
+        offlineProgressionActive = false;
+      }
+    }
+
+    const midState = get();
     const mergedPeriodKeys = [
       ...(midState.appliedEconomyPeriodKeys ?? []),
       ...periodic.periodKeysApplied,
     ].slice(-48);
 
-    logOfflineEconomyAudit({
-      trustedNow: nowMs,
-      lastProcessedAt: midState.lastProcessedEconomyAt ?? baselineMs,
-      elapsedHours: elapsed.elapsedMs / 3_600_000,
-      cappedHours: elapsed.appliedMs / 3_600_000,
-      periods: periodic.periodsElapsed,
-      deductions: periodic.deductions,
-      cashBefore,
-      cashAfter: midState.player.money ?? 0,
-      newlyProcessedUntil: periodic.newlyProcessedUntil,
-    });
+    logTimeProgressionAudit(
+      buildTimeProgressionAudit({
+        trustedNow: nowMs,
+        savedAt: state.lastSeenRealTimeMs ?? baselineMs,
+        lastProcessedAt:
+          progressedState.lastProcessedEconomyAt ?? baselineMs,
+        elapsedMs: elapsed.elapsedMs,
+        elapsedHours: elapsed.elapsedMs / HOUR_MS,
+        cappedProgressHours: gameHours,
+        costPeriods: periodic.periodsCharged,
+        deliveryTicksApplied,
+        transferTicksApplied,
+        processedUntil: periodic.newlyProcessedUntil,
+      }),
+    );
 
     const softLock = ensureEmergencyContractsForSoftLock({
       money: midState.player.money ?? 0,
@@ -3464,6 +3586,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lastEmergencyContractAtMs: midState.lastEmergencyContractAtMs,
       nowMs,
     });
+    const cashRecovery = evaluateSoftLockCashRecovery({
+      money: midState.player.money ?? 0,
+      trucks: midState.player.trucks ?? [],
+      alreadyGrantedAtMs: midState.cashRecoveryAssistanceGrantedAtMs,
+    });
+    const recoveryLedgerPatch =
+      cashRecovery.allowed && cashRecovery.transaction
+        ? patchFinanceLedger(midState, {
+            time: midState.currentTime,
+            type: 'income',
+            category: 'recovery_assistance',
+            amount: cashRecovery.transaction.amount,
+            title: 'Operasyon kurtarma desteği',
+            description:
+              'Kredi tabanındaki şirketin yeniden iş alabilmesi için tek seferlik destek.',
+            transactionId: cashRecovery.transaction.transactionId,
+            referenceId: cashRecovery.transaction.referenceId,
+          })
+        : null;
 
     // Offline catch-up must not invent a new world snapshot/history. Keep the
     // last backend-verified cache until the next successful connection.
@@ -3471,6 +3612,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     set({
       contracts: softLock.contracts,
+      ...(cashRecovery.transaction
+        ? {
+            player: {
+              ...midState.player,
+              money: cashRecovery.transaction.cashAfter,
+            },
+            ...recoveryLedgerPatch,
+            cashRecoveryAssistanceGrantedAtMs: nowMs,
+          }
+        : {}),
       lastProcessedEconomyAt: Math.max(
         midState.lastProcessedEconomyAt ?? 0,
         periodic.newlyProcessedUntil,
@@ -3500,7 +3651,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     offlineProgressCollector = null;
 
     if (__DEV__ && gameHours > 0) {
-      const elapsedMin = Math.round(elapsed.appliedMs / 60_000);
+      const elapsedMin = Math.round(elapsed.appliedMs / MINUTE_MS);
       console.log(
         `[offline] elapsedReal=${elapsedMin}m gameHours=${gameHours.toFixed(1)} speed=${simulationGameSpeed} completed=${collector.completedDeliveries}`,
       );
@@ -3593,45 +3744,44 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
     }
 
-    const stateBeforeDailyCosts = get();
-    const lastDailyOperatingCostTime =
-      stateBeforeDailyCosts.lastDailyOperatingCostTime ??
-      stateBeforeDailyCosts.currentTime ??
-      0;
-    const elapsedDays = computeElapsedOperatingDays(
-      lastDailyOperatingCostTime,
-      newTime,
-      DAILY_COST_INTERVAL_HOURS,
-    );
+    // Maaş/depo/operasyon giderleri hızlandırılmış oyun gününden değil,
+    // trusted gerçek zaman cursor'ından işlenir. Offline catch-up kendi
+    // bounded period uygulamasını advanceTime sonrasında yapar (ve kapalıdır).
+    if (!offlineProgressionActive) {
+      const costState = get();
+      const economyNowMs = getEconomyNow();
+      const periodic = buildPeriodicCostDeductions({
+        player: costState.player,
+        economyNowMs,
+        lastProcessedEconomyAt: costState.lastProcessedEconomyAt,
+        alreadyAppliedPeriodKeys: costState.appliedEconomyPeriodKeys ?? [],
+        maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+      });
 
-    if (elapsedDays > 0) {
-      const newLastDailyOperatingCostTime =
-        lastDailyOperatingCostTime + elapsedDays * DAILY_COST_INTERVAL_HOURS;
-
-      if (offlineProgressionActive) {
-        // Offline/cold-start: sabit işletme gideri kesilmez; gün işaretçisi senkron kalır
-        // ki online tick geriye dönük catch-up yapmasın.
+      if (periodic.periodsCharged > 0) {
         get().processDailyOperatingCosts({
-          days: 0,
-          elapsedDays,
-          reason: 'offline_skip',
+          days: periodic.periodsCharged,
+          elapsedDays: periodic.periodsElapsed,
+          reason:
+            periodic.periodsElapsed > 1 || periodic.capped
+              ? 'offline_catchup'
+              : 'daily_tick',
           currentTime: newTime,
-          lastDailyOperatingCostTime: newLastDailyOperatingCostTime,
-        });
-      } else {
-        // Uygulama açıkken: geçen oyun günleri için canonical günlük gider.
-        get().processDailyOperatingCosts({
-          days: elapsedDays,
-          elapsedDays,
-          reason: 'daily_tick',
-          currentTime: newTime,
-          lastDailyOperatingCostTime: newLastDailyOperatingCostTime,
+          lastDailyOperatingCostTime: newTime,
+          transactionId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
+          referenceId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
         });
       }
-    } else {
+
+      const afterCosts = get();
       set({
+        lastProcessedEconomyAt: periodic.newlyProcessedUntil,
+        appliedEconomyPeriodKeys: [
+          ...(afterCosts.appliedEconomyPeriodKeys ?? []),
+          ...periodic.periodKeysApplied,
+        ].slice(-48),
         dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
-          { ...stateBeforeDailyCosts, currentTime: newTime },
+          { ...afterCosts, currentTime: newTime },
           get().dailyOperatingCostDebug?.lastCharge ?? null,
         ),
       });
@@ -3784,13 +3934,60 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    const totalCost = breakdown.total * chargedDays;
-    const ledgerEntry = buildSummarizedDailyOperatingCostLedgerEntry(
+    const requestedTotalCost = breakdown.total * chargedDays;
+    const referenceId =
+      options?.referenceId ??
+      `daily-operating:${Math.floor(currentTime)}:${chargedDays}`;
+    const transactionId = options?.transactionId ?? `cash:${referenceId}`;
+    const cashTransaction = applyCashTransaction({
+      currentCash: state.player.money ?? 0,
+      amount: requestedTotalCost,
+      kind: 'mandatory-expense',
+      referenceId,
+      transactionId,
+      appliedTransactionIds: (state.financeLedger ?? [])
+        .map((entry) => entry.transactionId)
+        .filter((value): value is string => typeof value === 'string'),
+    });
+    if (!cashTransaction.ok && cashTransaction.reason === 'duplicate-transaction') {
+      return;
+    }
+    const totalCost = cashTransaction.amount;
+    if (offlineProgressionActive && offlineProgressCollector) {
+      offlineProgressCollector.expenses += totalCost;
+      offlineProgressCollector.dailyCostsApplied = totalCost > 0;
+    }
+    const requestedLedgerEntry = buildSummarizedDailyOperatingCostLedgerEntry(
       breakdown,
       currentTime,
       chargedDays,
       elapsedDays,
     );
+    const paidRatio =
+      requestedTotalCost > 0 ? totalCost / requestedTotalCost : 0;
+    const ledgerEntry =
+      requestedLedgerEntry && totalCost > 0
+        ? {
+            ...requestedLedgerEntry,
+            amount: totalCost,
+            transactionId: cashTransaction.transactionId,
+            referenceId: cashTransaction.referenceId,
+            ...(requestedLedgerEntry.breakdown
+              ? {
+                  breakdown: {
+                    driverSalary:
+                      requestedLedgerEntry.breakdown.driverSalary * paidRatio,
+                    warehouseOperating:
+                      requestedLedgerEntry.breakdown.warehouseOperating * paidRatio,
+                    generalOperations:
+                      requestedLedgerEntry.breakdown.generalOperations * paidRatio,
+                    chargedTruckLease:
+                      requestedLedgerEntry.breakdown.chargedTruckLease * paidRatio,
+                  },
+                }
+              : {}),
+          }
+        : null;
 
     let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | null = null;
     if (ledgerEntry) {
@@ -3809,7 +4006,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const patch: Partial<GameStore> = {
       player: {
         ...state.player,
-        money: applyMandatoryCashDeduction(state.player.money ?? 0, totalCost),
+        money: cashTransaction.cashAfter,
       },
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
@@ -3924,7 +4121,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (result.serverTimeMs != null) {
         getEconomyClock().syncFromServer?.(result.serverTimeMs);
       }
-      const epochsPerDay = Math.round(24 * 60 * 60 * 1000 / (snapshot.validUntil - snapshot.generatedAt));
+      const epochsPerDay = Math.round(
+        DAY_MS / (snapshot.validUntil - snapshot.generatedAt),
+      );
       const history = await repository.getHistory({
         fromEpoch: Math.max(0, snapshot.epoch - epochsPerDay * 30),
         toEpoch: snapshot.epoch,
@@ -4014,7 +4213,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       } else {
         get().refreshMarketSnapshot();
       }
-      lastContractMarketRefreshAt = Date.now();
+      lastContractMarketRefreshAt = getEconomyNow();
       return;
     }
 
@@ -4025,7 +4224,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       hoursSinceManual < contractGenerationBalance.manualRefreshCooldownHours
     ) {
       get().refreshMarketSnapshot();
-      lastContractMarketRefreshAt = Date.now();
+      lastContractMarketRefreshAt = getEconomyNow();
       return;
     }
 
@@ -4040,7 +4239,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         (contract, index) => previousContracts[index]?.status !== contract.status,
       );
 
-    lastContractMarketRefreshAt = Date.now();
+    lastContractMarketRefreshAt = getEconomyNow();
 
     if (!contractsChanged) {
       get().refreshMarketSnapshot();
@@ -4113,7 +4312,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   getContractRefreshRemainingSeconds: () => {
-    const elapsed = Date.now() - lastContractMarketRefreshAt;
+    const elapsed = getEconomyNow() - lastContractMarketRefreshAt;
     const remaining = contractBalance.contractRefreshIntervalMs - elapsed;
     return Math.max(0, Math.ceil(remaining / 1000));
   },
@@ -4469,6 +4668,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         sequence: state.activeDeliveries.length + 1,
         trailers,
         startedRealAtMs: getEconomyNow(),
+        activeWorldEvents: getActiveWorldEvents(
+          state.worldEvents ?? [],
+          gameDayFromTime(state.currentTime),
+        ),
       });
     } catch (error) {
       const message =
@@ -4497,14 +4700,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (!canAffordVoluntaryPurchase(state.player.money, delivery.fuelCost)) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_FUNDS',
-        message: `Yetersiz bakiye. Yakıt maliyeti: $${delivery.fuelCost.toFixed(0)}, mevcut: $${state.player.money.toFixed(0)}`,
-      };
-    }
-
     const routeLabel = `${getCityName(contract.originCityId)} → ${getCityName(contract.destinationCityId)}`;
     const deliveryStartEventId = `event_delivery_start_${delivery.id}`;
 
@@ -4528,7 +4723,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
 
     const cashBeforeStart = state.player.money;
-    const cashAfterStart = cashBeforeStart - delivery.fuelCost;
+    // Yakıt litre satın alımında ödenmiştir; görev başlangıcı tekrar tahsilat yapmaz.
+    const cashAfterStart = cashBeforeStart;
 
     const updatedTrailers = syncTrailersWithTruckLocation(
       trailers,
@@ -4547,13 +4743,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       },
       contracts: updatedContracts,
       activeDeliveries: [...state.activeDeliveries, delivery],
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'fuel',
-        amount: delivery.fuelCost,
-        description: `Yakıt · ${routeLabel}`,
-      }),
       deliverySettlementDebug: {
         phase: 'start',
         cashBefore: cashBeforeStart,
@@ -5027,6 +5216,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       transfer = createTruckTransfer({
         truck,
         driver,
+        trailer: (state.player.trailers ?? []).find(
+          (candidate) => candidate.attachedTruckId === truck.id,
+        ),
         fromCityId,
         toCityId: params.toCityId,
         route,
@@ -5055,14 +5247,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (!canAffordVoluntaryPurchase(state.player.money, transfer.totalCost)) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_FUNDS',
-        message: 'Nakit yetersiz.',
-      };
-    }
-
     const fromCityName = getCityName(fromCityId);
     const toCityName = getCityName(params.toCityId);
     const routeLabel = `${fromCityName} → ${toCityName}`;
@@ -5075,22 +5259,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ? { ...candidate, status: 'driving' as const, assignedTruckId: truck.id }
         : candidate,
     );
-
     set({
       player: {
         ...state.player,
-        money: state.player.money - transfer.totalCost,
         trucks: updatedTrucks,
         drivers: updatedDrivers,
       },
       activeTransfers: [...(state.activeTransfers ?? []), transfer],
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'truck_transfer',
-        amount: transfer.totalCost,
-        description: `Boş kamyon transferi · ${routeLabel}`,
-      }),
       eventLog: prependGameEvent(
         state.eventLog,
         {
@@ -5364,6 +5539,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
       penaltyCost: adjustedPenaltyCost,
       fuelAlreadyPaid: true,
     });
+    const revenueTransaction = applyCashTransaction({
+      currentCash: beforeMoney,
+      amount: settlement.grossRevenue,
+      kind: 'income',
+      referenceId: `delivery:${deliveryId}:revenue`,
+      transactionId: `delivery:${deliveryId}:revenue`,
+    });
+    const requestedCompletionExpenses =
+      settlement.maintenanceCost + settlement.penaltyCost;
+    const expenseTransaction =
+      requestedCompletionExpenses > 0
+        ? applyCashTransaction({
+            currentCash: revenueTransaction.cashAfter,
+            amount: requestedCompletionExpenses,
+            kind: 'mandatory-expense',
+            referenceId: `delivery:${deliveryId}:completion-expenses`,
+            transactionId: `delivery:${deliveryId}:completion-expenses`,
+          })
+        : null;
+    const paidCompletionExpenses = expenseTransaction?.amount ?? 0;
+    const completionExpenseRatio =
+      requestedCompletionExpenses > 0
+        ? paidCompletionExpenses / requestedCompletionExpenses
+        : 0;
+    const paidMaintenanceCost =
+      settlement.maintenanceCost * completionExpenseRatio;
+    const paidPenaltyCost = settlement.penaltyCost * completionExpenseRatio;
+    const moneyAfterComplete =
+      expenseTransaction?.cashAfter ?? revenueTransaction.cashAfter;
+    const cashSettlement = {
+      ...settlement,
+      maintenanceCost: paidMaintenanceCost,
+      penaltyCost: paidPenaltyCost,
+      cashDeltaOnCompletion: moneyAfterComplete - beforeMoney,
+    };
 
     if (offlineProgressionActive && offlineProgressCollector) {
       offlineProgressCollector.completedDeliveries += 1;
@@ -5372,10 +5582,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       offlineProgressCollector.earnings += settlement.grossRevenue;
       offlineProgressCollector.expenses +=
-        settlement.fuelCost + settlement.maintenanceCost + settlement.penaltyCost;
+        settlement.fuelCost + paidMaintenanceCost + paidPenaltyCost;
     }
 
-    const moneyAfterComplete = beforeMoney + settlement.cashDeltaOnCompletion;
     const netProfit = settlement.netProfit;
     const routeLabel = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
     const distanceKm = contract.distanceKm ?? delivery.distanceKm ?? 0;
@@ -5452,7 +5661,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       item.id === deliveryId ? { ...item, settledAt, settlementId } : item,
     );
     const completionLedgerEntries = buildDeliveryCompletionLedgerEntries(
-      settlement,
+      cashSettlement,
       routeLabel,
       state.currentTime,
       deliveryId,
@@ -5469,10 +5678,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         cashAfter: moneyAfterComplete,
         fuelCost: settlement.fuelCost,
         contractPayment: settlement.grossRevenue,
-        maintenanceCost: settlement.maintenanceCost,
-        penaltyCost: settlement.penaltyCost,
+        maintenanceCost: paidMaintenanceCost,
+        penaltyCost: paidPenaltyCost,
         reportedNetProfit: netProfit,
-        cashDeltaOnCompletion: settlement.cashDeltaOnCompletion,
+        cashDeltaOnCompletion: moneyAfterComplete - beforeMoney,
       },
       player: {
         ...state.player,
@@ -5610,7 +5819,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const newSimState = failDeliverySim(simState, deliveryId, reason);
     const contract = simState.contracts.find((c) => c.id === delivery.contractId);
     const penaltyAmount = calculateFailurePenalty(contract);
-    const moneyAfterFail = applyMandatoryCashDeduction(state.player.money, penaltyAmount);
+    const penaltyTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: penaltyAmount,
+      kind: 'mandatory-expense',
+      referenceId: `delivery:${deliveryId}:failure-penalty`,
+      transactionId: `delivery:${deliveryId}:failure-penalty`,
+      appliedTransactionIds: (state.financeLedger ?? [])
+        .map((entry) => entry.transactionId)
+        .filter((value): value is string => typeof value === 'string'),
+    });
+    const paidPenaltyAmount = penaltyTransaction.amount;
+    const moneyAfterFail = penaltyTransaction.cashAfter;
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterFail);
     const settledAt = state.currentTime;
     const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
@@ -5625,8 +5845,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         time: state.currentTime,
         type: 'expense',
         category: 'penalty',
-        amount: penaltyAmount,
+        amount: paidPenaltyAmount,
         description: `Başarısız teslimat cezası · ${routeLabel}`,
+        transactionId: penaltyTransaction.transactionId,
+        referenceId: penaltyTransaction.referenceId,
       }),
       deliverySettlementDebug: {
         phase: 'fail',
@@ -5635,9 +5857,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         fuelCost: delivery.fuelCost ?? 0,
         contractPayment: contract?.payment ?? 0,
         maintenanceCost: 0,
-        penaltyCost: penaltyAmount,
-        reportedNetProfit: -(delivery.fuelCost ?? 0) - penaltyAmount,
-        cashDeltaOnCompletion: -penaltyAmount,
+        penaltyCost: paidPenaltyAmount,
+        reportedNetProfit: -(delivery.fuelCost ?? 0) - paidPenaltyAmount,
+        cashDeltaOnCompletion: -paidPenaltyAmount,
       },
       player: {
         ...state.player,
@@ -5658,7 +5880,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           time: state.currentTime,
           type: 'warning' as const,
           title: 'Teslimat başarısız',
-          message: `Teslimat iptal edildi (${reason}). Ceza: $${penaltyAmount.toFixed(0)}`,
+          message: `Teslimat iptal edildi (${reason}). Ceza: $${paidPenaltyAmount.toFixed(0)}`,
           importance: 'high' as const,
         },
         ...state.marketNews,
@@ -5723,19 +5945,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       homeCityId: state.player.homeCityId ?? 'izmir',
       status: 'idle',
     });
+    const purchaseTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: template.purchasePrice,
+      kind: 'voluntary-expense',
+      referenceId: `truck:${instanceId}:purchase`,
+      transactionId: `vehicle-purchase:${instanceId}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: state.player.money - template.purchasePrice,
+        money: purchaseTransaction.cashAfter,
         trucks: [...state.player.trucks, newTruck],
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
-        category: 'truck_purchase',
-        amount: template.purchasePrice,
+        category: 'vehicle_purchase',
+        amount: purchaseTransaction.amount,
         description: `${template.name} satın alındı`,
+        transactionId: purchaseTransaction.transactionId,
+        referenceId: purchaseTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -5781,19 +6012,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       city: state.player.homeCityId ?? 'izmir',
       createdAtGameTime: state.currentTime,
     });
+    const purchaseTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: template.purchasePrice,
+      kind: 'voluntary-expense',
+      referenceId: `trailer:${instanceId}:purchase`,
+      transactionId: `vehicle-purchase:${instanceId}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: state.player.money - template.purchasePrice,
+        money: purchaseTransaction.cashAfter,
         trailers: [...(state.player.trailers ?? []), newTrailer],
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
-        category: 'truck_purchase',
-        amount: template.purchasePrice,
+        category: 'vehicle_purchase',
+        amount: purchaseTransaction.amount,
         description: `${template.name} satın alındı`,
+        transactionId: purchaseTransaction.transactionId,
+        referenceId: purchaseTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -5921,19 +6161,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
         homeCityId: state.player.homeCityId ?? 'izmir',
         status: 'idle',
       });
+      const leaseTransaction = applyCashTransaction({
+        currentCash: state.player.money,
+        amount: weeklyLeaseCost,
+        kind: 'voluntary-expense',
+        referenceId: `truck:${instanceId}:lease`,
+        transactionId: `truck-lease:${instanceId}`,
+      });
 
       set({
         player: {
           ...state.player,
-          money: state.player.money - weeklyLeaseCost,
+          money: leaseTransaction.cashAfter,
           trucks: [...state.player.trucks, newTruck],
         },
         ...patchFinanceLedger(state, {
           time: state.currentTime,
           type: 'expense',
           category: 'truck_lease',
-          amount: weeklyLeaseCost,
+          amount: leaseTransaction.amount,
           description: `${template.name} · 7 günlük kira (peşin)`,
+          transactionId: leaseTransaction.transactionId,
+          referenceId: leaseTransaction.referenceId,
         }),
         eventLog: prependGameEvent(
           state.eventLog,
@@ -6012,19 +6261,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       assignedTruckId: null,
       status: 'idle',
     };
+    const hireTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: hireCost,
+      kind: 'voluntary-expense',
+      referenceId: `driver:${poolId}:hire`,
+      transactionId: `driver-hire:${poolId}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: state.player.money - hireCost,
+        money: hireTransaction.cashAfter,
         drivers: [...state.player.drivers, newDriver],
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
         category: 'driver_hire',
-        amount: hireCost,
+        amount: hireTransaction.amount,
         description: `${template.name} işe alım`,
+        transactionId: hireTransaction.transactionId,
+        referenceId: hireTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -6080,11 +6338,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       truckId,
       state.player.trucks ?? [],
     );
+    const saleTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: salePrice,
+      kind: 'income',
+      referenceId: `truck:${truckId}:sale`,
+      transactionId: `vehicle-sale:${truckId}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: (state.player.money ?? 0) + salePrice,
+        money: saleTransaction.cashAfter,
         trucks: updatedTrucks,
         drivers: updatedDrivers,
         trailers: updatedTrailers,
@@ -6092,10 +6357,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'income',
-        category: 'truck_sale',
-        amount: salePrice,
+        category: 'vehicle_sale',
+        amount: saleTransaction.amount,
         title: 'Kamyon satışı',
         description: `${truck.name} satıldı. Kondisyon: %${condition}`,
+        transactionId: saleTransaction.transactionId,
+        referenceId: saleTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -6164,20 +6431,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const updatedDrivers = (state.player.drivers ?? []).filter((item) => item.id !== driverId);
+    const severanceTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: severanceCost,
+      kind: 'voluntary-expense',
+      referenceId: `driver:${driverId}:severance`,
+      transactionId: `driver-severance:${driverId}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: (state.player.money ?? 0) - severanceCost,
+        money: severanceTransaction.cashAfter,
         drivers: updatedDrivers,
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
         category: 'driver_severance',
-        amount: severanceCost,
+        amount: severanceTransaction.amount,
         title: 'Şoför çıkış maliyeti',
         description: `${driver.name} işten çıkarıldı.`,
+        transactionId: severanceTransaction.transactionId,
+        referenceId: severanceTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -6252,6 +6528,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!canAffordVoluntaryPurchase(state.player.money, repairCost)) {
       throw new Error('Yetersiz bakiye.');
     }
+    const repairTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: repairCost,
+      kind: 'voluntary-expense',
+      referenceId: `truck:${truckId}:maintenance`,
+      transactionId: `maintenance:${truckId}:${condition}:${state.currentTime}`,
+    });
+    if (!repairTransaction.ok) {
+      throw new Error('Yetersiz bakiye.');
+    }
 
     const nextMonetization =
       discountToken && discountAmount > 0
@@ -6267,11 +6553,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       monetization: nextMonetization,
       player: {
         ...state.player,
-        money: state.player.money - repairCost,
+        money: repairTransaction.cashAfter,
         trucks: state.player.trucks.map((t) =>
           t.id === truckId ? { ...t, condition: 100 } : t,
         ),
       },
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'maintenance',
+        amount: repairTransaction.amount,
+        title: 'Kamyon bakımı',
+        description: repairMessage,
+        transactionId: repairTransaction.transactionId,
+        referenceId: repairTransaction.referenceId,
+      }),
       eventLog: prependGameEvent(
         state.eventLog,
         {
@@ -6339,23 +6635,45 @@ export const useGameStore = create<GameStore>((set, get) => ({
     for (const effect of grantResult.effects) {
       switch (effect.type) {
         case 'cash': {
+          const usageCount =
+            grantResult.monetization.adRewardUsage[slotId]?.count ?? 0;
+          const transactionId =
+            `ad-reward:${slotId}:${grantResult.monetization.dailyResetKey}:${usageCount}`;
+          const rewardTransaction = applyCashTransaction({
+            currentCash: nextPlayer.money,
+            amount: effect.amount,
+            kind: 'income',
+            referenceId: `ad-reward:${slotId}`,
+            transactionId,
+            appliedTransactionIds: (
+              nextLedgerPatch?.financeLedger ??
+              state.financeLedger ??
+              []
+            )
+              .map((entry) => entry.transactionId)
+              .filter((value): value is string => typeof value === 'string'),
+          });
           nextPlayer = {
             ...nextPlayer,
-            money: nextPlayer.money + effect.amount,
+            money: rewardTransaction.cashAfter,
           };
-          nextLedgerPatch = patchFinanceLedger(
-            {
-              financeLedger: nextLedgerPatch?.financeLedger ?? state.financeLedger,
-              financeTotals: nextLedgerPatch?.financeTotals ?? state.financeTotals,
-            },
-            {
-              time: state.currentTime,
-              type: 'income',
-              category: 'ad_reward_daily_ops',
-              amount: effect.amount,
-              description: 'Reklam ödülü · günlük operasyon bonusu',
-            },
-          );
+          if (rewardTransaction.amount > 0) {
+            nextLedgerPatch = patchFinanceLedger(
+              {
+                financeLedger: nextLedgerPatch?.financeLedger ?? state.financeLedger,
+                financeTotals: nextLedgerPatch?.financeTotals ?? state.financeTotals,
+              },
+              {
+                time: state.currentTime,
+                type: 'income',
+                category: 'reward',
+                amount: rewardTransaction.amount,
+                description: 'Reklam ödülü · günlük operasyon bonusu',
+                transactionId: rewardTransaction.transactionId,
+                referenceId: rewardTransaction.referenceId,
+              },
+            );
+          }
           break;
         }
         case 'contract_refresh_bypass':
@@ -6441,21 +6759,39 @@ export const useGameStore = create<GameStore>((set, get) => ({
     let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | undefined;
 
     if (cashDelta !== 0) {
+      const incidentTransactionId = `incident:${deliveryId}:${choiceId}:${state.currentTime}`;
+      const incidentTransaction = applyCashTransaction({
+        currentCash: nextPlayer.money,
+        amount: Math.abs(cashDelta),
+        kind: cashDelta >= 0 ? 'income' : 'mandatory-expense',
+        referenceId: `delivery:${deliveryId}:incident`,
+        transactionId: incidentTransactionId,
+        appliedTransactionIds: (state.financeLedger ?? [])
+          .map((entry) => entry.transactionId)
+          .filter((value): value is string => typeof value === 'string'),
+      });
       nextPlayer = {
         ...nextPlayer,
-        money: nextPlayer.money + cashDelta,
+        money: incidentTransaction.cashAfter,
       };
-      ledgerPatch = patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: cashDelta >= 0 ? 'income' : 'expense',
-        category:
-          result.effects.fuelCostDelta !== 0 && result.effects.cashDelta === 0
-            ? 'fuel'
-            : 'other_expense',
-        amount: Math.abs(cashDelta),
-        description: `Operasyon kararı · ${incidentTitle}`,
-        relatedDeliveryId: deliveryId,
-      });
+      if (incidentTransaction.amount > 0) {
+        ledgerPatch = patchFinanceLedger(state, {
+          time: state.currentTime,
+          type: cashDelta >= 0 ? 'income' : 'expense',
+          category:
+            cashDelta >= 0
+              ? 'other_income'
+              : result.effects.fuelCostDelta !== 0 &&
+                  result.effects.cashDelta === 0
+                ? 'fuel'
+                : 'other_expense',
+          amount: incidentTransaction.amount,
+          description: `Operasyon kararı · ${incidentTitle}`,
+          relatedDeliveryId: deliveryId,
+          transactionId: incidentTransaction.transactionId,
+          referenceId: incidentTransaction.referenceId,
+        });
+      }
     }
 
     if (result.effects.truckConditionDelta !== 0) {
@@ -6536,12 +6872,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       throw new Error('Yetersiz nakit.');
     }
     const upgraded = applyTruckUpgrade(truck, upgradeType);
+    const upgradeTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: cost,
+      kind: 'voluntary-expense',
+      referenceId: `truck:${truckId}:upgrade:${upgradeType}`,
+      transactionId: `truck-upgrade:${truckId}:${upgradeType}:${cost}`,
+    });
     set({
       player: {
         ...state.player,
-        money: state.player.money - cost,
+        money: upgradeTransaction.cashAfter,
         trucks: state.player.trucks.map((t) => (t.id === truckId ? upgraded : t)),
       },
+      ...patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'maintenance',
+        amount: upgradeTransaction.amount,
+        description: `${truck.name} · ${upgradeType} geliştirmesi`,
+        transactionId: upgradeTransaction.transactionId,
+        referenceId: upgradeTransaction.referenceId,
+      }),
       eventLog: prependGameEvent(
         state.eventLog,
         {
@@ -6635,19 +6987,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ).total,
       openCost,
     };
+    const openTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: openCost,
+      kind: 'voluntary-expense',
+      referenceId: `warehouse:${warehouse.id}:open`,
+      transactionId: `warehouse-open:${warehouse.id}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: state.player.money - openCost,
+        money: openTransaction.cashAfter,
         warehouses: [...state.player.warehouses, warehouse],
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
         category: 'warehouse_open',
-        amount: openCost,
+        amount: openTransaction.amount,
         description: `${city.name} · ${typeLabel}`,
+        transactionId: openTransaction.transactionId,
+        referenceId: openTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -6799,21 +7160,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
         };
       });
 
-      const moneyAfter = playerMoney - upgradeCost;
+      const upgradeTransaction = applyCashTransaction({
+        currentCash: playerMoney,
+        amount: upgradeCost,
+        kind: 'voluntary-expense',
+        referenceId: `warehouse:${warehouse.id}:upgrade:${nextTier}`,
+        transactionId: `warehouse-upgrade:${warehouse.id}:${nextTier}`,
+      });
 
       set({
         player: {
           ...state.player,
-          money: moneyAfter,
+          money: upgradeTransaction.cashAfter,
           warehouses: updatedWarehouses,
         },
         ...patchFinanceLedger(state, {
           time: state.currentTime,
           type: 'expense',
           category: 'warehouse_open',
-          amount: upgradeCost,
+          amount: upgradeTransaction.amount,
           title: 'Depo yükseltmesi',
           description: `${cityName} · Seviye ${previousLevel} → ${nextTier}`,
+          transactionId: upgradeTransaction.transactionId,
+          referenceId: upgradeTransaction.referenceId,
         }),
         eventLog: prependGameEvent(
           state.eventLog,
@@ -6971,21 +7340,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
         usedCapacityTon,
       });
     });
+    const inventoryBefore =
+      getWarehouseInventoryItem(normalizedWarehouse, productId)?.quantity ?? 0;
+    const purchaseTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: totalCost,
+      kind: 'voluntary-expense',
+      referenceId: `market:${warehouse.id}:${productId}:purchase`,
+      transactionId:
+        `market-purchase:${warehouse.id}:${productId}:${state.currentTime}:${inventoryBefore}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: state.player.money - totalCost,
+        money: purchaseTransaction.cashAfter,
         warehouses: updatedWarehouses,
       },
       cities: updateCityProductStock(state.cities, cityId, productId, -quantity),
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
-        category: 'trade_purchase',
-        amount: totalCost,
+        category: 'market_purchase',
+        amount: purchaseTransaction.amount,
         description: `${cityName} · ${quantity.toFixed(1)} ton ${productName} (işlem gideri dahil)`,
         meta: { productId },
+        transactionId: purchaseTransaction.transactionId,
+        referenceId: purchaseTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -7117,21 +7498,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
         usedCapacityTon,
       });
     });
+    const saleTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: revenue,
+      kind: 'income',
+      referenceId: `market:${warehouse.id}:${productId}:sale`,
+      transactionId:
+        `market-sale:${warehouse.id}:${productId}:${state.currentTime}:${availableQuantity}`,
+    });
 
     set({
       player: {
         ...state.player,
-        money: state.player.money + revenue,
+        money: saleTransaction.cashAfter,
         warehouses: updatedWarehouses,
       },
       cities: updateCityProductStock(state.cities, warehouse.cityId, productId, quantity),
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'income',
-        category: 'trade_sale',
-        amount: revenue,
+        category: 'market_sale',
+        amount: saleTransaction.amount,
         description: `${productName} · Net kâr: ${formatNotificationMoney(profit)} (işlem gideri dahil)`,
         meta: { productId, profit },
+        transactionId: saleTransaction.transactionId,
+        referenceId: saleTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -7339,11 +7730,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const productName = getProductDisplayName(productId);
     const routeLabel = `${getCityName(transfer.sourceCityId)} → ${getCityName(transfer.destinationCityId)}`;
-
     set({
       player: {
         ...state.player,
-        money: state.player.money - transfer.totalCost,
         warehouses: reservedWarehouses,
         trucks: updatedTrucks,
         drivers: updatedDrivers,
@@ -7353,13 +7742,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ...(state.activeWarehouseStockTransfers ?? []),
         transfer,
       ],
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'truck_transfer',
-        amount: transfer.totalCost,
-        description: `Stok transferi · ${productName} · ${routeLabel}`,
-      }),
       eventLog: prependGameEvent(
         state.eventLog,
         {
@@ -7663,6 +8045,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return validation.result;
     }
     const quote = validation.quote;
+    const transactionId =
+      idempotencyKey ??
+      `refuel:${truck.id}:${quote.currentFuelL}:${quote.newFuelL}:${quote.unitPrice}`;
+    const cashTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: quote.totalCost,
+      kind: 'voluntary-expense',
+      referenceId: `truck:${truck.id}:fuel`,
+      transactionId,
+      appliedTransactionIds: state.fuelTransactionKeys ?? [],
+    });
+    if (!cashTransaction.ok) {
+      return {
+        success: false,
+        reason: 'insufficient-funds',
+        message: 'Yakıt almak için yeterli nakdin yok.',
+      };
+    }
 
     const updatedTrucks = state.player.trucks.map((candidate) =>
       candidate.id === truck.id
@@ -7672,15 +8072,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       player: {
         ...state.player,
-        money: state.player.money - quote.totalCost,
+        money: cashTransaction.cashAfter,
         trucks: updatedTrucks,
       },
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
-        category: 'fuel',
-        amount: quote.totalCost,
+        category: 'fuel_purchase',
+        amount: cashTransaction.amount,
         description: `${truck.name} · ${quote.litersToAdd.toFixed(1)} L yakıt alımı`,
+        transactionId: cashTransaction.transactionId,
+        referenceId: cashTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -7693,9 +8095,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         },
         state.currentTime,
       ),
-      fuelTransactionKeys: idempotencyKey
-        ? [...(state.fuelTransactionKeys ?? []), idempotencyKey].slice(-32)
-        : state.fuelTransactionKeys ?? [],
+      fuelTransactionKeys: [
+        ...(state.fuelTransactionKeys ?? []),
+        cashTransaction.transactionId,
+      ].slice(-32),
     });
     get().markSaveDirty();
     get().autoSave('fuel_purchase');
@@ -7743,6 +8146,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return validation.result;
     }
     const quote = validation.quote;
+    const transactionId =
+      idempotencyKey ??
+      `roadside:${job.id}:${quote.litersToAdd}:${quote.totalCost}`;
+    const cashTransaction = applyCashTransaction({
+      currentCash: state.player.money,
+      amount: quote.totalCost,
+      kind: 'voluntary-expense',
+      referenceId: `job:${job.id}:roadside-fuel`,
+      transactionId,
+      appliedTransactionIds: state.fuelTransactionKeys ?? [],
+    });
+    if (!cashTransaction.ok) {
+      return {
+        success: false,
+        reason: 'insufficient-funds',
+        message: 'Yakıt almak için yeterli nakdin yok.',
+        source: 'roadside-emergency',
+      };
+    }
     const resumedTruckStatus = delivery ? 'on_route' as const : 'transferring' as const;
     const updatedTrucks = state.player.trucks.map((candidate) =>
       candidate.id === truck.id
@@ -7756,7 +8178,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       player: {
         ...state.player,
-        money: state.player.money - quote.totalCost,
+        money: cashTransaction.cashAfter,
         trucks: updatedTrucks,
       },
       activeDeliveries: state.activeDeliveries.map((candidate) =>
@@ -7780,11 +8202,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ...patchFinanceLedger(state, {
         time: state.currentTime,
         type: 'expense',
-        category: 'fuel',
-        amount: quote.totalCost,
+        category: 'roadside_fuel',
+        amount: cashTransaction.amount,
         title: 'Acil yol yakıtı',
         description: `${truck.name} · ${quote.litersToAdd.toFixed(1)} L · servis ${formatNotificationMoney(quote.serviceFee)}`,
         source: 'roadside-emergency',
+        transactionId: cashTransaction.transactionId,
+        referenceId: cashTransaction.referenceId,
       }),
       eventLog: prependGameEvent(
         state.eventLog,
@@ -7797,9 +8221,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         },
         state.currentTime,
       ),
-      fuelTransactionKeys: idempotencyKey
-        ? [...(state.fuelTransactionKeys ?? []), idempotencyKey].slice(-32)
-        : state.fuelTransactionKeys ?? [],
+      fuelTransactionKeys: [
+        ...(state.fuelTransactionKeys ?? []),
+        cashTransaction.transactionId,
+      ].slice(-32),
     });
     get().addNotification({
       time: state.currentTime,

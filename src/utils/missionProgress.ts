@@ -128,7 +128,9 @@ function getContractIncomeTotal(
   financeTotals: StoreGameState['financeTotals'],
   financeLedger: FinanceLedgerEntry[] | undefined,
 ): number {
-  const fromTotals = financeTotals?.incomeByCategory?.contract_income ?? 0;
+  const fromTotals =
+    (financeTotals?.incomeByCategory?.contract_income ?? 0) +
+    (financeTotals?.incomeByCategory?.contract_revenue ?? 0);
 
   if (fromTotals > 0) {
     return fromTotals;
@@ -138,7 +140,9 @@ function getContractIncomeTotal(
     .filter(
       (entry) =>
         entry.type === 'income' &&
-        (entry.category === 'contract_income' || entry.category === 'delivery_income'),
+        (entry.category === 'contract_income' ||
+          entry.category === 'contract_revenue' ||
+          entry.category === 'delivery_income'),
     )
     .reduce((sum, entry) => sum + (entry.amount ?? 0), 0);
 }
@@ -147,8 +151,12 @@ function getTotalTradeProfit(
   financeTotals: StoreGameState['financeTotals'],
   financeLedger: FinanceLedgerEntry[] | undefined,
 ): number {
-  const sales = financeTotals?.incomeByCategory?.trade_sale ?? 0;
-  const purchases = financeTotals?.expenseByCategory?.trade_purchase ?? 0;
+  const sales =
+    (financeTotals?.incomeByCategory?.trade_sale ?? 0) +
+    (financeTotals?.incomeByCategory?.market_sale ?? 0);
+  const purchases =
+    (financeTotals?.expenseByCategory?.trade_purchase ?? 0) +
+    (financeTotals?.expenseByCategory?.market_purchase ?? 0);
 
   if (sales > 0 || purchases > 0) {
     return Math.max(0, sales - purchases);
@@ -157,10 +165,16 @@ function getTotalTradeProfit(
   let ledgerSales = 0;
   let ledgerPurchases = 0;
   for (const entry of financeLedger ?? []) {
-    if (entry.category === 'trade_sale' && entry.type === 'income') {
+    if (
+      (entry.category === 'trade_sale' || entry.category === 'market_sale') &&
+      entry.type === 'income'
+    ) {
       ledgerSales += entry.amount ?? 0;
     }
-    if (entry.category === 'trade_purchase' && entry.type === 'expense') {
+    if (
+      (entry.category === 'trade_purchase' || entry.category === 'market_purchase') &&
+      entry.type === 'expense'
+    ) {
       ledgerPurchases += entry.amount ?? 0;
     }
   }
@@ -233,7 +247,9 @@ export function getMissionProgress(
     case 'first_trade':
       current =
         missions.flags.tradePurchased ||
-        countLedgerCategory(state.financeLedger, 'trade_purchase') > 0
+        countLedgerCategory(state.financeLedger, 'trade_purchase') +
+          countLedgerCategory(state.financeLedger, 'market_purchase') >
+        0
           ? 1
           : 0;
       break;

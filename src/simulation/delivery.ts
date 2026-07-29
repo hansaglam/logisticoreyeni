@@ -34,10 +34,18 @@ import {
   getContractCargoWeight,
 } from '../utils/deliveryMetrics';
 import { getSafeFuelPrice } from './economy';
-import { getCargoWeightCostMultiplier } from './contractEconomics';
+import {
+  calculateContractDurationHours,
+  calculateContractEconomics,
+  getCargoWeightCostMultiplier,
+} from './contractEconomics';
 import { meetsDriverLevelRequirement } from './driverProgress';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
 import { normalizeCityId } from '../data/networkPositions';
+import {
+  calculateActualSpeedKmh,
+  calculateVehicleSpeed,
+} from '../utils/vehiclePerformance';
 import { getCityName, getProductByIdSafe } from '../utils/entityLookup';
 import {
   buildContractAvailabilityCopy,
@@ -885,11 +893,7 @@ export function calculateConditionSpeedMultiplier(truck: Truck): number {
 
 /** Ortalama seyahat hızını hesaplar (km/saat) */
 export function calculateAverageSpeed(truck: Truck, driver: Driver, route: Route): number {
-  const routeMultiplier = calculateRouteSpeedMultiplier(route);
-  const driverMultiplier = calculateDriverSpeedMultiplier(driver);
-  const conditionMultiplier = calculateConditionSpeedMultiplier(truck);
-
-  return Math.max(15, truck.speed * routeMultiplier * driverMultiplier * conditionMultiplier);
+  return calculateVehicleSpeed({ truck, driver, route }).effectiveSpeedKmh;
 }
 
 /** Toplam seyahat süresini hesaplar (saat) */
@@ -900,8 +904,15 @@ export function calculateTravelHours(
   route: Route,
   _product: Product,
 ): number {
-  const averageSpeed = calculateAverageSpeed(truck, driver, route);
-  return contract.distanceKm / averageSpeed;
+  return calculateContractDurationHours({
+    distanceKm: contract.distanceKm,
+    cargoTons: getContractCargoWeight(contract, _product),
+    routeDifficulty: route.difficulty,
+    truckSpeedKmh: truck.speed,
+    truckCapacityTons: truck.capacity,
+    truckCondition: truck.condition,
+    driverSpeed: driver.speed,
+  }).durationHours;
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,6 +1264,7 @@ export interface CreateDeliveryParams {
   trailers?: Trailer[];
   /** Gerçek zaman damgası — offline progress anchor */
   startedRealAtMs?: number;
+  activeWorldEvents?: import('../types/game').WorldEvent[];
 }
 
 export interface DeliveryStartCapacitySnapshot {
@@ -1341,6 +1353,7 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     sequence = randomIntBetween(1, 999_999),
     trailers = [],
     startedRealAtMs,
+    activeWorldEvents = [],
   } = params;
 
   const capacitySnapshot = buildDeliveryStartCapacitySnapshot({
@@ -1362,23 +1375,27 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     );
   }
 
-  const travelHours = calculateTravelHours(contract, truck, driver, route, product);
-  const fuelCost = calculateFuelCost(contract, truck, driver, route, product, globalEconomy);
-  const fuelLitersTotal = calculateDeliveryFuelLiters({
+  const attachedTrailer = getAttachedTrailerForTruck(truck.id, trailers);
+  const economics = calculateContractEconomics({
     contract,
     truck,
+    trailer: attachedTrailer,
     driver,
     route,
-    product,
+    globalEconomySnapshot: { fuelPricePerLiter: getSafeFuelPrice(globalEconomy) },
+    activeEvents: activeWorldEvents,
   });
+  const travelHours = economics.estimatedDurationHours;
+  const fuelCost = economics.costs.fuel;
+  const fuelLitersTotal = economics.fuelLiters;
   const fuelLitersAtStart = normalizeTruckFuel(truck).currentFuelL ?? fuelLitersTotal;
-  const maintenanceCost = calculateMaintenanceCost(truck, route, contract, product);
+  const maintenanceCost = economics.costs.maintenance + economics.costs.trailer +
+    economics.costs.toll + economics.costs.other;
   const conditionLoss = calculateConditionLoss(contract, truck, driver, route, product);
   const breakdownChance = calculateBreakdownChance(contract, truck, driver, route, product);
   const accidentChance = calculateAccidentChance(contract, truck, driver, route, product);
 
-  const cashFlow = calculateExpectedContractCashFlow(contract, fuelCost, maintenanceCost, 0);
-  const estimatedProfit = cashFlow.estimatedNetProfit;
+  const estimatedProfit = economics.estimatedProfit;
   const estimatedArrivalTime = currentTime + travelHours;
   const deadlineTime = currentTime + contract.deadlineHours;
   const realNow =
@@ -1408,6 +1425,7 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     lastFuelProcessedProgress: 0,
     lastFuelProcessedAt: currentTime,
     distanceTraveledKm: 0,
+    currentSpeedKmh: 0,
     fuelWarningsEmitted: [],
     maintenanceCost,
     estimatedProfit,
@@ -1436,11 +1454,16 @@ export function updateDeliveryProgress(delivery: Delivery, hoursPassed: number):
   );
   const progressDelta = hoursPassed / safeTravelHours;
   const newProgress = clamp(delivery.progress + progressDelta, 0, 1);
+  const distanceDeltaKm = Math.max(0, (newProgress - delivery.progress) * delivery.distanceKm);
 
   return {
     ...delivery,
     progress: newProgress,
     expectedDurationGameHours: delivery.expectedDurationGameHours ?? delivery.travelHours,
+    currentSpeedKmh: calculateActualSpeedKmh({
+      distanceDeltaKm,
+      elapsedHoursDelta: hoursPassed,
+    }),
   };
 }
 
@@ -1467,6 +1490,7 @@ export function updateDeliveryProgressWithFuel(
         ...delivery,
         estimatedArrivalTime: delivery.estimatedArrivalTime + hoursPassed,
         lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
+        currentSpeedKmh: 0,
       },
       truck: {
         ...normalizeTruckFuel(truck),
@@ -1509,6 +1533,11 @@ export function updateDeliveryProgressWithFuel(
       lastFuelProcessedProgress: result.lastFuelProcessedProgress,
       lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
       distanceTraveledKm: result.distanceTraveledKm,
+      currentSpeedKmh: calculateActualSpeedKmh({
+        distanceDeltaKm: result.mileageDeltaKm,
+        elapsedHoursDelta: hoursPassed,
+        paused: result.actualProgressDelta <= 0,
+      }),
       estimatedArrivalTime: result.outOfFuel
         ? delivery.estimatedArrivalTime +
           hoursPassed *

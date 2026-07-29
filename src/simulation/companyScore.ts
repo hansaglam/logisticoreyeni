@@ -103,10 +103,16 @@ export function calculateWeeklyTradeProfit(
 
   for (const entry of financeLedger ?? []) {
     if (entry.time < windowStart) continue;
-    if (entry.category === 'trade_purchase' && entry.type === 'expense') {
+    if (
+      (entry.category === 'trade_purchase' || entry.category === 'market_purchase') &&
+      entry.type === 'expense'
+    ) {
       purchases += entry.amount ?? 0;
     }
-    if (entry.category === 'trade_sale' && entry.type === 'income') {
+    if (
+      (entry.category === 'trade_sale' || entry.category === 'market_sale') &&
+      entry.type === 'income'
+    ) {
       sales += entry.amount ?? 0;
     }
   }

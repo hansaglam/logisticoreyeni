@@ -18,6 +18,7 @@ import { PRODUCTS } from '../data/products';
 import { ROUTES } from '../data/routes';
 import { STARTER_TRUCK } from '../data/trucks';
 import { normalizeGlobalEconomy } from '../simulation/economy';
+import { getEconomyNow } from '../simulation/economyClock';
 import { materializeSnapshotCities } from '../simulation/globalMarketSnapshot';
 import { normalizeTruckCity } from '../simulation/delivery';
 import { normalizeDelivery } from '../simulation/deliveryIncidents';
@@ -29,6 +30,7 @@ import { calculateXpToNextLevel, normalizePlayerProgress } from '../simulation/l
 import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals, FINANCE_LEDGER_MAX_COUNT } from '../utils/financeLedger';
+import { normalizeCashBalance } from '../utils/cashPolicy';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
 import { normalizeRetentionState } from '../simulation/retentionProgress';
 import { gameDayFromTime, normalizeWorldEventsState } from '../simulation/worldEvents';
@@ -155,6 +157,7 @@ export interface SaveGamePayload {
   cachedGlobalEconomySnapshotTrusted?: boolean;
   appliedEconomyPeriodKeys?: string[];
   lastEmergencyContractAtMs?: number;
+  cashRecoveryAssistanceGrantedAtMs?: number;
   lastRoadsideFuelAssistanceAt?: number;
   fuelTransactionKeys?: string[];
 }
@@ -469,6 +472,7 @@ export function normalizeLoadedPlayer(player: Player): Player {
   const trucks = normalizePlayerTrucks(player.trucks, homeCityId);
   const normalized = normalizePlayerProgress({
     ...player,
+    money: normalizeCashBalance(player.money),
     homeCityId,
     warehouses: normalizePlayerWarehouses(player.warehouses ?? []),
     trucks,
@@ -625,7 +629,7 @@ export function createDefaultSaveFallbacks(
       currentTime,
     ),
     meta: {
-      savedAt: safeNumber(metaRecord.savedAt, Date.now()),
+      savedAt: safeNumber(metaRecord.savedAt, getEconomyNow()),
       currentTime: safeNumber(metaRecord.currentTime, currentTime),
       cash: safeNumber(metaRecord.cash, player.money),
       companyName: player.companyName,
@@ -789,6 +793,11 @@ export function normalizeSavePayload(
     lastEmergencyContractAtMs: Number.isFinite(withFallbacks.lastEmergencyContractAtMs)
       ? Number(withFallbacks.lastEmergencyContractAtMs)
       : undefined,
+    cashRecoveryAssistanceGrantedAtMs: Number.isFinite(
+      withFallbacks.cashRecoveryAssistanceGrantedAtMs,
+    )
+      ? Number(withFallbacks.cashRecoveryAssistanceGrantedAtMs)
+      : undefined,
     lastRoadsideFuelAssistanceAt: Number.isFinite(
       withFallbacks.lastRoadsideFuelAssistanceAt,
     )
@@ -920,7 +929,7 @@ export function migrateSavePayload(rawPayload: unknown): SaveGamePayload | null 
       ...normalized.meta,
       saveVersion: SAVE_GAME_VERSION,
       migratedFromVersion: sourceVersion,
-      migratedAt: Date.now(),
+      migratedAt: getEconomyNow(),
     };
     console.warn(
       `[saveGame] Migration successful. Save upgraded to v${SAVE_GAME_VERSION}.`,
@@ -1249,6 +1258,7 @@ export function pruneContractsForSave(
 }
 
 export function serializeGameState(state: StoreGameState): SaveGamePayload {
+  const savedAtMs = getEconomyNow();
   const homeCityId = state.player.homeCityId ?? 'izmir';
   const player: Player = normalizeLoadedPlayer({
     ...structuredClone(state.player),
@@ -1266,7 +1276,7 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
   return {
     version: SAVE_GAME_VERSION,
     meta: {
-      savedAt: Date.now(),
+      savedAt: savedAtMs,
       currentTime: state.currentTime,
       cash: state.player.money,
       companyName: state.player.companyName,
@@ -1324,9 +1334,10 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     monetization: structuredClone(
       normalizeMonetizationState(state.monetization, state.currentTime),
     ),
-    lastSeenRealTimeMs: state.lastSeenRealTimeMs ?? state.lastSimulatedRealTimeMs ?? Date.now(),
+    lastSeenRealTimeMs:
+      state.lastSeenRealTimeMs ?? state.lastSimulatedRealTimeMs ?? savedAtMs,
     lastSimulatedRealTimeMs:
-      state.lastSimulatedRealTimeMs ?? state.lastSeenRealTimeMs ?? Date.now(),
+      state.lastSimulatedRealTimeMs ?? state.lastSeenRealTimeMs ?? savedAtMs,
     lastOfflineProgressAppliedAt: state.lastOfflineProgressAppliedAt,
     offlineProgressVersion: state.offlineProgressVersion ?? 1,
     lastSimulationGameSpeed: state.lastSimulationGameSpeed ?? state.gameSpeed ?? 1,
@@ -1341,6 +1352,8 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
       state.cachedGlobalEconomySnapshotTrusted === true,
     appliedEconomyPeriodKeys: state.appliedEconomyPeriodKeys?.slice(-48),
     lastEmergencyContractAtMs: state.lastEmergencyContractAtMs,
+    cashRecoveryAssistanceGrantedAtMs:
+      state.cashRecoveryAssistanceGrantedAtMs,
     lastRoadsideFuelAssistanceAt: state.lastRoadsideFuelAssistanceAt,
     fuelTransactionKeys: state.fuelTransactionKeys?.slice(-32),
   };
@@ -1507,6 +1520,11 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       payload.lastEmergencyContractAtMs != null &&
       Number.isFinite(payload.lastEmergencyContractAtMs)
         ? payload.lastEmergencyContractAtMs
+        : undefined,
+    cashRecoveryAssistanceGrantedAtMs:
+      payload.cashRecoveryAssistanceGrantedAtMs != null &&
+      Number.isFinite(payload.cashRecoveryAssistanceGrantedAtMs)
+        ? payload.cashRecoveryAssistanceGrantedAtMs
         : undefined,
     lastRoadsideFuelAssistanceAt:
       payload.lastRoadsideFuelAssistanceAt != null &&

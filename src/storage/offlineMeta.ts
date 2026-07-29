@@ -3,6 +3,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getEconomyNow } from '../simulation/economyClock';
 
 const OFFLINE_META_STORAGE_KEY = 'logisticore_offline_meta_v1';
 
@@ -25,7 +26,7 @@ export async function saveOfflineMeta(meta: OfflineMeta): Promise<void> {
       Number.isFinite(meta.lastSimulationGameSpeed) && meta.lastSimulationGameSpeed > 0
         ? meta.lastSimulationGameSpeed
         : 1,
-    savedAt: Date.now(),
+    savedAt: getEconomyNow(),
   };
   await AsyncStorage.setItem(OFFLINE_META_STORAGE_KEY, JSON.stringify(payload));
 }

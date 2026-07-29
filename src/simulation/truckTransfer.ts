@@ -4,7 +4,7 @@
 
 import { deliveryBalance, economyBalance } from '../config/balance';
 import { getRoute } from '../data/routes';
-import type { Driver, Route, Truck, TruckTransfer } from '../types/game';
+import type { Driver, Route, Trailer, Truck, TruckTransfer } from '../types/game';
 import {
   advanceFuelConstrainedProgress,
   calculateTransferFuelLiters,
@@ -12,6 +12,10 @@ import {
   getTruckFuelConsumptionPerKm,
   normalizeTruckFuel,
 } from '../utils/truckFuel';
+import {
+  calculateActualSpeedKmh,
+  calculateVehicleSpeed,
+} from '../utils/vehiclePerformance';
 
 const MIN_TRANSFER_HOURS = 1;
 const DEFAULT_SPEED_KMH = deliveryBalance.defaultAverageSpeed;
@@ -76,6 +80,7 @@ export function estimateTransferForRoute(params: {
   truck: Truck;
   driver: Driver;
   route: Route;
+  trailer?: Trailer | null;
   fuelPrice?: number;
 }): {
   durationHours: number;
@@ -84,7 +89,16 @@ export function estimateTransferForRoute(params: {
   totalCost: number;
 } {
   const fuelPrice = params.fuelPrice ?? economyBalance.baseFuelPrice;
-  const durationHours = calculateTransferDurationHours(params.route.distanceKm, params.truck.speed);
+  const effectiveSpeedKmh = calculateVehicleSpeed({
+    truck: params.truck,
+    driver: params.driver,
+    route: params.route,
+    trailer: params.trailer,
+  }).effectiveSpeedKmh;
+  const durationHours = calculateTransferDurationHours(
+    params.route.distanceKm,
+    effectiveSpeedKmh,
+  );
   return {
     durationHours,
     ...calculateTransferCosts({
@@ -112,11 +126,21 @@ export function createTruckTransfer(params: {
   fromCityId: string;
   toCityId: string;
   route: Route;
+  trailer?: Trailer | null;
   fuelPrice: number;
   currentTime: number;
   sequence: number;
 }): TruckTransfer {
-  const durationHours = calculateTransferDurationHours(params.route.distanceKm, params.truck.speed);
+  const effectiveSpeedKmh = calculateVehicleSpeed({
+    truck: params.truck,
+    driver: params.driver,
+    route: params.route,
+    trailer: params.trailer,
+  }).effectiveSpeedKmh;
+  const durationHours = calculateTransferDurationHours(
+    params.route.distanceKm,
+    effectiveSpeedKmh,
+  );
   const costs = calculateTransferCosts({
     distanceKm: params.route.distanceKm,
     truck: params.truck,
@@ -145,6 +169,7 @@ export function createTruckTransfer(params: {
     lastFuelProcessedProgress: 0,
     lastFuelProcessedAt: params.currentTime,
     distanceTraveledKm: 0,
+    currentSpeedKmh: 0,
     fuelWarningsEmitted: [],
     driverCost: costs.driverCost,
     totalCost: costs.totalCost,
@@ -166,7 +191,15 @@ export function updateTransferProgress(
 
   const travelHours = getTransferTravelHours(transfer);
   const progress = Math.min(1, transfer.progress + hoursPassed / travelHours);
-  return { ...transfer, progress };
+  const distanceDeltaKm = Math.max(0, (progress - transfer.progress) * transfer.distanceKm);
+  return {
+    ...transfer,
+    progress,
+    currentSpeedKmh: calculateActualSpeedKmh({
+      distanceDeltaKm,
+      elapsedHoursDelta: hoursPassed,
+    }),
+  };
 }
 
 export function updateTransferProgressWithFuel(
@@ -192,6 +225,7 @@ export function updateTransferProgressWithFuel(
         ...transfer,
         estimatedArrivalAt: transfer.estimatedArrivalAt + hoursPassed,
         lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
+        currentSpeedKmh: 0,
       },
       truck: {
         ...normalizeTruckFuel(truck),
@@ -234,6 +268,11 @@ export function updateTransferProgressWithFuel(
       lastFuelProcessedProgress: result.lastFuelProcessedProgress,
       lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
       distanceTraveledKm: result.distanceTraveledKm,
+      currentSpeedKmh: calculateActualSpeedKmh({
+        distanceDeltaKm: result.mileageDeltaKm,
+        elapsedHoursDelta: hoursPassed,
+        paused: result.actualProgressDelta <= 0,
+      }),
       estimatedArrivalAt: result.outOfFuel
         ? transfer.estimatedArrivalAt +
           hoursPassed *

@@ -2,7 +2,7 @@
  * Geliştirici / internal test bayrakları.
  * Production ve normal internal test akışında kapalı tutulmalı.
  *
- * Varsayılan preset: kalibrasyon — terminalde yalnız calibration logları görünür.
+ * Production-safe varsayılan: tüm debug ve kalibrasyon özellikleri kapalıdır.
  */
 
 export type DebugMapLogPreset = 'calibration' | 'road-debug' | 'truck-debug' | 'off';
@@ -12,25 +12,25 @@ export const debugConfig = {
    * Harita koordinat kalibrasyonu — açıkken haritaya tıklayınca x/y (0–1) loglanır.
    * Tap on the map and copy x/y values into worldMapPositions.ts / mapRoadNetwork.ts.
    */
-  mapCalibrationEnabled: true,
+  mapCalibrationEnabled: false,
   /**
    * Segment kalibrasyonu — örn. 'izmir-istanbul'
    * mapCalibrationEnabled true iken haritaya dokunarak points biriktirilir.
    * null → şehir merkezi kalibrasyon modu
    * __mapCalibration.print() ile yapıştırılabilir JSON alınır.
    */
-  mapCalibrationSegmentId: 'izmir-istanbul' as string | null,
+  mapCalibrationSegmentId: null as string | null,
 
   /**
    * Map debug log preset — tek yerden kategori seçimi.
    * Individual flag’ler bu preset’e göre resolve edilir (aşağıda).
    */
-  debugMapLogPreset: 'calibration' as DebugMapLogPreset,
+  debugMapLogPreset: 'off' as DebugMapLogPreset,
 
   /**
    * Kalibrasyon oturum logları ([map-calibration:*], yapıştırılabilir { x, y }).
    */
-  mapCalibrationLogsEnabled: true,
+  mapCalibrationLogsEnabled: false,
   /**
    * Kalibrasyon tıklamasında index/segmentId detay logu.
    * Kapalıyken yalnız yapıştırılabilir `{ x: …, y: … },` satırı basılır.
@@ -79,12 +79,18 @@ export const debugConfig = {
   /**
    * Teslimat başlatma kapasite snapshot logları ([delivery-start-capacity]).
    */
-  deliveryStartLogsEnabled: true,
+  deliveryStartLogsEnabled: false,
 
   /**
    * Debug sözleşme üretim logları ([debug-contract-generator-result]).
    */
-  debugContractGenerationLogsEnabled: true,
+  debugContractGenerationLogsEnabled: false,
+
+  /**
+   * Canonical sözleşme ekonomi/viability kaydı ([contract-generation-audit]).
+   * Aday başına log ürettiği için varsayılan kapalıdır.
+   */
+  contractGenerationAuditEnabled: false,
 
   /**
    * Cloud save payload boyut analizi ([cloud-save-size]).

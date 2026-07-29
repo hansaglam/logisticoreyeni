@@ -14,11 +14,18 @@ import { contractLevelBalance } from './contractLevelBalance';
 export { contractLevelBalance } from './contractLevelBalance';
 export type { ContractLevelBalance } from './contractLevelBalance';
 
-/** Oyun zaman ölçeği — gerçek ms / oyun saati */
-export const timeBalance = {
+/** Simulation zaman ölçeğinin tek kaynağı — gerçek ms / simulation saati. */
+export const simulationTimeScale = {
   normalMsPerGameHour: 15_000,
   fastMsPerGameHour: 7_500,
   debugMsPerGameHour: 1_000,
+  tickMs: 1_000,
+  maxGameSpeed: 8,
+} as const;
+
+/** @deprecated Zaman sabitleri için simulationTimeScale kullanın. */
+export const timeBalance = {
+  ...simulationTimeScale,
   hoursPerDay: 24,
   daysPerWeek: 7,
   daysPerMonth: 30,
@@ -48,8 +55,9 @@ export const operatingCostBalance = {
   /** Çok günlük kesimde bildirim — offline gider sistemi kaldırıldığı için kapalı */
   notifyWhenMultipleDaysCharged: false,
   /**
-   * Offline gerçek-zamanlı progress tavanı (saat).
-   * 24 saat = 24 * 60 * 60 * 1000 ms — saniye/dakika değil.
+   * Offline operasyon progress tavanı (simulation saati).
+   * Gerçek elapsed penceresi de aynı sayısal saatle ayrıca sınırlandırılır;
+   * gider period cap'i bundan bağımsızdır.
    */
   maxOfflineProgressHours: 24,
   /** Soft-lock kurtarma: nakit bu eşiğin altındayken acil işler */
@@ -81,7 +89,7 @@ export function realMsToGameHours(realElapsedMs: number, gameSpeed = 1): number 
 }
 
 /** Aktif oyun döngüsü tick aralığı (ms) */
-export const GAME_LOOP_TICK_MS = 1000;
+export const GAME_LOOP_TICK_MS = simulationTimeScale.tickMs;
 
 export function getGameHoursPerTick(gameSpeed: number): number {
   return realMsToGameHours(GAME_LOOP_TICK_MS, gameSpeed);
@@ -105,7 +113,10 @@ export function getEffectiveOfflineGameSpeed(state: {
     state.lastSimulationGameSpeed > 0
       ? state.lastSimulationGameSpeed
       : undefined;
-  return Math.max(0.25, Math.min(current ?? lastActive ?? 1, 8));
+  return Math.max(
+    0.25,
+    Math.min(current ?? lastActive ?? 1, simulationTimeScale.maxGameSpeed),
+  );
 }
 
 export interface TimeScaleDebugSnapshot {
@@ -192,6 +203,14 @@ export const contractBalance = {
   maxContractPaymentMultiplier: 2.5,
   /** Deadline hesabında ortalama hız (km/saat) */
   averageSpeedKmh: 60,
+  /** Yükleme + boşaltma sabit operasyon süresi (saat) */
+  baseHandlingHours: 1.25,
+  /** Ton başına ek yükleme/boşaltma süresi (saat) */
+  handlingHoursPerTon: 0.025,
+  /** Her kesintisiz sürüş bloğu (saat) */
+  drivingBlockHours: 4.5,
+  /** Sürüş bloğu başına dinlenme/operasyon payı (saat) */
+  restHoursPerDrivingBlock: 0.5,
   /** Minimum teslim süresi (saat) */
   minDeadlineHours: 4,
   /** Maksimum teslim süresi (saat) */
@@ -205,17 +224,17 @@ export const contractBalance = {
   /** Ürün değeri risk payı: amount × referencePrice × oran */
   cargoValueRiskRate: 0.015,
   /** Kolay/kısa iş hedef net kâr marjı */
-  profitMarginEasyMin: 0.2,
-  profitMarginEasyMax: 0.35,
+  profitMarginEasyMin: 0.12,
+  profitMarginEasyMax: 0.22,
   /** Orta iş hedef net kâr marjı */
-  profitMarginMediumMin: 0.3,
-  profitMarginMediumMax: 0.5,
+  profitMarginMediumMin: 0.18,
+  profitMarginMediumMax: 0.32,
   /** Riskli/acil iş hedef net kâr marjı */
-  profitMarginRiskyMin: 0.45,
-  profitMarginRiskyMax: 0.65,
+  profitMarginRiskyMin: 0.12,
+  profitMarginRiskyMax: 0.28,
   /** Büyük seviye işi hedef net kâr marjı */
-  profitMarginLargeMin: 0.5,
-  profitMarginLargeMax: 0.7,
+  profitMarginLargeMin: 0.22,
+  profitMarginLargeMax: 0.38,
   /** Büyük iş tonaj eşiği */
   largeContractTonnage: 22,
 } as const;
@@ -230,16 +249,16 @@ export const deliveryCostBalance = {
   riskReserveLow: 0.04,
   riskReserveMedium: 0.08,
   riskReserveHigh: 0.14,
-  urgentMarginBonusMin: 0.1,
-  urgentMarginBonusMax: 0.25,
-  marketOpportunityMarginBonusMin: 0.15,
-  marketOpportunityMarginBonusMax: 0.35,
+  urgentMarginBonusMin: 0.05,
+  urgentMarginBonusMax: 0.12,
+  marketOpportunityMarginBonusMin: 0.08,
+  marketOpportunityMarginBonusMax: 0.18,
 } as const;
 
 /** Seviye bazlı ödeme tavanları ve minimum net kâr tabanları */
 export const contractPaymentBalance = {
-  minProfitMargin: 0.18,
-  maxProfitMargin: 0.72,
+  minProfitMargin: 0.1,
+  maxProfitMargin: 0.5,
   absolutePaymentMax: 65_000,
   highPaymentThreshold: 20_000,
   highPaymentMinRequiredLevel: 3,
@@ -250,35 +269,35 @@ export const contractPaymentBalance = {
       paymentMin: 2_000,
       paymentMax: 8_000,
       urgentPaymentMax: 12_000,
-      minNetProfit: 700,
+      minNetProfit: 350,
       maxTypicalNetProfit: 3_000,
     },
     2: {
       paymentMin: 3_000,
       paymentMax: 12_000,
       urgentPaymentMax: 16_000,
-      minNetProfit: 900,
+      minNetProfit: 500,
       maxTypicalNetProfit: 4_500,
     },
     3: {
       paymentMin: 5_000,
       paymentMax: 18_000,
       urgentPaymentMax: 24_000,
-      minNetProfit: 1_200,
+      minNetProfit: 750,
       maxTypicalNetProfit: 6_500,
     },
     4: {
       paymentMin: 8_000,
       paymentMax: 28_000,
       urgentPaymentMax: 35_000,
-      minNetProfit: 1_500,
+      minNetProfit: 1_000,
       maxTypicalNetProfit: 9_000,
     },
     5: {
       paymentMin: 12_000,
       paymentMax: 40_000,
       urgentPaymentMax: 50_000,
-      minNetProfit: 2_000,
+      minNetProfit: 1_400,
       maxTypicalNetProfit: 12_000,
     },
   },
@@ -338,6 +357,13 @@ export const contractGenerationBalance = {
   manualRefreshCooldownHours: 3,
   /** Playable yokken manuel yenilemede üretilecek iş sayısı üst sınırı */
   manualRefreshPlayableContractCount: 2,
+
+  /** Standard işlerde canonical minimum net marj (kâr / ödeme) */
+  standardMinimumMargin: 0.12,
+  /** Özel/riskli işlerde izin verilen kontrollü minimum marj */
+  specialMinimumMargin: -0.05,
+  /** Üretilen havuzda riskli/negatif özel işlerin üst sınırı */
+  maxRiskyNegativeShare: 0.1,
 } as const;
 
 /** Sözleşme teklif süresi (oyun saati) — iş tipine göre */
@@ -373,9 +399,19 @@ export const deliveryBalance = {
 } as const;
 
 export const fleetManagementBalance = {
-  truckBaseResaleRate: 0.7,
-  minTruckResaleRate: 0.2,
-  maxTruckResaleRate: 0.75,
+  /** Galeriden çıkar çıkmaz oluşan amortisman; anlık al-sat kârını engeller. */
+  truckBaseResaleRate: 0.68,
+  minTruckResaleRate: 0.18,
+  maxTruckResaleRate: 0.78,
+  mileageDepreciationReferenceKm: 200_000,
+  maxMileageDepreciationRate: 0.38,
+  maxAgeDepreciationRate: 0.12,
+  upgradeRecoveryRate: 0.35,
+  minMarketResaleModifier: 0.85,
+  maxMarketResaleModifier: 1.1,
+  trailerBaseResaleRate: 0.62,
+  minTrailerResaleRate: 0.15,
+  maxTrailerResaleRate: 0.7,
   driverSeveranceDays: 2,
 } as const;
 
@@ -471,6 +507,8 @@ export const financeBalance = {
   minCashBalance: -5_000,
   /** Soft-lock kurtarma eşiği — bu nakit altında acil işler açılır */
   softLockRecoveryThreshold: 0,
+  /** Hard floor'da tek seferlik yardım sonrası hedef pozitif nakit ($). */
+  softLockRecoveryCashTarget: 500,
   /** Kritik nakit eşiği ($) */
   lowCashThreshold: 5000,
   /** Net kâr negatifken sağlık cezası */

@@ -218,10 +218,16 @@ function sumTradeProfit(ledger: FinanceLedgerEntry[] | undefined): number {
   let purchases = 0;
   let sales = 0;
   for (const entry of ledger ?? []) {
-    if (entry.category === 'trade_purchase' && entry.type === 'expense') {
+    if (
+      (entry.category === 'trade_purchase' || entry.category === 'market_purchase') &&
+      entry.type === 'expense'
+    ) {
       purchases += entry.amount ?? 0;
     }
-    if (entry.category === 'trade_sale' && entry.type === 'income') {
+    if (
+      (entry.category === 'trade_sale' || entry.category === 'market_sale') &&
+      entry.type === 'income'
+    ) {
       sales += entry.amount ?? 0;
     }
   }
@@ -234,7 +240,10 @@ function sumProductTradeProfit(
 ): number {
   let total = 0;
   for (const entry of ledger ?? []) {
-    if (entry.category === 'trade_sale' && entry.meta?.productId === productId) {
+    if (
+      (entry.category === 'trade_sale' || entry.category === 'market_sale') &&
+      entry.meta?.productId === productId
+    ) {
       total += Math.max(0, entry.meta?.profit ?? 0);
     }
   }
@@ -284,10 +293,10 @@ function hasTradeBuyAndSell(state: RetentionProgressState): boolean {
   let hasBuy = false;
   let hasSell = false;
   for (const entry of state.financeLedger ?? []) {
-    if (entry.category === 'trade_purchase') {
+    if (entry.category === 'trade_purchase' || entry.category === 'market_purchase') {
       hasBuy = true;
     }
-    if (entry.category === 'trade_sale') {
+    if (entry.category === 'trade_sale' || entry.category === 'market_sale') {
       hasSell = true;
     }
     if (hasBuy && hasSell) {

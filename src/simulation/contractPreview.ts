@@ -19,10 +19,7 @@ import type {
 } from '../types/game';
 import { getSafeGlobalEconomy } from './economy';
 import {
-  applyWorldEventImpactToContract,
-  applyWorldEventImpactToFuelPrice,
-} from './worldEvents';
-import {
+  calculateContractEconomics,
   estimateContractTripCostBreakdown,
 } from './contractEconomics';
 import {
@@ -34,9 +31,6 @@ import {
 } from './contractTypes';
 import { getEffectiveTruckCapacity, isTruckSuitableForRiskyContract } from './truckUpgrades';
 import {
-  calculateExpectedContractCashFlow,
-  calculateFuelCost,
-  calculateMaintenanceCost,
   calculateTravelHours,
   getContractAvailability,
   getContractCargoWeight,
@@ -297,43 +291,38 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     input.trailers,
   );
 
-  let estimatedTravelHours = 0;
-  let estimatedFuelCost = 0;
-  let estimatedMaintenanceCost = 0;
-
-  if (truck && driver && route && product) {
-    estimatedTravelHours = calculateTravelHours(contract, truck, driver, route, product);
-    const effectiveFuelPrice = applyWorldEventImpactToFuelPrice(
-      getSafeGlobalEconomy(input.globalEconomy).fuelPrice ?? 1,
-      input.activeWorldEvents ?? [],
-    );
-    const economyForFuel = {
-      ...safeEconomy,
-      fuelPrice: effectiveFuelPrice,
-    };
-    estimatedFuelCost = calculateFuelCost(contract, truck, driver, route, product, economyForFuel);
-    estimatedMaintenanceCost = calculateMaintenanceCost(truck, route, contract, product);
-  } else {
-    estimatedTravelHours = estimateTravelHoursFallback(contract);
-    estimatedFuelCost = estimateFuelCostFallback(contract, safeEconomy);
-    estimatedMaintenanceCost = estimateMaintenanceCostFallback(contract, route, safeEconomy);
-  }
+  const attachedTrailer =
+    input.trailers?.find((trailer) => trailer.attachedTruckId === truck?.id) ?? null;
+  const canonicalEconomics = route
+    ? calculateContractEconomics({
+        contract,
+        truck,
+        trailer: attachedTrailer,
+        driver,
+        route,
+        globalEconomySnapshot: {
+          fuelPricePerLiter: safeEconomy.fuelPrice,
+        },
+        activeEvents: input.activeWorldEvents,
+      })
+    : null;
+  let estimatedTravelHours =
+    canonicalEconomics?.estimatedDurationHours ??
+    estimateTravelHoursFallback(contract);
+  let estimatedFuelCost =
+    canonicalEconomics?.costs.fuel ??
+    estimateFuelCostFallback(contract, safeEconomy);
+  let estimatedMaintenanceCost =
+    canonicalEconomics != null
+      ? canonicalEconomics.totalCost - canonicalEconomics.costs.fuel
+      : estimateMaintenanceCostFallback(contract, route, safeEconomy);
 
   const contractType = normalizeContractType(contract);
   const typePaymentMult = getContractTypePaymentMultiplier(contract);
   const basePaymentBeforeType = typePaymentMult > 0 ? payment / typePaymentMult : payment;
   const contractTypePaymentBonus = payment - basePaymentBeforeType;
 
-  const activeWorldEvents = input.activeWorldEvents ?? [];
-  const worldEventAdjustment = applyWorldEventImpactToContract(
-    contract,
-    activeWorldEvents,
-    payment,
-    estimatedTravelHours,
-  );
-  estimatedTravelHours *= worldEventAdjustment.durationMultiplier;
-  estimatedMaintenanceCost *= worldEventAdjustment.maintenanceMultiplier;
-  const adjustedPayment = payment * worldEventAdjustment.paymentMultiplier;
+  const adjustedPayment = payment;
 
   let contractTypeWarning: string | undefined;
   if (truck && contract.recommendedTruckCondition != null) {
@@ -352,14 +341,12 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     }
   }
 
-  const cashFlow = calculateExpectedContractCashFlow(
-    { ...contract, payment: adjustedPayment },
-    estimatedFuelCost,
-    estimatedMaintenanceCost,
-    0,
-  );
-  const estimatedTripCost = cashFlow.fuelCost + cashFlow.maintenanceCost;
-  const estimatedOperationalProfit = cashFlow.estimatedNetProfit;
+  const estimatedTripCost =
+    canonicalEconomics?.totalCost ??
+    estimatedFuelCost + estimatedMaintenanceCost;
+  const estimatedOperationalProfit =
+    canonicalEconomics?.estimatedProfit ??
+    adjustedPayment - estimatedTripCost;
   const estimatedMarginPercent = adjustedPayment > 0 ? estimatedOperationalProfit / adjustedPayment : 0;
 
   const { riskLevel, riskLabel } = calculateContractRiskLevel(contract, route, product);
@@ -384,9 +371,11 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     suggestedDriver: input.driver ? undefined : driver,
     route,
     baseGrossPayment: basePaymentBeforeType,
-    worldEventPaymentBonus: worldEventAdjustment.paymentBonus,
-    worldEventDurationBonusHours: worldEventAdjustment.durationBonusHours,
-    worldEventLabels: worldEventAdjustment.labels,
+    worldEventPaymentBonus: 0,
+    worldEventDurationBonusHours: 0,
+    worldEventLabels: (input.activeWorldEvents ?? [])
+      .filter((event) => event.isActive)
+      .map((event) => event.title),
     contractType,
     contractTypeLabel: CONTRACT_TYPE_LABELS[contractType],
     contractTypeDescription: getContractTypeDescription(contract),

@@ -120,8 +120,8 @@ assert(salary === 120, 'driver daily salary = 120');
 const idlePeriodic = buildPeriodicCostDeductions({
   player,
   economyNowMs: now,
-  // Tam 1 dönem kesimi için ~2×24s pencere gerekir (tamamlanan period kuralı)
-  lastProcessedEconomyAt: now - 2 * PERIOD_24H_MS,
+  // Rolling trusted cursor: tam 24 gerçek saat = tam 1 dönem.
+  lastProcessedEconomyAt: now - PERIOD_24H_MS,
   alreadyAppliedPeriodKeys: [],
   maxOfflineCostPeriods: 3,
 });
@@ -165,9 +165,8 @@ assert(
       eco.costs.maintenance +
       eco.costs.trailer +
       eco.costs.toll +
-      eco.costs.penaltyReserve +
       eco.costs.other,
-  'totalCost şoför hariç (nakit hizalı)',
+  'totalCost şoför ve risk rezervi hariç (nakit hizalı)',
 );
 assert(
   !eco.totalCost.toString().includes('NaN'),
@@ -175,11 +174,12 @@ assert(
 );
 assert(
   eco.totalCost ===
-    eco.costs.fuel +
+      eco.costs.fuel +
       eco.costs.maintenance +
-      eco.costs.penaltyReserve +
+      eco.costs.trailer +
+      eco.costs.toll +
       eco.costs.other,
-  'cash total excludes allocated driver',
+  'cash total excludes allocated driver and penalty reserve',
 );
 
 const settlement = calculateDeliverySettlement({

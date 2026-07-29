@@ -68,7 +68,10 @@ export function sumRealizedTradeProfitFromLedger(
   let total = 0;
 
   for (const entry of entries) {
-    if (entry.type !== 'income' || entry.category !== 'trade_sale') {
+    if (
+      entry.type !== 'income' ||
+      (entry.category !== 'trade_sale' && entry.category !== 'market_sale')
+    ) {
       continue;
     }
     if (entry.time < cutoff) {

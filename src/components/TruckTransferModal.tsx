@@ -54,11 +54,9 @@ function formatTransferDuration(hours: number): string {
 function resolveTransferButtonLabel(params: {
   hasDriver: boolean;
   hasSelection: boolean;
-  canAfford: boolean;
 }): string {
   if (!params.hasDriver) return 'Müsait şoför yok';
   if (!params.hasSelection) return 'Hedef şehir seç';
-  if (!params.canAfford) return 'Nakit yetersiz';
   return 'Transferi Başlat';
 }
 
@@ -84,6 +82,7 @@ export default function TruckTransferModal({
   const insets = useAppSafeAreaInsets();
   const routes = useGameStore((state) => state.routes) ?? [];
   const drivers = useGameStore((state) => state.player?.drivers) ?? [];
+  const trailers = useGameStore((state) => state.player?.trailers) ?? [];
   const playerMoney = useGameStore((state) => state.player?.money) ?? 0;
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const fuelPrice = useGameStore((state) =>
@@ -106,6 +105,10 @@ export default function TruckTransferModal({
     if (!truck) return undefined;
     return selectDriverForTransfer(truck.id, drivers);
   }, [truck, drivers]);
+  const attachedTrailer = useMemo(
+    () => trailers.find((trailer) => trailer.attachedTruckId === truck?.id),
+    [trailers, truck?.id],
+  );
 
   const cityOptions = useMemo((): CityTransferOption[] => {
     if (!truck || !assignedDriver) return [];
@@ -129,6 +132,7 @@ export default function TruckTransferModal({
         truck,
         driver: assignedDriver,
         route,
+        trailer: attachedTrailer,
         fuelPrice,
       });
 
@@ -140,7 +144,7 @@ export default function TruckTransferModal({
         ...estimate,
       };
     });
-  }, [truck, assignedDriver, routes, fromCityId, fuelPrice]);
+  }, [truck, assignedDriver, routes, fromCityId, fuelPrice, attachedTrailer]);
 
   const selectedOption = cityOptions.find((option) => option.cityId === selectedCityId);
   const fuelReadiness = useMemo(() => {
@@ -175,13 +179,11 @@ export default function TruckTransferModal({
     !!selectedOption &&
     !selectedOption.disabled &&
     !!selectedOption.route &&
-    fuelReadiness?.canCompleteWithoutRefuel !== false &&
-    playerMoney >= selectedOption.totalCost;
+    fuelReadiness?.canCompleteWithoutRefuel !== false;
 
   const buttonLabel = resolveTransferButtonLabel({
     hasDriver: !!assignedDriver,
     hasSelection: !!selectedOption?.route,
-    canAfford: playerMoney >= (selectedOption?.totalCost ?? 0),
   });
 
   const handleStart = () => {
@@ -327,19 +329,18 @@ export default function TruckTransferModal({
                   </Text>
                 </View>
                 <View style={styles.summaryBlock}>
-                  <Text style={styles.summaryLabel}>Toplam maliyet</Text>
-                  <Text style={styles.summaryValue}>{formatMoney(selectedOption.totalCost)}</Text>
+                  <Text style={styles.summaryLabel}>Yakıt kullanımı</Text>
+                  <Text style={styles.summaryValue}>Mevcut tanktan</Text>
                 </View>
                 <View style={styles.summaryBlock}>
                   <Text style={styles.summaryLabel}>Kalan nakit</Text>
                   <Text
                     style={[
                       styles.summaryValue,
-                      playerMoney < selectedOption.totalCost && styles.summaryValueDanger,
                     ]}
                     numberOfLines={1}
                   >
-                    {formatMoney(playerMoney - selectedOption.totalCost)}
+                    {formatMoney(playerMoney)}
                   </Text>
                 </View>
               </View>

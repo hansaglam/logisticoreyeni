@@ -4,11 +4,11 @@
  */
 
 import { operatingCostBalance } from '../config/balance';
-import { getEconomyNow, MS_PER_24H } from './economyClock';
+import { DAY_MS, getEconomyNow } from './economyClock';
 import { calculateDailyOperatingCostBreakdown } from './dailyOperatingCosts';
 import type { Player } from '../types/game';
 
-export const PERIOD_24H_MS = MS_PER_24H;
+export const PERIOD_24H_MS = DAY_MS;
 
 export interface PeriodicCostDeduction {
   type: 'driver_salary' | 'warehouse_operating' | 'operations' | 'other';
@@ -41,8 +41,14 @@ export function calculatePeriodicCostPeriods(params: {
   periodStarts: number[];
   capped: boolean;
 } {
-  const maxPeriods =
-    params.maxOfflineCostPeriods ?? operatingCostBalance.maxOfflineChargeDays ?? 3;
+  const maxPeriods = Math.max(
+    0,
+    Math.floor(
+      params.maxOfflineCostPeriods ??
+        operatingCostBalance.maxOfflineChargeDays ??
+        3,
+    ),
+  );
   const now = Math.max(0, params.economyNowMs);
   const last =
     params.lastProcessedEconomyAt != null &&
@@ -55,27 +61,22 @@ export function calculatePeriodicCostPeriods(params: {
     return { periodsElapsed: 0, periodStarts: [], capped: false };
   }
 
-  const firstPeriodStart = Math.floor(last / PERIOD_24H_MS) * PERIOD_24H_MS;
-  // last tam period sınırındaysa bir sonraki period'dan başla
-  let cursor =
-    last > firstPeriodStart ? firstPeriodStart + PERIOD_24H_MS : firstPeriodStart;
-  if (cursor <= last) {
-    cursor = Math.floor(last / PERIOD_24H_MS) * PERIOD_24H_MS + PERIOD_24H_MS;
-  }
-
-  const allStarts: number[] = [];
-  while (cursor + PERIOD_24H_MS <= now) {
-    allStarts.push(cursor);
-    cursor += PERIOD_24H_MS;
-  }
-
-  const capped = allStarts.length > maxPeriods;
-  const periodStarts = capped ? allStarts.slice(-maxPeriods) : allStarts;
+  const elapsedMs = now - last;
+  const periodsElapsed = Math.floor(elapsedMs / PERIOD_24H_MS);
+  const maxWindowMs = maxPeriods * PERIOD_24H_MS;
+  const boundedEnd = Math.min(now, last + maxWindowMs);
+  const periodsToApply = Math.floor(
+    Math.max(0, boundedEnd - last) / PERIOD_24H_MS,
+  );
+  const periodStarts = Array.from(
+    { length: periodsToApply },
+    (_, index) => last + index * PERIOD_24H_MS,
+  );
 
   return {
-    periodsElapsed: allStarts.length,
+    periodsElapsed,
     periodStarts,
-    capped,
+    capped: periodsElapsed > periodsToApply,
   };
 }
 
@@ -135,15 +136,23 @@ export function buildPeriodicCostDeductions(params: {
 
   const totalAmount = deductions.reduce((sum, d) => sum + d.amount, 0);
   const periodKeysApplied = [...new Set(deductions.map((d) => d.periodKey))];
+  // Normal durumda fractional süre korunur ve sonraki tick'te birikmeye devam
+  // eder. Cap devreye girdiyse eski backlog tamamen tüketilir; aksi halde ilk
+  // foreground tick kalan günleri tekrar tekrar keser.
+  const previousProcessedAt =
+    params.lastProcessedEconomyAt != null &&
+    Number.isFinite(params.lastProcessedEconomyAt)
+      ? params.lastProcessedEconomyAt
+      : economyNowMs;
   const newlyProcessedUntil =
-    periodKeysApplied.length > 0
-      ? Math.max(
-          ...periodKeysApplied.map((key) => {
-            const n = Number(key.replace('p24_', ''));
-            return (n + 1) * PERIOD_24H_MS;
-          }),
-        )
-      : params.lastProcessedEconomyAt ?? economyNowMs;
+    economyNowMs <= previousProcessedAt
+      ? previousProcessedAt
+      : capped
+        ? economyNowMs
+        : Math.min(
+            economyNowMs,
+            previousProcessedAt + periodsElapsed * PERIOD_24H_MS,
+          );
 
   return {
     periodsElapsed,
@@ -156,12 +165,15 @@ export function buildPeriodicCostDeductions(params: {
   };
 }
 
-export function logOfflineEconomyAudit(payload: Record<string, unknown>): void {
+export function logTimeProgressionAudit(payload: object): void {
   if (!operatingCostBalance.economyAuditLogsEnabled && !__DEV__) {
     return;
   }
   if (!operatingCostBalance.economyAuditLogsEnabled) {
     return;
   }
-  console.log('[offline-economy-audit]', payload);
+  console.log('[time-progression-audit]', payload);
 }
+
+/** Backward-compatible export for older diagnostics. */
+export const logOfflineEconomyAudit = logTimeProgressionAudit;

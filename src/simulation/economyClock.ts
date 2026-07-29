@@ -10,7 +10,12 @@ export interface EconomyClock {
   syncFromServer?(serverTimestampMs: number): void;
 }
 
-const MAX_CLOCK_JUMP_MS = 6 * 60 * 60 * 1000; // 6 saat ileri atlama şüphesi
+export const MINUTE_MS = 60_000;
+export const HOUR_MS = 60 * MINUTE_MS;
+export const DAY_MS = 24 * HOUR_MS;
+export const MARKET_EPOCH_MS = 30 * MINUTE_MS;
+
+const MAX_CLOCK_JUMP_MS = 6 * HOUR_MS; // 6 saat ileri atlama şüphesi
 
 let trustedAnchorServerMs: number | null = null;
 let trustedAnchorPerfMs: number | null = null;
@@ -139,15 +144,16 @@ export function resetEconomyClockForTests(): void {
   activeClock = new LocalEconomyClock();
 }
 
-export const MS_PER_MINUTE = 60_000;
-export const MS_PER_HOUR = 60 * MS_PER_MINUTE;
-export const MS_PER_24H = 24 * MS_PER_HOUR;
+/** Backward-compatible aliases. New code should prefer the explicit canonical names. */
+export const MS_PER_MINUTE = MINUTE_MS;
+export const MS_PER_HOUR = HOUR_MS;
+export const MS_PER_24H = DAY_MS;
 
 /** Domain config version — snapshot / event uyumu */
 export const ECONOMY_CONFIG_VERSION = 1;
 
 /** Ortak piyasa tick aralığı (gerçek ms) */
-export const MARKET_TICK_INTERVAL_MS = 30 * MS_PER_MINUTE;
+export const MARKET_TICK_INTERVAL_MS = MARKET_EPOCH_MS;
 
 export function getMarketEpoch(nowMs: number = getEconomyNow()): number {
   return Math.floor(Math.max(0, nowMs) / MARKET_TICK_INTERVAL_MS);

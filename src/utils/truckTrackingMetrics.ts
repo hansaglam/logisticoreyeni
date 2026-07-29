@@ -2,11 +2,6 @@
  * Harita Kamyon Takip kartı metrikleri — yakıt, kalan mesafe, hız.
  */
 
-import { getRoute } from '../data/routes';
-import {
-  calculateAverageSpeed,
-  calculateConditionSpeedMultiplier,
-} from '../simulation/delivery';
 import { normalizeMapDeliveryProgress } from '../components/map/mapRoadUtils';
 import { isActiveRunningDelivery } from '../components/map/mapTruckLocation';
 import type { Delivery, Driver, Route, Truck, TruckTransfer } from '../types/game';
@@ -98,38 +93,28 @@ function resolveFuelState(
 }
 
 function resolveSpeedKmh(
-  truck: Truck,
-  driver: Driver | null | undefined,
-  route: Route | null | undefined,
   isMoving: boolean,
+  actualSpeedKmh?: number,
 ): number {
   if (!isMoving) {
     return 0;
   }
 
-  if (driver && route) {
-    return Math.round(calculateAverageSpeed(truck, driver, route));
+  if (
+    actualSpeedKmh != null &&
+    Number.isFinite(actualSpeedKmh) &&
+    actualSpeedKmh >= 0
+  ) {
+    return Math.round(actualSpeedKmh);
   }
 
-  const conditionMultiplier = calculateConditionSpeedMultiplier(truck);
-  return Math.round(Math.max(0, truck.speed * conditionMultiplier));
-}
-
-function resolveJobRoute(
-  fromCityId: string,
-  toCityId: string,
-  route?: Route | null,
-): Route | undefined {
-  if (route) {
-    return route;
-  }
-  return getRoute(fromCityId, toCityId);
+  return 0;
 }
 
 export function getTruckTrackingMetrics(
   params: GetTruckTrackingMetricsParams,
 ): TruckTrackingMetrics {
-  const { truck, delivery, transfer, driver } = params;
+  const { truck, delivery, transfer } = params;
   const activeDelivery = isActiveRunningDelivery(delivery) ? delivery : undefined;
   const activeTransfer =
     transfer != null && (transfer.status === 'active' || transfer.status === 'paused')
@@ -151,16 +136,13 @@ export function getTruckTrackingMetrics(
       Math.round((activeDelivery.distanceKm ?? 0) * (1 - progress)),
     );
     const isMoving = progress < 1 && activeDelivery.status !== 'paused';
-    const route = resolveJobRoute(
-      activeDelivery.originCityId,
-      activeDelivery.destinationCityId,
-      params.route,
-    );
-
     return {
       ...fuel,
       remainingDistanceKm,
-      currentSpeedKmh: resolveSpeedKmh(truck, driver, route, isMoving),
+      currentSpeedKmh: resolveSpeedKmh(
+        isMoving,
+        activeDelivery.currentSpeedKmh,
+      ),
       isMoving,
     };
   }
@@ -180,16 +162,13 @@ export function getTruckTrackingMetrics(
       Math.round(activeTransfer.distanceKm * (1 - progress)),
     );
     const isMoving = progress < 1 && activeTransfer.status !== 'paused';
-    const route = resolveJobRoute(
-      activeTransfer.fromCityId,
-      activeTransfer.toCityId,
-      params.route,
-    );
-
     return {
       ...fuel,
       remainingDistanceKm,
-      currentSpeedKmh: resolveSpeedKmh(truck, driver, route, isMoving),
+      currentSpeedKmh: resolveSpeedKmh(
+        isMoving,
+        activeTransfer.currentSpeedKmh,
+      ),
       isMoving,
     };
   }

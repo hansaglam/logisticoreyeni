@@ -22,8 +22,18 @@ import type {
   Truck,
   WorldEvent,
 } from '../types/game';
-import { contractBalance, contractExpiryBalance, contractGenerationBalance, contractLevelBalance } from '../config/balance';
-import { getContractSpawnWeightMultiplier } from './worldEvents';
+import {
+  contractBalance,
+  contractExpiryBalance,
+  contractGenerationBalance,
+  contractLevelBalance,
+  contractPaymentBalance,
+} from '../config/balance';
+import { debugConfig } from '../config/debug';
+import {
+  applyWorldEventImpactToContract,
+  getContractSpawnWeightMultiplier,
+} from './worldEvents';
 import { applyContractTypeToContract, getContractSelectionScoreInputs } from './contractTypes';
 import {
   applyCapacityProfileToTonnageRange,
@@ -36,9 +46,8 @@ import {
   isWarehouseCityUnlocked,
 } from '../config/levelConfig';
 import { isRoadGraphPairConnected } from '../components/map/mapRoadUtils';
-import { toProductMarket, getSafeGlobalEconomy } from './economy';
+import { toProductMarket } from './economy';
 import {
-  calculateFuelCost,
   getActiveDeliveryDestinationCityIds,
   getBusyTruckOriginCityIds,
   getContractAvailability,
@@ -59,10 +68,18 @@ import { meetsDriverLevelRequirement } from './driverProgress';
 import { getRoute as findRoute } from '../data/routes';
 import { getProductByIdSafe } from '../utils/entityLookup';
 import { canAffordVoluntaryPurchase } from '../utils/cashPolicy';
+import {
+  calculateDeliveryFuelLiters,
+  getTruckFuelReadiness,
+  normalizeTruckFuel,
+} from '../utils/truckFuel';
 import { clamp, randomBetween, randomIntBetween } from '../utils/math';
 import { getMarketContractMatchScore } from '../utils/marketContractMatch';
 import {
   calculateBalancedContractPayment,
+  calculateContractEconomics,
+  calculateContractDurationHours,
+  evaluateContractViability,
   estimateContractTripCostBreakdown,
   isContractEconomicallyViable,
   type ContractPaymentInput,
@@ -109,6 +126,7 @@ export interface ContractDeadlineParams {
   route: Route;
   product: Product;
   urgency: number;
+  amount?: number;
 }
 
 export interface ShouldGenerateContractParams {
@@ -140,6 +158,7 @@ export interface GenerateContractForProductParams {
   isMarketOpportunity?: boolean;
   playerLevel?: number;
   playerReputation?: number;
+  activeWorldEvents?: WorldEvent[];
 }
 
 export interface PlayerFleetCityContext {
@@ -314,18 +333,25 @@ export function estimateContractOperatingCosts(params: ContractPaymentParams): n
 }
 
 export function calculateContractPayment(params: ContractPaymentParams): number {
-  const paymentInput: ContractPaymentInput = {
-    amount: params.amount,
-    product: params.product,
-    originMarket: params.originMarket,
-    destinationMarket: params.destinationMarket,
+  return calculateContractEconomics({
+    contract: {
+      payment: 0,
+      amount: params.amount,
+      distanceKm: params.route.distanceKm,
+      urgency: params.urgency,
+    },
     route: params.route,
-    urgency: params.urgency,
-    globalEconomy: params.globalEconomy,
-    requiredLevel: params.requiredLevel,
-    isMarketOpportunity: params.isMarketOpportunity,
-  };
-  return calculateBalancedContractPayment(paymentInput);
+    globalEconomySnapshot: {
+      fuelPricePerLiter: params.globalEconomy.fuelPrice,
+    },
+    pricingContext: {
+      product: params.product,
+      originMarket: params.originMarket,
+      destinationMarket: params.destinationMarket,
+      requiredLevel: params.requiredLevel,
+      isMarketOpportunity: params.isMarketOpportunity,
+    },
+  }).revenue;
 }
 
 /**
@@ -336,20 +362,14 @@ export function calculateContractPayment(params: ContractPaymentParams): number 
  */
 export function calculateDeadlineHours(params: ContractDeadlineParams): number {
   const { route, product, urgency } = params;
-
-  const baseTravelHours = route.distanceKm / contractBalance.averageSpeedKmh;
-
-  // Zor rotalarda ek süre tanınır
-  const routeDifficultyMultiplier = 1 + route.difficulty * 0.35;
-
-  // Aciliyet arttıkça süre kısalır
-  const urgencyMultiplier = clamp(1 - urgency * 0.4, 0.55, 1);
-
-  // Bozulabilir ürünlerde süre kısalır
-  const productPerishabilityMultiplier = clamp(1 - product.perishability * 0.45, 0.5, 1);
-
-  const rawDeadline =
-    baseTravelHours * routeDifficultyMultiplier * urgencyMultiplier * productPerishabilityMultiplier;
+  const duration = calculateContractDurationHours({
+    distanceKm: route.distanceKm,
+    cargoTons: params.amount ?? 0,
+    routeDifficulty: route.difficulty,
+  }).durationHours;
+  const urgencyBuffer = clamp(1.55 - urgency * 0.35, 1.15, 1.55);
+  const perishabilityBuffer = clamp(1.35 - product.perishability * 0.15, 1.15, 1.35);
+  const rawDeadline = duration * Math.min(urgencyBuffer, perishabilityBuffer);
 
   return clamp(rawDeadline, contractBalance.minDeadlineHours, contractBalance.maxDeadlineHours);
 }
@@ -697,7 +717,7 @@ export interface PlayableContractContext {
 
 const MIN_TRUCK_CONDITION_FOR_PLAYABLE = 30;
 
-function hasAffordableContractAssignment(
+function hasFuelReadyOrAffordableAssignment(
   contract: Contract,
   trucks: Truck[] | undefined,
   drivers: Driver[] | undefined,
@@ -710,7 +730,7 @@ function hasAffordableContractAssignment(
     return false;
   }
 
-  const economy = getSafeGlobalEconomy(context.globalEconomy);
+  const fuelPrice = Math.max(0, context.globalEconomy.fuelPrice ?? 0);
   const idleDrivers = getIdleDrivers(drivers);
   const requiredDriverLevel = contract.requiredDriverLevel ?? 1;
   const qualifiedDrivers =
@@ -735,8 +755,26 @@ function hasAffordableContractAssignment(
 
   for (const truck of assignableTrucks) {
     for (const driver of qualifiedDrivers) {
-      const fuelCost = calculateFuelCost(contract, truck, driver, route, product, economy);
-      if (canAffordVoluntaryPurchase(context.playerMoney, fuelCost)) {
+      const requiredFuelL = calculateDeliveryFuelLiters({
+        contract,
+        truck,
+        driver,
+        route,
+        product,
+      });
+      const normalizedTruck = normalizeTruckFuel(truck);
+      if (requiredFuelL > (normalizedTruck.fuelTankCapacityL ?? 0) + 1e-6) {
+        continue;
+      }
+      const readiness = getTruckFuelReadiness(truck, requiredFuelL, fuelPrice);
+      if (
+        readiness.canCompleteWithoutRefuel ||
+        (readiness.estimatedRefuelCost > 0 &&
+          canAffordVoluntaryPurchase(
+            context.playerMoney,
+            readiness.estimatedRefuelCost,
+          ))
+      ) {
         return true;
       }
     }
@@ -778,7 +816,7 @@ export function isPlayableContract(
     return true;
   }
 
-  return hasAffordableContractAssignment(
+  return hasFuelReadyOrAffordableAssignment(
     contract,
     trucks,
     drivers,
@@ -903,7 +941,7 @@ export function generateContractForProduct(
     return null;
   }
 
-  const deadlineHours = calculateDeadlineHours({ route, product, urgency });
+  const deadlineHours = calculateDeadlineHours({ route, product, urgency, amount });
 
   const baseContract: Contract = {
     id: createContractId(originCity.id, destinationCity.id, productId, currentTime, sequence),
@@ -924,13 +962,102 @@ export function generateContractForProduct(
     riskLevel: 'low',
   };
 
-  return applyContractTypeToContract({
+  const typedContract = applyContractTypeToContract({
     contract: baseContract,
     product,
     playerLevel: params.playerLevel ?? 1,
     playerReputation: params.playerReputation ?? 0,
     sequence,
+    maxCargoTons: maxTruckCapacity,
   });
+  const preEventEconomics = calculateContractEconomics({
+    contract: typedContract,
+    route,
+    globalEconomySnapshot: { fuelPricePerLiter: safeEconomy.fuelPrice },
+    activeEvents: params.activeWorldEvents,
+  });
+  const eventAdjustment = applyWorldEventImpactToContract(
+    typedContract,
+    params.activeWorldEvents ?? [],
+    typedContract.payment,
+    preEventEconomics.estimatedDurationHours,
+  );
+  let finalTypedContract: Contract = {
+    ...typedContract,
+    payment: Math.min(
+      contractPaymentBalance.absolutePaymentMax,
+      Math.round(typedContract.payment * eventAdjustment.paymentMultiplier),
+    ),
+    deadlineHours: clamp(
+      typedContract.deadlineHours * eventAdjustment.durationMultiplier,
+      contractBalance.minDeadlineHours,
+      contractBalance.maxDeadlineHours,
+    ),
+  };
+  const eventAdjustedEconomics = calculateContractEconomics({
+    contract: finalTypedContract,
+    route,
+    globalEconomySnapshot: { fuelPricePerLiter: safeEconomy.fuelPrice },
+    activeEvents: params.activeWorldEvents,
+  });
+  const isControlledRiskOffer =
+    finalTypedContract.riskLevel === 'high' && sequence % 7 === 0;
+  if (isControlledRiskOffer) {
+    finalTypedContract = {
+      ...finalTypedContract,
+      payment: Math.max(1, Math.round(eventAdjustedEconomics.totalCost * 0.98)),
+      specialRules: [
+        ...(finalTypedContract.specialRules ?? []),
+        'Yüksek riskli düşük marj — beklenmeyen gider ihtimali açıkça yüksektir.',
+      ],
+    };
+  }
+  const viability = evaluateContractViability({
+    contract: finalTypedContract,
+    route,
+    globalEconomySnapshot: {
+      fuelPricePerLiter: safeEconomy.fuelPrice,
+    },
+    activeEvents: params.activeWorldEvents,
+    maxFleetCapacityTons: maxTruckCapacity,
+  });
+
+  if (
+    typeof __DEV__ !== 'undefined' &&
+    __DEV__ &&
+    debugConfig.contractGenerationAuditEnabled
+  ) {
+    console.log('[contract-generation-audit]', {
+      contractId: finalTypedContract.id,
+      origin: finalTypedContract.originCityId,
+      destination: finalTypedContract.destinationCityId,
+      distanceKm: route.distanceKm,
+      cargoType: finalTypedContract.contractType ?? 'standard',
+      cargoTons: finalTypedContract.amount,
+      payment: finalTypedContract.payment,
+      requiredTruckCapacity: finalTypedContract.cargoWeight,
+      estimatedDurationHours: viability.economics.estimatedDurationHours,
+      fuelRequiredL: viability.economics.fuelLiters,
+      fuelCost: viability.economics.costs.fuel,
+      allocatedDriverCost: viability.economics.costs.driver,
+      maintenanceCost: viability.economics.costs.maintenance,
+      tollCost: viability.economics.costs.toll,
+      totalEstimatedCost: viability.economics.totalCost,
+      estimatedProfit: viability.economics.estimatedProfit,
+      marginPercent: viability.economics.profitMarginPercent,
+      generationModifiers: {
+        marketOpportunity: isMarketOpportunity,
+        eventPaymentMultiplier: eventAdjustment.paymentMultiplier,
+        eventDurationMultiplier: eventAdjustment.durationMultiplier,
+        activeEventIds: (params.activeWorldEvents ?? [])
+          .filter((event) => event.isActive)
+          .map((event) => event.id),
+      },
+      acceptedByViabilityGuard: viability.accepted,
+    });
+  }
+
+  return viability.accepted ? finalTypedContract : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,6 +1174,10 @@ export function generateContracts(
 
         const routeKey = `${originCity.id}-${destinationCity.id}-${product.id}`;
         const isMarketOpportunity = priorityOpportunityKeys.has(routeKey);
+        const fleetBoundMaxTonnage = Math.min(
+          tonnageBounds.maxTonnage,
+          ownedMaxCapacity,
+        );
         const contract = generateContractForProduct({
           originCity,
           destinationCity,
@@ -1055,13 +1186,17 @@ export function generateContracts(
           route,
           globalEconomy,
           currentTime,
-          maxTruckCapacity: tonnageBounds.maxTonnage,
-          minTonnage: tonnageBounds.minTonnage,
-          maxTonnage: tonnageBounds.maxTonnage,
+          maxTruckCapacity: fleetBoundMaxTonnage,
+          minTonnage: Math.min(
+            tonnageBounds.minTonnage,
+            fleetBoundMaxTonnage,
+          ),
+          maxTonnage: fleetBoundMaxTonnage,
           sequence: sequenceCounter,
           isMarketOpportunity,
           playerLevel,
           playerReputation,
+          activeWorldEvents: options.activeWorldEvents,
         });
 
         if (!contract) {
@@ -1149,13 +1284,42 @@ export function generateContracts(
 
   const selected: Contract[] = [];
   const batchDedupeKeys = new Set(existingDedupeKeys);
+  const maxRiskyNegativeContracts = Math.floor(
+    maxNewContracts * contractGenerationBalance.maxRiskyNegativeShare,
+  );
+  let selectedRiskyNegativeContracts = 0;
 
   for (const candidate of candidates) {
     if (selected.length >= maxNewContracts) break;
     const key = getContractDedupeKey(candidate.contract);
     if (batchDedupeKeys.has(key)) continue;
+    const candidateRoute = getRouteBetweenCities(
+      routes,
+      candidate.contract.originCityId,
+      candidate.contract.destinationCityId,
+    );
+    if (!candidateRoute) continue;
+    const candidateViability = evaluateContractViability({
+      contract: candidate.contract,
+      route: candidateRoute,
+      globalEconomySnapshot: {
+        fuelPricePerLiter: sanitizeFuelPricePerLiter(globalEconomy.fuelPrice),
+      },
+      activeEvents: options.activeWorldEvents,
+      maxFleetCapacityTons: ownedMaxCapacity,
+    });
+    const isRiskyNegative =
+      candidate.contract.riskLevel === 'high' &&
+      candidateViability.economics.estimatedProfit < 0;
+    if (
+      isRiskyNegative &&
+      selectedRiskyNegativeContracts >= maxRiskyNegativeContracts
+    ) {
+      continue;
+    }
     batchDedupeKeys.add(key);
     selected.push(candidate.contract);
+    if (isRiskyNegative) selectedRiskyNegativeContracts += 1;
   }
 
   return selected;

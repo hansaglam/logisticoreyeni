@@ -606,6 +606,8 @@ export interface Delivery {
   lastFuelProcessedAt?: number;
   /** Mileage'a işlenmiş gerçek mesafe (km) */
   distanceTraveledKm?: number;
+  /** Son işlenen tick'teki gerçek hız (km/saat); UI bunun üzerinden okunur. */
+  currentSpeedKmh?: number;
   pausedReason?: JobPausedReason;
   fuelWarningsEmitted?: FuelWarningKey[];
   roadsideAssistanceGrantedAt?: number;
@@ -659,6 +661,8 @@ export interface TruckTransfer {
   lastFuelProcessedProgress?: number;
   lastFuelProcessedAt?: number;
   distanceTraveledKm?: number;
+  /** Son işlenen tick'teki gerçek hız (km/saat). */
+  currentSpeedKmh?: number;
   pausedReason?: JobPausedReason;
   fuelWarningsEmitted?: FuelWarningKey[];
   roadsideAssistanceGrantedAt?: number;
@@ -708,6 +712,8 @@ export interface WarehouseStockTransfer {
   lastFuelProcessedProgress?: number;
   lastFuelProcessedAt?: number;
   distanceTraveledKm?: number;
+  /** Son işlenen tick'teki gerçek hız (km/saat). */
+  currentSpeedKmh?: number;
   pausedReason?: JobPausedReason;
   fuelWarningsEmitted?: FuelWarningKey[];
   roadsideAssistanceGrantedAt?: number;
@@ -771,9 +777,15 @@ export interface Warehouse {
 
 /** Finans defteri kategorileri — yeni kayıtlar standart isimleri kullanır; eski save uyumluluğu için legacy değerler de geçerlidir */
 export type FinanceLedgerCategory =
+  | 'contract_revenue'
   | 'contract_income'
+  | 'fuel_purchase'
+  | 'roadside_fuel'
   | 'trade_sale'
+  | 'market_sale'
   | 'bonus'
+  | 'reward'
+  | 'recovery_assistance'
   | 'mission_reward'
   | 'ad_reward_daily_ops'
   | 'other_income'
@@ -781,10 +793,14 @@ export type FinanceLedgerCategory =
   | 'maintenance'
   | 'penalty'
   | 'trade_purchase'
+  | 'market_purchase'
   | 'driver_salary'
+  | 'warehouse_cost'
   | 'warehouse_operating'
   | 'truck_lease'
   | 'daily_operating_cost'
+  | 'vehicle_purchase'
+  | 'vehicle_sale'
   | 'truck_purchase'
   | 'truck_sale'
   | 'driver_hire'
@@ -827,6 +843,10 @@ export interface FinanceLedgerEntry {
   title?: string;
   description?: string;
   source?: 'roadside-emergency' | string;
+  /** Cash mutation idempotency anahtarı. */
+  transactionId?: string;
+  /** Domain nesnesi/işlemi ile deterministik ilişki. */
+  referenceId?: string;
   breakdown?: FinanceLedgerBreakdown;
   /** Teslimat tamamlama gibi ilişkili kayıtların çift yazılmasını önlemek için */
   relatedDeliveryId?: string;
@@ -1473,6 +1493,8 @@ export interface StoreGameState {
   appliedEconomyPeriodKeys?: string[];
   /** Son acil operasyon sözleşmesi üretim zamanı (ms) */
   lastEmergencyContractAtMs?: number;
+  /** Hard-floor soft-lock için tek seferlik nakit yardım zamanı (trusted ms). */
+  cashRecoveryAssistanceGrantedAtMs?: number;
   /** Son ücretsiz yol yardımı zamanı (oyun saati). */
   lastRoadsideFuelAssistanceAt?: number;
   /** Başarılı yakıt transaction retry anahtarları; save sırasında son N kayıt tutulur. */

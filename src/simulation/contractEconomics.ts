@@ -4,6 +4,7 @@
 
 import {
   contractBalance,
+  contractGenerationBalance,
   contractPaymentBalance,
   deliveryBalance,
   deliveryCostBalance,
@@ -21,7 +22,11 @@ import type {
   WorldEvent,
 } from '../types/game';
 import { clamp } from '../utils/math';
-import { getFuelRequiredForDistance } from '../utils/truckFuel';
+import {
+  calculateFuelUsed as calculateCanonicalFuelUsed,
+  getFuelRequiredForDistance,
+} from '../utils/truckFuel';
+import { calculateVehicleSpeed } from '../utils/vehiclePerformance';
 import { sanitizeFuelPricePerLiter } from './economy';
 import { resolveActiveEventModifiers } from './globalMarketSnapshot';
 
@@ -39,6 +44,7 @@ export interface ContractTripCostInput {
 export interface ContractTripCostBreakdown {
   fuelCost: number;
   maintenanceCost: number;
+  tollCost: number;
   routeDifficultyCost: number;
   cargoHandlingCost: number;
   riskReserve: number;
@@ -84,6 +90,76 @@ export interface ContractEconomicsResult {
   requiredStartingCash: number;
   fuelPricePerLiter: number;
   fuelLiters: number;
+  estimatedDurationHours: number;
+  effectiveAverageSpeedKmh: number;
+}
+
+export interface ContractViabilityResult {
+  accepted: boolean;
+  reason:
+    | 'viable'
+    | 'margin-below-minimum'
+    | 'capacity-impossible'
+    | 'invalid-economics';
+  minimumMarginPercent: number;
+  economics: ContractEconomicsResult;
+}
+
+export function calculateContractDurationHours(params: {
+  distanceKm: number;
+  cargoTons: number;
+  truckCapacityTons?: number;
+  routeDifficulty?: number;
+  truckSpeedKmh?: number;
+  truckCondition?: number;
+  driverSpeed?: number;
+  trailerType?: Trailer['type'];
+  eventSpeedMultiplier?: number;
+}): {
+  durationHours: number;
+  effectiveAverageSpeedKmh: number;
+  travelHours: number;
+  handlingHours: number;
+  restHours: number;
+} {
+  const distanceKm = Math.max(0, Number(params.distanceKm) || 0);
+  const speed = calculateVehicleSpeed({
+    truck: {
+      speed: Number(params.truckSpeedKmh) || contractBalance.averageSpeedKmh,
+      capacity: Math.max(
+        1,
+        Number(params.truckCapacityTons) || Number(params.cargoTons) || 25,
+      ),
+      condition: params.truckCondition ?? 100,
+    },
+    driver: { speed: params.driverSpeed ?? 0 },
+    route: { difficulty: params.routeDifficulty ?? 0 },
+    cargoWeightTons: params.cargoTons,
+    trailer: params.trailerType
+      ? {
+          type: params.trailerType,
+        }
+      : null,
+    eventSpeedMultiplier: params.eventSpeedMultiplier,
+  });
+  const effectiveAverageSpeedKmh = speed.effectiveSpeedKmh;
+  const travelHours = distanceKm / effectiveAverageSpeedKmh;
+  const handlingHours =
+    contractBalance.baseHandlingHours +
+    Math.max(0, Number(params.cargoTons) || 0) *
+      contractBalance.handlingHoursPerTon;
+  const completedDrivingBlocks = Math.floor(
+    travelHours / contractBalance.drivingBlockHours,
+  );
+  const restHours =
+    completedDrivingBlocks * contractBalance.restHoursPerDrivingBlock;
+  return {
+    durationHours: Math.max(0.25, travelHours + handlingHours + restHours),
+    effectiveAverageSpeedKmh,
+    travelHours,
+    handlingHours,
+    restHours,
+  };
 }
 
 /** Ağır yüklerde maliyet çarpanı */
@@ -162,17 +238,19 @@ export function estimateContractTripCostBreakdown(
   const cargoHandlingCost = Math.round(amount * deliveryCostBalance.cargoHandlingCostPerTon);
 
   const directCost = fuelCost + maintenanceCost + routeDifficultyCost + cargoHandlingCost;
+  const tollCost = Math.round(Math.max(0, input.route.tollCost ?? 0));
   const riskReserve = Math.round(
-    directCost * resolveRiskReserveRate(urgency, routeDifficulty),
+    (directCost + tollCost) * resolveRiskReserveRate(urgency, routeDifficulty),
   );
 
   return {
     fuelCost,
     maintenanceCost,
+    tollCost,
     routeDifficultyCost,
     cargoHandlingCost,
     riskReserve,
-    baseTripCost: directCost + riskReserve,
+    baseTripCost: directCost + tollCost + riskReserve,
   };
 }
 
@@ -318,10 +396,19 @@ export function isContractEconomicallyViable(input: ContractPaymentInput): boole
  * - totalCost / estimatedProfit nakit kalemleriyle hizalıdır (şoför hariç).
  */
 export function calculateContractEconomics(params: {
-  contract: Pick<Contract, 'payment' | 'amount' | 'distanceKm' | 'urgency'>;
-  truck?: Pick<Truck, 'fuelConsumptionPerKm' | 'capacity'> | null;
+  contract: Pick<
+    Contract,
+    'payment' | 'amount' | 'distanceKm' | 'urgency' | 'contractType' | 'riskLevel'
+  >;
+  truck?: Pick<
+    Truck,
+    'fuelConsumptionPerKm' | 'capacity' | 'maintenanceCost' | 'condition' | 'speed'
+  > | null;
   trailer?: Trailer | null;
-  driver?: Pick<Driver, 'fuelSaving' | 'dailySalary' | 'salaryPerDay'> | null;
+  driver?: Pick<
+    Driver,
+    'fuelSaving' | 'dailySalary' | 'salaryPerDay' | 'speed'
+  > | null;
   route: Route;
   globalEconomySnapshot: {
     fuelPricePerLiter: number;
@@ -330,6 +417,14 @@ export function calculateContractEconomics(params: {
   activeEvents?: WorldEvent[];
   playerModifiers?: { costMultiplier?: number };
   estimatedDurationHours?: number;
+  /** Üretim sırasında ödeme de bu helper içinden hesaplanır. */
+  pricingContext?: {
+    product: Product;
+    originMarket: ProductMarket;
+    destinationMarket: ProductMarket;
+    requiredLevel?: number;
+    isMarketOpportunity?: boolean;
+  };
 }): ContractEconomicsResult {
   const fuelPricePerLiter = sanitizeFuelPricePerLiter(
     params.globalEconomySnapshot.fuelPricePerLiter,
@@ -350,10 +445,19 @@ export function calculateContractEconomics(params: {
     maintenanceCostMultiplier: maintenanceMult,
   });
 
+  const duration = calculateContractDurationHours({
+    distanceKm: params.route.distanceKm,
+    cargoTons: params.contract.amount,
+    routeDifficulty: params.route.difficulty,
+    truckSpeedKmh: params.truck?.speed,
+    truckCapacityTons: params.truck?.capacity,
+    truckCondition: params.truck?.condition,
+    driverSpeed: params.driver?.speed,
+    trailerType: params.trailer?.type,
+  });
   const durationHours = Math.max(
-    1,
-    params.estimatedDurationHours ??
-      params.contract.distanceKm / Math.max(1, contractBalance.averageSpeedKmh),
+    0.25,
+    params.estimatedDurationHours ?? duration.durationHours,
   );
 
   // Bilgilendirici allocated cost — settlement / ledger / offline cash'e dahil edilmez
@@ -364,27 +468,80 @@ export function calculateContractEconomics(params: {
   );
 
   const playerMult = clamp(params.playerModifiers?.costMultiplier ?? 1, 0.5, 1.5);
-  const fuel = Math.round(breakdown.fuelCost * playerMult);
-  const maintenance = Math.round(breakdown.maintenanceCost * playerMult);
+  const fuelLiters = params.truck
+    ? calculateCanonicalFuelUsed({
+        distanceKm: params.route.distanceKm,
+        truck: params.truck,
+        cargoWeightTons: params.contract.amount,
+        routeDifficulty: params.route.difficulty,
+        driverFuelSaving: params.driver?.fuelSaving ?? 0,
+      })
+    : estimateContractFuelLiters({
+        amount: params.contract.amount,
+        route: params.route,
+        urgency: params.contract.urgency ?? 0,
+        globalEconomy: { fuelPrice: fuelPricePerLiter } as GlobalEconomy,
+        fuelConsumptionPerKm: fuelPerKm,
+      });
+  const fuel = Math.round(
+    fuelLiters * fuelPricePerLiter * deliveryCostBalance.fuelCostMultiplier * playerMult,
+  );
+  const routeDifficulty = clamp(params.route.difficulty ?? 0.5, 0, 1);
+  const weightMultiplier = getCargoWeightCostMultiplier(params.contract.amount);
+  const conditionFactor =
+    1 + Math.max(0, (100 - (params.truck?.condition ?? 100)) / 100) * 0.15;
+  const maintenancePerKm = Math.max(
+    (params.truck?.maintenanceCost ?? contractBalance.estimateMaintenancePerKm) *
+      deliveryCostBalance.maintenanceCostMultiplier,
+    deliveryBalance.maintenanceCostPerKm *
+      deliveryCostBalance.maintenanceCostMultiplier,
+  );
+  const maintenance = Math.round(
+    params.route.distanceKm *
+      maintenancePerKm *
+      weightMultiplier *
+      (1 + routeDifficulty * 0.4) *
+      conditionFactor *
+      deliveryCostBalance.routeDifficultyCostMultiplier *
+      maintenanceMult *
+      playerMult,
+  );
   const other = Math.round(
     (breakdown.routeDifficultyCost + breakdown.cargoHandlingCost) * playerMult,
   );
   const penaltyReserve = Math.round(breakdown.riskReserve * playerMult);
-  const trailer = 0;
-  const toll = 0;
+  const contractType = params.contract.contractType ?? 'standard';
+  const trailerRatePerKm =
+    contractType === 'refrigerated'
+      ? 0.08
+      : contractType === 'bulk'
+        ? 0.05
+        : params.trailer
+          ? 0.025
+          : 0;
+  const trailer = Math.round(
+    params.route.distanceKm * trailerRatePerKm * playerMult,
+  );
+  const toll = Math.round(Math.max(0, params.route.tollCost ?? 0) * playerMult);
 
-  // Nakit hizalı toplam — şoför maaşı periodic cost'ta kesilir
-  const totalCost = fuel + maintenance + trailer + toll + penaltyReserve + other;
-  const revenue = Math.max(0, params.contract.payment);
+  // Nakit hizalı toplam — şoför maaşı periodic, penaltyReserve ise yalnız risk bilgisidir.
+  const totalCost = fuel + maintenance + trailer + toll + other;
+  const revenue = params.pricingContext
+    ? calculateBalancedContractPayment({
+        amount: params.contract.amount,
+        product: params.pricingContext.product,
+        originMarket: params.pricingContext.originMarket,
+        destinationMarket: params.pricingContext.destinationMarket,
+        route: params.route,
+        urgency: params.contract.urgency,
+        globalEconomy: { fuelPrice: fuelPricePerLiter } as GlobalEconomy,
+        requiredLevel: params.pricingContext.requiredLevel,
+        isMarketOpportunity: params.pricingContext.isMarketOpportunity,
+      })
+    : Math.max(0, params.contract.payment);
   const estimatedProfit = revenue - totalCost;
   const profitMarginPercent =
     revenue > 0 ? Math.round((estimatedProfit / revenue) * 1000) / 10 : 0;
-
-  const fuelLiters = getFuelRequiredForDistance({
-    distanceKm: params.contract.distanceKm,
-    fuelConsumptionPerKm: fuelPerKm,
-    loadMultiplier: getCargoWeightCostMultiplier(params.contract.amount),
-  });
 
   return {
     revenue,
@@ -403,5 +560,63 @@ export function calculateContractEconomics(params: {
     requiredStartingCash: Math.max(0, fuel + Math.round(maintenance * 0.25)),
     fuelPricePerLiter,
     fuelLiters: Math.round(fuelLiters * 10) / 10,
+    estimatedDurationHours: Math.round(durationHours * 100) / 100,
+    effectiveAverageSpeedKmh:
+      Math.round(duration.effectiveAverageSpeedKmh * 10) / 10,
+  };
+}
+
+export function evaluateContractViability(params: {
+  contract: Contract;
+  route: Route;
+  globalEconomySnapshot: {
+    fuelPricePerLiter: number;
+    modifiers?: { maintenanceMultiplier?: number };
+  };
+  activeEvents?: WorldEvent[];
+  maxFleetCapacityTons?: number;
+}): ContractViabilityResult {
+  const economics = calculateContractEconomics({
+    contract: params.contract,
+    route: params.route,
+    globalEconomySnapshot: params.globalEconomySnapshot,
+    activeEvents: params.activeEvents,
+  });
+  const values = [
+    economics.revenue,
+    economics.totalCost,
+    economics.estimatedProfit,
+    economics.profitMarginPercent,
+    economics.estimatedDurationHours,
+  ];
+  if (values.some((value) => !Number.isFinite(value))) {
+    return {
+      accepted: false,
+      reason: 'invalid-economics',
+      minimumMarginPercent: 0,
+      economics,
+    };
+  }
+  if (
+    params.maxFleetCapacityTons != null &&
+    params.contract.amount > params.maxFleetCapacityTons
+  ) {
+    return {
+      accepted: false,
+      reason: 'capacity-impossible',
+      minimumMarginPercent: 0,
+      economics,
+    };
+  }
+  const isStandard = (params.contract.contractType ?? 'standard') === 'standard';
+  const minimumMargin = isStandard
+    ? contractGenerationBalance.standardMinimumMargin
+    : contractGenerationBalance.specialMinimumMargin;
+  const accepted = economics.profitMarginPercent / 100 >= minimumMargin;
+  return {
+    accepted,
+    reason: accepted ? 'viable' : 'margin-below-minimum',
+    minimumMarginPercent: minimumMargin * 100,
+    economics,
   };
 }

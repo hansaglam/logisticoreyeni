@@ -344,10 +344,16 @@ export function summarizeFinanceLedger(entries: FinanceLedgerEntry[] | undefined
   let tradeSaleTotal = 0;
 
   for (const entry of entries ?? []) {
-    if (entry.category === 'trade_purchase' && entry.type === 'expense') {
+    if (
+      (entry.category === 'trade_purchase' || entry.category === 'market_purchase') &&
+      entry.type === 'expense'
+    ) {
       tradePurchaseTotal += entry.amount;
     }
-    if (entry.category === 'trade_sale' && entry.type === 'income') {
+    if (
+      (entry.category === 'trade_sale' || entry.category === 'market_sale') &&
+      entry.type === 'income'
+    ) {
       tradeSaleTotal += entry.amount;
     }
   }

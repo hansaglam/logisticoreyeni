@@ -99,6 +99,15 @@ function fuelTone(percent: number): string {
   return '#E8EEF7';
 }
 
+function formatEtaHours(hours: number | null): string {
+  if (hours == null || !Number.isFinite(hours) || hours < 0) return 'ETA bekleniyor';
+  const totalMinutes = Math.max(0, Math.round(hours * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (wholeHours <= 0) return `ETA ${minutes} dk`;
+  return `ETA ${wholeHours} sa ${minutes} dk`;
+}
+
 export interface MapTruckTrackingCardProps {
   truck: Truck;
   delivery?: Delivery;
@@ -165,6 +174,9 @@ function MapTruckTrackingCard({
   const speedLabel = metrics.isMoving
     ? `${metrics.currentSpeedKmh} km/sa`
     : '0 km/sa';
+  const etaLabel = metrics.isMoving
+    ? formatEtaHours(metrics.etaHours)
+    : 'ETA beklemede';
 
   const CardWrapper = onPress ? TouchableOpacity : View;
 
@@ -230,7 +242,10 @@ function MapTruckTrackingCard({
               {metrics.isMoving ? kmLabel : speedLabel}
             </Text>
             {metrics.isMoving ? (
-              <Text style={styles.metricSubValue}>{speedLabel}</Text>
+              <>
+                <Text style={styles.metricSubValue}>{speedLabel}</Text>
+                <Text style={styles.metricEtaValue}>{etaLabel}</Text>
+              </>
             ) : null}
           </View>
         </View>
@@ -437,6 +452,14 @@ const styles = StyleSheet.create({
     fontSize: 8.5,
     fontWeight: '600',
     color: MAP_MUTED,
+  },
+  metricEtaValue: {
+    maxWidth: 74,
+    fontSize: 7.5,
+    lineHeight: 10,
+    fontWeight: '600',
+    color: MAP_MUTED,
+    textAlign: 'center',
   },
   rightCol: {
     alignItems: 'flex-end',

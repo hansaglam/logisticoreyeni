@@ -112,8 +112,12 @@ export function calculateContractDurationHours(params: {
   routeDifficulty?: number;
   truckSpeedKmh?: number;
   truckCondition?: number;
+  truckVehicleClass?: Truck['vehicleClass'];
+  truckCatalogId?: string;
   driverSpeed?: number;
+  driverTier?: Driver['tier'];
   trailerType?: Trailer['type'];
+  trailerCapacityBonusTons?: number;
   eventSpeedMultiplier?: number;
 }): {
   durationHours: number;
@@ -131,13 +135,16 @@ export function calculateContractDurationHours(params: {
         Number(params.truckCapacityTons) || Number(params.cargoTons) || 25,
       ),
       condition: params.truckCondition ?? 100,
+      vehicleClass: params.truckVehicleClass,
+      catalogId: params.truckCatalogId,
     },
-    driver: { speed: params.driverSpeed ?? 0 },
+    driver: { speed: params.driverSpeed ?? 0, tier: params.driverTier },
     route: { difficulty: params.routeDifficulty ?? 0 },
     cargoWeightTons: params.cargoTons,
     trailer: params.trailerType
       ? {
           type: params.trailerType,
+          capacityBonusTons: params.trailerCapacityBonusTons,
         }
       : null,
     eventSpeedMultiplier: params.eventSpeedMultiplier,
@@ -402,12 +409,20 @@ export function calculateContractEconomics(params: {
   >;
   truck?: Pick<
     Truck,
-    'fuelConsumptionPerKm' | 'capacity' | 'maintenanceCost' | 'condition' | 'speed'
+    | 'id'
+    | 'catalogId'
+    | 'name'
+    | 'vehicleClass'
+    | 'fuelConsumptionPerKm'
+    | 'capacity'
+    | 'maintenanceCost'
+    | 'condition'
+    | 'speed'
   > | null;
   trailer?: Trailer | null;
   driver?: Pick<
     Driver,
-    'fuelSaving' | 'dailySalary' | 'salaryPerDay' | 'speed'
+    'fuelSaving' | 'dailySalary' | 'salaryPerDay' | 'speed' | 'tier'
   > | null;
   route: Route;
   globalEconomySnapshot: {
@@ -452,8 +467,12 @@ export function calculateContractEconomics(params: {
     truckSpeedKmh: params.truck?.speed,
     truckCapacityTons: params.truck?.capacity,
     truckCondition: params.truck?.condition,
+    truckVehicleClass: params.truck?.vehicleClass,
+    truckCatalogId: params.truck?.catalogId,
     driverSpeed: params.driver?.speed,
+    driverTier: params.driver?.tier,
     trailerType: params.trailer?.type,
+    trailerCapacityBonusTons: params.trailer?.capacityBonusTons,
   });
   const durationHours = Math.max(
     0.25,

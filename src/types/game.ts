@@ -255,6 +255,14 @@ export type TruckStatus =
 /** Kamyon sahiplik türü */
 export type TruckOwnershipType = 'owned' | 'leased';
 
+/** Şehirler arası operasyon ortalama hız sınıfı. */
+export type VehicleClass =
+  | 'light-truck'
+  | 'medium-truck'
+  | 'heavy-truck'
+  | 'tractor'
+  | 'special-heavy';
+
 /** Kamyon kira dönemi */
 export type TruckLeasePeriod = 'daily' | 'weekly' | 'monthly';
 
@@ -274,6 +282,8 @@ export interface Truck {
   totalMileageKm?: number;
   /** Temel sürüş hızı (km/saat) */
   speed: number;
+  /** Canonical operasyon hız sınıfı; eski save'lerde kapasite/katalogdan türetilir. */
+  vehicleClass?: VehicleClass;
   /** Güvenilirlik (0–100) — düşük değer arıza riskini artırır */
   reliability: number;
   /** km başına bakım maliyeti ($/km) — tamir hesabında düşük değerler için sabit çarpan kullanılır */

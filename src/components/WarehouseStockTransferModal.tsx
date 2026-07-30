@@ -34,6 +34,7 @@ import { getCityName, getProductName } from '../utils/entityLookup';
 import { getTruckFuelReadiness } from '../utils/truckFuel';
 import type { ProductId, Warehouse } from '../types/game';
 import TruckRefuelSheet from './TruckRefuelSheet';
+import FuelRequirementModal from './FuelRequirementModal';
 
 export interface WarehouseStockTransferModalProps {
   visible: boolean;
@@ -78,12 +79,15 @@ export default function WarehouseStockTransferModal({
   const [quantity, setQuantity] = useState<number>(tradingBalance.defaultTradeQuantity);
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [refuelVisible, setRefuelVisible] = useState(false);
+  const [fuelRequirementVisible, setFuelRequirementVisible] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
     setDestinationWarehouseId(null);
     setQuantity(tradingBalance.defaultTradeQuantity);
     setSelectedTruckId(null);
+    setFuelRequirementVisible(false);
+    setRefuelVisible(false);
   }, [visible, sourceWarehouse?.id, productId]);
 
   const inventoryQty = useMemo(() => {
@@ -205,6 +209,10 @@ export default function WarehouseStockTransferModal({
       onError?.('Hedef depo seçmelisin.');
       return;
     }
+    if (fuelReadiness?.canCompleteWithoutRefuel === false) {
+      setFuelRequirementVisible(true);
+      return;
+    }
     const result = startWarehouseStockTransfer({
       sourceWarehouseId: sourceWarehouse.id,
       destinationWarehouseId,
@@ -228,11 +236,7 @@ export default function WarehouseStockTransferModal({
     return null;
   }
 
-  const canStart = Boolean(
-    validation?.success &&
-      preview &&
-      fuelReadiness?.canCompleteWithoutRefuel !== false,
-  );
+  const canStartBase = Boolean(validation?.success && preview);
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -358,43 +362,28 @@ export default function WarehouseStockTransferModal({
           </ScrollView>
 
           <View style={styles.footer}>
-            {fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel ? (
-              <View style={styles.fuelWarning}>
-                <Text style={styles.fuelWarningText}>
-                  Bu rota için {Math.ceil(fuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda{' '}
-                  {Math.floor(fuelReadiness.currentFuelL)} L var.
-                </Text>
-                <View style={styles.fuelWarningActions}>
-                  <ActionButton
-                    label="Yakıt Al"
-                    icon="fuel"
-                    onPress={() => setRefuelVisible(true)}
-                    compact
-                    style={styles.fuelWarningButton}
-                  />
-                  <ActionButton
-                    label="Vazgeç"
-                    onPress={onClose}
-                    variant="secondary"
-                    compact
-                    style={styles.fuelWarningButton}
-                  />
-                </View>
-              </View>
-            ) : null}
             <ActionButton
               label={
                 fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel
                   ? 'Yakıt gerekli'
-                  : canStart
+                  : canStartBase
                     ? 'Transferi Başlat'
                     : 'Seçimleri tamamla'
               }
               onPress={handleStart}
-              disabled={!canStart}
+              disabled={!canStartBase}
               variant="primary"
             />
           </View>
+          <FuelRequirementModal
+            visible={fuelRequirementVisible}
+            readiness={fuelReadiness}
+            onCancel={() => setFuelRequirementVisible(false)}
+            onBuyFuel={() => {
+              setFuelRequirementVisible(false);
+              setRefuelVisible(true);
+            }}
+          />
           <TruckRefuelSheet
             visible={refuelVisible}
             truck={selectedTruck ?? null}

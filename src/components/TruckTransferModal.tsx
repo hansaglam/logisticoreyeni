@@ -26,6 +26,7 @@ import { colors, formatMoney, spacing, typography } from '../theme';
 import { formatCityLocative } from '../theme/format';
 import type { Route, Truck } from '../types/game';
 import TruckRefuelSheet from './TruckRefuelSheet';
+import FuelRequirementModal from './FuelRequirementModal';
 
 const TRANSFER_CITY_IDS = CITY_IDS;
 const FOOTER_SUMMARY_HEIGHT = 72;
@@ -96,6 +97,7 @@ export default function TruckTransferModal({
 
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [refuelVisible, setRefuelVisible] = useState(false);
+  const [fuelRequirementVisible, setFuelRequirementVisible] = useState(false);
 
   const fromCityId = useMemo(() => {
     if (!truck) return 'izmir';
@@ -160,6 +162,8 @@ export default function TruckTransferModal({
   useEffect(() => {
     if (!visible) {
       setSelectedCityId(null);
+      setFuelRequirementVisible(false);
+      setRefuelVisible(false);
       return;
     }
 
@@ -174,14 +178,12 @@ export default function TruckTransferModal({
     });
   }, [visible, initialToCityId, fromCityId, cityOptions]);
 
-  const canStart =
+  const canStartBase =
     !!truck &&
     !!assignedDriver &&
     !!selectedOption &&
     !selectedOption.disabled &&
-    !!selectedOption.route &&
-    fuelReadiness?.canCompleteWithoutRefuel !== false;
-
+    !!selectedOption.route;
   const buttonLabel = resolveTransferButtonLabel({
     hasDriver: !!assignedDriver,
     hasSelection: !!selectedOption?.route,
@@ -189,6 +191,10 @@ export default function TruckTransferModal({
 
   const handleStart = () => {
     if (!truck || !selectedCityId) return;
+    if (fuelReadiness?.canCompleteWithoutRefuel === false) {
+      setFuelRequirementVisible(true);
+      return;
+    }
 
     const result = startTruckTransfer({
       truckId: truck.id,
@@ -296,30 +302,6 @@ export default function TruckTransferModal({
           </ScrollView>
 
           <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
-            {fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel ? (
-              <View style={styles.fuelWarning}>
-                <Text style={styles.fuelWarningText}>
-                  Bu rota için {Math.ceil(fuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda{' '}
-                  {Math.floor(fuelReadiness.currentFuelL)} L var.
-                </Text>
-                <View style={styles.fuelWarningActions}>
-                  <ActionButton
-                    label="Yakıt Al"
-                    icon="fuel"
-                    onPress={() => setRefuelVisible(true)}
-                    compact
-                    style={styles.fuelWarningButton}
-                  />
-                  <ActionButton
-                    label="Vazgeç"
-                    onPress={onClose}
-                    variant="secondary"
-                    compact
-                    style={styles.fuelWarningButton}
-                  />
-                </View>
-              </View>
-            ) : null}
             {selectedOption?.route ? (
               <View style={styles.summaryRow}>
                 <View style={styles.summaryBlock}>
@@ -353,12 +335,21 @@ export default function TruckTransferModal({
                   : buttonLabel
               }
               onPress={handleStart}
-              disabled={!canStart}
+              disabled={!canStartBase}
               icon="truck"
               fullWidth
               style={styles.startButton}
             />
           </View>
+          <FuelRequirementModal
+            visible={fuelRequirementVisible}
+            readiness={fuelReadiness}
+            onCancel={() => setFuelRequirementVisible(false)}
+            onBuyFuel={() => {
+              setFuelRequirementVisible(false);
+              setRefuelVisible(true);
+            }}
+          />
           <TruckRefuelSheet
             visible={refuelVisible}
             truck={truck}

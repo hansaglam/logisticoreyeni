@@ -9,7 +9,7 @@
  * - userTrackingUsageDescription app.config.js içinde tanımlı; runtime izin akışı eklenmeli
  */
 
-import { Platform, TurboModuleRegistry } from 'react-native';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
 import {
   getProductionRewardedAdUnitId,
@@ -49,6 +49,13 @@ function getMobileAdsModule(): MobileAdsModule | null {
 
   if (!nativeModuleChecked) {
     nativeModuleChecked = true;
+    // Expo Go'nun native binary'sinde AdMob modülü yoktur. require çağrısı
+    // TurboModuleRegistry.getEnforcing ile RedBox ürettiği için önce native
+    // kayıt kontrolü yapılır; development/production build'lerde modül vardır.
+    if (!NativeModules.RNGoogleMobileAdsModule) {
+      nativeModuleAvailable = false;
+      return null;
+    }
     try {
       // Önce native modülün binary'de kayıtlı olduğunu throw etmeyen get() ile
       // doğrula; SDK import'u getEnforcing() çağırdığı için modül yoksa

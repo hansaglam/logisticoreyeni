@@ -73,7 +73,6 @@ const isDevBuild = typeof __DEV__ !== 'undefined' && __DEV__;
 export const DEFAULT_TRUCK_CITY_ID = 'izmir';
 
 /** Şoför hız etkisi çarpanı — speed ±100 skalasında */
-const DRIVER_SPEED_EFFECT = 0.28;
 
 /** Düşük dikkat → ek aşınma çarpanı üst sınırı */
 const DRIVER_ATTENTION_WEAR_MAX = 0.35;
@@ -875,7 +874,10 @@ export function formatCapacityExceededMessage(
 
 /** Rota zorluğu hız çarpanı — yüksek zorluk = daha yavaş */
 export function calculateRouteSpeedMultiplier(route: Route): number {
-  return clamp(1 - route.difficulty * 0.3, 0.55, 1);
+  return calculateVehicleSpeed({
+    truck: { speed: 70, capacity: 25, condition: 100 },
+    route,
+  }).routeMultiplier;
 }
 
 /**
@@ -883,12 +885,15 @@ export function calculateRouteSpeedMultiplier(route: Route): number {
  * Pozitif speed hızlandırır, negatif yavaşlatır.
  */
 export function calculateDriverSpeedMultiplier(driver: Driver): number {
-  return clamp(1 + (driver.speed / 100) * DRIVER_SPEED_EFFECT, 0.65, 1.4);
+  return calculateVehicleSpeed({
+    truck: { speed: 70, capacity: 25, condition: 100 },
+    driver,
+  }).driverMultiplier;
 }
 
 /** Kamyon kondisyonu hız çarpanı — düşük kondisyon yavaşlatır */
 export function calculateConditionSpeedMultiplier(truck: Truck): number {
-  return clamp(0.5 + (truck.condition / 100) * 0.5, 0.45, 1);
+  return calculateVehicleSpeed({ truck }).conditionMultiplier;
 }
 
 /** Ortalama seyahat hızını hesaplar (km/saat) */
@@ -911,7 +916,10 @@ export function calculateTravelHours(
     truckSpeedKmh: truck.speed,
     truckCapacityTons: truck.capacity,
     truckCondition: truck.condition,
+    truckVehicleClass: truck.vehicleClass,
+    truckCatalogId: truck.catalogId,
     driverSpeed: driver.speed,
+    driverTier: driver.tier,
   }).durationHours;
 }
 

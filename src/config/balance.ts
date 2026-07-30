@@ -23,6 +23,49 @@ export const simulationTimeScale = {
   maxGameSpeed: 8,
 } as const;
 
+/** Bir operasyon saatinin oyuncunun beklediği gerçek zaman karşılığı. */
+export const SIMULATION_MS_PER_TRAVEL_HOUR =
+  simulationTimeScale.normalMsPerGameHour;
+
+/** Ağır taşıt seyir hızı — bütün simulation ve ETA tüketicilerinin balance kaynağı. */
+export const vehicleSpeedBalance = {
+  baseAverageSpeedKmh: {
+    'light-truck': 80,
+    'medium-truck': 70,
+    'heavy-truck': 62,
+    tractor: 65,
+    'special-heavy': 55,
+  },
+  trailerMultiplier: {
+    standard: 0.94,
+    refrigerated: 0.93,
+    heavy: 0.88,
+    container: 0.94,
+  },
+  /** Route roadType metadata henüz yok; V1 bütün rotalarda aynı ortalama kullanır. */
+  routeAverageMultiplier: 0.93,
+  roadTypeMultiplier: {
+    motorway: 1,
+    'divided-road': 0.94,
+    'standard-road': 0.88,
+    'mountain-road': 0.78,
+    'urban-entry': 0.65,
+  },
+  driverTierMultiplier: {
+    rookie: 0.96,
+    standard: 1,
+    experienced: 1.03,
+    expert: 1.05,
+    international: 1.05,
+  },
+  minMovingSpeedKmh: 35,
+  maxOperationSpeedKmh: 90,
+  minCatalogPerformanceMultiplier: 0.94,
+  maxCatalogPerformanceMultiplier: 1.06,
+  minExternalModifier: 0.75,
+  maxExternalModifier: 1.1,
+} as const;
+
 /** @deprecated Zaman sabitleri için simulationTimeScale kullanın. */
 export const timeBalance = {
   ...simulationTimeScale,

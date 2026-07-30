@@ -53,6 +53,7 @@ import type { StatusBadgeVariant } from './ui';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import TutorialOverlay from './tutorial/TutorialOverlay';
 import TruckRefuelSheet from './TruckRefuelSheet';
+import FuelRequirementModal from './FuelRequirementModal';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
 
@@ -74,6 +75,8 @@ export type ContractAssignmentModalProps = {
 interface ContractSummaryFinancials {
   expense: number;
   profit: number;
+  durationHours: number;
+  effectiveSpeedKmh: number;
 }
 
 function formatTimeLeft(hours: number): string {
@@ -369,6 +372,7 @@ export default function ContractAssignmentModal({
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [refuelVisible, setRefuelVisible] = useState(false);
+  const [fuelRequirementVisible, setFuelRequirementVisible] = useState(false);
 
   const safeTrucks = trucks ?? [];
   const safeDrivers = drivers ?? [];
@@ -450,6 +454,8 @@ export default function ContractAssignmentModal({
     return {
       expense: preview.estimatedTripCost,
       profit: preview.estimatedOperationalProfit,
+      durationHours: preview.estimatedTravelHours,
+      effectiveSpeedKmh: preview.effectiveAverageSpeedKmh,
     };
   }, [
     contract,
@@ -496,6 +502,8 @@ export default function ContractAssignmentModal({
 
     setSelectedTruckId(defaultTruck?.truck.id ?? null);
     setSelectedDriverId(defaultDriver?.driver.id ?? null);
+    setFuelRequirementVisible(false);
+    setRefuelVisible(false);
   }, [visible, contract?.id, eligibleTrucks.length, eligibleDrivers.length]);
 
   if (!contract) {
@@ -693,7 +701,13 @@ export default function ContractAssignmentModal({
             ) : null}
           </View>
           {summaryFinancials ? (
-            <Text style={styles.summaryFinanceHint}>{CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT}</Text>
+            <>
+              <Text style={styles.summaryOperationMeta}>
+                Operasyon süresi: {formatTimeLeft(summaryFinancials.durationHours)} · Ortalama hız:{' '}
+                {Math.round(summaryFinancials.effectiveSpeedKmh)} km/sa
+              </Text>
+              <Text style={styles.summaryFinanceHint}>{CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT}</Text>
+            </>
           ) : null}
         </AppCard>
 
@@ -766,30 +780,6 @@ export default function ContractAssignmentModal({
 
         <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
           <Text style={styles.selectionSummary}>{selectionSummary}</Text>
-          {canConfirm && fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel ? (
-            <View style={styles.fuelWarning}>
-              <Text style={styles.fuelWarningText}>
-                Bu rota için {Math.ceil(fuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda{' '}
-                {Math.floor(fuelReadiness.currentFuelL)} L var.
-              </Text>
-              <View style={styles.fuelWarningActions}>
-                <ActionButton
-                  label="Yakıt Al"
-                  icon="fuel"
-                  onPress={() => setRefuelVisible(true)}
-                  compact
-                  style={styles.fuelWarningButton}
-                />
-                <ActionButton
-                  label="Vazgeç"
-                  onPress={onClose}
-                  variant="secondary"
-                  compact
-                  style={styles.fuelWarningButton}
-                />
-              </View>
-            </View>
-          ) : null}
           {!canConfirm ? (
             <Text style={styles.footerHint}>Başlamak için uygun kamyon ve şoför seç.</Text>
           ) : null}
@@ -799,10 +789,13 @@ export default function ContractAssignmentModal({
               if (
                 selectedTruckId &&
                 selectedDriverId &&
-                canConfirm &&
-                fuelReadiness?.canCompleteWithoutRefuel !== false
+                canConfirm
               ) {
-                onConfirm(selectedTruckId, selectedDriverId);
+                if (fuelReadiness?.canCompleteWithoutRefuel === false) {
+                  setFuelRequirementVisible(true);
+                } else {
+                  onConfirm(selectedTruckId, selectedDriverId);
+                }
               }
             }}
           >
@@ -817,15 +810,16 @@ export default function ContractAssignmentModal({
                 if (
                   selectedTruckId &&
                   selectedDriverId &&
-                  canConfirm &&
-                  fuelReadiness?.canCompleteWithoutRefuel !== false
+                  canConfirm
                 ) {
-                  onConfirm(selectedTruckId, selectedDriverId);
+                  if (fuelReadiness?.canCompleteWithoutRefuel === false) {
+                    setFuelRequirementVisible(true);
+                  } else {
+                    onConfirm(selectedTruckId, selectedDriverId);
+                  }
                 }
               }}
-              disabled={
-                !canConfirm || (fuelReadiness != null && !fuelReadiness.canCompleteWithoutRefuel)
-              }
+              disabled={!canConfirm}
               fullWidth
               variant="primary"
               style={styles.startButton}
@@ -833,6 +827,15 @@ export default function ContractAssignmentModal({
           </TutorialTarget>
         </View>
       </View>
+      <FuelRequirementModal
+        visible={fuelRequirementVisible}
+        readiness={fuelReadiness}
+        onCancel={() => setFuelRequirementVisible(false)}
+        onBuyFuel={() => {
+          setFuelRequirementVisible(false);
+          setRefuelVisible(true);
+        }}
+      />
       <TruckRefuelSheet
         visible={refuelVisible}
         truck={selectedTruckOption?.truck ?? null}
@@ -912,10 +915,16 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontWeight: '700',
   },
+  summaryOperationMeta: {
+    ...typography.caption,
+    color: colors.info,
+    fontWeight: '700',
+    marginTop: spacing.sm,
+  },
   summaryFinanceHint: {
     ...typography.caption,
     color: colors.textMuted,
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
     lineHeight: 16,
   },
   scroll: {

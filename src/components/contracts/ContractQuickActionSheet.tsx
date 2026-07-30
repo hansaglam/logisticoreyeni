@@ -23,6 +23,11 @@ import {
 import { useGameStore } from '../../store/gameStore';
 import { getSnapshotFuelPrice } from '../../simulation/globalMarketSnapshot';
 import {
+  calculateDeliveryFuelLiters,
+  getTruckFuelReadiness,
+} from '../../utils/truckFuel';
+import { getRoute as findRoute } from '../../data/routes';
+import {
   buildDriverOptions,
   buildTruckOptions,
   getDriverBadge,
@@ -35,7 +40,7 @@ import {
   type TruckOption,
 } from '../../utils/assignmentOptions';
 import { getContractAvailabilityLabel } from '../../utils/contractAvailabilityDisplay';
-import { getCityName, getProductName } from '../../utils/entityLookup';
+import { getCityName, getProductByIdSafe, getProductName } from '../../utils/entityLookup';
 import { colors, formatMoney, formatRatioPercent, spacing, typography } from '../../theme';
 import type { Contract, Driver, Truck } from '../../types/game';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
@@ -44,6 +49,8 @@ import { TutorialTarget } from '../../tutorial/TutorialTarget';
 import type { TutorialTargetId } from '../../tutorial/types';
 import { ActionButton, GameIcon, IconButton, StatusBadge } from '../ui';
 import AssignmentPickerSheet from './AssignmentPickerSheet';
+import FuelRequirementModal from '../FuelRequirementModal';
+import TruckRefuelSheet from '../TruckRefuelSheet';
 
 const OVERLAY_OPACITY = 0.52;
 const SHEET_RADIUS = 24;
@@ -203,6 +210,8 @@ export default function ContractQuickActionSheet({
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [pickerMode, setPickerMode] = useState<'truck' | 'driver' | null>(null);
+  const [fuelRequirementVisible, setFuelRequirementVisible] = useState(false);
+  const [refuelVisible, setRefuelVisible] = useState(false);
 
   const cargoWeight = contract ? getContractCargoWeight(contract) : 0;
   const isExpired = contract ? currentTime >= (contract.expiresAt ?? 0) : false;
@@ -219,6 +228,28 @@ export default function ContractQuickActionSheet({
 
   const selectedTruckOption = truckOptions.find((option) => option.truck.id === selectedTruckId);
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
+  const fuelReadiness = useMemo(() => {
+    if (!contract || !selectedTruckOption?.truck || !selectedDriverOption?.driver) return null;
+    const route = findRoute(contract.originCityId, contract.destinationCityId);
+    const product = getProductByIdSafe(contract.productId);
+    if (!route || !product) return null;
+    return getTruckFuelReadiness(
+      selectedTruckOption.truck,
+      calculateDeliveryFuelLiters({
+        contract,
+        truck: selectedTruckOption.truck,
+        driver: selectedDriverOption.driver,
+        route,
+        product,
+      }),
+      globalEconomy.fuelPrice ?? 0,
+    );
+  }, [
+    contract,
+    globalEconomy.fuelPrice,
+    selectedDriverOption?.driver,
+    selectedTruckOption?.truck,
+  ]);
 
   const assignmentPreview = useMemo(() => {
     if (!contract) return null;
@@ -256,6 +287,8 @@ export default function ContractQuickActionSheet({
     setSelectedDriverId(bestDriver?.driver.id ?? null);
     setDetailsExpanded(false);
     setPickerMode(null);
+    setFuelRequirementVisible(false);
+    setRefuelVisible(false);
   }, [visible, contract?.id, truckOptions.length, driverOptions.length]);
 
   if (!visible || !contract || !preview) {
@@ -319,6 +352,10 @@ export default function ContractQuickActionSheet({
 
   const handleStart = () => {
     if (!selectedTruckId || !selectedDriverId || !canStart) return;
+    if (fuelReadiness?.canCompleteWithoutRefuel === false) {
+      setFuelRequirementVisible(true);
+      return;
+    }
     onStartDelivery(selectedTruckId, selectedDriverId);
   };
 
@@ -428,7 +465,18 @@ export default function ContractQuickActionSheet({
                     Mesafe: {Math.round(contract.distanceKm)} km
                   </Text>
                   <Text style={styles.detailLine}>
-                    Tahmini süre: {formatTimeLeft(preview.estimatedTravelHours)}
+                    Operasyon süresi:{' '}
+                    {formatTimeLeft(
+                      assignmentPreview?.estimatedTravelHours ?? preview.estimatedTravelHours,
+                    )}
+                  </Text>
+                  <Text style={styles.detailLine}>
+                    Ortalama hız:{' '}
+                    {Math.round(
+                      assignmentPreview?.effectiveAverageSpeedKmh ??
+                        preview.effectiveAverageSpeedKmh,
+                    )}{' '}
+                    km/sa
                   </Text>
                   <Text style={styles.detailHint}>{CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT}</Text>
                 </View>
@@ -542,6 +590,20 @@ export default function ContractQuickActionSheet({
         onSelectTruck={setSelectedTruckId}
         onSelectDriver={setSelectedDriverId}
         onClose={() => setPickerMode(null)}
+      />
+      <FuelRequirementModal
+        visible={fuelRequirementVisible}
+        readiness={fuelReadiness}
+        onCancel={() => setFuelRequirementVisible(false)}
+        onBuyFuel={() => {
+          setFuelRequirementVisible(false);
+          setRefuelVisible(true);
+        }}
+      />
+      <TruckRefuelSheet
+        visible={refuelVisible}
+        truck={selectedTruckOption?.truck ?? null}
+        onClose={() => setRefuelVisible(false)}
       />
     </>
   );

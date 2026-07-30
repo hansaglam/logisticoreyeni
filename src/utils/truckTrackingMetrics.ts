@@ -12,6 +12,7 @@ import {
   getTruckFuelConsumptionPerKm,
   normalizeTruckFuel,
 } from './truckFuel';
+import { calculateVehicleTravelMetrics } from './vehiclePerformance';
 
 export interface TruckTrackingMetrics {
   fuelPercent: number;
@@ -19,6 +20,7 @@ export interface TruckTrackingMetrics {
   fuelTankCapacityL: number;
   remainingDistanceKm: number;
   currentSpeedKmh: number;
+  etaHours: number | null;
   isMoving: boolean;
 }
 
@@ -136,13 +138,20 @@ export function getTruckTrackingMetrics(
       Math.round((activeDelivery.distanceKm ?? 0) * (1 - progress)),
     );
     const isMoving = progress < 1 && activeDelivery.status !== 'paused';
+    const currentSpeedKmh = resolveSpeedKmh(
+      isMoving,
+      activeDelivery.currentSpeedKmh,
+    );
+    const eta = calculateVehicleTravelMetrics({
+      routeDistanceKm: activeDelivery.distanceKm ?? 0,
+      progress,
+      effectiveSpeedKmh: currentSpeedKmh,
+    });
     return {
       ...fuel,
       remainingDistanceKm,
-      currentSpeedKmh: resolveSpeedKmh(
-        isMoving,
-        activeDelivery.currentSpeedKmh,
-      ),
+      currentSpeedKmh,
+      etaHours: isMoving && currentSpeedKmh > 0 ? eta.remainingTravelHours : null,
       isMoving,
     };
   }
@@ -162,13 +171,20 @@ export function getTruckTrackingMetrics(
       Math.round(activeTransfer.distanceKm * (1 - progress)),
     );
     const isMoving = progress < 1 && activeTransfer.status !== 'paused';
+    const currentSpeedKmh = resolveSpeedKmh(
+      isMoving,
+      activeTransfer.currentSpeedKmh,
+    );
+    const eta = calculateVehicleTravelMetrics({
+      routeDistanceKm: activeTransfer.distanceKm,
+      progress,
+      effectiveSpeedKmh: currentSpeedKmh,
+    });
     return {
       ...fuel,
       remainingDistanceKm,
-      currentSpeedKmh: resolveSpeedKmh(
-        isMoving,
-        activeTransfer.currentSpeedKmh,
-      ),
+      currentSpeedKmh,
+      etaHours: isMoving && currentSpeedKmh > 0 ? eta.remainingTravelHours : null,
       isMoving,
     };
   }
@@ -183,6 +199,7 @@ export function getTruckTrackingMetrics(
     fuelTankCapacityL,
     remainingDistanceKm: 0,
     currentSpeedKmh: 0,
+    etaHours: null,
     isMoving: false,
   };
 }

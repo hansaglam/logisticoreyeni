@@ -60,6 +60,7 @@ export const CONTRACT_OPERATIONAL_PROFIT_DETAIL_HINT =
 
 export interface ContractPreview {
   estimatedTravelHours: number;
+  effectiveAverageSpeedKmh: number;
   estimatedFuelCost: number;
   estimatedMaintenanceCost: number;
   /** Yakıt + bakım tahmini — günlük sabit giderler dahil değil */
@@ -309,6 +310,9 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
   let estimatedTravelHours =
     canonicalEconomics?.estimatedDurationHours ??
     estimateTravelHoursFallback(contract);
+  const effectiveAverageSpeedKmh =
+    canonicalEconomics?.effectiveAverageSpeedKmh ??
+    Math.max(0, (route?.distanceKm ?? contract.distanceKm ?? 0) / Math.max(estimatedTravelHours, 0.1));
   let estimatedFuelCost =
     canonicalEconomics?.costs.fuel ??
     estimateFuelCostFallback(contract, safeEconomy);
@@ -354,6 +358,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
 
   return {
     estimatedTravelHours,
+    effectiveAverageSpeedKmh,
     estimatedFuelCost,
     estimatedMaintenanceCost,
     estimatedTripCost,

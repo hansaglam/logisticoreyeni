@@ -14,6 +14,7 @@ import {
   initializeApp,
 } from 'firebase-admin/app';
 import { Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 import {
   calculateMarketplaceRecommendedPrice,
@@ -28,6 +29,8 @@ const CONFIRMED = process.argv.includes('--confirm-production');
 const PROJECT_ID = 'logisticore-53ab4';
 const REGION = 'us-central1';
 const SOURCE_SAVE_VERSION = 7;
+const FUNCTIONS_SERVICE_ACCOUNT =
+  '363783837598-compute@developer.gserviceaccount.com';
 
 interface TestIdentity {
   uid: string;
@@ -87,14 +90,15 @@ async function createTestIdentity(
   label: string,
   suffix: string,
 ): Promise<TestIdentity> {
-  void label;
-  void suffix;
+  const uid = `smoke-${label}-${suffix}`.slice(0, 120);
+  const customToken = await createCanaryCustomToken(uid);
   const response = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        token: customToken,
         returnSecureToken: true,
       }),
     },
@@ -112,18 +116,65 @@ async function createTestIdentity(
   return { uid: body.localId, idToken: body.idToken };
 }
 
-async function deleteTestIdentity(
-  apiKey: string,
-  identity: TestIdentity,
-): Promise<void> {
-  await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${apiKey}`,
+function base64Url(value: string | Buffer): string {
+  return Buffer.from(value)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+async function createCanaryCustomToken(uid: string): Promise<string> {
+  const cliAuth = require('firebase-tools/lib/auth') as {
+    getGlobalDefaultAccount: () =>
+      | { tokens?: { refresh_token?: string } }
+      | undefined;
+    getAccessToken: (
+      refreshToken?: string,
+      scopes?: string[],
+    ) => Promise<{ access_token?: string }>;
+  };
+  const scopes = require('firebase-tools/lib/scopes') as {
+    CLOUD_PLATFORM: string;
+  };
+  const refreshToken = cliAuth.getGlobalDefaultAccount()?.tokens?.refresh_token;
+  const access = await cliAuth.getAccessToken(refreshToken, [scopes.CLOUD_PLATFORM]);
+  if (!access.access_token) throw new Error('CANARY_OAUTH_TOKEN_UNAVAILABLE');
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const unsigned = `${base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${base64Url(
+    JSON.stringify({
+      iss: FUNCTIONS_SERVICE_ACCOUNT,
+      sub: FUNCTIONS_SERVICE_ACCOUNT,
+      aud: 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',
+      iat: nowSeconds,
+      exp: nowSeconds + 3600,
+      uid,
+      claims: { logisticoreSmokeTest: true },
+    }),
+  )}`;
+  const response = await fetch(
+    `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(FUNCTIONS_SERVICE_ACCOUNT)}:signBlob`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ idToken: identity.idToken }),
+      headers: {
+        authorization: `Bearer ${access.access_token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ payload: Buffer.from(unsigned).toString('base64') }),
     },
   );
+  const body = await response.json() as { signedBlob?: string; error?: { message?: string } };
+  if (!response.ok || !body.signedBlob) {
+    throw new Error(`CANARY_SIGN_BLOB_FAILED:${body.error?.message ?? response.status}`);
+  }
+  return `${unsigned}.${base64Url(Buffer.from(body.signedBlob, 'base64'))}`;
+}
+
+async function deleteTestIdentity(
+  _apiKey: string,
+  identity: TestIdentity,
+): Promise<void> {
+  await getAuth().deleteUser(identity.uid);
 }
 
 function truck(
@@ -235,6 +286,7 @@ async function main(): Promise<void> {
       truck(`smoke-${suffix}-seller-1`),
       truck(`smoke-${suffix}-seller-2`),
       truck(`smoke-${suffix}-seller-3`),
+      truck(`smoke-${suffix}-seller-4`),
     ];
     await Promise.all([
       firestore.doc(`users/${seller.uid}`).set({ smokeTest: true }),
@@ -269,6 +321,49 @@ async function main(): Promise<void> {
     );
     assert(ownStateRead.ok, 'OWNER_MARKETPLACE_STATE_READ_FAILED');
     assert(foreignStateRead.status === 403, 'FOREIGN_STATE_READ_NOT_DENIED');
+
+    const invalidPayloads = [
+      {
+        transactionId: `smoke-invalid-unknown-${suffix}`,
+        idempotencyKey: `smoke-invalid-unknown-key-${suffix}`,
+        truckId: sellerTrucks[0]!.truckId,
+        askingPrice: 40_000,
+        unknownField: true,
+      },
+      {
+        transactionId: 'x'.repeat(129),
+        idempotencyKey: `smoke-invalid-long-tx-key-${suffix}`,
+        truckId: sellerTrucks[0]!.truckId,
+        askingPrice: 40_000,
+      },
+      {
+        transactionId: `smoke-invalid-long-key-${suffix}`,
+        idempotencyKey: 'x'.repeat(129),
+        truckId: sellerTrucks[0]!.truckId,
+        askingPrice: 40_000,
+      },
+      {
+        transactionId: `smoke-invalid-price-${suffix}`,
+        idempotencyKey: `smoke-invalid-price-key-${suffix}`,
+        truckId: sellerTrucks[0]!.truckId,
+        askingPrice: Number.NaN,
+      },
+      {
+        transactionId: `smoke-invalid-save-version-${suffix}`,
+        idempotencyKey: `smoke-invalid-save-version-key-${suffix}`,
+        truckId: sellerTrucks[0]!.truckId,
+        askingPrice: 40_000,
+        clientSaveVersion: -1,
+      },
+    ];
+    for (const payload of invalidPayloads) {
+      const invalid = await callable<MarketplaceActionResult>(
+        'createVehicleListing',
+        seller,
+        payload,
+      );
+      assert(!invalid.ok && invalid.reason === 'invalid-request', 'VALIDATION_REGRESSION');
+    }
 
     const firstPrice = calculateMarketplaceRecommendedPrice(sellerTrucks[0]!);
     const firstCreate = await callable<
@@ -329,6 +424,22 @@ async function main(): Promise<void> {
     assert(
       directTransactionWrite.status === 403,
       'DIRECT_TRANSACTION_WRITE_NOT_DENIED',
+    );
+
+    const invalidListingVersion = await callable<MarketplaceActionResult>(
+      'purchaseVehicleListing',
+      buyer,
+      {
+        transactionId: `smoke-invalid-listing-version-${suffix}`,
+        idempotencyKey: `smoke-invalid-listing-version-key-${suffix}`,
+        listingId: firstCreate.data.listingId,
+        listingVersion: 0,
+        quotedPrice: firstPrice,
+      },
+    );
+    assert(
+      !invalidListingVersion.ok && invalidListingVersion.reason === 'invalid-request',
+      'LISTING_VERSION_VALIDATION_FAILED',
     );
 
     const firstPurchaseId = `smoke-purchase-1-${suffix}`;
@@ -445,6 +556,68 @@ async function main(): Promise<void> {
       'DUPLICATE_CONCURRENT_OWNERSHIP',
     );
 
+    const deletionPrice = calculateMarketplaceRecommendedPrice(sellerTrucks[2]!);
+    const deletionListing = await callable<
+      MarketplaceActionResult<{ listingId: string; recommendedPrice: number }>
+    >('createVehicleListing', seller, {
+      transactionId: `smoke-delete-create-${suffix}`,
+      idempotencyKey: `smoke-delete-create-key-${suffix}`,
+      truckId: sellerTrucks[2]!.truckId,
+      askingPrice: deletionPrice,
+      clientSaveVersion: SOURCE_SAVE_VERSION,
+    });
+    assert(deletionListing.ok && deletionListing.data, 'DELETION_LISTING_CREATE_FAILED');
+    listingIds.push(deletionListing.data.listingId);
+    await Promise.all([
+      firestore.doc(`users/${seller.uid}/saves/current`).set({
+        ownerUid: seller.uid,
+        schemaVersion: 1,
+        saveVersion: SOURCE_SAVE_VERSION,
+      }),
+      firestore.doc(`users/${seller.uid}/marketAlerts/smoke`).set({
+        ownerUid: seller.uid,
+        isActive: true,
+      }),
+      firestore.doc(`users/${seller.uid}/notificationTokens/smoke`).set({
+        ownerUid: seller.uid,
+        token: 'redacted-smoke-token',
+      }),
+      firestore.doc(`leaderboards/smoke-${suffix}/entries/${seller.uid}`).set({
+        uid: seller.uid,
+        companyScore: 1,
+      }),
+    ]);
+    const deletion = await callable<{
+      ok: boolean;
+      cancelledListings: number;
+      leaderboardEntriesDeleted: number;
+    }>('prepareVehicleMarketplaceAccountDeletion', seller, {});
+    assert(deletion.ok, 'ACCOUNT_DELETION_PREPARE_FAILED');
+    const [deletedUser, deletedLeaderboard, cancelledListing] = await Promise.all([
+      firestore.doc(`users/${seller.uid}`).get(),
+      firestore.doc(`leaderboards/smoke-${suffix}/entries/${seller.uid}`).get(),
+      firestore.doc(`vehicleMarketplaceListings/${deletionListing.data.listingId}`).get(),
+    ]);
+    assert(!deletedUser.exists, 'ACCOUNT_USER_TREE_NOT_DELETED');
+    assert(!deletedLeaderboard.exists, 'ACCOUNT_LEADERBOARD_NOT_DELETED');
+    assert(cancelledListing.data()?.status === 'cancelled', 'ACCOUNT_LISTING_NOT_CANCELLED');
+    assert(
+      String(cancelledListing.data()?.sellerUid ?? '').startsWith('deleted:'),
+      'ACCOUNT_LISTING_UID_NOT_ANONYMIZED',
+    );
+    const orphanQueries = await Promise.all([
+      firestore.collection('vehicleMarketplaceIdempotency').where('uid', '==', seller.uid).get(),
+      firestore.collection('vehicleMarketplaceActionReceipts').where('uid', '==', seller.uid).get(),
+      firestore.collection('vehicleMarketplaceRateLimits').where('uid', '==', seller.uid).get(),
+      firestore.collection('vehicleMarketplaceListings').where('sellerUid', '==', seller.uid).get(),
+      firestore.collection('vehicleMarketplaceTransactions').where('sellerUid', '==', seller.uid).get(),
+      firestore.collection('vehicleMarketplaceTransactions').where('buyerUid', '==', seller.uid).get(),
+    ]);
+    const orphanRecordCount = orphanQueries.reduce((sum, query) => sum + query.size, 0);
+    assert(orphanRecordCount === 0, `ACCOUNT_ORPHAN_RECORDS:${orphanRecordCount}`);
+    await deleteTestIdentity(apiKey, seller);
+    await assertAuthUserMissing(seller.uid);
+
     console.info('[vehicle-marketplace-production-smoke]', {
       result: 'complete',
       sellerUidHash: uidHash(seller.uid),
@@ -454,6 +627,10 @@ async function main(): Promise<void> {
       ownerReadIsolationVerified: true,
       concurrentWinners: 1,
       restoreResurrectionBlocked: true,
+      validationRegressionPassed: true,
+      rateLimitHealthy: true,
+      accountDeletionPassed: true,
+      orphanRecordCount: 0,
       durationMs: Date.now() - startedAt,
     });
   } finally {
@@ -485,6 +662,7 @@ async function main(): Promise<void> {
       for (const collectionName of [
         'vehicleMarketplaceIdempotency',
         'vehicleMarketplaceActionReceipts',
+        'vehicleMarketplaceRateLimits',
       ]) {
         const documents = await firestore
           .collection(collectionName)
@@ -502,6 +680,20 @@ async function main(): Promise<void> {
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+async function assertAuthUserMissing(uid: string): Promise<void> {
+  try {
+    await getAuth().getUser(uid);
+  } catch (error) {
+    const code =
+      error && typeof error === 'object' && 'code' in error
+        ? String((error as { code?: unknown }).code)
+        : '';
+    if (code === 'auth/user-not-found') return;
+    throw error;
+  }
+  throw new Error('AUTH_USER_NOT_DELETED');
 }
 
 void main().catch((error) => {

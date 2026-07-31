@@ -830,6 +830,10 @@ export async function prepareMarketplaceAccountDeletion(
   nowMs = Date.now(),
 ): Promise<{ cancelledListings: number; anonymizedListings: number }> {
   const now = Timestamp.fromMillis(nowMs);
+  const anonymizedUid = `deleted:${createHash('sha256')
+    .update(uid)
+    .digest('hex')
+    .slice(0, 20)}`;
   let cancelledListings = 0;
   let anonymizedListings = 0;
   let listingCursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
@@ -848,6 +852,7 @@ export async function prepareMarketplaceAccountDeletion(
       if (!fresh.exists) return;
       const listing = fresh.data() as MarketplaceListingDocument;
       const update: Record<string, unknown> = {
+        sellerUid: anonymizedUid,
         sellerDisplayName: 'Silinmiş Oyuncu',
         updatedAt: now,
         version: listing.version + 1,
@@ -863,6 +868,42 @@ export async function prepareMarketplaceAccountDeletion(
     listingCursor = listings.docs.at(-1);
     if (listings.size < 200) break;
   }
+  while (true) {
+    const purchasedListings = await firestore
+      .collection('vehicleMarketplaceListings')
+      .where('buyerUid', '==', uid)
+      .limit(200)
+      .get();
+    if (purchasedListings.empty) break;
+    const batch = firestore.batch();
+    for (const document of purchasedListings.docs) {
+      batch.update(document.ref, {
+        buyerUid: anonymizedUid,
+        updatedAt: now,
+      });
+    }
+    await batch.commit();
+    if (purchasedListings.size < 200) break;
+  }
+  for (const identityField of ['sellerUid', 'buyerUid'] as const) {
+    while (true) {
+      const transactions = await firestore
+        .collection('vehicleMarketplaceTransactions')
+        .where(identityField, '==', uid)
+        .limit(200)
+        .get();
+      if (transactions.empty) break;
+      const batch = firestore.batch();
+      for (const document of transactions.docs) {
+        batch.update(document.ref, {
+          [identityField]: anonymizedUid,
+          updatedAt: now,
+        });
+      }
+      await batch.commit();
+      if (transactions.size < 200) break;
+    }
+  }
   const personalCollections = [
     `users/${uid}/marketplaceHistory`,
     `users/${uid}/marketplaceLedger`,
@@ -875,6 +916,24 @@ export async function prepareMarketplaceAccountDeletion(
       for (const document of documents.docs) {
         batch.delete(document.ref);
       }
+      await batch.commit();
+      if (documents.size < 400) break;
+    }
+  }
+  for (const collectionName of [
+    'vehicleMarketplaceIdempotency',
+    'vehicleMarketplaceActionReceipts',
+    'vehicleMarketplaceRateLimits',
+  ]) {
+    while (true) {
+      const documents = await firestore
+        .collection(collectionName)
+        .where('uid', '==', uid)
+        .limit(400)
+        .get();
+      if (documents.empty) break;
+      const batch = firestore.batch();
+      for (const document of documents.docs) batch.delete(document.ref);
       await batch.commit();
       if (documents.size < 400) break;
     }

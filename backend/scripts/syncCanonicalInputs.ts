@@ -6,6 +6,11 @@ import {
   ECONOMY_CONFIG_VERSION,
   MARKET_TICK_INTERVAL_MS,
 } from '../../src/simulation/economyClock';
+import {
+  fleetManagementBalance,
+  vehicleMarketplaceBalance,
+} from '../../src/config/balance';
+import { STARTER_TRUCK, TRUCK_MARKET } from '../../src/data/trucks';
 
 const catalog = CITIES.map((city) => ({
   id: city.id,
@@ -36,6 +41,16 @@ writeFileSync(
     `export const ECONOMY_CONFIG_VERSION = ${ECONOMY_CONFIG_VERSION} as const;`,
     `export const MARKET_TICK_INTERVAL_MS = ${MARKET_TICK_INTERVAL_MS} as const;`,
     `export const CANONICAL_CITY_MARKET_CATALOG = ${JSON.stringify(catalog, null, 2)} as const;`,
+    `export const CANONICAL_TRUCK_MARKET_CATALOG = ${JSON.stringify([
+      STARTER_TRUCK,
+      ...TRUCK_MARKET,
+    ].map((truck) => ({
+      templateId: truck.id,
+      purchasePrice: truck.purchasePrice,
+      fuelTankCapacityL: truck.fuelTankCapacityL ?? null,
+    })), null, 2)} as const;`,
+    `export const FLEET_MANAGEMENT_BALANCE = ${JSON.stringify(fleetManagementBalance, null, 2)} as const;`,
+    `export const VEHICLE_MARKETPLACE_BALANCE = ${JSON.stringify(vehicleMarketplaceBalance, null, 2)} as const;`,
     '',
   ].join('\n'),
   'utf8',
@@ -44,4 +59,5 @@ writeFileSync(
 console.log('[global-economy-worker] canonical inputs synchronized', {
   configVersion: ECONOMY_CONFIG_VERSION,
   cities: catalog.length,
+  trucks: TRUCK_MARKET.length + 1,
 });

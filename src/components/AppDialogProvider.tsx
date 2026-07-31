@@ -23,6 +23,8 @@ export interface AppDialogAction {
   label: string;
   onPress: () => void;
   variant?: 'primary' | 'secondary' | 'destructive';
+  disabled?: boolean;
+  loading?: boolean;
 }
 
 export interface AppDialogOptions {

@@ -209,6 +209,9 @@ export default function FleetScreen() {
   const pendingFleetSubTab = useGameStore((state) => state.pendingFleetSubTab);
   const clearPendingFleetSubTab = useGameStore((state) => state.clearPendingFleetSubTab);
   const requestNavigationToShop = useGameStore((state) => state.requestNavigationToShop);
+  const openVehicleMarketplaceForTruck = useGameStore(
+    (state) => state.openVehicleMarketplaceForTruck,
+  );
 
   const [activeTab, setActiveTab] = useState<FleetTab>('trucks');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
@@ -804,6 +807,9 @@ export default function FleetScreen() {
                   onRefuel={setRefuelSheetTruck}
                   onRoadsideFuel={setRoadsideFuelJobId}
                   onSell={handleSellTruck}
+                  onMarketplaceSell={(selectedTruck) =>
+                    openVehicleMarketplaceForTruck(selectedTruck.id)
+                  }
                   onShowSellBlocked={handleShowSellBlocked}
                 />
               ))}

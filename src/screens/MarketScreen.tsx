@@ -44,6 +44,7 @@ import {
 } from '../components/market/marketTheme';
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
+import { MARKET_ALARMS_ENABLED } from '../config/backendRoadmap';
 import {
   ActionButton,
   AppCard,
@@ -727,14 +728,14 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
             </Text>
           </Pressable>
         ) : null}
-        <Pressable style={styles.productAlarmBtn} onPress={() => onAlarmPress(market.productId)}>
+        {MARKET_ALARMS_ENABLED ? <Pressable style={styles.productAlarmBtn} onPress={() => onAlarmPress(market.productId)}>
           <GameIcon name="notification" size={narrowScreen ? 12 : 13} color={colors.textSecondary} />
           {!narrowScreen ? (
             <Text style={styles.productAlarmBtnText} numberOfLines={1}>
               Alarm
             </Text>
           ) : null}
-        </Pressable>
+        </Pressable> : null}
       </View>
     </View>
   );
@@ -1643,13 +1644,13 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               ))}
             </ScrollView>
 
-            <ActiveMarketAlertsSection
+            {MARKET_ALARMS_ENABLED ? <ActiveMarketAlertsSection
               alerts={activeMarketAlerts}
               selectedCityId={selectedCityId}
               onPressAlert={handlePressMarketAlert}
               onDeleteAlert={(alertId) => void handleDeleteMarketAlert(alertId)}
               hideEmptyHint={isOnboardingMarket}
-            />
+            /> : null}
 
             {!selectedCity ? (
               <EmptyState title="Şehir seç" message="Ürün fiyatlarını görmek için bir şehir seç." icon="city" />
@@ -1806,10 +1807,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           onBuy={handleBuyProductPress}
           onSell={handleSellProductPress}
           onCreateAlert={handleAlarmProductPress}
+          alertsEnabled={MARKET_ALARMS_ENABLED}
         />
       ) : null}
 
-      <MarketAlertModal
+      {MARKET_ALARMS_ENABLED ? <MarketAlertModal
         visible={alertModalVisible}
         city={selectedCity}
         product={alertProduct}
@@ -1820,7 +1822,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         }
         onConfirm={handleConfirmAlert}
         onClose={closeAlertModal}
-      />
+      /> : null}
 
       <TradeProductModal
         visible={tradeModalVisible}

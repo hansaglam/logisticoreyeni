@@ -34,8 +34,15 @@ import {
   MAX_SAVE_SIZE_BYTES,
 } from '../utils/cloudSaveSize';
 import { findUnexpectedUndefinedPaths, sanitizeForFirestore } from '../utils/sanitizeForFirestore';
+import { sha256 } from '../utils/authNonce';
+import { canonicalJsonStringify } from '../utils/canonicalJson';
 import { getWeeklySeasonDocId } from '../utils/leaderboardSeason';
-import { getFirestoreSafe, isFirebaseEnabled, resetFirebaseFirestoreCache } from './firebase';
+import {
+  getFirebaseAuthSafe,
+  getFirestoreSafe,
+  isFirebaseEnabled,
+  resetFirebaseFirestoreCache,
+} from './firebase';
 
 function devCloudLog(message: string, ...args: unknown[]): void {
   if (__DEV__) {
@@ -79,6 +86,8 @@ export function resetCloudFirestoreCache(): void {
 }
 
 export interface CloudSavePayload {
+  ownerUid: string;
+  authProvider: string;
   schemaVersion: number;
   version: number;
   saveVersion: number;
@@ -86,15 +95,21 @@ export interface CloudSavePayload {
   deviceUpdatedAt: number;
   gameState: SaveGamePayload;
   summary: CloudSaveSummary;
+  payloadChecksum?: string;
+  syncId?: string;
 }
 
 export interface CloudSaveMeta {
+  ownerUid: string;
+  authProvider: string;
   schemaVersion: number;
   version: number;
   saveVersion: number;
   updatedAt: number;
   deviceUpdatedAt: number;
   summary: CloudSaveSummary;
+  payloadChecksum?: string;
+  syncId?: string;
 }
 
 export interface CloudSaveOperationResult {
@@ -153,6 +168,18 @@ export async function verifyCloudSaveReadBack(
   }
 }
 
+export type CloudSaveLoadFailureReason =
+  | 'cloud-save-not-found'
+  | 'cloud-save-corrupted'
+  | 'owner-mismatch'
+  | 'network-error'
+  | 'permission-denied'
+  | 'unknown';
+
+export type CloudSaveLoadResult =
+  | { ok: true; payload: CloudSavePayload }
+  | { ok: false; reason: CloudSaveLoadFailureReason; errorCode?: string };
+
 function getAppVersion(): string {
   return Constants.expoConfig?.version ?? '1.0.0';
 }
@@ -206,7 +233,10 @@ function getFirestoreErrorInfo(error: unknown): { code: string | null; message: 
   };
 }
 
-function parseCloudSaveDocument(data: Record<string, unknown>): CloudSavePayload | null {
+async function parseCloudSaveDocument(
+  data: Record<string, unknown>,
+  expectedOwnerUid: string,
+): Promise<CloudSavePayload | null> {
   const gameState = data.gameState;
   if (!gameState || typeof gameState !== 'object') {
     return null;
@@ -232,6 +262,11 @@ function parseCloudSaveDocument(data: Record<string, unknown>): CloudSavePayload
             Number((summaryRaw as CloudSaveSummary).lastLocalSaveAt) ||
             Number(data.deviceUpdatedAt) ||
             0,
+          driversCount: Number((summaryRaw as CloudSaveSummary).driversCount) || 0,
+          trailersCount: Number((summaryRaw as CloudSaveSummary).trailersCount) || 0,
+          activeJobsCount: Number((summaryRaw as CloudSaveSummary).activeJobsCount) || 0,
+          progressionScore: Number((summaryRaw as CloudSaveSummary).progressionScore) || 0,
+          saveVersion: Number((summaryRaw as CloudSaveSummary).saveVersion) || 1,
         }
       : buildCloudSaveSummaryFromPayload(gameState as SaveGamePayload);
 
@@ -240,7 +275,21 @@ function parseCloudSaveDocument(data: Record<string, unknown>): CloudSavePayload
       ? data.deviceUpdatedAt
       : timestampToMillis(data.deviceUpdatedAt);
 
+  const ownerUid =
+    typeof data.ownerUid === 'string' && data.ownerUid.length > 0
+      ? data.ownerUid
+      : expectedOwnerUid;
+  if (ownerUid !== expectedOwnerUid) return null;
+  const checksum = typeof data.payloadChecksum === 'string' ? data.payloadChecksum : undefined;
+  if (checksum) {
+    const calculated = await sha256(canonicalJsonStringify(gameState));
+    if (!calculated.ok || calculated.hash !== checksum) return null;
+  }
+
   return {
+    ownerUid,
+    authProvider:
+      typeof data.authProvider === 'string' ? data.authProvider : 'legacy',
     schemaVersion: typeof data.schemaVersion === 'number' ? data.schemaVersion : 1,
     version: typeof data.version === 'number' ? data.version : 1,
     saveVersion:
@@ -251,6 +300,8 @@ function parseCloudSaveDocument(data: Record<string, unknown>): CloudSavePayload
     deviceUpdatedAt,
     gameState: gameState as SaveGamePayload,
     summary,
+    payloadChecksum: checksum,
+    syncId: typeof data.syncId === 'string' ? data.syncId : undefined,
   };
 }
 
@@ -427,6 +478,10 @@ export async function saveGameToCloud(
       documentPath,
     };
   }
+  const authUser = getFirebaseAuthSafe()?.currentUser;
+  if (!authUser || authUser.uid !== uid) {
+    return { ok: false, error: 'owner-mismatch', errorCode: 'owner-mismatch' };
+  }
 
   const unexpectedUndefinedPaths = findUnexpectedUndefinedPaths(savePayload);
   warnUnexpectedUndefinedPaths(unexpectedUndefinedPaths);
@@ -435,6 +490,11 @@ export async function saveGameToCloud(
   const sanitizedGameState = sanitizeForFirestore(savePayload);
   const sanitizedSummary = sanitizeForFirestore(summary);
   const deviceUpdatedAt = savePayload.meta?.savedAt ?? Date.now();
+  const checksumResult = await sha256(canonicalJsonStringify(sanitizedGameState));
+  if (!checksumResult.ok) {
+    return { ok: false, error: 'payload-checksum-failed' };
+  }
+  const syncId = `${uid}:${savePayload.meta?.saveVersion ?? savePayload.version}:${deviceUpdatedAt}`;
 
   let estimatedSize = 0;
   try {
@@ -498,6 +558,8 @@ export async function saveGameToCloud(
 
     const saveVersion = savePayload.meta?.saveVersion ?? savePayload.version ?? 1;
     const cloudSaveData = sanitizeForFirestore({
+      ownerUid: uid,
+      authProvider: provider,
       schemaVersion: 1,
       version: savePayload.version ?? 1,
       saveVersion,
@@ -506,6 +568,8 @@ export async function saveGameToCloud(
       deviceUpdatedAt,
       gameState: sanitizedGameState,
       summary: sanitizedSummary,
+      payloadChecksum: checksumResult.hash,
+      syncId,
     });
 
     const statusData = sanitizeForFirestore({
@@ -574,32 +638,59 @@ export async function saveGameToCloud(
   }
 }
 
-export async function loadGameFromCloud(uid: string): Promise<CloudSavePayload | null> {
+export async function loadGameFromCloudDetailed(uid: string): Promise<CloudSaveLoadResult> {
   if (!uid || !isFirebaseEnabled()) {
-    return null;
+    return { ok: false, reason: 'network-error' };
   }
 
   const db = getFirestoreSafe();
   if (!db) {
-    return null;
+    return { ok: false, reason: 'network-error' };
+  }
+  const authUid = getFirebaseAuthSafe()?.currentUser?.uid;
+  if (!authUid || authUid !== uid) {
+    return { ok: false, reason: 'owner-mismatch' };
   }
 
   try {
     const snapshot = await getDoc(doc(db, 'users', uid, 'saves', CURRENT_SAVE_DOC_ID));
     if (!snapshot.exists()) {
-      return null;
+      return { ok: false, reason: 'cloud-save-not-found' };
     }
 
     const data = snapshot.data();
     if (!data || typeof data !== 'object') {
-      return null;
+      return { ok: false, reason: 'cloud-save-corrupted' };
     }
 
-    return parseCloudSaveDocument(data as Record<string, unknown>);
+    if (typeof data.ownerUid === 'string' && data.ownerUid !== uid) {
+      return { ok: false, reason: 'owner-mismatch' };
+    }
+    const payload = await parseCloudSaveDocument(data as Record<string, unknown>, uid);
+    return payload
+      ? { ok: true, payload }
+      : { ok: false, reason: 'cloud-save-corrupted' };
   } catch (error) {
     console.warn('[cloud-save] loadGameFromCloud failed:', error);
-    return null;
+    const info = getFirestoreErrorInfo(error);
+    if (info.code === 'permission-denied' || info.code === 'firestore/permission-denied') {
+      return { ok: false, reason: 'permission-denied', errorCode: info.code ?? undefined };
+    }
+    if (
+      info.code === 'unavailable' ||
+      info.code === 'firestore/unavailable' ||
+      info.code === 'deadline-exceeded' ||
+      info.code === 'firestore/deadline-exceeded'
+    ) {
+      return { ok: false, reason: 'network-error', errorCode: info.code ?? undefined };
+    }
+    return { ok: false, reason: 'unknown', errorCode: info.code ?? undefined };
   }
+}
+
+export async function loadGameFromCloud(uid: string): Promise<CloudSavePayload | null> {
+  const result = await loadGameFromCloudDetailed(uid);
+  return result.ok ? result.payload : null;
 }
 
 export async function getCloudSaveMeta(uid: string): Promise<CloudSaveMeta | null> {
@@ -609,12 +700,16 @@ export async function getCloudSaveMeta(uid: string): Promise<CloudSaveMeta | nul
   }
 
   return {
+    ownerUid: payload.ownerUid,
+    authProvider: payload.authProvider,
     schemaVersion: payload.schemaVersion,
     version: payload.version,
     saveVersion: payload.saveVersion,
     updatedAt: payload.updatedAt,
     deviceUpdatedAt: payload.deviceUpdatedAt,
     summary: payload.summary,
+    payloadChecksum: payload.payloadChecksum,
+    syncId: payload.syncId,
   };
 }
 
@@ -663,6 +758,18 @@ export async function deleteUserCloudData(uid: string): Promise<CloudSaveOperati
 
   try {
     devCloudLog('[cloud-save] deleteUserCloudData started', uid);
+    const { prepareVehicleMarketplaceAccountDeletion } = await import(
+      './vehicleMarketplaceService'
+    );
+    const marketplacePrepared =
+      await prepareVehicleMarketplaceAccountDeletion();
+    if (!marketplacePrepared) {
+      return {
+        ok: false,
+        error: 'marketplace-account-cleanup-failed',
+        errorCode: 'cloud-delete-failed',
+      };
+    }
     await deleteActiveLeaderboardEntry(uid);
     const batch = writeBatch(db);
     batch.delete(saveRef);

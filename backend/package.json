@@ -2,7 +2,7 @@
   "name": "logisticore-backend",
   "version": "1.0.0",
   "private": true,
-  "main": "lib/index.js",
+  "main": "lib/backend/src/index.js",
   "engines": {
     "node": "20"
   },
@@ -10,6 +10,8 @@
     "sync:canonical": "tsx scripts/syncCanonicalInputs.ts",
     "build": "npm run sync:canonical && tsc",
     "typecheck": "npm run sync:canonical && tsc --noEmit",
+    "marketplace:migrate": "npm run sync:canonical && tsx scripts/migrateMarketplaceStates.ts",
+    "marketplace:smoke:production": "npm run sync:canonical && tsx scripts/productionMarketplaceSmoke.ts",
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {

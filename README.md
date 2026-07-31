@@ -40,3 +40,9 @@ firebase deploy --only functions
 
 Gerçek deploy işlemi proje owner/deployer yetkisi, Blaze planı ve gerekli
 Google Cloud API'lerinin etkin olmasını gerektirir.
+# Vehicle Marketplace V1 production gate
+
+The player-to-player vehicle marketplace is backend-ready but remains disabled
+in the production client through `VEHICLE_MARKETPLACE_ENABLED = false`.
+Migration, TTL, deployment and canary instructions are documented in
+[`docs/vehicle-marketplace-v1.md`](docs/vehicle-marketplace-v1.md).

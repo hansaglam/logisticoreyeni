@@ -323,3 +323,59 @@ export const CANONICAL_CITY_MARKET_CATALOG = [
     }
   }
 ] as const;
+export const CANONICAL_TRUCK_MARKET_CATALOG = [
+  {
+    "templateId": "truck-starter-1",
+    "purchasePrice": 45000,
+    "fuelTankCapacityL": null
+  },
+  {
+    "templateId": "truck-ford-cargo",
+    "purchasePrice": 52000,
+    "fuelTankCapacityL": null
+  },
+  {
+    "templateId": "truck-volvo-fh",
+    "purchasePrice": 85000,
+    "fuelTankCapacityL": null
+  },
+  {
+    "templateId": "truck-mercedes-actros",
+    "purchasePrice": 92000,
+    "fuelTankCapacityL": null
+  },
+  {
+    "templateId": "truck-refrigerated",
+    "purchasePrice": 98000,
+    "fuelTankCapacityL": null
+  },
+  {
+    "templateId": "truck-heavy-haul",
+    "purchasePrice": 125000,
+    "fuelTankCapacityL": null
+  }
+] as const;
+export const FLEET_MANAGEMENT_BALANCE = {
+  "truckBaseResaleRate": 0.68,
+  "minTruckResaleRate": 0.18,
+  "maxTruckResaleRate": 0.78,
+  "mileageDepreciationReferenceKm": 200000,
+  "maxMileageDepreciationRate": 0.38,
+  "maxAgeDepreciationRate": 0.12,
+  "upgradeRecoveryRate": 0.35,
+  "minMarketResaleModifier": 0.85,
+  "maxMarketResaleModifier": 1.1,
+  "trailerBaseResaleRate": 0.62,
+  "minTrailerResaleRate": 0.15,
+  "maxTrailerResaleRate": 0.7,
+  "driverSeveranceDays": 2
+} as const;
+export const VEHICLE_MARKETPLACE_BALANCE = {
+  "vehicleMarketplaceListingFee": 150,
+  "vehicleMarketplaceSaleFeeRate": 0.06,
+  "vehicleMarketplaceListingDurationHours": 72,
+  "vehicleMarketplaceMinPriceRatio": 0.7,
+  "vehicleMarketplaceMaxPriceRatio": 1.35,
+  "vehicleMarketplaceIdempotencyRetentionDays": 30,
+  "vehicleMarketplaceDefaultFleetLimit": 20
+} as const;

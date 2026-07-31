@@ -250,7 +250,8 @@ export type TruckStatus =
   | 'on_route'
   | 'maintenance'
   | 'transferring'
-  | 'out_of_fuel';
+  | 'out_of_fuel'
+  | 'marketplace_locked';
 
 /** Kamyon sahiplik türü */
 export type TruckOwnershipType = 'owned' | 'leased';
@@ -1509,6 +1510,8 @@ export interface StoreGameState {
   lastProcessedEconomyAt?: number;
   /** Son görülen global market epoch */
   lastSeenMarketEpoch?: number;
+  /** Backend marketplace sahipliğinin küçük local/cache görünümü; canonical değildir. */
+  vehicleMarketplace?: import('./vehicleMarketplace').VehicleMarketplaceSaveCache;
   /** Cache'lenen global snapshot sürümü */
   cachedSnapshotVersion?: number;
   cachedSnapshotGeneratedAt?: number;

@@ -458,6 +458,24 @@ export const fleetManagementBalance = {
   driverSeveranceDays: 2,
 } as const;
 
+/** Oyuncular arası araç pazarı V1 ücret ve fiyat korumaları. */
+export const vehicleMarketplaceBalance = {
+  /** İlan açılırken bir kez alınan sabit ücret. */
+  vehicleMarketplaceListingFee: 150,
+  /** Satış bedelinden satıcıya ödeme yapılmadan önce kesilen komisyon. */
+  vehicleMarketplaceSaleFeeRate: 0.06,
+  /** Aktif ilanın ömrü. */
+  vehicleMarketplaceListingDurationHours: 72,
+  /** İlan fiyatının canonical ikinci el değerine göre alt sınırı. */
+  vehicleMarketplaceMinPriceRatio: 0.7,
+  /** İlan fiyatının canonical ikinci el değerine göre üst sınırı. */
+  vehicleMarketplaceMaxPriceRatio: 1.35,
+  /** Backend action receipt/idempotency kayıtlarının TTL süresi. */
+  vehicleMarketplaceIdempotencyRetentionDays: 30,
+  /** V1 canonical marketplace fleet slot sınırı. */
+  vehicleMarketplaceDefaultFleetLimit: 20,
+} as const;
+
 export const truckBalance = {
   /** Temel kondisyon aşınması (baseWear) */
   baseConditionWear: 1.2,

@@ -11,11 +11,14 @@ import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import {
+  getAuth,
   getReactNativePersistence,
   initializeAuth,
   type Auth,
 } from 'firebase/auth';
 import { getFirestore, initializeFirestore, type Firestore } from 'firebase/firestore';
+import { getFunctions, type Functions } from 'firebase/functions';
+import { getStorage, type FirebaseStorage } from 'firebase/storage';
 
 import publicFirebaseConfig from '../config/firebase.public.json';
 import { normalizeConfigValue } from '../config/firebaseRuntimeContract';
@@ -34,6 +37,9 @@ type FirebaseConfigKey = keyof FirebaseConfig;
 
 const AUTH_GLOBAL_KEY = '__logisticoreFirebaseAuth';
 const FIRESTORE_GLOBAL_KEY = '__logisticoreFirebaseFirestore';
+const FUNCTIONS_GLOBAL_KEY = '__logisticoreFirebaseFunctions';
+const STORAGE_GLOBAL_KEY = '__logisticoreFirebaseStorage';
+export const FIREBASE_FUNCTIONS_REGION = 'us-central1';
 
 type GlobalAuthStore = typeof globalThis & {
   [AUTH_GLOBAL_KEY]?: Auth;
@@ -43,9 +49,15 @@ type GlobalFirestoreStore = typeof globalThis & {
   [FIRESTORE_GLOBAL_KEY]?: Firestore;
 };
 
+type GlobalServiceStore = typeof globalThis & {
+  [FUNCTIONS_GLOBAL_KEY]?: Map<string, Functions>;
+  [STORAGE_GLOBAL_KEY]?: FirebaseStorage;
+};
+
 let appInstance: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
 let firestoreInstance: Firestore | null = null;
+let storageInstance: FirebaseStorage | null = null;
 let authInitFailed = false;
 let firestoreInitFailed = false;
 let lastAppInitError: unknown = null;
@@ -384,6 +396,36 @@ export function getFirestoreSafe(): Firestore | null {
   }
 }
 
+export function getFirebaseFunctionsSafe(
+  region = FIREBASE_FUNCTIONS_REGION,
+): Functions | null {
+  const app = getFirebaseAppSafe();
+  if (!app) return null;
+  const globalStore = globalThis as GlobalServiceStore;
+  const cache = globalStore[FUNCTIONS_GLOBAL_KEY] ?? new Map<string, Functions>();
+  globalStore[FUNCTIONS_GLOBAL_KEY] = cache;
+  const cached = cache.get(region);
+  if (cached) return cached;
+  const instance = getFunctions(app, region);
+  cache.set(region, instance);
+  return instance;
+}
+
+export function getFirebaseStorageSafe(): FirebaseStorage | null {
+  if (storageInstance) return storageInstance;
+  const globalStore = globalThis as GlobalServiceStore;
+  const cached = globalStore[STORAGE_GLOBAL_KEY];
+  if (cached) {
+    storageInstance = cached;
+    return cached;
+  }
+  const app = getFirebaseAppSafe();
+  if (!app) return null;
+  storageInstance = getStorage(app);
+  globalStore[STORAGE_GLOBAL_KEY] = storageInstance;
+  return storageInstance;
+}
+
 /** @deprecated Use getFirebaseAppSafe */
 export function getFirebaseApp(): FirebaseApp | null {
   return getFirebaseAppSafe();
@@ -399,6 +441,9 @@ export function getFirestoreDb(): Firestore | null {
   return getFirestoreSafe();
 }
 
+export const getFirebaseFunctions = getFirebaseFunctionsSafe;
+export const getFirebaseStorage = getFirebaseStorageSafe;
+
 /** @deprecated Prefer getFirebaseAppSafe / getFirebaseAuthSafe */
 export function initializeFirebase(): boolean {
   return getFirebaseAppSafe() !== null && getFirebaseAuthSafe() !== null;
@@ -410,9 +455,12 @@ export function resetFirebaseFirestoreCache(): void {
   delete (globalThis as GlobalFirestoreStore)[FIRESTORE_GLOBAL_KEY];
 }
 
-/** Auth silindikten sonra yeniden init denenebilsin */
+/**
+ * @deprecated Firebase Auth app-scoped bir singleton'dır ve oturum geçişlerinde
+ * sıfırlanmamalıdır. Bu fonksiyon yalnız gerçek bootstrap retry'si için tutulur;
+ * SDK instance/global cache bilinçli olarak korunur.
+ */
 export function resetFirebaseAuthCache(): void {
-  authInstance = null;
   authInitFailed = false;
   lastAuthInitError = null;
   delete (globalThis as GlobalAuthStore)[AUTH_GLOBAL_KEY];

@@ -145,6 +145,8 @@ export interface SaveGamePayload {
   lastWorldEventGeneratedDay?: number;
   monetization?: MonetizationState;
   lastSeenRealTimeMs?: number;
+  /** Yalnız listing referansları/sync sürümü; canonical ownership veya geçmiş içermez. */
+  vehicleMarketplace?: import('../types/vehicleMarketplace').VehicleMarketplaceSaveCache;
   lastSimulatedRealTimeMs?: number;
   lastOfflineProgressAppliedAt?: number;
   offlineProgressVersion?: number;
@@ -1343,6 +1345,17 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     lastSimulationGameSpeed: state.lastSimulationGameSpeed ?? state.gameSpeed ?? 1,
     lastProcessedEconomyAt: state.lastProcessedEconomyAt,
     lastSeenMarketEpoch: state.lastSeenMarketEpoch,
+    vehicleMarketplace: state.vehicleMarketplace
+      ? {
+          activeMarketplaceListingIds:
+            state.vehicleMarketplace.activeMarketplaceListingIds.slice(-50),
+          lastMarketplaceSyncAt:
+            state.vehicleMarketplace.lastMarketplaceSyncAt,
+          marketplaceStateVersion:
+            state.vehicleMarketplace.marketplaceStateVersion,
+          soldTruckIds: state.vehicleMarketplace.soldTruckIds?.slice(-100),
+        }
+      : undefined,
     cachedSnapshotVersion: state.cachedSnapshotVersion,
     cachedSnapshotGeneratedAt: state.cachedSnapshotGeneratedAt,
     cachedGlobalEconomySnapshot: state.cachedGlobalEconomySnapshot
@@ -1498,6 +1511,30 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       payload.lastSeenMarketEpoch != null && Number.isFinite(payload.lastSeenMarketEpoch)
         ? payload.lastSeenMarketEpoch
         : undefined,
+    vehicleMarketplace: payload.vehicleMarketplace
+      ? {
+          activeMarketplaceListingIds: Array.isArray(
+            payload.vehicleMarketplace.activeMarketplaceListingIds,
+          )
+            ? payload.vehicleMarketplace.activeMarketplaceListingIds
+                .filter((id): id is string => typeof id === 'string')
+                .slice(-50)
+            : [],
+          lastMarketplaceSyncAt:
+            Number.isFinite(payload.vehicleMarketplace.lastMarketplaceSyncAt)
+              ? payload.vehicleMarketplace.lastMarketplaceSyncAt
+              : undefined,
+          marketplaceStateVersion:
+            Number.isFinite(payload.vehicleMarketplace.marketplaceStateVersion)
+              ? payload.vehicleMarketplace.marketplaceStateVersion
+              : undefined,
+          soldTruckIds: Array.isArray(payload.vehicleMarketplace.soldTruckIds)
+            ? payload.vehicleMarketplace.soldTruckIds
+                .filter((id): id is string => typeof id === 'string')
+                .slice(-100)
+            : [],
+        }
+      : undefined,
     cachedSnapshotVersion:
       payload.cachedSnapshotVersion != null && Number.isFinite(payload.cachedSnapshotVersion)
         ? payload.cachedSnapshotVersion

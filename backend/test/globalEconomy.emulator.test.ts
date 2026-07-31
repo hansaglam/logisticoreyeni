@@ -128,12 +128,17 @@ test('history query and private owner data rules', async () => {
   assert.equal(result.size, 3);
 
   await assertSucceeds(
-    ownerDb.doc('users/owner/saves/current').set({ version: 1 }),
+    ownerDb.doc('users/owner/saves/current').set({
+      ownerUid: 'owner',
+      schemaVersion: 1,
+      saveVersion: 3,
+      version: 1,
+    }),
   );
   await assertFails(
     strangerDb.doc('users/owner/saves/current').get(),
   );
-  await assertSucceeds(
+  await assertFails(
     ownerDb.doc('users/owner/marketAlerts/alert-1').set({
       ownerUid: 'owner',
       isActive: true,

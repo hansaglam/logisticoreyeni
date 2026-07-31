@@ -1,6 +1,14 @@
 import type { GameIconName } from '../theme/icons';
 
-export type TabKey = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'shop' | 'market' | 'more';
+export type TabKey =
+  | 'dashboard'
+  | 'map'
+  | 'contracts'
+  | 'fleet'
+  | 'shop'
+  | 'market'
+  | 'vehicleMarketplace'
+  | 'more';
 
 /** Mağaza kategori parametresi */
 export type ShopCategory = 'trucks' | 'trailers' | 'drivers';

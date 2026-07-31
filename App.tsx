@@ -43,6 +43,7 @@ import FleetScreen from './src/screens/FleetScreen';
 import ShopScreen from './src/screens/ShopScreen';
 import MarketScreen from './src/screens/MarketScreen';
 import MoreScreen from './src/screens/MoreScreen';
+import VehicleMarketplaceScreen from './src/screens/VehicleMarketplaceScreen';
 import OfflineProgressSummaryModal from './src/components/offline/OfflineProgressSummaryModal';
 import { UI } from './src/theme/ui';
 
@@ -71,6 +72,12 @@ function renderActiveScreen(
       return <ShopScreen />;
     case 'market':
       return <MarketScreen onOpenContracts={() => onNavigate('contracts')} />;
+    case 'vehicleMarketplace':
+      return (
+        <VehicleMarketplaceScreen
+          onBack={() => onNavigate('dashboard')}
+        />
+      );
     case 'more':
       return <MoreScreen />;
     default:
@@ -128,6 +135,9 @@ function AppShell() {
           navigationRequest: { tab: 'more' },
           pendingMoreSubRoute: 'missions',
         });
+        break;
+      case 'vehicleMarketplace':
+        setActiveTab('vehicleMarketplace');
         break;
       case 'settings':
       case 'account':

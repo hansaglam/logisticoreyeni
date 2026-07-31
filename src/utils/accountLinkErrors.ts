@@ -1,6 +1,7 @@
 export type AccountLinkErrorKind =
   | 'credential-already-in-use'
   | 'account-exists-with-different-credential'
+  | 'provider-already-linked'
   | 'cancelled'
   | 'general';
 

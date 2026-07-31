@@ -21,6 +21,7 @@ import { getFirestoreSafe, isFirebaseEnabled } from './firebase';
 import { getWeeklySeasonDocId } from '../utils/leaderboardSeason';
 import { leaderboardConfig } from '../config/leaderboard';
 import { sanitizeForFirestore } from '../utils/sanitizeForFirestore';
+import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 
 export interface LeaderboardEntry {
   uid: string;
@@ -58,6 +59,7 @@ export interface LeaderboardFetchResult {
 }
 
 export function isLeaderboardEligible(): boolean {
+  if (!LEADERBOARD_ENABLED) return false;
   const account = getAccountStatus();
   if (!account.isReady || account.isAnonymous) {
     return false;
@@ -125,7 +127,7 @@ export async function fetchWeeklyLeaderboard(
   uid: string | null,
   seasonKey: string = getWeeklySeasonDocId(),
 ): Promise<LeaderboardFetchResult> {
-  if (!isFirebaseEnabled()) {
+  if (!LEADERBOARD_ENABLED || !isFirebaseEnabled()) {
     return {
       ok: false,
       seasonKey,

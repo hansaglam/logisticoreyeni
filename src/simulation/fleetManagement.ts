@@ -3,6 +3,7 @@
  */
 
 import { fleetManagementBalance, operatingCostBalance } from '../config/balance';
+import { calculateCanonicalTruckResaleValue } from '../domain/truckResaleValuation';
 import type {
   Delivery,
   DeliveryStatus,
@@ -138,66 +139,7 @@ export function calculateTruckUpgradeInvestmentValue(truck: Truck): number {
 
 export function calculateTruckResaleValue(input: Truck | TruckResaleValueInput): number {
   const resale = resolveTruckResaleInput(input);
-  if (resale.isLeased) {
-    return 0;
-  }
-
-  const rawPurchasePrice = Number(resale.basePrice);
-  const purchasePrice = Number.isFinite(rawPurchasePrice)
-    ? Math.max(0, rawPurchasePrice)
-    : 0;
-  if (purchasePrice <= 0) {
-    return 0;
-  }
-
-  const condition = clamp(Number(resale.condition) || 0, 0, 100);
-  const conditionMultiplier = getConditionMultiplier(condition);
-  const {
-    truckBaseResaleRate,
-    minTruckResaleRate,
-    maxTruckResaleRate,
-    mileageDepreciationReferenceKm,
-    maxMileageDepreciationRate,
-    maxAgeDepreciationRate,
-    upgradeRecoveryRate,
-    minMarketResaleModifier,
-    maxMarketResaleModifier,
-  } = fleetManagementBalance;
-  const mileageRatio = clamp(
-    (Math.max(0, Number(resale.mileageKm) || 0) / mileageDepreciationReferenceKm) *
-      maxMileageDepreciationRate,
-    0,
-    maxMileageDepreciationRate,
-  );
-  const rawUsage = Math.max(0, Number(resale.ageOrUsage) || 0);
-  const normalizedUsage = rawUsage <= 1 ? rawUsage : rawUsage / (24 * 365 * 5);
-  const ageDepreciation = clamp(
-    normalizedUsage * maxAgeDepreciationRate,
-    0,
-    maxAgeDepreciationRate,
-  );
-  const marketMultiplier = clamp(
-    (Number(resale.rarity) || 1) * (Number(resale.marketModifier) || 1),
-    minMarketResaleModifier,
-    maxMarketResaleModifier,
-  );
-  const recoveredUpgradeValue =
-    Math.max(0, Number(resale.upgradeValue) || 0) * upgradeRecoveryRate;
-  const rawPrice =
-    purchasePrice *
-      truckBaseResaleRate *
-      conditionMultiplier *
-      (1 - mileageRatio) *
-      (1 - ageDepreciation) *
-      marketMultiplier +
-    recoveredUpgradeValue;
-  const minPrice = purchasePrice * minTruckResaleRate;
-  const maxPrice = Math.min(
-    purchasePrice * 0.95,
-    purchasePrice * maxTruckResaleRate + recoveredUpgradeValue,
-  );
-
-  return Math.round(clamp(rawPrice, minPrice, maxPrice));
+  return calculateCanonicalTruckResaleValue(resale, fleetManagementBalance);
 }
 
 export function calculateTrailerResaleValue(

@@ -4,6 +4,7 @@
 
 import React from 'react';
 import {
+  ActivityIndicator,
   Modal,
   Pressable,
   StyleSheet,
@@ -16,6 +17,7 @@ import {
 import { colors, radius, shadows, spacing, typography } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
 import GameIcon from './GameIcon';
+import { runDialogActionAfterDismiss } from '../../utils/dialogActions';
 
 export type AppDialogVariant = 'info' | 'warning' | 'confirm' | 'danger' | 'success';
 
@@ -41,6 +43,8 @@ export interface AppDialogProps {
     label: string;
     onPress: () => void;
     variant?: 'primary' | 'secondary' | 'destructive';
+    disabled?: boolean;
+    loading?: boolean;
   }>;
   onConfirm?: () => void;
   onCancel?: () => void;
@@ -103,11 +107,15 @@ function DialogActionButton({
   onPress,
   variant,
   style,
+  disabled = false,
+  loading = false,
 }: {
   label: string;
   onPress: () => void;
   variant: 'primary' | 'secondary' | 'destructive';
   style?: StyleProp<ViewStyle>;
+  disabled?: boolean;
+  loading?: boolean;
 }) {
   const palette =
     variant === 'primary'
@@ -131,16 +139,20 @@ function DialogActionButton({
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled || loading}
       style={({ pressed }) => [
         styles.actionButton,
         {
           backgroundColor: palette.backgroundColor,
           borderColor: palette.borderColor,
-          opacity: pressed ? 0.88 : 1,
+          opacity: disabled ? 0.55 : pressed ? 0.88 : 1,
         },
         style,
       ]}
     >
+      {loading ? (
+        <ActivityIndicator size="small" color={palette.textColor} />
+      ) : null}
       <Text style={[styles.actionButtonText, { color: palette.textColor }]} numberOfLines={1}>
         {label}
       </Text>
@@ -233,10 +245,12 @@ export default function AppDialog({
                   key={action.label}
                   label={action.label}
                   onPress={() => {
-                    action.onPress();
-                    handleDismiss();
+                    // Eski dialogu önce kapat. Callback yeni bir dialog açarsa onu kapatma.
+                    runDialogActionAfterDismiss(handleDismiss, action.onPress);
                   }}
                   variant={action.variant ?? 'secondary'}
+                  disabled={action.disabled}
+                  loading={action.loading}
                   style={styles.actionFull}
                 />
               ))
@@ -360,6 +374,8 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     minHeight: 52,
+    flexDirection: 'row',
+    gap: spacing.sm,
     borderRadius: 17,
     borderWidth: 1,
     alignItems: 'center',

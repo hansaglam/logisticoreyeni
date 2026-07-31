@@ -11,6 +11,7 @@ import {
 import { getTruckArtwork } from '../../assets/fleetAssets';
 import { getTruckCatalogId } from '../../data/trucks';
 import { timeBalance } from '../../config/balance';
+import { VEHICLE_MARKETPLACE_ENABLED } from '../../config/backendRoadmap';
 import AdRewardButton from '../monetization/AdRewardButton';
 import { GameIcon, ProgressBar, StatusBadge } from '../ui';
 import type { StatusBadgeVariant } from '../ui';
@@ -100,6 +101,7 @@ export interface OwnedTruckCardProps {
   onRefuel: (truck: Truck) => void;
   onRoadsideFuel: (jobId: string) => void;
   onSell: (truck: Truck) => void;
+  onMarketplaceSell: (truck: Truck) => void;
   onShowSellBlocked: (reason: string) => void;
 }
 
@@ -119,6 +121,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   onRefuel,
   onRoadsideFuel,
   onSell,
+  onMarketplaceSell,
   onShowSellBlocked,
 }: OwnedTruckCardProps) {
   const { width: screenWidth } = useWindowDimensions();
@@ -440,6 +443,24 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
               <Text style={styles.moreActionText} numberOfLines={1}>
                 {sellCheck.canSell ? 'Sat' : 'Satılamaz'}
               </Text>
+            </Pressable>
+          ) : null}
+          {VEHICLE_MARKETPLACE_ENABLED && sellCheck.canSell && isIdle && !isLeased ? (
+            <Pressable
+              style={[styles.moreAction, styles.marketplaceAction]}
+              onPress={() => onMarketplaceSell(truck)}
+            >
+              <View style={styles.marketplaceActionRow}>
+                <GameIcon name="truck" size={14} color={colors.info} />
+                <View style={styles.marketplaceActionText}>
+                  <Text style={styles.moreActionText} numberOfLines={1}>
+                    Araç Sat
+                  </Text>
+                  <Text style={styles.marketplaceActionSubtitle} numberOfLines={1}>
+                    Oyuncu pazarında ilan oluştur
+                  </Text>
+                </View>
+              </View>
             </Pressable>
           ) : null}
           {showMaintenanceAdOffer ? (
@@ -769,6 +790,26 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: colors.textSecondary,
+  },
+  marketplaceAction: {
+    height: 48,
+    alignItems: 'stretch',
+    borderColor: colors.info,
+    backgroundColor: colors.infoSoft,
+  },
+  marketplaceActionRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  marketplaceActionText: {
+    flex: 1,
+  },
+  marketplaceActionSubtitle: {
+    color: colors.textMuted,
+    fontSize: 9,
+    marginTop: 2,
   },
   moreMeta: {
     fontSize: 9,

@@ -15,19 +15,66 @@ service cloud.firestore {
       allow read, create, update, delete: if isOwner(userId);
 
       match /saves/{saveId} {
-        allow read, create, update, delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.ownerUid == userId;
       }
 
       match /meta/{docId} {
         allow read, create, update, delete: if isOwner(userId);
       }
 
-      // Personal alarms observe global prices but never mutate global market data.
+      // Backend alarm evaluation is V2. Direct client writes remain disabled so
+      // production cannot expose an unevaluated or spoofable alarm system.
       match /marketAlerts/{alertId} {
-        allow read, create, update, delete: if isOwner(userId)
-          && (!('ownerUid' in request.resource.data)
-            || request.resource.data.ownerUid == userId);
+        allow read: if isOwner(userId);
+        allow create, update, delete: if false;
       }
+
+      // Marketplace cash, ownership, history and ledger are Admin SDK managed.
+      match /marketplaceState/{documentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /marketplaceHistory/{transactionId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /marketplaceLedger/{transactionId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+    }
+
+    // Active offers are publicly browseable. Historical records are visible
+    // only to their seller/buyer. Every mutation is a trusted callable action.
+    match /vehicleMarketplaceListings/{listingId} {
+      allow read: if resource.data.status == 'active'
+        || (signedIn()
+          && (resource.data.sellerUid == request.auth.uid
+            || resource.data.buyerUid == request.auth.uid));
+      allow write: if false;
+    }
+
+    match /vehicleMarketplaceTransactions/{transactionId} {
+      allow read: if signedIn()
+        && (resource.data.sellerUid == request.auth.uid
+          || resource.data.buyerUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /vehicleMarketplaceIdempotency/{documentId} {
+      allow read, write: if false;
+    }
+
+    match /vehicleMarketplaceActionReceipts/{documentId} {
+      allow read, write: if false;
+    }
+
+    match /vehicleMarketplaceRateLimits/{documentId} {
+      allow read, write: if false;
     }
 
     // Authenticated players may read the authoritative world market.
@@ -47,34 +94,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Existing leaderboard policy: authenticated reads, non-anonymous owner writes.
+    // Read-only until scores and rewards are verified by a trusted worker.
     match /leaderboards/{seasonId}/entries/{entryId} {
       allow read: if signedIn();
 
-      allow create, update: if signedIn()
-        && request.auth.uid == entryId
-        && request.auth.token.firebase.sign_in_provider != 'anonymous'
-        && request.resource.data.uid == entryId
-        && request.resource.data.seasonKey == seasonId
-        && request.resource.data.companyName is string
-        && request.resource.data.companyName.size() >= 1
-        && request.resource.data.companyName.size() <= 64
-        && request.resource.data.companyScore is number
-        && request.resource.data.companyScore >= 0
-        && request.resource.data.companyScore <= 100000000
-        && request.resource.data.level is number
-        && request.resource.data.level >= 1
-        && request.resource.data.level <= 999
-        && request.resource.data.reputation is number
-        && request.resource.data.reputation >= 0
-        && request.resource.data.reputation <= 100
-        && request.resource.data.completedContracts is number
-        && request.resource.data.completedContracts >= 0
-        && request.resource.data.completedContracts <= 1000000;
-
-      allow delete: if signedIn()
-        && request.auth.uid == entryId
-        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {

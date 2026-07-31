@@ -11,11 +11,11 @@ export type Sha256Result =
   | { ok: false; error: 'crypto-unavailable' };
 
 export function generateRandomNonce(length = 32): string {
-  let result = '';
-  for (let i = 0; i < length; i += 1) {
-    result += NONCE_CHARS.charAt(Math.floor(Math.random() * NONCE_CHARS.length));
-  }
-  return result;
+  // Apple rawNonce güvenlik girdisidir; native kriptografik kaynak kullanılır.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Crypto = require('expo-crypto') as typeof import('expo-crypto');
+  const bytes = Crypto.getRandomBytes(length);
+  return Array.from(bytes, (byte) => NONCE_CHARS.charAt(byte % NONCE_CHARS.length)).join('');
 }
 
 /**

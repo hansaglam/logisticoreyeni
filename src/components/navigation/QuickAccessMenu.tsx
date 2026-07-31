@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { createDefaultMissionsState } from '../../config/missions';
+import { VEHICLE_MARKETPLACE_ENABLED } from '../../config/backendRoadmap';
 import type { QuickAccessAction } from '../../navigation/quickAccessTypes';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
@@ -21,6 +22,7 @@ import GameIcon from '../ui/GameIcon';
 interface QuickAccessItemDef {
   key: QuickAccessAction;
   label: string;
+  subtitle?: string;
   icon: GameIconName;
 }
 
@@ -30,6 +32,14 @@ const QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = (
     { key: 'shop', label: 'Mağaza', icon: 'inventory' },
     { key: 'warehouse', label: 'Depolar', icon: 'warehouse' },
     { key: 'finance', label: 'Finans', icon: 'cash' },
+    ...(VEHICLE_MARKETPLACE_ENABLED
+      ? [{
+          key: 'vehicleMarketplace' as const,
+          label: 'Araç Pazarı',
+          subtitle: 'Oyuncu ilanları',
+          icon: 'truck' as const,
+        }]
+      : []),
     { key: 'missions', label: 'Görevler', icon: 'contract' },
     { key: 'settings', label: 'Ayarlar', icon: 'settings' },
     { key: 'account', label: 'Hesap', icon: 'account' },
@@ -114,6 +124,11 @@ export default function QuickAccessMenu({
                       <Text style={styles.tileLabel} numberOfLines={1}>
                         {item.label}
                       </Text>
+                      {item.subtitle ? (
+                        <Text style={styles.tileSubtitle} numberOfLines={1}>
+                          {item.subtitle}
+                        </Text>
+                      ) : null}
                     </TouchableOpacity>
                   );
                 })}
@@ -203,6 +218,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '600',
     fontSize: 11,
+  },
+  tileSubtitle: {
+    color: colors.textMuted,
+    fontSize: 9,
+    marginTop: -3,
   },
   tileBadge: {
     position: 'absolute',

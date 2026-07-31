@@ -21,6 +21,7 @@ import type { TabDefinition, TabKey } from '../../navigation/tabTypes';
 import { MAIN_TAB_KEYS } from '../../navigation/tabTypes';
 import type { QuickAccessAction } from '../../navigation/quickAccessTypes';
 import QuickAccessMenu from './QuickAccessMenu';
+import { MARKET_ALARMS_ENABLED } from '../../config/backendRoadmap';
 
 const TAB_TARGET_IDS: Partial<Record<TabKey, TutorialTargetId>> = {
   dashboard: 'tab-dashboard',
@@ -93,7 +94,9 @@ function useTabBadges(): Partial<Record<TabKey, number>> {
       badges.contracts = playableCount;
     }
 
-    const alertCount = countActiveMarketAlerts(marketAlerts ?? []);
+    const alertCount = MARKET_ALARMS_ENABLED
+      ? countActiveMarketAlerts(marketAlerts ?? [])
+      : 0;
     if (alertCount > 0) {
       badges.market = alertCount;
     }

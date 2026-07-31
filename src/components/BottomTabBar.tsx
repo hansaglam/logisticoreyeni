@@ -25,6 +25,7 @@ const TAB_TARGET_IDS: Record<TabKey, TutorialTargetId> = {
   fleet: 'tab-fleet',
   shop: 'tab-fleet',
   market: 'tab-market',
+  vehicleMarketplace: 'tab-more',
   more: 'tab-more',
 };
 

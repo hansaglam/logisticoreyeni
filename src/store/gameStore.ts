@@ -9,6 +9,7 @@
 
 import { create } from 'zustand';
 import type { ShopCategory } from '../navigation/tabTypes';
+import { VEHICLE_MARKETPLACE_ENABLED } from '../config/backendRoadmap';
 import type {
   City,
   Contract,
@@ -46,6 +47,8 @@ import type {
   WarehouseType,
 } from '../types/game';
 import type { AdRewardGrantContext, AdRewardSlotId } from '../types/monetization';
+import type { AuthoritativeMarketplaceReconciliation } from '../domain/vehicleMarketplaceReconciliation';
+import { reconcileFleetWithVehicleMarketplace } from '../domain/vehicleMarketplaceReconciliation';
 import { resolveNotificationDismissMs } from '../types/game';
 import { CITIES } from '../data/cities';
 import { PRODUCTS } from '../data/products';
@@ -581,7 +584,15 @@ function notifySaveWriteFailureOnce(
   }
 }
 
-export type NavigationTab = 'dashboard' | 'map' | 'contracts' | 'fleet' | 'shop' | 'market' | 'more';
+export type NavigationTab =
+  | 'dashboard'
+  | 'map'
+  | 'contracts'
+  | 'fleet'
+  | 'shop'
+  | 'market'
+  | 'vehicleMarketplace'
+  | 'more';
 
 export interface NavigationRequest {
   tab: NavigationTab;
@@ -608,6 +619,7 @@ export type AutoSaveReason =
   | 'economy_tick'
   | 'contracts_generated'
   | 'warehouse'
+  | 'marketplace-reconciliation'
   | 'clear_save'
   | 'background'
   | 'manual'
@@ -1414,6 +1426,7 @@ export interface GameStore extends StoreGameState {
   pendingUpgradeTruckId: string | null;
   pendingFleetSubTab: FleetSubTab | null;
   pendingShopCategory: ShopCategory | null;
+  pendingMarketplaceSellTruckId: string | null;
   marketContractFilter: MarketContractFilter | null;
   highlightedContractId: string | null;
   pendingMarketFocus: MarketFocusRequest | null;
@@ -1428,6 +1441,9 @@ export interface GameStore extends StoreGameState {
   addNotification: (notification: Omit<GameNotification, 'id'> & { id?: string }) => void;
   dismissNotification: (notificationId: string) => void;
   clearNotifications: () => void;
+  applyVehicleMarketplaceReconciliation: (
+    authoritative: AuthoritativeMarketplaceReconciliation,
+  ) => void;
   requestNavigationFromNotification: (target: GameNotificationActionTarget) => void;
   clearNavigationRequest: () => void;
   clearPendingMoreSubRoute: () => void;
@@ -1437,6 +1453,8 @@ export interface GameStore extends StoreGameState {
   clearPendingFleetSubTab: () => void;
   requestNavigationToShop: (category?: ShopCategory) => void;
   clearPendingShopCategory: () => void;
+  openVehicleMarketplaceForTruck: (truckId: string) => void;
+  clearPendingMarketplaceSellTruckId: () => void;
   setMarketContractFilter: (filter: MarketContractFilter | null) => void;
   clearMarketContractFilter: () => void;
   setHighlightedContractId: (contractId: string | null) => void;
@@ -1655,6 +1673,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   pendingUpgradeTruckId: null,
   pendingFleetSubTab: null,
   pendingShopCategory: null,
+  pendingMarketplaceSellTruckId: null,
   marketContractFilter: null,
   highlightedContractId: null,
   pendingMarketFocus: null,
@@ -1698,6 +1717,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   clearNotifications: () => {
     set({ notifications: [] });
+  },
+
+  applyVehicleMarketplaceReconciliation: (authoritative) => {
+    const state = get();
+    const result = reconcileFleetWithVehicleMarketplace(
+      state.player.trucks,
+      authoritative,
+    );
+    set({
+      player: {
+        ...state.player,
+        trucks: result.trucks,
+        money: result.authoritativeCash ?? state.player.money,
+      },
+      vehicleMarketplace: result.cache,
+    });
+    get().autoSave('marketplace-reconciliation');
   },
 
   requestNavigationFromNotification: (target) => {
@@ -1767,6 +1803,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   clearPendingShopCategory: () => {
     set({ pendingShopCategory: null });
+  },
+
+  openVehicleMarketplaceForTruck: (truckId) => {
+    if (!VEHICLE_MARKETPLACE_ENABLED) return;
+    set({
+      navigationRequest: { tab: 'vehicleMarketplace' },
+      pendingMarketplaceSellTruckId: truckId,
+    });
+  },
+
+  clearPendingMarketplaceSellTruckId: () => {
+    set({ pendingMarketplaceSellTruckId: null });
   },
 
   setMarketContractFilter: (filter) => {

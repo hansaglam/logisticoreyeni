@@ -34,6 +34,7 @@ import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
 import UpgradesScreen from './UpgradesScreen';
 import AccountSection from '../components/AccountSection';
+import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 
 type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions' | 'leaderboard' | 'upgrades';
 
@@ -105,9 +106,13 @@ const DEV_MODULE_ITEMS: ModuleItem[] = [
   },
 ];
 
+const ENABLED_PRODUCTION_MODULE_ITEMS = PRODUCTION_MODULE_ITEMS.filter(
+  (item) => item.key !== 'leaderboard' || LEADERBOARD_ENABLED,
+);
+
 const VISIBLE_MODULE_ITEMS = __DEV__
-  ? [...PRODUCTION_MODULE_ITEMS, ...DEV_MODULE_ITEMS]
-  : PRODUCTION_MODULE_ITEMS;
+  ? [...ENABLED_PRODUCTION_MODULE_ITEMS, ...DEV_MODULE_ITEMS]
+  : ENABLED_PRODUCTION_MODULE_ITEMS;
 
 const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
 
@@ -262,7 +267,7 @@ export default function MoreScreen() {
     );
   }
 
-  if (route === 'leaderboard') {
+  if (route === 'leaderboard' && LEADERBOARD_ENABLED) {
     return (
       <View style={styles.embeddedRoot}>
         <LeaderboardScreen onBack={() => setRoute('menu')} />

@@ -277,3 +277,23 @@ export async function clearGoogleSignInSession(): Promise<void> {
     }
   }
 }
+
+export async function clearGoogleSignInSessionStrict(): Promise<{
+  ok: true;
+} | {
+  ok: false;
+  error: 'google-disconnect-failed';
+}> {
+  if (!configureGoogleSignIn()) {
+    return { ok: false, error: 'google-disconnect-failed' };
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { GoogleSignin } = require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin');
+    await GoogleSignin.signOut();
+    return { ok: true };
+  } catch (error) {
+    devWarn('[google-auth] strict signOut failed', error);
+    return { ok: false, error: 'google-disconnect-failed' };
+  }
+}

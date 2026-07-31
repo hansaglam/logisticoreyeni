@@ -42,6 +42,7 @@ export interface ProductMarketDetailModalProps {
   onBuy: (productId: ProductId) => void;
   onSell: (productId: ProductId) => void;
   onCreateAlert: (productId: ProductId) => void;
+  alertsEnabled?: boolean;
 }
 
 export default function ProductMarketDetailModal({
@@ -52,6 +53,7 @@ export default function ProductMarketDetailModal({
   onBuy,
   onSell,
   onCreateAlert,
+  alertsEnabled = true,
 }: ProductMarketDetailModalProps) {
   const insets = useAppSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
@@ -358,13 +360,13 @@ export default function ProductMarketDetailModal({
                 style={styles.actionButton}
               />
             ) : null}
-            <ActionButton
+            {alertsEnabled ? <ActionButton
               label="Alarm Kur"
               onPress={handleAlert}
               variant="secondary"
               icon="notification"
               style={styles.actionButton}
-            />
+            /> : null}
           </View>
         </View>
       </View>

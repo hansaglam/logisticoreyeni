@@ -11,6 +11,7 @@ import {
   saveGameToCloud,
   updateUserProfileSummary,
   type CloudSaveMeta,
+  type CloudSavePayload,
 } from '../services/cloudSaveService';
 import { syncLeaderboardEntry } from '../services/leaderboardService';
 import { isFirebaseEnabled } from '../services/firebase';
@@ -26,6 +27,11 @@ import {
   estimateCloudSaveDocumentBytes,
   MAX_SAVE_SIZE_BYTES,
 } from '../utils/cloudSaveSize';
+import { compareLocalAndCloudSave } from '../utils/cloudSaveComparison';
+import {
+  clearPendingCloudRestore,
+  getInterruptedCloudRestore,
+} from './cloudRestoreJournal';
 
 export type CloudSyncReason =
   | 'app_start'
@@ -191,7 +197,11 @@ export function detectCloudRestoreCandidate(
   const localUpdatedAt = localSave.meta.savedAt ?? 0;
   const cloudUpdatedAt = cloudMeta.deviceUpdatedAt ?? 0;
 
-  if (cloudUpdatedAt <= localUpdatedAt) {
+  const comparison = compareLocalAndCloudSave(
+    buildCloudSaveSummaryFromPayload(localSave),
+    cloudMeta.summary,
+  );
+  if (comparison.decision !== 'cloud-newer') {
     return { hasCandidate: false };
   }
 
@@ -202,6 +212,21 @@ export function detectCloudRestoreCandidate(
     cloudUpdatedAt,
     localUpdatedAt,
   };
+}
+
+export function setCloudRestoreCandidateForConflict(
+  state: StoreGameState,
+  cloud: CloudSavePayload,
+): void {
+  const localPayload = serializeGameState(state);
+  restoreCandidate = {
+    hasCandidate: true,
+    localSummary: buildCloudSaveSummaryFromPayload(localPayload),
+    cloudSummary: cloud.summary,
+    localUpdatedAt: localPayload.meta.savedAt ?? 0,
+    cloudUpdatedAt: cloud.deviceUpdatedAt,
+  };
+  notifyStatusListeners();
 }
 
 export function mapAutoSaveReasonToCloudSync(
@@ -357,6 +382,18 @@ export async function initCloudSaveSync(getState: () => StoreGameState): Promise
       return;
     }
 
+    const interruptedRestore = await getInterruptedCloudRestore();
+    if (interruptedRestore) {
+      // Uygulama yeniden açıldığında memory state zaten temizdir. Local kayıt
+      // tekrar okunur ve cloud karşılaştırması aşağıda güvenli retry kararı verir.
+      await clearPendingCloudRestore();
+      if (__DEV__) {
+        console.warn('[cloud-save] interrupted restore recovered', {
+          sameOwner: interruptedRestore.ownerUid === user.uid,
+        });
+      }
+    }
+
     if (__DEV__) {
       console.log('[cloud-save] enabled');
     }
@@ -374,6 +411,11 @@ export async function initCloudSaveSync(getState: () => StoreGameState): Promise
     }
 
     notifyStatusListeners();
+    if (restoreCandidate.hasCandidate) {
+      // Kullanıcı conflict seçimi yapmadan cloud kaydın üzerine local state yazılmaz.
+      setCloudSaveStatus('pending');
+      return;
+    }
     await syncLocalSaveToCloud('app_start', { force: true, state });
   })();
 

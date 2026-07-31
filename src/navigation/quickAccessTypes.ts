@@ -5,5 +5,6 @@ export type QuickAccessAction =
   | 'warehouse'
   | 'finance'
   | 'missions'
+  | 'vehicleMarketplace'
   | 'settings'
   | 'account';

@@ -46,7 +46,11 @@ export async function isAppleSignInAvailable(): Promise<boolean> {
 }
 
 export type AppleCredentialResult =
-  | { ok: true; credential: AuthCredential }
+  | {
+      ok: true;
+      credential: AuthCredential;
+      profile?: { displayName?: string; email?: string };
+    }
   | { ok: false; error: string };
 
 export async function createAppleFirebaseCredential(): Promise<AppleCredentialResult> {
@@ -113,7 +117,7 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
     });
 
     if (!appleCredential.identityToken) {
-      return { ok: false, error: 'apple-missing-token' };
+      return { ok: false, error: 'apple-token-missing' };
     }
 
     const provider = new OAuthProvider('apple.com');
@@ -122,7 +126,25 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       rawNonce,
     });
 
-    return { ok: true, credential };
+    const displayName = [
+      appleCredential.fullName?.givenName,
+      appleCredential.fullName?.middleName,
+      appleCredential.fullName?.familyName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    return {
+      ok: true,
+      credential,
+      profile: {
+        displayName: displayName || undefined,
+        // Apple bu değeri çoğunlukla yalnız ilk yetkilendirmede döndürür.
+        // Private relay adresleri geçerli email olarak aynen korunur.
+        email: appleCredential.email ?? undefined,
+      },
+    };
   } catch (error: unknown) {
     if (
       error &&
@@ -130,7 +152,7 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       'code' in error &&
       (error as { code?: string }).code === 'ERR_REQUEST_CANCELED'
     ) {
-      return { ok: false, error: 'cancelled' };
+      return { ok: false, error: 'apple-signin-cancelled' };
     }
 
     const message =

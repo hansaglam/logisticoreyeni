@@ -134,12 +134,26 @@ function getPointAtPolylineDistance(
   return { point: points[points.length - 1], segmentIndex: lastValidSegment };
 }
 
-function normalizeHeadingDegrees(headingDeg: number): number {
+/** Heading’i (-180, 180] aralığına sıkıştırır. */
+export function normalizeHeadingDegrees(headingDeg: number): number {
   if (!Number.isFinite(headingDeg)) return 0;
   let normalized = headingDeg;
   while (normalized > 180) normalized -= 360;
   while (normalized <= -180) normalized += 360;
   return normalized;
+}
+
+/** Heading’i [0, 360) aralığına sıkıştırır. */
+export function normalizeHeadingDegrees360(headingDeg: number): number {
+  if (!Number.isFinite(headingDeg)) return 0;
+  let normalized = headingDeg % 360;
+  if (normalized < 0) normalized += 360;
+  return normalized;
+}
+
+/** Derece cinsinden shortest-angle delta: ((target - current + 540) % 360) - 180 */
+export function shortestHeadingDeltaDegrees(fromDeg: number, toDeg: number): number {
+  return ((toDeg - fromDeg + 540) % 360) - 180;
 }
 
 export interface RouteHeadingAtProgressParams {

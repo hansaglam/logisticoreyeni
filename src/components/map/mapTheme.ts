@@ -77,8 +77,13 @@ export const MAP_TRUCK_MARKER_MAX_SCREEN = 30;
 export const MAP_TRUCK_MARKER_BORDER = '#5DD4FF';
 export const MAP_TRUCK_MARKER_FILL = '#031225';
 export const MAP_TRUCK_MARKER_ANIM_MS = 750;
-/** MaterialCommunityIcons truck glyph'i varsayılan olarak sola bakar. */
-export const TRUCK_ASSET_HEADING_OFFSET_DEG = 180;
+/**
+ * MaterialCommunityIcons `truck-outline` doğal yönü: sağa (kabin + hood x≈20–23).
+ * atan2 ekran heading’i 0° = sağa; ek offset gerekmez.
+ */
+export const TRUCK_ICON_BASE_ROTATION_DEG = 0;
+/** @deprecated Use TRUCK_ICON_BASE_ROTATION_DEG */
+export const TRUCK_ASSET_HEADING_OFFSET_DEG = TRUCK_ICON_BASE_ROTATION_DEG;
 
 export const MAP_DELIVERY_PROGRESS_TRACK = '#132238';
 export const MAP_DELIVERY_PROGRESS_FILL = '#39A0FF';

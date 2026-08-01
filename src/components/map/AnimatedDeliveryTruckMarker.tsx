@@ -17,12 +17,12 @@ import {
   MAP_TRUCK_MARKER_MIN_SCREEN,
   MAP_TRUCK_MARKER_SIZE,
   MAP_TRUCK_MARKER_ANIM_MS,
-  TRUCK_ASSET_HEADING_OFFSET_DEG,
+  TRUCK_ICON_BASE_ROTATION_DEG,
 } from './mapTheme';
 
 function toDisplayAngle(angleRadians: number): number {
   return normalizeAngleRadians(
-    angleRadians + (TRUCK_ASSET_HEADING_OFFSET_DEG * Math.PI) / 180,
+    angleRadians + (TRUCK_ICON_BASE_ROTATION_DEG * Math.PI) / 180,
   );
 }
 

@@ -47,10 +47,27 @@ function resolveLeaderboardErrorMessage(
   errorCode?: string,
   error?: string,
 ): string {
-  if (errorCode === 'firebase-disabled') {
-    return 'Liderlik tablosu şu anda kullanılamıyor.';
+  switch (errorCode) {
+    case 'feature-disabled':
+    case 'firebase-disabled':
+      return 'Liderlik tablosu şu anda kullanılamıyor.';
+    case 'auth-required':
+      return 'Liderlik tablosunu görmek için giriş yapmalısın.';
+    case 'anonymous-not-supported':
+      return 'Sıralama için Google veya Apple hesabını bağlaman gerekir.';
+    case 'save-not-found':
+      return 'Bulut kaydın henüz hazır değil. Kısa süre sonra tekrar dene.';
+    case 'invalid-player-state':
+      return 'Oyuncu verisi doğrulanamadı. Tekrar senkronize etmeyi dene.';
+    case 'rate-limited':
+      return 'Çok fazla istek gönderildi. Biraz sonra tekrar dene.';
+    case 'season-closed':
+      return 'Bu sezon kapanmış. Güncel haftalık tabloyu yenile.';
+    case 'service-unavailable':
+      return 'Liderlik servisi geçici olarak kullanılamıyor.';
+    default:
+      return LEADERBOARD_LOAD_ERROR_MESSAGE;
   }
-  return LEADERBOARD_LOAD_ERROR_MESSAGE;
 }
 
 function logLeaderboardError(errorCode?: string, error?: string): void {
@@ -219,6 +236,20 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
       setIsRefreshing(true);
     } else {
       setIsLoading(true);
+    }
+
+    if (!isLeaderboardEligible()) {
+      setFetchResult({
+        ok: true,
+        seasonKey: '',
+        entries: [],
+        playerEntry: null,
+        playerRank: null,
+      });
+      setError(null);
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
     }
 
     const result = await fetchWeeklyLeaderboard(uid);

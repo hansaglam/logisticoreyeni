@@ -36,9 +36,6 @@ import { getLevelProgress } from '../simulation/leveling';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useGameStore } from '../store/gameStore';
-import {
-  detectMarketTradeOpportunities,
-} from '../utils/marketTradeOpportunities';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import {
   buildOnboardingEvaluationState,
@@ -151,17 +148,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
     };
   }, [player]);
-
-  const marketOpportunityCount = useMemo(() => {
-    if (!player) return 0;
-    return detectMarketTradeOpportunities({
-      player,
-      cities,
-      products,
-      currentTime,
-      limit: 8,
-    }).length;
-  }, [player, cities, products, currentTime]);
 
   const warehouseFillRatio = useMemo(
     () => (player ? getWarehouseFillRatio(player, currentTime) : 0),
@@ -380,7 +366,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         showLocationHint={showTruckLocationHint}
         onNavigate={handleNavigate}
         onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
-        marketOpportunities={marketOpportunityCount}
         idleTrucks={fleetSnapshot.idleTrucks}
         activeDeliveries={runningDeliveries.length}
         warehouseFillRatio={warehouseFillRatio}

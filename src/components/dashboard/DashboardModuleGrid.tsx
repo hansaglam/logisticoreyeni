@@ -17,7 +17,7 @@ import {
   DASHBOARD_MODULE_GAP,
 } from './dashboardTheme';
 
-export type DashboardModuleKey = 'market' | 'fleet' | 'warehouse';
+export type DashboardModuleKey = 'shop' | 'fleet' | 'warehouse';
 
 interface ModuleTheme {
   iconColor: string;
@@ -36,16 +36,16 @@ interface DashboardModule {
 
 const MODULES: DashboardModule[] = [
   {
-    key: 'market',
-    label: 'Market',
-    icon: 'market',
+    key: 'shop',
+    label: 'Mağaza',
+    icon: 'inventory',
     theme: {
       iconColor: '#2388FF',
       iconBackground: 'rgba(35, 136, 255, 0.16)',
       borderColor: 'rgba(35, 136, 255, 0.42)',
       shadowColor: '#2388FF',
     },
-    tab: 'market',
+    tab: 'shop',
   },
   {
     key: 'fleet',
@@ -75,7 +75,6 @@ const MODULES: DashboardModule[] = [
 interface DashboardModuleGridProps {
   onNavigate: (tab: TabKey) => void;
   onOpenWarehouse?: () => void;
-  marketOpportunities: number;
   idleTrucks: number;
   activeDeliveries: number;
   warehouseFillRatio: number;
@@ -83,7 +82,6 @@ interface DashboardModuleGridProps {
 }
 
 interface ModuleStatusInput {
-  marketOpportunities: number;
   idleTrucks: number;
   activeDeliveries: number;
   warehouseFillRatio: number;
@@ -91,10 +89,8 @@ interface ModuleStatusInput {
 
 function resolveModuleStatus(key: DashboardModuleKey, data: ModuleStatusInput): string {
   switch (key) {
-    case 'market':
-      return data.marketOpportunities > 0
-        ? `${data.marketOpportunities} fırsat`
-        : 'Fiyat ve stok';
+    case 'shop':
+      return 'Araç ve ekipman';
     case 'fleet':
       if (data.idleTrucks > 0) {
         return `${data.idleTrucks} boşta`;
@@ -167,7 +163,6 @@ function ModuleCard({ module, statusLabel, onPress }: ModuleCardProps) {
 export default function DashboardModuleGrid({
   onNavigate,
   onOpenWarehouse,
-  marketOpportunities,
   idleTrucks,
   activeDeliveries,
   warehouseFillRatio,
@@ -184,7 +179,6 @@ export default function DashboardModuleGrid({
   };
 
   const statusData: ModuleStatusInput = {
-    marketOpportunities,
     idleTrucks,
     activeDeliveries,
     warehouseFillRatio,

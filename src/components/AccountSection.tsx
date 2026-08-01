@@ -20,6 +20,7 @@ import {
   linkAnonymousAccountWithApple,
   linkAnonymousAccountWithGoogle,
   beginGoogleAccountSwitchSelection,
+  cancelPendingGoogleLinkConflict,
   linkSelectedGoogleAccountToGuest,
   retryProviderAccountLink,
   resetAccountSwitchTransition,
@@ -357,7 +358,7 @@ export default function AccountSection() {
   };
 
   const handleLink = async (provider: 'google' | 'apple') => {
-    if (isLinking) {
+    if (isLinking || isResolvingConflict || isSwitchingAccount) {
       return;
     }
 
@@ -365,7 +366,7 @@ export default function AccountSection() {
     try {
       const result =
         provider === 'google'
-          ? await linkAnonymousAccountWithGoogle()
+          ? await linkAnonymousAccountWithGoogle({ forceInteractivePicker: true })
           : await linkAnonymousAccountWithApple();
 
       refreshAccount();
@@ -373,6 +374,11 @@ export default function AccountSection() {
 
       if (result.ok) {
         showAlert('Hesap bağlandı', 'İlerlemen artık hesabınla korunuyor.');
+        return;
+      }
+
+      if (result.error === 'cancelled') {
+        // Picker iptali: anonymous + local save korunur; loading finally ile kapanır.
         return;
       }
 
@@ -394,6 +400,33 @@ export default function AccountSection() {
     } finally {
       setIsLinking(null);
     }
+  };
+
+  const handleCancelGoogleLinkConflict = async () => {
+    setPendingAccountConflict(null);
+    setIsResolvingConflict(false);
+    setIsLinking(null);
+    setCloudSaveAccountConflictPending(false);
+    accountSwitchConflictRef.current = false;
+    endCloudSaveConflictResolution(conflictResolutionInFlightRef);
+    hideDialog();
+    await cancelPendingGoogleLinkConflict();
+    refreshAccount();
+  };
+
+  const handleSelectDifferentGoogleAccount = async () => {
+    if (isLinking || isResolvingConflict) {
+      return;
+    }
+    setPendingAccountConflict(null);
+    setIsResolvingConflict(false);
+    setCloudSaveAccountConflictPending(false);
+    accountSwitchConflictRef.current = false;
+    endCloudSaveConflictResolution(conflictResolutionInFlightRef);
+    hideDialog();
+    await cancelPendingGoogleLinkConflict();
+    // Interactive picker’ı yeniden aç; yeni hesapta conflict kontrolü tekrar çalışır.
+    await handleLink('google');
   };
 
   const handleSwitchToProviderAccount = async (
@@ -571,10 +604,28 @@ export default function AccountSection() {
           variant: 'secondary',
           onPress: showComparison,
         },
+        ...(provider === 'google'
+          ? [
+              {
+                label: 'Farklı Hesap Seç',
+                variant: 'secondary' as const,
+                onPress: () => {
+                  void handleSelectDifferentGoogleAccount();
+                },
+              },
+            ]
+          : []),
         {
           label: 'Vazgeç',
           variant: 'secondary',
-          onPress: () => setPendingAccountConflict(null),
+          onPress: () => {
+            if (provider === 'google') {
+              void handleCancelGoogleLinkConflict();
+            } else {
+              setPendingAccountConflict(null);
+              hideDialog();
+            }
+          },
         },
       ],
     });

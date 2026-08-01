@@ -58,6 +58,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "363783837598-5llvph09s50dgl7qfjk0apuqrcecf60d.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ethemsincar.logisticore",
+            "certificate_hash": "2fbb2c21c780a98838677d7884ef84d77164a51f"
+          }
+        },
+        {
           "client_id": "363783837598-6vbgmbn16krsfogk4dr1mub8b0nh4gfg.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

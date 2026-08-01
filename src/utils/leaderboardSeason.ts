@@ -1,5 +1,8 @@
 /**
- * Haftalık liderlik tablosu sezon anahtarı (gerçek takvim haftası, ISO-8601).
+ * Haftalık sezon anahtarları.
+ *
+ * - Leaderboard: `2026-W31` (ISO-8601, UTC)
+ * - Missions/retention: `weekly_2026-W31` (mevcut ilerleme anahtarlarıyla uyumlu)
  */
 
 const MS_PER_DAY = 86_400_000;
@@ -14,13 +17,20 @@ function getIsoWeekParts(date: Date): { isoYear: number; isoWeek: number } {
   return { isoYear, isoWeek };
 }
 
-export function getWeeklySeasonKey(date: Date = new Date()): string {
+/** Canonical liderlik sezon anahtarı: 2026-W31 */
+export function getLeaderboardSeasonKey(date: Date = new Date()): string {
   const { isoYear, isoWeek } = getIsoWeekParts(date);
-  return `weekly_${isoYear}-W${String(isoWeek).padStart(2, '0')}`;
+  return `${isoYear}-W${String(isoWeek).padStart(2, '0')}`;
 }
 
+/** Missions / retention haftalık anahtarı (prefix korunur). */
+export function getWeeklySeasonKey(date: Date = new Date()): string {
+  return `weekly_${getLeaderboardSeasonKey(date)}`;
+}
+
+/** @deprecated Use getLeaderboardSeasonKey */
 export function getWeeklySeasonDocId(seasonKey?: string): string {
-  return seasonKey ?? getWeeklySeasonKey();
+  return seasonKey ?? getLeaderboardSeasonKey();
 }
 
 function getIsoWeekStart(date: Date): Date {
@@ -39,4 +49,9 @@ export function getWeeklySeasonLabel(date: Date = new Date()): string {
     month: 'short',
   });
   return `${formatter.format(start)} – ${formatter.format(end)}`;
+}
+
+export function getLeaderboardSeasonEndMs(date: Date = new Date()): number {
+  const start = getIsoWeekStart(date);
+  return start.getTime() + 7 * MS_PER_DAY - 1;
 }

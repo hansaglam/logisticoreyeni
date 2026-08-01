@@ -9,10 +9,11 @@
  * - userTrackingUsageDescription app.config.js içinde tanımlı; runtime izin akışı eklenmeli
  */
 
-import { Platform } from 'react-native';
+import { Platform, TurboModuleRegistry } from 'react-native';
 
 import {
   getProductionRewardedAdUnitId,
+  isRunningInExpoGo,
   resolveAdsMode,
   type AdsMode,
 } from '../config/adMob';
@@ -42,16 +43,23 @@ function isSupportedPlatform(): boolean {
 type MobileAdsModule = typeof import('react-native-google-mobile-ads');
 
 function getMobileAdsModule(): MobileAdsModule | null {
-  if (!isSupportedPlatform()) {
+  if (!isSupportedPlatform() || isRunningInExpoGo()) {
     return null;
   }
 
   if (!nativeModuleChecked) {
     nativeModuleChecked = true;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('react-native-google-mobile-ads');
-      nativeModuleAvailable = true;
+      // Önce native modülün binary'de kayıtlı olduğunu throw etmeyen get() ile
+      // doğrula; SDK import'u getEnforcing() çağırdığı için modül yoksa
+      // Invariant Violation fırlatır ve LogBox'a ERROR düşer.
+      if (TurboModuleRegistry.get('RNGoogleMobileAdsModule') == null) {
+        nativeModuleAvailable = false;
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('react-native-google-mobile-ads');
+        nativeModuleAvailable = true;
+      }
     } catch {
       nativeModuleAvailable = false;
     }

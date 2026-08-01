@@ -28,6 +28,7 @@ import {
   signInWithCredential,
   signOut,
   deleteUser,
+  updateProfile,
   type AuthCredential,
   type User,
 } from 'firebase/auth';
@@ -38,6 +39,11 @@ import { getFirebaseAuthSafe, resetFirebaseAuthCache } from './firebase';
 import { clearGoogleSignInSession, createGoogleFirebaseCredential } from './googleAuthService';
 import { devLog, devWarn } from '../utils/devLog';
 import type { AccountLinkErrorKind } from '../utils/accountLinkErrors';
+
+type AppleLinkProfile = {
+  fullName: string | null;
+  email: string | null;
+};
 
 export type AccountProvider = 'guest' | 'google' | 'apple' | 'unknown';
 
@@ -134,6 +140,14 @@ function mapLinkErrorKind(error: unknown): AccountLinkErrorKind {
     return 'account-exists-with-different-credential';
   }
 
+  if (code === 'auth/provider-already-linked' || message.includes('provider-already-linked')) {
+    return 'provider-already-linked';
+  }
+
+  if (code === 'auth/operation-not-allowed' || message.includes('operation-not-allowed')) {
+    return 'provider-not-enabled';
+  }
+
   if (code === 'auth/cancelled-popup-request' || code === 'auth/popup-closed-by-user') {
     return 'cancelled';
   }
@@ -199,6 +213,12 @@ function mapLinkError(error: unknown): string {
   if (kind === 'account-exists-with-different-credential') {
     return 'account-exists-with-different-credential';
   }
+  if (kind === 'provider-already-linked') {
+    return 'provider-already-linked';
+  }
+  if (kind === 'provider-not-enabled') {
+    return 'provider-not-enabled';
+  }
   if (kind === 'cancelled') {
     return 'cancelled';
   }
@@ -217,6 +237,13 @@ function mapLinkError(error: unknown): string {
       : error instanceof Error
         ? error.message
         : 'link-failed';
+
+  if (code === 'auth/network-request-failed') {
+    return 'auth/network-request-failed';
+  }
+  if (code === 'auth/internal-error') {
+    return 'auth/internal-error';
+  }
 
   return code ?? message;
 }
@@ -326,16 +353,53 @@ async function restoreGuestAnonymousSession(): Promise<void> {
   await initAnonymousAuth();
 }
 
+async function applyAppleFirstLoginProfile(
+  user: User,
+  profile: AppleLinkProfile | undefined,
+): Promise<void> {
+  const nextName =
+    typeof profile?.fullName === 'string' && profile.fullName.trim().length > 0
+      ? profile.fullName.trim()
+      : null;
+  const nextEmail =
+    typeof profile?.email === 'string' && profile.email.trim().length > 0
+      ? profile.email.trim()
+      : null;
+
+  // Sonraki girişlerde null gelen name mevcut displayName'i ezmez
+  if (nextName && !user.displayName?.trim()) {
+    try {
+      await updateProfile(user, { displayName: nextName });
+    } catch (error) {
+      console.warn('[auth] Apple displayName update failed', error);
+    }
+  }
+
+  try {
+    await markUserProviderLinked(user.uid, 'apple', {
+      displayName: nextName ?? user.displayName ?? null,
+      email: nextEmail ?? user.email ?? null,
+    });
+  } catch (error) {
+    console.warn('[auth] Apple profile meta update failed', error);
+  }
+}
+
 async function finalizeAccountLink(
   provider: 'google' | 'apple',
   user: User,
+  appleProfile?: AppleLinkProfile,
 ): Promise<void> {
   devLog('[auth] account linked with', provider, user.uid);
 
-  try {
-    await markUserProviderLinked(user.uid, provider);
-  } catch (error) {
-    console.warn('[auth] markUserProviderLinked failed', error);
+  if (provider === 'apple') {
+    await applyAppleFirstLoginProfile(user, appleProfile);
+  } else {
+    try {
+      await markUserProviderLinked(user.uid, provider);
+    } catch (error) {
+      console.warn('[auth] markUserProviderLinked failed', error);
+    }
   }
 
   // Lazy import — cloudSaveSync / gameStore döngüsünü kırar
@@ -543,7 +607,7 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
       };
     }
 
-    await finalizeAccountLink('apple', linkResult.user);
+    await finalizeAccountLink('apple', linkResult.user, appleResult.profile);
     devLog('[auth] Apple account linked', linkResult.user.uid);
     return { ok: true, provider: 'apple' };
   } catch (error) {

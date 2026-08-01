@@ -40,6 +40,10 @@ module.exports = () => {
     },
     plugins: [
       ...existingPlugins,
+      'expo-asset',
+      'expo-font',
+      'expo-build-properties',
+      './plugins/withGoogleSignInModularHeaders.js',
       [
         'expo-navigation-bar',
         {

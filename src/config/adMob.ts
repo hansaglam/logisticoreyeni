@@ -9,9 +9,19 @@
  * Env yoksa: __DEV__ → test, release → production
  */
 
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
 
 export type AdsMode = 'stub' | 'test' | 'production';
+
+/**
+ * Expo Go, native AdMob modülünü (RNGoogleMobileAdsModule) içermez;
+ * SDK require edilirse TurboModuleRegistry.getEnforcing hatası fırlatır.
+ * Bu yüzden Expo Go'da her zaman stub moda düşülür.
+ */
+export function isRunningInExpoGo(): boolean {
+  return Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+}
 
 export const ADMOB_APP_IDS = {
   android: 'ca-app-pub-8214453687597896~5560651696',
@@ -30,6 +40,9 @@ function isDevEnvironment(): boolean {
 }
 
 export function resolveAdsMode(): AdsMode {
+  if (isRunningInExpoGo()) {
+    return 'stub';
+  }
   const raw = process.env.EXPO_PUBLIC_ADS_MODE?.trim().toLowerCase();
   if (raw === 'stub' || raw === 'test' || raw === 'production') {
     return raw;

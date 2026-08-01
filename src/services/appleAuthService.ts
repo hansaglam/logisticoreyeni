@@ -11,9 +11,19 @@
 import { OAuthProvider, type AuthCredential } from 'firebase/auth';
 import { Platform } from 'react-native';
 
-import { generateRandomNonce, sha256 } from '../utils/authNonce';
+import { getFirebaseAuthSafe } from './firebase';
+import { generateSecureNonceAsync, sha256 } from '../utils/authNonce';
 
 type AppleAuthModule = typeof import('expo-apple-authentication');
+
+export type AppleSignInProfile = {
+  fullName: string | null;
+  email: string | null;
+};
+
+export type AppleCredentialResult =
+  | { ok: true; credential: AuthCredential; profile: AppleSignInProfile }
+  | { ok: false; error: string };
 
 function loadAppleAuthentication(): AppleAuthModule | null {
   if (Platform.OS !== 'ios') {
@@ -26,6 +36,69 @@ function loadAppleAuthentication(): AppleAuthModule | null {
     console.warn('[auth] expo-apple-authentication unavailable', error);
     return null;
   }
+}
+
+function formatAppleFullName(
+  fullName: {
+    givenName?: string | null;
+    familyName?: string | null;
+    middleName?: string | null;
+  } | null
+  | undefined,
+): string | null {
+  if (!fullName) {
+    return null;
+  }
+  const parts = [fullName.givenName, fullName.middleName, fullName.familyName]
+    .map((part) => (typeof part === 'string' ? part.trim() : ''))
+    .filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function getNativeErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+  return 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : null;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    return (error as { message: string }).message;
+  }
+  return 'apple-sign-in-failed';
+}
+
+/** Token / nonce / email / UID loglanmaz. */
+function logAppleAuthFailed(fields: {
+  nativeCode: string | null;
+  firebaseCode: string | null;
+  category: string;
+  identityTokenPresent: boolean;
+  rawNoncePresent: boolean;
+}): void {
+  const auth = getFirebaseAuthSafe();
+  const currentUser = auth?.currentUser ?? null;
+  console.warn('[apple-auth-failed]', {
+    nativeCode: fields.nativeCode,
+    firebaseCode: fields.firebaseCode,
+    category: fields.category,
+    identityTokenPresent: fields.identityTokenPresent,
+    rawNoncePresent: fields.rawNoncePresent,
+    authInitialized: Boolean(auth),
+    currentUserPresent: Boolean(currentUser),
+    currentUserAnonymous: currentUser ? Boolean(currentUser.isAnonymous) : null,
+  });
 }
 
 export async function isAppleSignInAvailable(): Promise<boolean> {
@@ -44,10 +117,6 @@ export async function isAppleSignInAvailable(): Promise<boolean> {
     return false;
   }
 }
-
-export type AppleCredentialResult =
-  | { ok: true; credential: AuthCredential }
-  | { ok: false; error: string };
 
 export async function createAppleFirebaseCredential(): Promise<AppleCredentialResult> {
   return requestAppleFirebaseCredential();
@@ -96,11 +165,34 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
     return { ok: false, error: 'apple-not-available' };
   }
 
-  try {
-    const rawNonce = generateRandomNonce(32);
-    const hashedResult = await sha256(rawNonce);
+  let rawNoncePresent = false;
+  let identityTokenPresent = false;
 
+  try {
+    const nonceResult = await generateSecureNonceAsync(32);
+    if (!nonceResult.ok) {
+      logAppleAuthFailed({
+        nativeCode: null,
+        firebaseCode: null,
+        category: 'crypto-unavailable',
+        identityTokenPresent: false,
+        rawNoncePresent: false,
+      });
+      return { ok: false, error: 'crypto-unavailable' };
+    }
+
+    const rawNonce = nonceResult.nonce;
+    rawNoncePresent = true;
+
+    const hashedResult = await sha256(rawNonce);
     if (!hashedResult.ok) {
+      logAppleAuthFailed({
+        nativeCode: null,
+        firebaseCode: null,
+        category: 'crypto-unavailable',
+        identityTokenPresent: false,
+        rawNoncePresent: true,
+      });
       return { ok: false, error: hashedResult.error };
     }
 
@@ -112,46 +204,100 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       nonce: hashedResult.hash,
     });
 
-    if (!appleCredential.identityToken) {
-      return { ok: false, error: 'apple-missing-token' };
+    // identityToken zorunlu; authorizationCode asla idToken yerine kullanılmaz
+    const identityToken =
+      typeof appleCredential.identityToken === 'string'
+        ? appleCredential.identityToken.trim()
+        : '';
+    identityTokenPresent = identityToken.length > 0;
+
+    if (!identityTokenPresent) {
+      logAppleAuthFailed({
+        nativeCode: null,
+        firebaseCode: null,
+        category: 'apple-token-missing',
+        identityTokenPresent: false,
+        rawNoncePresent: true,
+      });
+      return { ok: false, error: 'apple-token-missing' };
     }
 
     const provider = new OAuthProvider('apple.com');
     const credential = provider.credential({
-      idToken: appleCredential.identityToken,
+      idToken: identityToken,
       rawNonce,
     });
 
-    return { ok: true, credential };
+    const fullName = formatAppleFullName(appleCredential.fullName);
+    const email =
+      typeof appleCredential.email === 'string' && appleCredential.email.trim().length > 0
+        ? appleCredential.email.trim()
+        : null;
+
+    return {
+      ok: true,
+      credential,
+      profile: {
+        fullName,
+        email,
+      },
+    };
   } catch (error: unknown) {
-    if (
-      error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      (error as { code?: string }).code === 'ERR_REQUEST_CANCELED'
-    ) {
+    const nativeCode = getNativeErrorCode(error);
+
+    if (nativeCode === 'ERR_REQUEST_CANCELED') {
       return { ok: false, error: 'cancelled' };
     }
 
-    const message =
-      error instanceof Error
-        ? error.message
-        : typeof error === 'object' &&
-            error &&
-            'message' in error &&
-            typeof (error as { message?: unknown }).message === 'string'
-          ? (error as { message: string }).message
-          : 'apple-sign-in-failed';
+    const message = getErrorMessage(error);
 
     if (
       message.includes('ExpoCrypto') ||
       message.includes('native module') ||
       message.includes('Native module')
     ) {
+      logAppleAuthFailed({
+        nativeCode,
+        firebaseCode: null,
+        category: 'crypto-unavailable',
+        identityTokenPresent,
+        rawNoncePresent,
+      });
       return { ok: false, error: 'crypto-unavailable' };
     }
 
-    console.warn('[auth] Apple Sign-In failed', error);
-    return { ok: false, error: message };
+    if (
+      nativeCode === 'ERR_REQUEST_UNKNOWN' ||
+      /invalid.?credential|credential.?invalid/i.test(message)
+    ) {
+      logAppleAuthFailed({
+        nativeCode,
+        firebaseCode: null,
+        category: 'apple-credential-invalid',
+        identityTokenPresent,
+        rawNoncePresent,
+      });
+      return { ok: false, error: 'apple-credential-invalid' };
+    }
+
+    if (/revoked/i.test(message)) {
+      logAppleAuthFailed({
+        nativeCode,
+        firebaseCode: null,
+        category: 'apple-credential-revoked',
+        identityTokenPresent,
+        rawNoncePresent,
+      });
+      return { ok: false, error: 'apple-credential-revoked' };
+    }
+
+    logAppleAuthFailed({
+      nativeCode,
+      firebaseCode: null,
+      category: 'apple-sign-in-failed',
+      identityTokenPresent,
+      rawNoncePresent,
+    });
+    return { ok: false, error: 'apple-sign-in-failed' };
   }
 }

@@ -246,6 +246,10 @@ async function updateCloudSyncMeta(
 export async function markUserProviderLinked(
   uid: string,
   provider: 'google' | 'apple',
+  extras?: {
+    displayName?: string | null;
+    email?: string | null;
+  },
 ): Promise<CloudSaveOperationResult> {
   if (!uid || !isFirebaseEnabled()) {
     return { ok: false, error: 'firebase-disabled' };
@@ -258,6 +262,24 @@ export async function markUserProviderLinked(
 
   try {
     const userRef = doc(db, 'users', uid);
+    const existing = await getDoc(userRef);
+    const existingData = existing.exists() ? existing.data() : null;
+    const existingDisplayName =
+      existingData && typeof existingData.displayName === 'string'
+        ? existingData.displayName.trim()
+        : '';
+    const existingEmail =
+      existingData && typeof existingData.email === 'string' ? existingData.email.trim() : '';
+
+    const nextDisplayName =
+      typeof extras?.displayName === 'string' && extras.displayName.trim().length > 0
+        ? extras.displayName.trim()
+        : null;
+    const nextEmail =
+      typeof extras?.email === 'string' && extras.email.trim().length > 0
+        ? extras.email.trim()
+        : null;
+
     const profileData = sanitizeForFirestore({
       uid,
       provider,
@@ -266,6 +288,11 @@ export async function markUserProviderLinked(
       updatedAt: serverTimestamp(),
       appVersion: getAppVersion(),
       platform: getPlatform(),
+      // Null ile overwrite yok — yalnızca geçerli değer veya mevcut kayıt
+      ...(nextDisplayName || existingDisplayName
+        ? { displayName: nextDisplayName ?? existingDisplayName }
+        : {}),
+      ...(nextEmail || existingEmail ? { email: nextEmail ?? existingEmail } : {}),
     });
     await setDoc(userRef, asRecord(profileData), { merge: true });
     devCloudLog('[cloud-save] user provider linked', provider);

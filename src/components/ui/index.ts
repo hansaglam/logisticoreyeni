@@ -6,6 +6,7 @@ export type {
   AppDialogVariant,
 } from './AppDialog';
 export { default as ActionButton } from './ActionButton';
+export { default as AuthProviderButton } from './AuthProviderButton';
 export { default as AppCard } from './AppCard';
 export { default as AppScreen } from './AppScreen';
 export { default as EmptyState } from './EmptyState';
@@ -24,6 +25,10 @@ export { default as SmallStatPill } from './SmallStatPill';
 export { default as StatusBadge } from './StatusBadge';
 
 export type { ActionButtonVariant } from './ActionButton';
+export type {
+  AuthProvider,
+  AuthProviderButtonVariant,
+} from './AuthProviderButton';
 export type { AppCardVariant } from './AppCard';
 export type { StatusBadgeSize, StatusBadgeVariant } from './StatusBadge';
 export type { SegmentOption } from './SegmentedControl';

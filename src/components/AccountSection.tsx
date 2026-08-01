@@ -10,7 +10,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AuthCredential } from 'firebase/auth';
 
 import { useAppDialog } from './AppDialogProvider';
-import { ActionButton, AppCard, GameIcon, StatusBadge } from './ui';
+import { ActionButton, AppCard, AuthProviderButton, GameIcon, StatusBadge } from './ui';
 import type { StatusBadgeVariant } from './ui';
 import {
   DEFAULT_ACCOUNT_STATUS,
@@ -24,7 +24,6 @@ import {
 } from '../services/authService';
 import {
   configureGoogleSignIn,
-  isGoogleSignInConfigured,
 } from '../services/googleAuthService';
 import { isAppleSignInAvailable } from '../services/appleAuthService';
 import { useGameStore } from '../store/gameStore';
@@ -109,22 +108,42 @@ function getCloudSaveUserStatus(status: CloudSaveStatusState): {
 }
 
 function linkErrorMessage(error: string | undefined): string | null {
-  if (!error || error === 'cancelled') {
+  if (
+    !error ||
+    error === 'cancelled' ||
+    error === 'apple-signin-cancelled'
+  ) {
     return null;
   }
   if (isAccountLinkConflictError(error)) {
     return null;
   }
   if (error === 'config-missing') {
-    return Platform.OS === 'ios'
-      ? 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID veya Google yapılandırmasını kontrol et.'
-      : 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID kontrol et. Değişiklikten sonra: npx expo start -c';
+    return 'Google girişi şu an yapılandırılamadı. Lütfen daha sonra tekrar dene.';
   }
   if (error === 'native-module-unavailable') {
-    return 'Google girişi Expo Go\'da çalışmaz. Development build gerekir:\nnpx expo run:android';
+    return 'Google girişi bu yapıda kullanılamıyor. Development build gerekir.';
   }
   if (error === 'apple-not-available' || error === 'apple-not-supported') {
     return 'Apple ile giriş bu cihazda kullanılamıyor.';
+  }
+  if (error === 'apple-token-missing' || error === 'apple-missing-token') {
+    return 'Apple girişi tamamlanamadı. Lütfen tekrar dene.';
+  }
+  if (error === 'apple-credential-invalid' || error === 'apple-credential-revoked') {
+    return 'Apple oturumu geçersiz veya iptal edilmiş. Lütfen tekrar dene.';
+  }
+  if (error === 'provider-not-enabled') {
+    return 'Apple ile giriş şu an kullanılamıyor.';
+  }
+  if (error === 'provider-already-linked' || error === 'already-linked') {
+    return 'Bu hesaba zaten bir giriş yöntemi bağlı.';
+  }
+  if (error === 'auth/network-request-failed') {
+    return 'Bağlantı sorunu oluştu. İnternetini kontrol edip tekrar dene.';
+  }
+  if (error === 'auth/internal-error') {
+    return 'Giriş sırasında beklenmeyen bir hata oluştu. Lütfen tekrar dene.';
   }
   if (error === 'crypto-unavailable') {
     return 'Apple ile giriş için gerekli güvenlik modülü hazırlanamadı. Lütfen uygulamayı yeniden başlat.';
@@ -208,8 +227,8 @@ export default function AccountSection() {
   const [isLinking, setIsLinking] = useState<'google' | 'apple' | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [dangerExpanded, setDangerExpanded] = useState(false);
-  const [googleConfigured, setGoogleConfigured] = useState(() => isGoogleSignInConfigured());
   const [appleAvailable, setAppleAvailable] = useState(false);
+  const [configHint, setConfigHint] = useState<string | null>(null);
   const deleteAccountAndCloudData = useGameStore((state) => state.deleteAccountAndCloudData);
 
   const safeAccountStatus = account ?? DEFAULT_ACCOUNT_STATUS;
@@ -228,7 +247,6 @@ export default function AccountSection() {
 
   useEffect(() => {
     configureGoogleSignIn();
-    setGoogleConfigured(isGoogleSignInConfigured());
     refreshAccount();
     const unsubAuth = subscribeAuthState(() => {
       refreshAccount();
@@ -300,6 +318,7 @@ export default function AccountSection() {
     }
 
     setIsLinking(provider);
+    setConfigHint(null);
     try {
       const result =
         provider === 'google'
@@ -320,6 +339,13 @@ export default function AccountSection() {
       ) {
         showAccountConflictDialog(provider, result.pendingCredential);
         return;
+      }
+
+      if (
+        result.error === 'config-missing' ||
+        result.error === 'native-module-unavailable'
+      ) {
+        setConfigHint(linkErrorMessage(result.error));
       }
 
       const message = linkErrorMessage(result.error);
@@ -595,31 +621,26 @@ export default function AccountSection() {
         {safeAccountStatus.isReady && isGuest ? (
           <View style={styles.linkButtons}>
             {showGoogle ? (
-              <ActionButton
-                label={isLinking === 'google' ? 'Bağlanıyor...' : 'Google ile Devam Et'}
+              <AuthProviderButton
+                provider="google"
+                label="Google ile Devam Et"
                 onPress={() => void handleLink('google')}
                 variant="primary"
-                compact
                 disabled={Boolean(isLinking)}
-                style={styles.primaryLinkButton}
+                loading={isLinking === 'google'}
               />
             ) : null}
             {showApple ? (
-              <ActionButton
-                label={isLinking === 'apple' ? 'Bağlanıyor...' : 'Apple ile Devam Et'}
+              <AuthProviderButton
+                provider="apple"
+                label="Apple ile Devam Et"
                 onPress={() => void handleLink('apple')}
                 variant="secondary"
-                compact
                 disabled={Boolean(isLinking)}
+                loading={isLinking === 'apple'}
               />
             ) : null}
-            {__DEV__ && !googleConfigured && showGoogle ? (
-              <Text style={styles.devHintText}>
-                {Platform.OS === 'ios'
-                  ? 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID veya Google yapılandırmasını kontrol et.'
-                  : 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID eksik. .env sonrası: npx expo start -c'}
-              </Text>
-            ) : null}
+            {configHint ? <Text style={styles.configHintText}>{configHint}</Text> : null}
           </View>
         ) : null}
 
@@ -743,11 +764,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   linkButtons: {
-    gap: spacing.sm,
+    gap: 13,
     marginTop: spacing.xs,
   },
-  primaryLinkButton: {
-    alignSelf: 'stretch',
+  configHintText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 16,
+    marginTop: 2,
+    paddingHorizontal: spacing.xs,
   },
   secureFootnote: {
     ...typography.caption,
@@ -783,11 +809,6 @@ const styles = StyleSheet.create({
   dangerButton: {
     alignSelf: 'flex-start',
     marginTop: spacing.xs,
-  },
-  devHintText: {
-    ...typography.caption,
-    color: colors.textMuted,
-    lineHeight: 16,
   },
   headerRow: {
     flexDirection: 'row',

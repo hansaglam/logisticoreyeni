@@ -461,6 +461,19 @@ const HIGH_PAYMENT_CONTRACT_THRESHOLD = 8_000;
 const FUEL_PRICE_CHANGE_THRESHOLD = 0.05;
 const MIN_TRUCK_CONDITION_FOR_DELIVERY = 30;
 
+function categorizeGlobalEconomyError(code: string): string {
+  const lower = code.toLowerCase();
+  if (lower.includes('permission-denied')) return 'permission-denied';
+  if (lower.includes('unavailable')) return 'unavailable';
+  if (lower.includes('unauthenticated')) return 'unauthenticated';
+  if (lower.includes('not-found')) return 'not-found';
+  if (lower.includes('deadline-exceeded')) return 'deadline-exceeded';
+  if (lower.includes('failed-precondition')) return 'failed-precondition';
+  if (lower.includes('invalid-argument')) return 'invalid-argument';
+  if (lower.includes('unsupported_global_economy')) return 'failed-precondition';
+  return 'unknown';
+}
+
 // ---------------------------------------------------------------------------
 // Otomatik kayıt durumu (modül kapsamı)
 // ---------------------------------------------------------------------------
@@ -4125,6 +4138,91 @@ export const useGameStore = create<GameStore>((set, get) => ({
       (before.cachedGlobalEconomySnapshotTrusted === true ||
         (typeof __DEV__ !== 'undefined' && __DEV__));
     set({ globalMarketSyncStatus: 'syncing' });
+
+    const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? null;
+    const online =
+      typeof navigator !== 'undefined' && 'onLine' in navigator
+        ? navigator.onLine
+        : null;
+
+    // Production Firestore rules require signedIn(); auth bootstrap race'ini kapat.
+    // Sıra: auth ready + currentUser olmadan globalEconomy/current okunmaz.
+    let authReady = false;
+    let authUser: { uid: string; isAnonymous: boolean } | null = null;
+    try {
+      const { initAnonymousAuth, isAuthSessionReady } = await import(
+        '../services/authService'
+      );
+      await initAnonymousAuth();
+      authReady = isAuthSessionReady();
+      const { getFirebaseAuthSafe } = await import('../services/firebase');
+      const user = getFirebaseAuthSafe()?.currentUser ?? null;
+      authUser = user
+        ? { uid: user.uid, isAnonymous: Boolean(user.isAnonymous) }
+        : null;
+    } catch (authError) {
+      console.warn('[global-economy-load-failed]', {
+        code: 'auth-bootstrap-failed',
+        projectId,
+        path: 'globalEconomy/current',
+        authReady: false,
+        userPresent: false,
+        anonymous: null,
+        online,
+        detail:
+          authError instanceof Error ? authError.message : String(authError),
+      });
+      const { recordGlobalEconomyResult } = await import(
+        '../services/backendDiagnostics'
+      );
+      recordGlobalEconomyResult({
+        success: false,
+        code: 'auth-bootstrap-failed',
+      });
+      set({
+        globalMarketSyncStatus: canUseCachedSnapshot
+          ? 'offline-cache'
+          : 'error',
+      });
+      return {
+        success: canUseCachedSnapshot,
+        source: canUseCachedSnapshot ? ('cache' as const) : ('unavailable' as const),
+        stale: true,
+      };
+    }
+
+    if (!authReady || !authUser) {
+      console.warn('[global-economy-load-failed]', {
+        code: 'unauthenticated',
+        projectId,
+        path: 'globalEconomy/current',
+        authReady,
+        userPresent: Boolean(authUser),
+        anonymous: authUser?.isAnonymous ?? null,
+        online,
+        detail:
+          'request.auth yok — Firestore signedIn() kuralı permission-denied üretir; okuma atlandı',
+      });
+      const { recordGlobalEconomyResult } = await import(
+        '../services/backendDiagnostics'
+      );
+      recordGlobalEconomyResult({
+        success: false,
+        code: 'unauthenticated',
+        detail: 'no-current-user-before-economy-read',
+      });
+      set({
+        globalMarketSyncStatus: canUseCachedSnapshot
+          ? 'offline-cache'
+          : 'error',
+      });
+      return {
+        success: canUseCachedSnapshot,
+        source: canUseCachedSnapshot ? ('cache' as const) : ('unavailable' as const),
+        stale: true,
+      };
+    }
+
     let repository = getGlobalEconomyRepository();
     if (!repository) {
       const [{ getFirestoreSafe }, { FirestoreGlobalEconomyRepository }] =
@@ -4145,7 +4243,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
       return {
         success: canUseCachedSnapshot,
-        source: canUseCachedSnapshot ? 'cache' as const : 'unavailable' as const,
+        source: canUseCachedSnapshot ? ('cache' as const) : ('unavailable' as const),
         stale: true,
       };
     }
@@ -4154,6 +4252,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const result = await repository.getCurrentSnapshot();
       const snapshot = result.snapshot;
       if (!snapshot) {
+        const { recordGlobalEconomyResult } = await import(
+          '../services/backendDiagnostics'
+        );
+        recordGlobalEconomyResult({
+          success: false,
+          code: 'not-found',
+        });
         set({
           globalMarketSyncStatus: canUseCachedSnapshot
             ? 'offline-cache'
@@ -4161,7 +4266,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         });
         return {
           success: canUseCachedSnapshot,
-          source: canUseCachedSnapshot ? 'cache' as const : 'unavailable' as const,
+          source: canUseCachedSnapshot ? ('cache' as const) : ('unavailable' as const),
           stale: true,
         };
       }
@@ -4200,13 +4305,47 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
       get().markSaveDirty();
       get().checkMarketPriceAlerts();
+      const { recordGlobalEconomyResult } = await import(
+        '../services/backendDiagnostics'
+      );
+      recordGlobalEconomyResult({ success: true, code: null });
       return {
         success: true,
         source: result.source,
         stale: result.source !== 'backend',
       };
     } catch (error) {
-      console.warn('[global-market] snapshot sync failed', error);
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      const category = categorizeGlobalEconomyError(code);
+      const permissionWithoutAuth =
+        category === 'permission-denied' && !authUser;
+      console.warn('[global-economy-load-failed]', {
+        code: code || null,
+        projectId,
+        path: 'globalEconomy/current',
+        authReady,
+        userPresent: Boolean(authUser),
+        anonymous: authUser?.isAnonymous ?? null,
+        online,
+        category,
+        detail: permissionWithoutAuth
+          ? 'permission-denied with request.auth missing'
+          : category === 'permission-denied'
+            ? 'permission-denied despite signed-in user'
+            : null,
+      });
+      const { recordGlobalEconomyResult } = await import(
+        '../services/backendDiagnostics'
+      );
+      recordGlobalEconomyResult({
+        success: false,
+        code: code || category,
+      });
       set({
         globalMarketSyncStatus: canUseCachedSnapshot
           ? 'offline-cache'
@@ -4214,7 +4353,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
       return {
         success: canUseCachedSnapshot,
-        source: canUseCachedSnapshot ? 'cache' as const : 'unavailable' as const,
+        source: canUseCachedSnapshot ? ('cache' as const) : ('unavailable' as const),
         stale: true,
       };
     }

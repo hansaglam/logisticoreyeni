@@ -108,6 +108,15 @@ module.exports = () => {
       ads: {
         mode: process.env.EXPO_PUBLIC_ADS_MODE ?? '',
       },
+      features: {
+        vehicleMarketplaceEnabled:
+          process.env.EXPO_PUBLIC_VEHICLE_MARKETPLACE_ENABLED ?? '',
+        leaderboardEnabled: process.env.EXPO_PUBLIC_LEADERBOARD_ENABLED ?? '',
+        marketAlarmsEnabled: process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED ?? '',
+        backendDiagnosticsEnabled:
+          process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED ?? '',
+      },
+      firebaseFunctionsRegion: 'us-central1',
     },
   };
 };

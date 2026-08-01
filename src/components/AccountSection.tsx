@@ -10,6 +10,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AuthCredential } from 'firebase/auth';
 
 import { useAppDialog } from './AppDialogProvider';
+import BackendDiagnosticsPanel from './BackendDiagnosticsPanel';
 import { ActionButton, AppCard, AuthProviderButton, GameIcon, StatusBadge } from './ui';
 import type { StatusBadgeVariant } from './ui';
 import {
@@ -201,6 +202,24 @@ function linkErrorMessage(error: string | undefined): string | null {
   }
   if (error === 'provider-already-linked') {
     return 'Bu sağlayıcı zaten mevcut hesaba bağlı.';
+  }
+  if (error === 'DEVELOPER_ERROR' || error === '10') {
+    return 'Google Sign-In yapılandırması hatalı (DEVELOPER_ERROR). Firebase SHA parmak izlerini kontrol et.';
+  }
+  if (error === 'auth/operation-not-allowed' || error === 'provider-not-enabled') {
+    return 'Bu giriş yöntemi Firebase’de kapalı. Google / Anonymous provider’ı etkinleştir.';
+  }
+  if (error === 'auth/network-request-failed' || error === 'network-error') {
+    return 'Ağ bağlantısı kurulamadı. Bağlantını kontrol edip tekrar dene.';
+  }
+  if (error === 'auth/credential-already-in-use' || error === 'credential-already-in-use') {
+    return 'Bu Google hesabı başka bir oturuma bağlı.';
+  }
+  if (
+    error === 'auth/account-exists-with-different-credential' ||
+    error === 'account-exists-with-different-credential'
+  ) {
+    return 'Bu e-posta başka bir giriş yöntemiyle kayıtlı.';
   }
   if (error === 'not-implemented') {
     return 'Hesap bağlama henüz hazır değil.';
@@ -1140,6 +1159,7 @@ export default function AccountSection() {
   };
 
   return (
+    <>
     <AppCard
       style={[styles.card, cardVariant === 'linked' ? styles.cardLinked : styles.cardGuest]}
       padded={false}
@@ -1331,6 +1351,8 @@ export default function AccountSection() {
         ) : null}
       </View>
     </AppCard>
+    <BackendDiagnosticsPanel />
+    </>
   );
 }
 

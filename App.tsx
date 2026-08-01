@@ -33,6 +33,7 @@ import {
 } from './src/services/notifications';
 import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
+import { logProductionBuildConfigOnce } from './src/services/productionBuildAudit';
 import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
 import { initializeAdProvider } from './src/services/adProvider';
@@ -200,12 +201,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Auth sırası (paralel değil):
+    // Firebase/Auth initialize → onAuthStateChanged initial →
+    // signInAnonymously (gerekirse) → auth ready → initializeGame →
+    // globalEconomy/current read.
     // Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.
-    configureGoogleSignIn();
-    logFirebaseRuntimeConfigOnce();
-    // Auth restore tamamlanana kadar anonymous sign-in yapılmaz.
-    void initAnonymousAuth();
-    void useGameStore.getState().initializeGame();
+    let cancelled = false;
+    void (async () => {
+      configureGoogleSignIn();
+      logFirebaseRuntimeConfigOnce();
+      // Auth restore tamamlanana kadar anonymous sign-in yapılmaz.
+      await initAnonymousAuth();
+      if (cancelled) return;
+      logProductionBuildConfigOnce();
+      await useGameStore.getState().initializeGame();
+    })();
 
     setupNotificationHandler();
     const notificationSub = addNotificationResponseListener((response) => {
@@ -234,6 +244,7 @@ export default function App() {
     });
 
     return () => {
+      cancelled = true;
       notificationSub.remove();
       subscription.remove();
     };

@@ -24,6 +24,10 @@ import {
   getFirebaseFunctionsSafe,
 } from './firebase';
 import { isCloudSaveAccountConflictPending } from './cloudSaveConflictState';
+import {
+  isAuthSessionReady,
+} from './authService';
+import { recordMarketplaceCallableResult } from './backendDiagnostics';
 
 export const VEHICLE_MARKETPLACE_FUNCTIONS_REGION = FIREBASE_FUNCTIONS_REGION;
 export const VEHICLE_MARKETPLACE_CALLABLES = {
@@ -112,19 +116,56 @@ function errorRecord(error: unknown): Record<string, unknown> {
     : {};
 }
 
-function logCallableError(error: unknown): void {
-  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
-  const details = errorRecord(errorRecord(error).details);
-  console.warn('[vehicle-marketplace-callable-error]', {
-    firebaseCode: getMarketplaceFirebaseErrorCode(error) || null,
-    backendReason: getMarketplaceBackendReason(error) ?? null,
-    message:
-      typeof errorRecord(error).message === 'string'
-        ? errorRecord(error).message
-        : null,
-    details: {
-      reason: typeof details.reason === 'string' ? details.reason : null,
-    },
+function logCallableError(error: unknown, callableName: string): void {
+  const user = getFirebaseAuthSafe()?.currentUser ?? null;
+  const firebaseCode = getMarketplaceFirebaseErrorCode(error) || null;
+  const backendReason = getMarketplaceBackendReason(error) ?? null;
+  console.warn('[marketplace-callable-failed]', {
+    callableName,
+    firebaseCode,
+    authReady: isAuthSessionReady(),
+    userPresent: Boolean(user),
+    anonymous: user?.isAnonymous ?? null,
+    region: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
+    projectId: getFirebaseAppSafe()?.options.projectId ?? null,
+    backendReason,
+  });
+  recordMarketplaceCallableResult({
+    success: false,
+    code: firebaseCode ?? backendReason ?? 'callable-failed',
+    detail: callableName,
+  });
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const details = errorRecord(errorRecord(error).details);
+    console.warn('[vehicle-marketplace-callable-error]', {
+      firebaseCode,
+      backendReason,
+      message:
+        typeof errorRecord(error).message === 'string'
+          ? errorRecord(error).message
+          : null,
+      details: {
+        reason: typeof details.reason === 'string' ? details.reason : null,
+      },
+    });
+  }
+}
+
+function logAuthRequiredCallable(callableName: string): void {
+  const user = getFirebaseAuthSafe()?.currentUser ?? null;
+  console.warn('[marketplace-callable-failed]', {
+    callableName,
+    firebaseCode: 'auth-required',
+    authReady: isAuthSessionReady(),
+    userPresent: Boolean(user),
+    anonymous: user?.isAnonymous ?? null,
+    region: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
+    projectId: getFirebaseAppSafe()?.options.projectId ?? null,
+  });
+  recordMarketplaceCallableResult({
+    success: false,
+    code: 'auth-required',
+    detail: callableName,
   });
 }
 
@@ -147,7 +188,10 @@ export async function createVehicleListing(input: MarketplaceActionEnvelope & {
     return failure(input, 'service-unavailable');
   }
   if (isCloudSaveAccountConflictPending()) return failure(input, 'save-conflict');
-  if (!user || user.isAnonymous) return failure(input, 'auth-required');
+  if (!user || user.isAnonymous) {
+    logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.create);
+    return failure(input, 'auth-required');
+  }
 
   const action = callable<typeof input, VehicleMarketplaceActionResult<{
     listingId: string;
@@ -176,7 +220,7 @@ export async function createVehicleListing(input: MarketplaceActionEnvelope & {
     }
     return result;
   } catch (error) {
-    logCallableError(error);
+    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.create);
     return failure(input, mapMarketplaceCallableError(error));
   } finally {
     marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
@@ -189,7 +233,10 @@ export async function cancelVehicleListing(input: MarketplaceActionEnvelope & {
 }): Promise<VehicleMarketplaceActionResult<{ listingId: string }>> {
   if (!isVehicleMarketplaceMutationAllowed()) return failure(input, 'service-unavailable');
   const user = getFirebaseAuthSafe()?.currentUser;
-  if (!user || user.isAnonymous) return failure(input, 'auth-required');
+  if (!user || user.isAnonymous) {
+    logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.cancel);
+    return failure(input, 'auth-required');
+  }
   const action = callable<typeof input, VehicleMarketplaceActionResult<{
     listingId: string;
   }>>(VEHICLE_MARKETPLACE_CALLABLES.cancel);
@@ -198,7 +245,7 @@ export async function cancelVehicleListing(input: MarketplaceActionEnvelope & {
   try {
     return (await action(input)).data;
   } catch (error) {
-    logCallableError(error);
+    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.cancel);
     return failure(input, mapMarketplaceCallableError(error));
   } finally {
     marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
@@ -218,7 +265,10 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
 }>> {
   if (!isVehicleMarketplaceMutationAllowed()) return failure(input, 'service-unavailable');
   const user = getFirebaseAuthSafe()?.currentUser;
-  if (!user || user.isAnonymous) return failure(input, 'auth-required');
+  if (!user || user.isAnonymous) {
+    logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.purchase);
+    return failure(input, 'auth-required');
+  }
   const action = callable<typeof input, VehicleMarketplaceActionResult<{
     listingId: string;
     grossPrice: number;
@@ -230,7 +280,7 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
   try {
     return (await action(input)).data;
   } catch (error) {
-    logCallableError(error);
+    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.purchase);
     return failure(input, mapMarketplaceCallableError(error));
   } finally {
     marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
@@ -250,13 +300,31 @@ export async function getVehicleMarketplaceListings(
   }
   try {
     const result = (await action({ limit, cursor })).data;
+    if (!result.ok) {
+      const reason = result.reason ?? 'service-unavailable';
+      if (reason === 'auth-required' || reason === 'unauthenticated') {
+        logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.list);
+      } else {
+        recordMarketplaceCallableResult({
+          success: false,
+          code: reason,
+          detail: VEHICLE_MARKETPLACE_CALLABLES.list,
+        });
+      }
+      return {
+        ...result,
+        listings: [],
+        reason,
+      };
+    }
+    recordMarketplaceCallableResult({ success: true, code: null });
     return {
       ...result,
       listings: result.listings.map((listing) =>
         normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
     };
   } catch (error) {
-    logCallableError(error);
+    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.list);
     return {
       ok: false,
       listings: [],
@@ -284,13 +352,26 @@ export async function getMyVehicleListings(): Promise<{
   if (!action) return { ok: false, listings: [], reason: 'service-unavailable' };
   try {
     const result = (await action({})).data;
+    if (!result.ok) {
+      const reason = result.reason ?? 'service-unavailable';
+      if (reason === 'auth-required' || reason === 'unauthenticated') {
+        logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.myListings);
+      } else {
+        recordMarketplaceCallableResult({
+          success: false,
+          code: reason,
+          detail: VEHICLE_MARKETPLACE_CALLABLES.myListings,
+        });
+      }
+      return { ...result, listings: [], reason };
+    }
     return {
       ...result,
       listings: result.listings.map((listing) =>
         normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
     };
   } catch (error) {
-    logCallableError(error);
+    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.myListings);
     return {
       ok: false,
       listings: [],

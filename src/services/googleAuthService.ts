@@ -14,6 +14,8 @@ import Constants from 'expo-constants';
 import { GoogleAuthProvider, type AuthCredential } from 'firebase/auth';
 import { Platform } from 'react-native';
 
+import { recordGoogleSignInResult } from './backendDiagnostics';
+import { getFirebaseAuthSafe } from './firebase';
 import { devLog, devWarn } from '../utils/devLog';
 
 export type GoogleSignInConfig = {
@@ -241,7 +243,39 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
       return { ok: false, error: 'in-progress' };
     }
 
-    devWarn('[google-auth] sign-in failed', error);
+    const category = categorizeGoogleAuthFailure(code, error);
+    const currentUser = getFirebaseAuthSafe()?.currentUser ?? null;
+    const firebaseConfigPresent = Boolean(
+      normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID) ??
+        (Constants.expoConfig?.extra as { firebase?: { projectId?: string } } | undefined)
+          ?.firebase?.projectId,
+    );
+    console.warn('[google-auth-failed]', {
+      nativeCode: code ?? null,
+      firebaseCode: null,
+      category,
+      authReady: Boolean(getFirebaseAuthSafe()),
+      currentUserPresent: Boolean(currentUser),
+      currentUserAnonymous: currentUser?.isAnonymous ?? null,
+      idTokenPresent: false,
+      packageName:
+        Platform.OS === 'android'
+          ? (Constants.expoConfig?.android?.package ?? null)
+          : (Constants.expoConfig?.ios?.bundleIdentifier ?? null),
+      projectId:
+        normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID) ??
+        (Constants.expoConfig?.extra as { firebase?: { projectId?: string } } | undefined)
+          ?.firebase?.projectId ??
+        null,
+      webClientIdPresent: Boolean(readGoogleConfig().webClientId),
+      authInitialized: firebaseConfigPresent,
+      googleServicesConfigured: configured,
+    });
+    recordGoogleSignInResult({
+      success: false,
+      code: category === 'unknown' ? (code ?? 'google-sign-in-failed') : category,
+    });
+
     const message =
       error instanceof Error
         ? error.message
@@ -255,8 +289,45 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
       return { ok: false, error: 'native-module-unavailable' };
     }
 
-    return { ok: false, error: code ?? message };
+    return { ok: false, error: category === 'unknown' ? (code ?? message) : category };
   }
+}
+
+function categorizeGoogleAuthFailure(code: string | null, error: unknown): string {
+  const raw =
+    code ??
+    (error instanceof Error ? error.message : typeof error === 'string' ? error : '');
+  const lower = raw.toLowerCase();
+  if (
+    raw === '10' ||
+    raw === 'DEVELOPER_ERROR' ||
+    lower.includes('developer_error') ||
+    lower.includes('code: 10')
+  ) {
+    return 'DEVELOPER_ERROR';
+  }
+  if (raw === 'SIGN_IN_CANCELLED' || raw === '-5' || lower.includes('cancel')) {
+    return 'SIGN_IN_CANCELLED';
+  }
+  if (raw === 'IN_PROGRESS' || lower.includes('in_progress')) {
+    return 'IN_PROGRESS';
+  }
+  if (lower.includes('play_services') || lower.includes('play services')) {
+    return 'PLAY_SERVICES_NOT_AVAILABLE';
+  }
+  if (lower.includes('auth/credential-already-in-use')) {
+    return 'auth/credential-already-in-use';
+  }
+  if (lower.includes('auth/account-exists-with-different-credential')) {
+    return 'auth/account-exists-with-different-credential';
+  }
+  if (lower.includes('auth/operation-not-allowed')) return 'auth/operation-not-allowed';
+  if (lower.includes('auth/network-request-failed')) return 'auth/network-request-failed';
+  if (lower.includes('auth/api-key-not-valid')) return 'auth/api-key-not-valid';
+  if (lower.includes('auth/app-not-authorized')) return 'auth/app-not-authorized';
+  if (lower.includes('auth/internal-error')) return 'auth/internal-error';
+  if (lower.includes('auth/invalid-credential')) return 'auth/invalid-credential';
+  return 'unknown';
 }
 
 export async function clearGoogleSignInSession(): Promise<void> {

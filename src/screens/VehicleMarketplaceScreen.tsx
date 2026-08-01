@@ -90,6 +90,7 @@ export default function VehicleMarketplaceScreen({
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
+  const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const [filters, setFilters] = useState<MarketplaceFilters>(DEFAULT_MARKETPLACE_FILTERS);
   const [filtersVisible, setFiltersVisible] = useState(false);
   const [selected, setSelected] = useState<VehicleMarketplaceListing | null>(null);
@@ -99,9 +100,12 @@ export default function VehicleMarketplaceScreen({
   const [createVisible, setCreateVisible] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  const syncMineAndReconcile = useCallback(async () => {
+  const syncMineAndReconcile = useCallback(async (): Promise<{
+    ok: boolean;
+    reason?: string;
+  }> => {
     const result = await getMyVehicleListings();
-    if (!result.ok) return false;
+    if (!result.ok) return { ok: false, reason: result.reason };
     setMyListings(result.listings);
     if (result.reconciliation) {
       applyReconciliation(result.reconciliation);
@@ -111,27 +115,58 @@ export default function VehicleMarketplaceScreen({
           : null,
       );
     }
-    return true;
+    return { ok: true };
   }, [applyReconciliation]);
 
-  const loadFirstPage = useCallback(async () => {
+  const loadFirstPage = useCallback(async (): Promise<{
+    ok: boolean;
+    reason?: string;
+  }> => {
     const page = await getVehicleMarketplaceListings(PAGE_SIZE);
     if (!page.ok) {
-      setUnavailable(true);
       setListings([]);
       setHasMore(false);
-      return false;
+      return { ok: false, reason: page.reason };
     }
-    setUnavailable(false);
     setListings(mergeMarketplacePage([], page));
     setCursor(page.nextCursor);
     setHasMore(page.hasMore);
-    return true;
+    return { ok: true };
   }, []);
 
   const refreshAll = useCallback(async () => {
-    const [publicOk, myOk] = await Promise.all([loadFirstPage(), syncMineAndReconcile()]);
-    setUnavailable(!publicOk || !myOk);
+    const user = getFirebaseAuthSafe()?.currentUser ?? null;
+    if (!user || user.isAnonymous) {
+      setUnavailable(true);
+      setUnavailableReason('auth-required');
+      setListings([]);
+      setMyListings([]);
+      setHasMore(false);
+      return;
+    }
+
+    const [publicResult, myResult] = await Promise.all([
+      loadFirstPage(),
+      syncMineAndReconcile(),
+    ]);
+
+    if (!publicResult.ok) {
+      setUnavailable(true);
+      setUnavailableReason(publicResult.reason ?? 'service-unavailable');
+      return;
+    }
+
+    if (
+      !myResult.ok &&
+      (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
+    ) {
+      setUnavailable(true);
+      setUnavailableReason('auth-required');
+      return;
+    }
+
+    setUnavailable(false);
+    setUnavailableReason(null);
   }, [loadFirstPage, syncMineAndReconcile]);
 
   useEffect(() => {
@@ -164,6 +199,7 @@ export default function VehicleMarketplaceScreen({
       setHasMore(page.hasMore);
     } else {
       setUnavailable(true);
+      setUnavailableReason(page.reason ?? 'service-unavailable');
     }
     setLoadingMore(false);
   };
@@ -359,11 +395,40 @@ export default function VehicleMarketplaceScreen({
             ) : null}
             {!loading && unavailable ? (
               <EmptyState
-                title="Araç Pazarı şu anda kullanılamıyor."
-                message="Bağlantını kontrol edip tekrar dene."
-                actionLabel="Tekrar Dene"
-                onAction={() => void onRefresh()}
-                icon="warning"
+                title={
+                  unavailableReason === 'auth-required' ||
+                  unavailableReason === 'unauthenticated'
+                    ? 'Araç Pazarı hesabı gerekli'
+                    : 'Araç Pazarı şu anda kullanılamıyor.'
+                }
+                message={
+                  unavailableReason === 'auth-required' ||
+                  unavailableReason === 'unauthenticated'
+                    ? getMarketplaceErrorMessage('auth-required')
+                    : unavailableReason === 'network-error'
+                      ? getMarketplaceErrorMessage('network-error')
+                      : getMarketplaceErrorMessage(
+                          unavailableReason ?? 'marketplace-unavailable',
+                        )
+                }
+                actionLabel={
+                  unavailableReason === 'auth-required' ||
+                  unavailableReason === 'unauthenticated'
+                    ? undefined
+                    : 'Tekrar Dene'
+                }
+                onAction={
+                  unavailableReason === 'auth-required' ||
+                  unavailableReason === 'unauthenticated'
+                    ? undefined
+                    : () => void onRefresh()
+                }
+                icon={
+                  unavailableReason === 'auth-required' ||
+                  unavailableReason === 'unauthenticated'
+                    ? 'lock'
+                    : 'warning'
+                }
                 compact
               />
             ) : null}

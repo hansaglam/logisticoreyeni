@@ -5,17 +5,29 @@
  * Faz 2+: Cloud restore UI, Google/Apple login, leaderboard, remote config
  */
 
+import Constants from 'expo-constants';
+
 export const BACKEND_ENABLED = true;
 export const CLOUD_SAVE_WRITE_ENABLED = true;
 export const CLOUD_SAVE_AUTO_RESTORE_ENABLED = false;
 
+function readExtraFeatureFlag(key: string): string | undefined {
+  const extra = Constants.expoConfig?.extra as
+    | { features?: Record<string, unknown> }
+    | undefined;
+  const value = extra?.features?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 /** Server-authoritative workers tamamlanana kadar production'da kapalıdır. */
 export const LEADERBOARD_ENABLED =
   (typeof __DEV__ !== 'undefined' && __DEV__) ||
-  process.env.EXPO_PUBLIC_LEADERBOARD_ENABLED === 'true';
+  process.env.EXPO_PUBLIC_LEADERBOARD_ENABLED === 'true' ||
+  readExtraFeatureFlag('leaderboardEnabled') === 'true';
 export const MARKET_ALARMS_ENABLED =
   (typeof __DEV__ !== 'undefined' && __DEV__) ||
-  process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED === 'true';
+  process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED === 'true' ||
+  readExtraFeatureFlag('marketAlarmsEnabled') === 'true';
 /** Migration + production canary doğrulanana kadar hiçbir UI giriş noktası açılmamalı. */
 export type VehicleMarketplaceFeatureSource = 'dev' | 'env' | 'disabled';
 
@@ -28,9 +40,13 @@ export function resolveVehicleMarketplaceFeatureFlag(input: {
   return { enabled: false, source: 'disabled' };
 }
 
+const vehicleMarketplaceEnvValue =
+  process.env.EXPO_PUBLIC_VEHICLE_MARKETPLACE_ENABLED ??
+  readExtraFeatureFlag('vehicleMarketplaceEnabled');
+
 const vehicleMarketplaceFeature = resolveVehicleMarketplaceFeatureFlag({
   isDevelopment: typeof __DEV__ !== 'undefined' && __DEV__,
-  envValue: process.env.EXPO_PUBLIC_VEHICLE_MARKETPLACE_ENABLED,
+  envValue: vehicleMarketplaceEnvValue,
 });
 
 /** Development'ta açık; internal/production build'de yalnız explicit env=true ile açık. */

@@ -38,6 +38,12 @@ import {
   loadGameFromCloudDetailed,
   markUserProviderLinked,
 } from './cloudSaveService';
+import {
+  recordAnonymousSignInResult,
+  recordGoogleSignInResult,
+  resolveCurrentUserKind,
+  setBackendDiagnosticsMeta,
+} from './backendDiagnostics';
 import { getFirebaseAuthSafe } from './firebase';
 import {
   clearGoogleSignInSession,
@@ -321,6 +327,66 @@ function getAuthErrorCode(error: unknown): string | null {
   return 'code' in error && typeof (error as { code?: unknown }).code === 'string'
     ? (error as { code: string }).code
     : null;
+}
+
+const ANONYMOUS_AUTH_BLOCKER_CODES = new Set([
+  'auth/operation-not-allowed',
+  'auth/network-request-failed',
+  'auth/app-not-authorized',
+  'auth/api-key-not-valid',
+  'auth/internal-error',
+]);
+
+function categorizeAnonymousAuthFailure(code: string | null): string {
+  if (!code) return 'unknown';
+  if (ANONYMOUS_AUTH_BLOCKER_CODES.has(code)) return code;
+  return code;
+}
+
+function syncAuthDiagnostics(user: User | null): void {
+  setBackendDiagnosticsMeta({
+    authInitialized: Boolean(getFirebaseAuthSafe()),
+    authReady: authSessionReady,
+    currentUserKind: resolveCurrentUserKind(user),
+  });
+}
+
+function logAnonymousAuthResult(input: {
+  attempted: boolean;
+  success: boolean;
+  firebaseCode?: string | null;
+  user?: User | null;
+}): void {
+  const auth = getFirebaseAuthSafe();
+  const currentUser = input.user ?? auth?.currentUser ?? null;
+  const payload = {
+    attempted: input.attempted,
+    success: input.success,
+    firebaseCode: input.firebaseCode ?? null,
+    authReady: authSessionReady,
+    currentUserPresent: Boolean(currentUser),
+    currentUserAnonymous: currentUser?.isAnonymous ?? null,
+  };
+  console.info('[anonymous-auth-result]', payload);
+  if (input.firebaseCode === 'auth/operation-not-allowed') {
+    console.error(
+      '[anonymous-auth-blocker] Firebase Anonymous Auth provider kapalı — Authentication > Sign-in method > Anonymous etkinleştirilmeli (release blocker)',
+    );
+  } else if (
+    input.firebaseCode &&
+    ANONYMOUS_AUTH_BLOCKER_CODES.has(input.firebaseCode)
+  ) {
+    console.error('[anonymous-auth-blocker]', {
+      firebaseCode: input.firebaseCode,
+      category: categorizeAnonymousAuthFailure(input.firebaseCode),
+    });
+  }
+  recordAnonymousSignInResult({
+    attempted: input.attempted,
+    success: input.success,
+    firebaseCode: input.firebaseCode ?? null,
+  });
+  syncAuthDiagnostics(currentUser);
 }
 
 function isAppleCredentialReuseError(error: unknown): boolean {
@@ -617,6 +683,7 @@ export function resetAuthService(): void {
 
 /**
  * Auth oturumunu başlatır: önce persistence restore, yoksa anonymous sign-in.
+ * Sıra: Auth initialize → onAuthStateChanged initial → yoksa signInAnonymously → ready.
  */
 export async function initAnonymousAuth(): Promise<User | null> {
   if (initPromise) {
@@ -630,10 +697,22 @@ export async function initAnonymousAuth(): Promise<User | null> {
       console.warn('[auth] unavailable, using local save only');
       setAuthLifecycleState('failed', 'auth-initialization-failed');
       authSessionReady = true;
+      logAnonymousAuthResult({
+        attempted: false,
+        success: false,
+        firebaseCode: 'auth-unavailable',
+      });
       initPromise = null;
       return null;
     }
 
+    setBackendDiagnosticsMeta({
+      authInitialized: true,
+      authReady: false,
+      currentUserKind: 'none',
+    });
+
+    // Persistence restore: ilk onAuthStateChanged callback'ini bekle.
     const restoredUser = await waitForInitialAuthState();
 
     if (restoredUser) {
@@ -643,20 +722,43 @@ export async function initAnonymousAuth(): Promise<User | null> {
         restoredUser.isAnonymous ? 'anonymous' : 'authenticated',
         'persistence-restored',
       );
+      logAnonymousAuthResult({
+        attempted: false,
+        success: true,
+        firebaseCode: null,
+        user: restoredUser,
+      });
       return restoredUser;
     }
 
     try {
       devLog('[auth] no restored user, signing in anonymously');
       const credential = await signInAnonymously(auth);
-      devLog('[auth] anonymous user ready', credential.user.uid);
       authSessionReady = true;
       setAuthLifecycleState('anonymous', 'anonymous-created');
+      logAnonymousAuthResult({
+        attempted: true,
+        success: true,
+        firebaseCode: null,
+        user: credential.user,
+      });
       return credential.user;
     } catch (error) {
-      console.warn('[auth] anonymous sign-in failed', error);
+      const firebaseCode = getAuthErrorCode(error);
+      console.warn('[auth] anonymous sign-in failed', {
+        firebaseCode,
+        category: categorizeAnonymousAuthFailure(firebaseCode),
+        error,
+      });
       authSessionReady = true;
       setAuthLifecycleState('failed', 'anonymous-sign-in-failed');
+      logAnonymousAuthResult({
+        attempted: true,
+        success: false,
+        firebaseCode,
+        user: auth.currentUser,
+      });
+      // Anonymous user silinmez — zaten oluşturulamadı; mevcut oturum korunur.
       initPromise = null;
       return null;
     }
@@ -672,16 +774,50 @@ export async function initAnonymousAuth(): Promise<User | null> {
 export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResult> {
   void Platform.OS;
 
+  const authBefore = getFirebaseAuthSafe()?.currentUser ?? null;
   try {
     setAuthLifecycleState('linking-provider', 'google-link');
     const googleResult = await createGoogleFirebaseCredential();
     if (!googleResult.ok) {
+      // Native Google hatası googleAuthService içinde [google-auth-failed] loglar.
+      // Link başarısız olsa bile anonymous oturum korunmalı.
+      const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
+      console.warn('[google-auth-failed]', {
+        nativeCode: googleResult.error,
+        firebaseCode: null,
+        category: googleResult.error,
+        authReady: authSessionReady,
+        currentUserPresent: Boolean(preserved),
+        currentUserAnonymous: preserved?.isAnonymous ?? null,
+        idTokenPresent: false,
+      });
+      recordGoogleSignInResult({
+        success: false,
+        code: googleResult.error,
+      });
+      syncAuthDiagnostics(preserved);
       return { ok: false, error: googleResult.error };
     }
 
     const uidBefore = getCurrentUserId();
     const linkResult = await applyCredentialToCurrentUser(googleResult.credential);
     if (!linkResult.ok) {
+      const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
+      console.warn('[google-auth-failed]', {
+        nativeCode: null,
+        firebaseCode: linkResult.error,
+        category: linkResult.errorKind ?? linkResult.error,
+        authReady: authSessionReady,
+        currentUserPresent: Boolean(preserved),
+        currentUserAnonymous: preserved?.isAnonymous ?? null,
+        idTokenPresent: true,
+      });
+      recordGoogleSignInResult({
+        success: false,
+        code: linkResult.error,
+        detail: linkResult.errorKind ?? null,
+      });
+      syncAuthDiagnostics(preserved);
       return {
         ok: false,
         error: linkResult.error,
@@ -699,9 +835,24 @@ export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResul
 
     await finalizeAccountLink('google', linkResult.user);
     setAuthLifecycleState('authenticated', 'google-linked');
+    recordGoogleSignInResult({ success: true, code: null });
+    syncAuthDiagnostics(linkResult.user);
     return { ok: true, provider: 'google' };
   } catch (error) {
     const mapped = mapLinkError(error);
+    const firebaseCode = getAuthErrorCode(error) ?? mapped;
+    const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
+    console.warn('[google-auth-failed]', {
+      nativeCode: null,
+      firebaseCode,
+      category: mapLinkErrorKind(error),
+      authReady: authSessionReady,
+      currentUserPresent: Boolean(preserved),
+      currentUserAnonymous: preserved?.isAnonymous ?? null,
+      idTokenPresent: null,
+    });
+    recordGoogleSignInResult({ success: false, code: firebaseCode });
+    syncAuthDiagnostics(preserved);
     console.warn('[auth] linkAnonymousAccountWithGoogle failed', mapped);
     return { ok: false, error: mapped, errorKind: mapLinkErrorKind(error) };
   }

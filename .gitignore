@@ -44,6 +44,13 @@ yarn-error.log*
 *.p12
 credentials.json
 
+# Android upload / release signing (asla commit etme)
+android/keystore.properties
+android/UPLOAD_KEYSTORE_BACKUP.txt
+android/app/*.keystore
+!android/app/debug.keystore
+*.jks
+
 # TypeScript
 *.tsbuildinfo
 

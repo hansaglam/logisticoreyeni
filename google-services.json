@@ -58,11 +58,27 @@
       },
       "oauth_client": [
         {
-          "client_id": "363783837598-0613gvv3ordch4u6rst6kv7kvh8nkgd8.apps.googleusercontent.com",
+          "client_id": "363783837598-6vbgmbn16krsfogk4dr1mub8b0nh4gfg.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.ethemsincar.logisticore",
-            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+            "certificate_hash": "eef506407d800e6c418df2f26c9584b8e3039f78"
+          }
+        },
+        {
+          "client_id": "363783837598-b59k38voskg3oj4gpk3a96um55ft75kh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ethemsincar.logisticore",
+            "certificate_hash": "6434734c38ca710c99d837b7e993c1928ff4e9bf"
+          }
+        },
+        {
+          "client_id": "363783837598-hgmtner8ukvoppi41cvkphrig1fhkskk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ethemsincar.logisticore",
+            "certificate_hash": "c71bd7a22a55ba0bef2a97208018af46f0d313d4"
           }
         },
         {

@@ -147,6 +147,18 @@ export function getMissingFirebaseConfigKeys(): string[] {
   return getMissingFirebaseEnvKeys();
 }
 
+/** Audit / validate — tam secret değerleri döndürmez; yalnız presence + projectId. */
+export function readFirebaseConfigForAudit(): {
+  projectId?: string;
+  apiKey?: string;
+  authDomain?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+} {
+  return readFirebaseConfig();
+}
+
 function logMissingConfigOnce(): void {
   if (missingConfigLogged) {
     return;

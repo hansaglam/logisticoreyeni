@@ -8,6 +8,8 @@
     "start": "expo start",
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npx tsx scripts/check-require-cycles.ts",
+    "validate:production-build": "npx tsx scripts/validate-production-build-config.ts",
+    "android:bundle:release": "npm run validate:production-build && cd android && gradlew.bat bundleRelease",
     "backend:build": "npm --prefix backend run build",
     "backend:typecheck": "npm --prefix backend run typecheck",
     "backend:verify": "npm run backend:typecheck && npm run backend:build && npx tsx scripts/backend-function-consistency-test.ts && npx tsx scripts/check-require-cycles.ts && npm run firebase:emulators:test && npx tsx scripts/cloud-save-conflict-test.ts && npx tsx scripts/cloud-save-production-audit-test.ts",

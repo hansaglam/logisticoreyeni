@@ -94,11 +94,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Read-only until scores and rewards are verified by a trusted worker.
+    // Read-only for clients. Scores are written only by Admin SDK callables.
     match /leaderboards/{seasonId}/entries/{entryId} {
       allow read: if signedIn();
-
       allow create, update, delete: if false;
+    }
+
+    match /leaderboardIdempotency/{documentId} {
+      allow read, write: if false;
     }
 
     match /{document=**} {

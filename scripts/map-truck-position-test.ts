@@ -11,7 +11,7 @@ import {
   shouldRenderActiveDeliveryMarker,
 } from '../src/components/map/mapDeliveryOverlayPolicy';
 import { resolveTruckMapLocation } from '../src/components/map/mapTruckLocation';
-import { TRUCK_ASSET_HEADING_OFFSET_DEG } from '../src/components/map/mapTheme';
+import { TRUCK_ICON_BASE_ROTATION_DEG } from '../src/components/map/mapTheme';
 import { getWorldMapCityPosition } from '../src/data/worldMapPositions';
 import type { Delivery, Truck } from '../src/types/game';
 
@@ -152,8 +152,8 @@ assert(
   'only one moving truck marker is enabled per active delivery',
 );
 assert(
-  TRUCK_ASSET_HEADING_OFFSET_DEG === 180,
-  'truck asset uses one canonical 180° heading offset',
+  TRUCK_ICON_BASE_ROTATION_DEG === 0,
+  'truck asset uses one canonical 0° heading offset (faces right)',
 );
 
 console.log('\nSynthetic route headings');

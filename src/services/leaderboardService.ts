@@ -1,27 +1,42 @@
 /**
- * Haftalık liderlik tablosu — Firestore V1
+ * Haftalık liderlik tablosu — backend-authoritative V1
  *
  * Koleksiyon: leaderboards/{seasonKey}/entries/{uid}
+ * Yazma yalnız Admin SDK (submitLeaderboardScore callable).
  */
 
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-} from 'firebase/firestore';
+import { httpsCallable, type Functions } from 'firebase/functions';
 
-import { getAccountStatus } from './authService';
-import { getFirestoreSafe, isFirebaseEnabled } from './firebase';
-import { getWeeklySeasonDocId } from '../utils/leaderboardSeason';
-import { leaderboardConfig } from '../config/leaderboard';
-import { sanitizeForFirestore } from '../utils/sanitizeForFirestore';
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
+import { leaderboardConfig } from '../config/leaderboard';
+import { getLeaderboardSeasonKey } from '../utils/leaderboardSeason';
+import { getAccountStatus, isAuthSessionReady } from './authService';
+import {
+  FIREBASE_FUNCTIONS_REGION,
+  getFirebaseAppSafe,
+  getFirebaseAuthSafe,
+  getFirebaseFunctionsSafe,
+  isFirebaseEnabled,
+} from './firebase';
+
+export const LEADERBOARD_CALLABLES = {
+  submit: 'submitLeaderboardScore',
+  get: 'getLeaderboard',
+} as const;
+
+export type LeaderboardErrorCode =
+  | 'auth-required'
+  | 'anonymous-not-supported'
+  | 'save-not-found'
+  | 'invalid-player-state'
+  | 'invalid-request'
+  | 'rate-limited'
+  | 'season-closed'
+  | 'score-not-improved'
+  | 'service-unavailable'
+  | 'firebase-disabled'
+  | 'feature-disabled'
+  | 'network-error';
 
 export interface LeaderboardEntry {
   uid: string;
@@ -38,24 +53,64 @@ export interface LeaderboardRankedEntry extends LeaderboardEntry {
   rank: number;
 }
 
-export interface LeaderboardEntryInput {
-  uid: string;
-  companyName: string;
-  companyScore: number;
-  level: number;
-  reputation: number;
-  completedContracts: number;
-  seasonKey?: string;
-}
-
 export interface LeaderboardFetchResult {
   ok: boolean;
   seasonKey: string;
+  seasonStartMs?: number;
+  seasonEndMs?: number;
   entries: LeaderboardRankedEntry[];
   playerEntry: LeaderboardEntry | null;
   playerRank: number | null;
+  hasMore?: boolean;
   error?: string;
-  errorCode?: string;
+  errorCode?: LeaderboardErrorCode | string;
+}
+
+export interface LeaderboardSubmitResult {
+  ok: boolean;
+  updated?: boolean;
+  score?: number;
+  seasonKey?: string;
+  errorCode?: LeaderboardErrorCode | string;
+  error?: string;
+}
+
+function getLeaderboardFunctions(): Functions | null {
+  return getFirebaseFunctionsSafe(FIREBASE_FUNCTIONS_REGION);
+}
+
+function callable<TInput, TOutput>(name: string) {
+  const firebaseApp = getFirebaseAppSafe();
+  const functions = getLeaderboardFunctions();
+  if (!firebaseApp || !functions) return null;
+  return httpsCallable<TInput, TOutput>(functions, name);
+}
+
+function mapCallableError(error: unknown): LeaderboardErrorCode {
+  if (!error || typeof error !== 'object') return 'network-error';
+  const code = 'code' in error ? String((error as { code?: string }).code ?? '') : '';
+  const message =
+    'message' in error ? String((error as { message?: string }).message ?? '') : '';
+  const details =
+    'details' in error && (error as { details?: unknown }).details
+      ? String((error as { details?: unknown }).details)
+      : '';
+  const blob = `${code} ${message} ${details}`.toLowerCase();
+  if (blob.includes('auth-required') || code === 'functions/unauthenticated') {
+    return 'auth-required';
+  }
+  if (blob.includes('anonymous-not-supported')) return 'anonymous-not-supported';
+  if (blob.includes('save-not-found')) return 'save-not-found';
+  if (blob.includes('invalid-player-state')) return 'invalid-player-state';
+  if (blob.includes('rate-limited') || code === 'functions/resource-exhausted') {
+    return 'rate-limited';
+  }
+  if (blob.includes('season-closed')) return 'season-closed';
+  if (blob.includes('score-not-improved')) return 'score-not-improved';
+  if (code === 'functions/unavailable' || code === 'functions/internal') {
+    return 'service-unavailable';
+  }
+  return 'network-error';
 }
 
 export function isLeaderboardEligible(): boolean {
@@ -67,143 +122,251 @@ export function isLeaderboardEligible(): boolean {
   return account.provider === 'google' || account.provider === 'apple';
 }
 
-function normalizeLeaderboardEntry(
-  uid: string,
-  data: Record<string, unknown>,
+function normalizeEntry(
+  raw: Record<string, unknown>,
   seasonKey: string,
-): LeaderboardEntry {
-  return {
-    uid,
-    companyName: typeof data.companyName === 'string' ? data.companyName : 'LogistiCore Lojistik',
-    companyScore: typeof data.companyScore === 'number' ? data.companyScore : 0,
-    level: typeof data.level === 'number' ? data.level : 1,
-    reputation: typeof data.reputation === 'number' ? data.reputation : 0,
+  rank?: number,
+): LeaderboardRankedEntry {
+  const entry: LeaderboardRankedEntry = {
+    uid: typeof raw.uid === 'string' ? raw.uid : '',
+    companyName:
+      typeof raw.companyName === 'string' ? raw.companyName : 'LogistiCore Lojistik',
+    companyScore: typeof raw.companyScore === 'number' ? raw.companyScore : 0,
+    level: typeof raw.level === 'number' ? raw.level : 1,
+    reputation: typeof raw.reputation === 'number' ? raw.reputation : 0,
     completedContracts:
-      typeof data.completedContracts === 'number' ? data.completedContracts : 0,
+      typeof raw.completedContracts === 'number' ? raw.completedContracts : 0,
     updatedAt:
-      typeof data.updatedAt === 'number'
-        ? data.updatedAt
-        : typeof (data.updatedAt as { toMillis?: () => number })?.toMillis === 'function'
-          ? (data.updatedAt as { toMillis: () => number }).toMillis()
+      typeof raw.updatedAtMs === 'number'
+        ? raw.updatedAtMs
+        : typeof raw.updatedAt === 'number'
+          ? raw.updatedAt
           : Date.now(),
-    seasonKey: typeof data.seasonKey === 'string' ? data.seasonKey : seasonKey,
+    seasonKey: typeof raw.seasonKey === 'string' ? raw.seasonKey : seasonKey,
+    rank: typeof rank === 'number' ? rank : typeof raw.rank === 'number' ? raw.rank : 0,
   };
+  return entry;
 }
 
-export async function syncLeaderboardEntry(input: LeaderboardEntryInput): Promise<boolean> {
-  if (!isFirebaseEnabled() || !isLeaderboardEligible()) {
-    return false;
+function createIdempotencyKey(prefix: string): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now()}-${rand}`.slice(0, 120);
+}
+
+/**
+ * Trusted backend skor gönderimi. Client raw score göndermez.
+ */
+export async function submitLeaderboardScore(options?: {
+  clientSaveVersion?: number;
+  idempotencyKey?: string;
+}): Promise<LeaderboardSubmitResult> {
+  if (!LEADERBOARD_ENABLED) {
+    return { ok: false, errorCode: 'feature-disabled' };
+  }
+  if (!isFirebaseEnabled() || !isAuthSessionReady()) {
+    return { ok: false, errorCode: 'auth-required' };
+  }
+  if (!isLeaderboardEligible()) {
+    const account = getAccountStatus();
+    return {
+      ok: false,
+      errorCode: account?.isAnonymous ? 'anonymous-not-supported' : 'auth-required',
+    };
   }
 
-  const db = getFirestoreSafe();
-  if (!db) {
-    return false;
+  const fn = callable<
+    {
+      transactionId: string;
+      idempotencyKey: string;
+      clientSaveVersion?: number;
+    },
+    {
+      ok: boolean;
+      reason?: string;
+      updated?: boolean;
+      score?: number;
+      seasonKey?: string;
+    }
+  >(LEADERBOARD_CALLABLES.submit);
+
+  if (!fn) {
+    return { ok: false, errorCode: 'firebase-disabled' };
   }
 
-  const seasonKey = input.seasonKey ?? getWeeklySeasonDocId();
-  const entryRef = doc(db, 'leaderboards', seasonKey, 'entries', input.uid);
+  const transactionId = createIdempotencyKey('lb-tx');
+  const idempotencyKey = options?.idempotencyKey ?? createIdempotencyKey('lb-idem');
 
   try {
-    const payload = sanitizeForFirestore({
-      uid: input.uid,
-      companyName: input.companyName,
-      companyScore: Math.max(0, Math.floor(input.companyScore)),
-      level: Math.max(1, Math.floor(input.level)),
-      reputation: Math.max(0, Math.min(100, Math.round(input.reputation))),
-      completedContracts: Math.max(0, Math.floor(input.completedContracts)),
-      seasonKey,
-      updatedAt: serverTimestamp(),
+    const response = await fn({
+      transactionId,
+      idempotencyKey,
+      ...(options?.clientSaveVersion != null
+        ? { clientSaveVersion: options.clientSaveVersion }
+        : {}),
     });
-
-    await setDoc(entryRef, payload as Record<string, unknown>, { merge: true });
-    return true;
+    const data = response.data;
+    if (!data?.ok) {
+      return {
+        ok: false,
+        errorCode: (data?.reason as LeaderboardErrorCode) ?? 'service-unavailable',
+        error: data?.reason,
+      };
+    }
+    return {
+      ok: true,
+      updated: Boolean(data.updated),
+      score: data.score,
+      seasonKey: data.seasonKey,
+      errorCode: data.reason === 'score-not-improved' ? 'score-not-improved' : undefined,
+    };
   } catch (error) {
-    console.warn('[leaderboard] sync failed', error);
-    return false;
+    const errorCode = mapCallableError(error);
+    if (__DEV__) {
+      console.warn('[leaderboard] submit failed', { errorCode, error });
+    }
+    return {
+      ok: false,
+      errorCode,
+      error: error instanceof Error ? error.message : 'submit-failed',
+    };
   }
+}
+
+/** @deprecated Client Firestore write kaldırıldı — submitLeaderboardScore kullanın. */
+export async function syncLeaderboardEntry(_input: {
+  uid: string;
+  companyName: string;
+  companyScore: number;
+  level: number;
+  reputation: number;
+  completedContracts: number;
+  seasonKey?: string;
+}): Promise<boolean> {
+  const result = await submitLeaderboardScore();
+  return result.ok;
 }
 
 export async function fetchWeeklyLeaderboard(
-  uid: string | null,
-  seasonKey: string = getWeeklySeasonDocId(),
+  _uid: string | null,
+  seasonKey: string = getLeaderboardSeasonKey(),
 ): Promise<LeaderboardFetchResult> {
-  if (!LEADERBOARD_ENABLED || !isFirebaseEnabled()) {
+  if (!LEADERBOARD_ENABLED) {
     return {
       ok: false,
       seasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
+      errorCode: 'feature-disabled',
+      error: 'feature-disabled',
+    };
+  }
+  if (!isFirebaseEnabled()) {
+    return {
+      ok: false,
+      seasonKey,
+      entries: [],
+      playerEntry: null,
+      playerRank: null,
+      errorCode: 'firebase-disabled',
       error: 'firebase-disabled',
     };
   }
 
-  const db = getFirestoreSafe();
-  if (!db) {
+  const user = getFirebaseAuthSafe()?.currentUser;
+  if (!user) {
     return {
       ok: false,
       seasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
-      error: 'firestore-unavailable',
+      errorCode: 'auth-required',
+      error: 'auth-required',
+    };
+  }
+  if (user.isAnonymous) {
+    return {
+      ok: false,
+      seasonKey,
+      entries: [],
+      playerEntry: null,
+      playerRank: null,
+      errorCode: 'anonymous-not-supported',
+      error: 'anonymous-not-supported',
+    };
+  }
+
+  const fn = callable<
+    { seasonKey?: string; limit?: number },
+    {
+      ok: boolean;
+      reason?: string;
+      seasonKey?: string;
+      seasonStartMs?: number;
+      seasonEndMs?: number;
+      entries?: Array<Record<string, unknown>>;
+      playerEntry?: Record<string, unknown> | null;
+      playerRank?: number | null;
+      hasMore?: boolean;
+    }
+  >(LEADERBOARD_CALLABLES.get);
+
+  if (!fn) {
+    return {
+      ok: false,
+      seasonKey,
+      entries: [],
+      playerEntry: null,
+      playerRank: null,
+      errorCode: 'firebase-disabled',
     };
   }
 
   try {
-    const entriesRef = collection(db, 'leaderboards', seasonKey, 'entries');
-    const topQuery = query(
-      entriesRef,
-      orderBy('companyScore', 'desc'),
-      limit(leaderboardConfig.leaderboardSize),
-    );
-    const snapshot = await getDocs(topQuery);
-
-    const entries: LeaderboardRankedEntry[] = snapshot.docs.map((entryDoc, index) => ({
-      ...normalizeLeaderboardEntry(
-        entryDoc.id,
-        entryDoc.data() as Record<string, unknown>,
-        seasonKey,
-      ),
-      rank: index + 1,
-    }));
-
-    let playerEntry: LeaderboardEntry | null = null;
-    let playerRank: number | null = null;
-
-    if (uid) {
-      const inTopIndex = entries.findIndex((entry) => entry.uid === uid);
-      if (inTopIndex >= 0) {
-        playerEntry = entries[inTopIndex];
-        playerRank = inTopIndex + 1;
-      } else {
-        const playerRef = doc(db, 'leaderboards', seasonKey, 'entries', uid);
-        const playerSnap = await getDoc(playerRef);
-        if (playerSnap.exists()) {
-          playerEntry = normalizeLeaderboardEntry(
-            uid,
-            playerSnap.data() as Record<string, unknown>,
-            seasonKey,
-          );
-        }
-      }
+    const response = await fn({
+      seasonKey,
+      limit: leaderboardConfig.leaderboardSize,
+    });
+    const data = response.data;
+    if (!data?.ok) {
+      return {
+        ok: false,
+        seasonKey: data?.seasonKey ?? seasonKey,
+        entries: [],
+        playerEntry: null,
+        playerRank: null,
+        errorCode: (data?.reason as LeaderboardErrorCode) ?? 'service-unavailable',
+        error: data?.reason,
+      };
     }
+
+    const resolvedSeason = data.seasonKey ?? seasonKey;
+    const entries = (data.entries ?? []).map((entry, index) =>
+      normalizeEntry(entry, resolvedSeason, typeof entry.rank === 'number' ? entry.rank : index + 1),
+    );
+    const playerEntry = data.playerEntry
+      ? normalizeEntry(
+          data.playerEntry,
+          resolvedSeason,
+          typeof data.playerRank === 'number' ? data.playerRank : undefined,
+        )
+      : null;
 
     return {
       ok: true,
-      seasonKey,
+      seasonKey: resolvedSeason,
+      seasonStartMs: data.seasonStartMs,
+      seasonEndMs: data.seasonEndMs,
       entries,
       playerEntry,
-      playerRank,
+      playerRank: data.playerRank ?? null,
+      hasMore: Boolean(data.hasMore),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'fetch-failed';
-    const errorCode =
-      error && typeof error === 'object' && 'code' in error
-        ? String((error as { code?: string }).code ?? 'fetch-failed')
-        : 'fetch-failed';
+    const errorCode = mapCallableError(error);
     if (__DEV__) {
-      console.warn('[leaderboard] fetch failed', { errorCode, message });
+      console.warn('[leaderboard] fetch failed', { errorCode, error });
     }
     return {
       ok: false,
@@ -211,8 +374,8 @@ export async function fetchWeeklyLeaderboard(
       entries: [],
       playerEntry: null,
       playerRank: null,
-      error: message,
       errorCode,
+      error: error instanceof Error ? error.message : 'fetch-failed',
     };
   }
 }

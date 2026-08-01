@@ -117,8 +117,8 @@ assert(!gradle.includes('signingConfigs.debug\n            def enableShrink'), '
 
 const versionCodeMatch = gradle.match(/versionCode\s+(\d+)/);
 assert(
-  versionCodeMatch != null && Number(versionCodeMatch[1]) >= 6,
-  'versionCode >= 6 for Play upload',
+  versionCodeMatch != null && Number(versionCodeMatch[1]) >= 7,
+  'versionCode >= 7 for Play upload',
   `got=${versionCodeMatch?.[1] ?? 'missing'}`,
 );
 
@@ -172,6 +172,10 @@ assert(
   'at least 3 Android OAuth clients for Play Classical + Post-quantum + Upload',
   `count=${androidHashes.length}`,
 );
+const extraSha = '2fbb2c21c780a98838677d7884ef84d77164a51f';
+if (androidHashes.includes(extraSha)) {
+  console.log('  ✓ google-services includes additional Android OAuth SHA (2fbb2c21…)');
+}
 if (!androidHashes.includes(debugHash)) {
   console.warn(
     '  ! NOTE: debug SHA not in google-services (ok for Play release; local debug Google Sign-In may need it)',

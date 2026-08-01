@@ -27,9 +27,22 @@ export type GoogleCredentialResult =
   | { ok: true; credential: AuthCredential }
   | { ok: false; error: string };
 
+export type GoogleAccountPickerLog = {
+  action: string;
+  providerSessionCleared: boolean;
+  pickerOpened: boolean;
+  pickerCancelled: boolean;
+  credentialReceived: boolean;
+  conflictDetected?: boolean;
+};
+
 let configured = false;
 let configureAttempted = false;
 let envCheckLogged = false;
+
+function logGoogleAccountPicker(payload: GoogleAccountPickerLog): void {
+  console.info('[google-account-picker]', payload);
+}
 
 function normalizeEnvValue(value: unknown): string | undefined {
   if (typeof value !== 'string') {
@@ -169,8 +182,13 @@ export function configureGoogleSignIn(): boolean {
 /**
  * Google hesabından Firebase AuthCredential üretir.
  * link / signIn kararını authService verir.
+ *
+ * forceInteractivePicker: Android cached account’u temizleyip hesap seçiciyi zorlar.
+ * Firebase Auth’a dokunmaz; revokeAccess kullanmaz.
  */
-export async function createGoogleFirebaseCredential(): Promise<GoogleCredentialResult> {
+export async function createGoogleFirebaseCredential(
+  options?: { forceInteractivePicker?: boolean },
+): Promise<GoogleCredentialResult> {
   logGoogleEnvCheckOnce();
 
   if (!isGoogleSignInConfigured()) {
@@ -185,6 +203,12 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
     return { ok: false, error: 'native-module-unavailable' };
   }
 
+  let providerSessionCleared = false;
+  if (options?.forceInteractivePicker) {
+    await clearGoogleSignInSession();
+    providerSessionCleared = true;
+  }
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const googleSignIn = require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin');
@@ -193,9 +217,25 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
     if (Platform.OS === 'android') {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
     }
+
+    logGoogleAccountPicker({
+      action: 'open-picker',
+      providerSessionCleared,
+      pickerOpened: true,
+      pickerCancelled: false,
+      credentialReceived: false,
+    });
+
     const response = await GoogleSignin.signIn();
 
     if (response.type === 'cancelled') {
+      logGoogleAccountPicker({
+        action: 'picker-cancelled',
+        providerSessionCleared,
+        pickerOpened: true,
+        pickerCancelled: true,
+        credentialReceived: false,
+      });
       return { ok: false, error: 'cancelled' };
     }
 
@@ -211,8 +251,23 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
     }
 
     if (!idToken) {
+      logGoogleAccountPicker({
+        action: 'missing-token',
+        providerSessionCleared,
+        pickerOpened: true,
+        pickerCancelled: false,
+        credentialReceived: false,
+      });
       return { ok: false, error: 'google-missing-token' };
     }
+
+    logGoogleAccountPicker({
+      action: 'credential-received',
+      providerSessionCleared,
+      pickerOpened: true,
+      pickerCancelled: false,
+      credentialReceived: true,
+    });
 
     return {
       ok: true,
@@ -236,6 +291,13 @@ export async function createGoogleFirebaseCredential(): Promise<GoogleCredential
         : null;
 
     if (code === cancelledCode || code === 'SIGN_IN_CANCELLED' || code === '-5') {
+      logGoogleAccountPicker({
+        action: 'picker-cancelled',
+        providerSessionCleared,
+        pickerOpened: true,
+        pickerCancelled: true,
+        credentialReceived: false,
+      });
       return { ok: false, error: 'cancelled' };
     }
 
@@ -330,6 +392,10 @@ function categorizeGoogleAuthFailure(code: string | null, error: unknown): strin
   return 'unknown';
 }
 
+/**
+ * Yalnız Google provider cache’ini temizler.
+ * Firebase Auth signOut / revokeAccess YAPMAZ.
+ */
 export async function clearGoogleSignInSession(): Promise<void> {
   if (!configureGoogleSignIn()) {
     return;
@@ -339,6 +405,13 @@ export async function clearGoogleSignInSession(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { GoogleSignin } = require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin');
     await GoogleSignin.signOut();
+    logGoogleAccountPicker({
+      action: 'provider-session-cleared',
+      providerSessionCleared: true,
+      pickerOpened: false,
+      pickerCancelled: false,
+      credentialReceived: false,
+    });
     if (__DEV__) {
       devLog('[google-auth] signOut ok — account picker can reopen');
     }

@@ -4,7 +4,7 @@
  * Premium piyasa analizi: stoklar, fiyatlar ve taşıma fırsatları.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PixelRatio,
   Platform,
@@ -135,11 +135,14 @@ const HIGH_SURPLUS_RATIO = 1.5;
 const SHORTAGE_THRESHOLD = 0.7;
 const SURPLUS_THRESHOLD = 1.2;
 const STATUS_MESSAGE_TIMEOUT_MS = 2000;
+const MARKET_SUCCESS_BANNER_MS = 2500;
 const MAX_OPPORTUNITIES = 3;
 const OPPORTUNITY_SCORE_CAP = 2500;
 
 type MarketTab = 'products' | 'opportunities';
 type MarketMood = 'Sakin' | 'Hareketli' | 'Fırsatlı' | 'Kriz';
+/** Piyasa fetch UI — success ve error aynı anda render edilmez. */
+type MarketFetchUiStatus = 'idle' | 'loading' | 'success' | 'error' | 'stale';
 
 const MARKET_TABS = [
   { key: 'products' as const, label: 'Ürünler', icon: 'inventory' as const },
@@ -321,6 +324,8 @@ interface MarketMetricStripProps {
   currentTime: number;
   criticalCount: number;
   opportunityCount: number;
+  lastSyncedAtMs?: number | null;
+  syncStatus?: string | null;
 }
 
 function MarketMetricStrip({
@@ -328,7 +333,21 @@ function MarketMetricStrip({
   currentTime,
   criticalCount,
   opportunityCount,
+  lastSyncedAtMs,
+  syncStatus,
 }: MarketMetricStripProps) {
+  const syncLabel =
+    syncStatus === 'error'
+      ? 'Bağlantı yok'
+      : syncStatus === 'offline-cache'
+        ? 'Çevrimdışı'
+        : syncStatus === 'syncing'
+          ? 'Senkronize…'
+          : formatLiveEconomyCompact({
+              lastSyncAtMs: lastSyncedAtMs,
+              nowMs: Date.now(),
+            });
+
   return (
     <View style={styles.metricStrip}>
       <MarketMetricTile
@@ -339,9 +358,15 @@ function MarketMetricStrip({
       />
       <MarketMetricTile
         label="Piyasa"
-        value={formatLiveEconomyCompact()}
+        value={syncLabel}
         icon="time"
-        accentColor={colors.info}
+        accentColor={
+          syncStatus === 'error'
+            ? colors.danger
+            : syncStatus === 'offline-cache'
+              ? colors.warning
+              : colors.info
+        }
       />
       <MarketMetricTile
         label="Hareket"
@@ -934,7 +959,11 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const [activeTab, setActiveTab] = useState<MarketTab>('products');
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  /** Alım/satım / alarm gibi işlem mesajları — sync banner’ından ayrı. */
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [fetchUiStatus, setFetchUiStatus] = useState<MarketFetchUiStatus>('idle');
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+  const marketRefreshInFlightRef = useRef(false);
   const [tradeModalVisible, setTradeModalVisible] = useState(false);
   const [tradeMode, setTradeMode] = useState<TradeProductModalMode>('buy');
   const [tradeProductId, setTradeProductId] = useState<ProductId | null>(null);
@@ -984,6 +1013,40 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     const timeout = setTimeout(() => setStatusMessage(null), STATUS_MESSAGE_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [statusMessage]);
+
+  // Store sync durumunu UI banner state’ine yansıt (yerel refresh sırasında ezme).
+  useEffect(() => {
+    if (marketRefreshInFlightRef.current) return;
+    if (marketSyncStatus === 'syncing') {
+      setFetchUiStatus('loading');
+      setShowSuccessBanner(false);
+      return;
+    }
+    if (marketSyncStatus === 'error') {
+      setFetchUiStatus('error');
+      setShowSuccessBanner(false);
+      return;
+    }
+    if (marketSyncStatus === 'offline-cache') {
+      setFetchUiStatus('stale');
+      setShowSuccessBanner(false);
+      return;
+    }
+    if (marketSyncStatus === 'online') {
+      setFetchUiStatus((prev) =>
+        prev === 'error' || prev === 'stale' || prev === 'loading' ? 'idle' : prev,
+      );
+    }
+  }, [marketSyncStatus]);
+
+  useEffect(() => {
+    if (!showSuccessBanner) return;
+    const timeout = setTimeout(() => {
+      setShowSuccessBanner(false);
+      setFetchUiStatus((prev) => (prev === 'success' ? 'idle' : prev));
+    }, MARKET_SUCCESS_BANNER_MS);
+    return () => clearTimeout(timeout);
+  }, [showSuccessBanner]);
 
   const marketHighlights = useMemo(
     () => findMarketHighlights(cities, products),
@@ -1497,14 +1560,27 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   };
 
   const handleRefreshMarket = async () => {
-    const result = await refreshMarketSnapshot();
-    setStatusMessage(
-      !result.success
-        ? 'Piyasa verilerine ulaşılamıyor'
-        : result.stale
-        ? 'Çevrimdışı piyasa verisi gösteriliyor'
-        : 'Global piyasa senkronize edildi',
-    );
+    marketRefreshInFlightRef.current = true;
+    // Yeni fetch: önceki success/error banner’larını temizle.
+    setFetchUiStatus('loading');
+    setShowSuccessBanner(false);
+    try {
+      const result = await refreshMarketSnapshot();
+      if (result.success && !result.stale) {
+        setFetchUiStatus('success');
+        setShowSuccessBanner(true);
+        return;
+      }
+      if (result.stale || result.source === 'cache') {
+        setFetchUiStatus('stale');
+        setShowSuccessBanner(false);
+        return;
+      }
+      setFetchUiStatus('error');
+      setShowSuccessBanner(false);
+    } finally {
+      marketRefreshInFlightRef.current = false;
+    }
   };
 
   const handleOpenContractsForOpportunity = (opportunity: MarketOpportunity) => {
@@ -1565,21 +1641,33 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           </Pressable>
         </View>
 
-        {statusMessage ? (
-          <AppCard variant="success" style={styles.statusBanner} padded>
-            <View style={styles.statusBannerRow}>
-              <GameIcon name="success" size={14} color={colors.success} />
-              <Text style={styles.statusBannerText}>{statusMessage}</Text>
+        {fetchUiStatus === 'error' ? (
+          <AppCard variant="danger" style={styles.statusBanner} padded>
+            <View style={styles.statusBannerColumn}>
+              <View style={styles.statusBannerRow}>
+                <GameIcon name="alert" size={14} color={colors.danger} />
+                <Text style={styles.statusBannerText}>
+                  Piyasa verilerine ulaşılamıyor
+                </Text>
+              </View>
+              {globalSnapshot ? (
+                <Text style={styles.statusBannerSubtext}>
+                  Son kayıtlı piyasa verileri gösteriliyor.
+                </Text>
+              ) : null}
             </View>
           </AppCard>
-        ) : null}
-
-        {marketSyncStatus === 'offline-cache' ? (
+        ) : fetchUiStatus === 'stale' ? (
           <AppCard variant="highlighted" style={styles.statusBanner} padded>
-            <View style={styles.statusBannerRow}>
-              <GameIcon name="alert" size={14} color={colors.warning} />
-              <Text style={styles.statusBannerText}>
-                Çevrimdışı piyasa verisi
+            <View style={styles.statusBannerColumn}>
+              <View style={styles.statusBannerRow}>
+                <GameIcon name="alert" size={14} color={colors.warning} />
+                <Text style={styles.statusBannerText}>
+                  Piyasa verilerine ulaşılamıyor
+                </Text>
+              </View>
+              <Text style={styles.statusBannerSubtext}>
+                Son kayıtlı piyasa verileri gösteriliyor.
                 {marketLastSyncedAtMs
                   ? ` · Son senkronizasyon ${Math.max(
                       0,
@@ -1589,15 +1677,18 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               </Text>
             </View>
           </AppCard>
-        ) : null}
-
-        {marketSyncStatus === 'error' ? (
-          <AppCard variant="danger" style={styles.statusBanner} padded>
+        ) : fetchUiStatus === 'success' && showSuccessBanner ? (
+          <AppCard variant="success" style={styles.statusBanner} padded>
             <View style={styles.statusBannerRow}>
-              <GameIcon name="alert" size={14} color={colors.danger} />
-              <Text style={styles.statusBannerText}>
-                Piyasa verilerine ulaşılamıyor
-              </Text>
+              <GameIcon name="success" size={14} color={colors.success} />
+              <Text style={styles.statusBannerText}>Piyasa verileri güncellendi</Text>
+            </View>
+          </AppCard>
+        ) : statusMessage ? (
+          <AppCard variant="success" style={styles.statusBanner} padded>
+            <View style={styles.statusBannerRow}>
+              <GameIcon name="success" size={14} color={colors.success} />
+              <Text style={styles.statusBannerText}>{statusMessage}</Text>
             </View>
           </AppCard>
         ) : null}
@@ -1614,6 +1705,8 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           currentTime={currentTime}
           criticalCount={marketHighlights.criticalCount}
           opportunityCount={globalSnapshot?.globalOpportunityCount ?? opportunities.length}
+          lastSyncedAtMs={marketLastSyncedAtMs}
+          syncStatus={marketSyncStatus}
         />
 
         <MarketStatusSummary
@@ -1874,6 +1967,9 @@ const styles = StyleSheet.create({
   statusBanner: {
     marginBottom: 0,
   },
+  statusBannerColumn: {
+    gap: 4,
+  },
   statusBannerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1881,9 +1977,14 @@ const styles = StyleSheet.create({
   },
   statusBannerText: {
     ...typography.bodySmall,
-    color: colors.success,
+    color: colors.textPrimary,
     fontWeight: '700',
     flex: 1,
+  },
+  statusBannerSubtext: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    paddingLeft: 22,
   },
   screenStack: {
     gap: MARKET_SECTION_GAP,

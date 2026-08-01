@@ -1305,32 +1305,49 @@ export async function initAnonymousAuth(): Promise<User | null> {
 /**
  * Anonymous hesabı Google’a bağlar; mümkünse mevcut uid korunur.
  * credential-already-in-use: otomatik sign-in / local overwrite yapılmaz.
+ *
+ * Guest link her zaman interactive picker ister (Android cached account’u atlar).
+ * Başarıyla bağlı Google kullanıcısı bu fonksiyonu kullanmaz.
  */
-export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResult> {
+export async function linkAnonymousAccountWithGoogle(
+  options?: { forceInteractivePicker?: boolean },
+): Promise<AccountLinkResult> {
   void Platform.OS;
 
   const authBefore = getFirebaseAuthSafe()?.currentUser ?? null;
+  // Misafir bağlama: yarım kalan Google cache picker’ı kilitlemesin.
+  const forceInteractivePicker = options?.forceInteractivePicker !== false;
   try {
     setAuthLifecycleState('linking-provider', 'google-link');
-    const googleResult = await createGoogleFirebaseCredential();
+    const googleResult = await createGoogleFirebaseCredential({
+      forceInteractivePicker,
+    });
     if (!googleResult.ok) {
       // Native Google hatası googleAuthService içinde [google-auth-failed] loglar.
-      // Link başarısız olsa bile anonymous oturum korunmalı.
+      // Link başarısız / picker iptal olsa bile anonymous oturum korunmalı.
       const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
-      console.warn('[google-auth-failed]', {
-        nativeCode: googleResult.error,
-        firebaseCode: null,
-        category: googleResult.error,
-        authReady: authSessionReady,
-        currentUserPresent: Boolean(preserved),
-        currentUserAnonymous: preserved?.isAnonymous ?? null,
-        idTokenPresent: false,
-      });
-      recordGoogleSignInResult({
-        success: false,
-        code: googleResult.error,
-      });
+      if (googleResult.error !== 'cancelled') {
+        console.warn('[google-auth-failed]', {
+          nativeCode: googleResult.error,
+          firebaseCode: null,
+          category: googleResult.error,
+          authReady: authSessionReady,
+          currentUserPresent: Boolean(preserved),
+          currentUserAnonymous: preserved?.isAnonymous ?? null,
+          idTokenPresent: false,
+        });
+        recordGoogleSignInResult({
+          success: false,
+          code: googleResult.error,
+        });
+      }
       syncAuthDiagnostics(preserved);
+      setAuthLifecycleState(
+        preserved?.isAnonymous ? 'anonymous' : preserved ? 'authenticated' : 'idle',
+        googleResult.error === 'cancelled'
+          ? 'google-picker-cancelled'
+          : 'google-link-failed',
+      );
       return { ok: false, error: googleResult.error };
     }
 
@@ -1338,6 +1355,17 @@ export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResul
     const linkResult = await applyCredentialToCurrentUser(googleResult.credential, 'google');
     if (!linkResult.ok) {
       const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
+      const conflictDetected =
+        linkResult.errorKind === 'credential-already-in-use' ||
+        linkResult.errorKind === 'account-exists-with-different-credential';
+      console.info('[google-account-picker]', {
+        action: conflictDetected ? 'conflict-detected' : 'link-failed',
+        providerSessionCleared: forceInteractivePicker,
+        pickerOpened: true,
+        pickerCancelled: false,
+        credentialReceived: true,
+        conflictDetected,
+      });
       console.warn('[google-auth-failed]', {
         nativeCode: null,
         firebaseCode: linkResult.error,
@@ -1401,6 +1429,29 @@ export async function linkAnonymousAccountWithGoogle(): Promise<AccountLinkResul
     console.warn('[auth] linkAnonymousAccountWithGoogle failed', mapped);
     return { ok: false, error: mapped, errorKind: mapLinkErrorKind(error) };
   }
+}
+
+/**
+ * Cloud conflict “Vazgeç” / picker reset.
+ * Firebase anonymous user ve local save korunur.
+ * Yalnız Google provider cache + transition state temizlenir.
+ */
+export async function cancelPendingGoogleLinkConflict(): Promise<void> {
+  await clearGoogleSignInSession();
+  const user = getFirebaseAuthSafe()?.currentUser ?? null;
+  setAuthLifecycleState(
+    user?.isAnonymous ? 'anonymous' : user ? 'authenticated' : 'idle',
+    'google-link-conflict-cancelled',
+  );
+  resetAccountSwitchTransition();
+  console.info('[google-account-picker]', {
+    action: 'conflict-cancelled',
+    providerSessionCleared: true,
+    pickerOpened: false,
+    pickerCancelled: false,
+    credentialReceived: false,
+    conflictDetected: false,
+  });
 }
 
 /**
@@ -1825,7 +1876,9 @@ export async function beginGoogleAccountSwitchSelection(): Promise<GoogleAccount
       setAccountSwitchTransitionState('failed', providerCleared.error);
       return providerCleared;
     }
-    const google = await createGoogleFirebaseCredential();
+    const google = await createGoogleFirebaseCredential({
+      forceInteractivePicker: true,
+    });
     if (!google.ok) {
       const error =
         google.error === 'cancelled'

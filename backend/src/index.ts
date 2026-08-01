@@ -8,6 +8,12 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 
 import { runGlobalEconomyEpoch } from './globalEconomyWorker';
 import {
+  deleteLeaderboardEntriesForUid,
+  getLeaderboardSnapshot,
+  submitLeaderboardScoreTransaction,
+} from './leaderboard';
+import { isValidLeaderboardSeasonKey } from './leaderboardSeason';
+import {
   cancelVehicleListingTransaction,
   cleanupVehicleMarketplaceEphemeralRecords,
   createVehicleListingTransaction,
@@ -40,6 +46,8 @@ const RATE_LIMITS = {
   list: { windowMs: 60 * 1000, maxRequests: 120 },
   myListings: { windowMs: 60 * 1000, maxRequests: 60 },
   accountDeletion: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
+  leaderboardSubmit: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  leaderboardGet: { windowMs: 60 * 1000, maxRequests: 60 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -180,6 +188,39 @@ function callableIdentity(request: {
       typeof request.auth.token.name === 'string'
         ? request.auth.token.name
         : null,
+  };
+}
+
+function resolveLeaderboardIdentity(request: {
+  auth?: { uid: string; token: Record<string, unknown> };
+}):
+  | { ok: true; identity: { uid: string; displayName: string | null } }
+  | { ok: false; reason: 'auth-required' | 'anonymous-not-supported' } {
+  if (!request.auth?.uid) {
+    return { ok: false, reason: 'auth-required' };
+  }
+  const firebaseToken = request.auth.token.firebase;
+  const signInProvider =
+    firebaseToken &&
+    typeof firebaseToken === 'object' &&
+    'sign_in_provider' in firebaseToken
+      ? String(
+          (firebaseToken as { sign_in_provider?: unknown }).sign_in_provider ??
+            '',
+        )
+      : '';
+  if (signInProvider === 'anonymous') {
+    return { ok: false, reason: 'anonymous-not-supported' };
+  }
+  return {
+    ok: true,
+    identity: {
+      uid: request.auth.uid,
+      displayName:
+        typeof request.auth.token.name === 'string'
+          ? request.auth.token.name
+          : null,
+    },
   };
 }
 
@@ -473,22 +514,10 @@ export const prepareVehicleMarketplaceAccountDeletion = onCall(
     // Admin SDK recursive delete profile, saves/meta, alarms, notification
     // tokens ve bounded restore receipt alt koleksiyonlarını kapsar.
     await firestore.recursiveDelete(firestore.doc(`users/${identity.uid}`));
-    let leaderboardEntriesDeleted = 0;
-    while (true) {
-      const leaderboardEntries = await firestore
-        .collectionGroup('entries')
-        .where('uid', '==', identity.uid)
-        .limit(400)
-        .get();
-      if (leaderboardEntries.empty) break;
-      const batch = firestore.batch();
-      for (const entry of leaderboardEntries.docs) {
-        batch.delete(entry.ref);
-      }
-      await batch.commit();
-      leaderboardEntriesDeleted += leaderboardEntries.size;
-      if (leaderboardEntries.size < 400) break;
-    }
+    const leaderboardEntriesDeleted = await deleteLeaderboardEntriesForUid(
+      firestore,
+      identity.uid,
+    );
     logger.info('[account-deletion-cleanup]', {
       uidHash: uidHash(identity.uid),
       leaderboardEntriesDeleted,
@@ -499,6 +528,134 @@ export const prepareVehicleMarketplaceAccountDeletion = onCall(
       ...marketplace,
       leaderboardEntriesDeleted,
     };
+  },
+);
+
+export const submitLeaderboardScore = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const startedAt = Date.now();
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason: auth.reason,
+        transactionId: typeof record.transactionId === 'string' ? record.transactionId : '',
+        idempotencyKey:
+          typeof record.idempotencyKey === 'string' ? record.idempotencyKey : '',
+      };
+    }
+    if (
+      !hasActionEnvelope(request.data) ||
+      !hasOnlyKeys(record, ['transactionId', 'idempotencyKey', 'clientSaveVersion']) ||
+      !isOptionalSaveVersion(record.clientSaveVersion)
+    ) {
+      return invalidRequestResult(record);
+    }
+    // Client may not spoof UID — only request.auth.uid is used.
+    if ('uid' in record || 'score' in record || 'companyScore' in record) {
+      return invalidRequestResult(record);
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'leaderboardSubmit',
+        record.idempotencyKey as string,
+      ))
+    ) {
+      return rateLimitedResult(record);
+    }
+    const result = await submitLeaderboardScoreTransaction(
+      getFirestore(),
+      auth.identity,
+      {
+        transactionId: record.transactionId as string,
+        idempotencyKey: record.idempotencyKey as string,
+        clientSaveVersion:
+          record.clientSaveVersion === undefined
+            ? undefined
+            : Number(record.clientSaveVersion),
+      },
+    );
+    logger.info('[leaderboard-submit]', {
+      uidHash: uidHash(auth.identity.uid),
+      seasonKey: result.ok ? result.seasonKey : null,
+      updated: result.ok ? result.updated : false,
+      reason: result.ok ? result.reason ?? 'success' : result.reason,
+      durationMs: Date.now() - startedAt,
+      retryCount: result.retryCount ?? 0,
+    });
+    return result;
+  },
+);
+
+export const getLeaderboard = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const startedAt = Date.now();
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason: auth.reason,
+        seasonKey: '',
+      };
+    }
+    const cursor = requestRecord(record.cursor);
+    if (
+      !hasOnlyKeys(record, ['seasonKey', 'limit', 'cursor']) ||
+      (record.seasonKey !== undefined &&
+        !isValidLeaderboardSeasonKey(record.seasonKey)) ||
+      (record.limit !== undefined &&
+        (!Number.isInteger(record.limit) ||
+          Number(record.limit) < 1 ||
+          Number(record.limit) > 100)) ||
+      (record.cursor !== undefined &&
+        (!hasOnlyKeys(cursor, ['companyScore', 'uid']) ||
+          !Number.isFinite(cursor.companyScore) ||
+          !isBoundedId(cursor.uid)))
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        seasonKey:
+          typeof record.seasonKey === 'string' ? record.seasonKey : '',
+      };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'leaderboardGet'))) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        seasonKey:
+          typeof record.seasonKey === 'string' ? record.seasonKey : '',
+      };
+    }
+    const result = await getLeaderboardSnapshot(
+      getFirestore(),
+      auth.identity,
+      {
+        seasonKey:
+          typeof record.seasonKey === 'string' ? record.seasonKey : undefined,
+        limit: record.limit === undefined ? undefined : Number(record.limit),
+        cursor:
+          record.cursor === undefined
+            ? undefined
+            : {
+                companyScore: Number(cursor.companyScore),
+                uid: String(cursor.uid),
+              },
+      },
+    );
+    logger.info('[leaderboard-get]', {
+      uidHash: uidHash(auth.identity.uid),
+      seasonKey: result.seasonKey,
+      ok: result.ok,
+      entryCount: result.ok ? result.entries.length : 0,
+      durationMs: Date.now() - startedAt,
+    });
+    return result;
   },
 );
 

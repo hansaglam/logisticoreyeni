@@ -57,6 +57,10 @@ const firebaseSource = readFileSync(
 assert.match(accountSource, /Hesap Değiştir/);
 assert.match(accountSource, /Google Hesabından Çıkış Yap/);
 assert.match(accountSource, /Kaydet ve Hesap Değiştir/);
+assert.match(accountSource, /Farklı Hesap Seç/);
+assert.match(accountSource, /handleCancelGoogleLinkConflict/);
+assert.match(accountSource, /handleSelectDifferentGoogleAccount/);
+assert.match(accountSource, /forceInteractivePicker:\s*true/);
 assert.match(accountSource, /if \(isSwitchingAccount\) return/);
 assert.match(accountSource, /isVehicleMarketplaceOperationActive/);
 assert.match(accountSource, /activeMarketplaceListingIds: \[\]/);
@@ -66,9 +70,15 @@ assert.ok(
   'cloud sync must precede account selection',
 );
 assert.match(authSource, /clearGoogleSignInSessionStrict/);
+assert.match(authSource, /cancelPendingGoogleLinkConflict/);
 assert.match(authSource, /signOutGoogleAccountToGuest/);
+assert.match(authSource, /forceInteractivePicker/);
 assert.match(googleSource, /GoogleSignin\.signIn\(\)/);
+assert.match(googleSource, /forceInteractivePicker/);
+assert.match(googleSource, /\[google-account-picker\]/);
 assert.doesNotMatch(googleSource, /signInSilently/);
+assert.doesNotMatch(googleSource, /revokeAccess\s*\(/);
+assert.doesNotMatch(authSource, /revokeAccess\s*\(/);
 assert.equal(
   (firebaseSource.match(/initializeAuth\(app/g) ?? []).length,
   1,
@@ -97,6 +107,9 @@ console.log('[account-switch-flow-test] PASS', {
   noAuthReinitialize: true,
   safeSyncBeforeSwitch: true,
   interactivePicker: true,
+  conflictCancelClearsProvider: true,
+  selectDifferentAccount: true,
+  noRevokeAccess: true,
   marketplaceIsolation: true,
   structuredErrors: 7,
 });

@@ -714,29 +714,13 @@ export async function getCloudSaveMeta(uid: string): Promise<CloudSaveMeta | nul
 }
 
 async function deleteActiveLeaderboardEntry(uid: string): Promise<void> {
-  const db = getFirestoreSafe();
-  if (!db) {
-    return;
-  }
-
-  const seasonKey = getWeeklySeasonDocId();
-  const entryRef = doc(db, 'leaderboards', seasonKey, 'entries', uid);
-
-  try {
-    await deleteDoc(entryRef);
-    if (__DEV__) {
-      devCloudLog('[cloud-save] active leaderboard entry deleted', { uid, seasonKey });
-    }
-  } catch (error) {
-    const info = getFirestoreErrorInfo(error);
-    if (__DEV__) {
-      console.warn('[cloud-save] active leaderboard entry delete skipped', {
-        uid,
-        seasonKey,
-        code: info.code,
-        message: info.message,
-      });
-    }
+  // Client writes/deletes are denied by rules. Account deletion callable
+  // (prepareVehicleMarketplaceAccountDeletion) removes all season entries via Admin SDK.
+  if (__DEV__) {
+    devCloudLog('[cloud-save] leaderboard entry cleanup deferred to trusted callable', {
+      uid,
+      seasonKey: getWeeklySeasonDocId(),
+    });
   }
 }
 

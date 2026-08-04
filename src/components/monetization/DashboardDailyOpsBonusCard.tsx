@@ -51,6 +51,7 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
   );
   const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const fullContext = useMemo(
@@ -67,12 +68,16 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
     return canGrantAdReward(normalized, 'daily_ops_bonus', fullContext);
   }, [fullContext, monetization]);
 
-  const isDisabled = loading || !eligibility.ok;
+  const isDisabled = loading || (!eligibility.ok && !failed);
   const buttonLabel = loading
-    ? 'Yükleniyor…'
-    : !eligibility.ok
-      ? 'Limit doldu'
-      : 'Reklam İzle';
+    ? 'Reklam hazırlanıyor…'
+    : failed
+      ? 'Tekrar Dene'
+      : !eligibility.ok
+        ? 'Limit doldu'
+        : shouldShowTestAdLabel()
+          ? 'Reklam İzle (Test)'
+          : 'Reklam İzle';
 
   const handlePress = async () => {
     if (loading) {
@@ -92,17 +97,24 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
     }
 
     setLoading(true);
+    setFailed(false);
     setErrorText(null);
     try {
       const result = await applyAdReward('daily_ops_bonus', {});
       if (!result.ok) {
-        const reason = result.reason ?? 'Reklam ödülü alınamadı.';
+        const reason =
+          result.reason === 'Reklam yüklenemedi.'
+            ? 'Reklam şu anda kullanılamıyor.'
+            : result.reason ?? 'Reklam şu anda kullanılamıyor.';
         setErrorText(reason);
+        setFailed(true);
         return;
       }
+      setFailed(false);
       onSuccess?.(rewardAmount);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Reklam ödülü alınamadı.');
+      setFailed(true);
+      setErrorText(error instanceof Error ? error.message : 'Reklam şu anda kullanılamıyor.');
     } finally {
       setLoading(false);
     }
@@ -199,14 +211,7 @@ export default function DashboardDailyOpsBonusCard({
         >
           Reklam izle, küçük operasyon desteği al ({formatMoney(rewardAmount)})
         </Text>
-        <Text
-          style={[styles.footnote, isNarrow && styles.footnoteNarrow]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.72}
-        >
-          Görev ödülünden ayrıdır · günde 1 kez{showTestLabel ? ' · Test reklam' : ''}
-        </Text>
+        {showTestLabel ? <Text style={styles.footnote}>Test reklamı</Text> : null}
       </View>
 
       <DailyOpsAdCta rewardAmount={rewardAmount} onSuccess={onSuccess} isNarrow={isNarrow} />
@@ -289,15 +294,15 @@ const styles = StyleSheet.create({
     lineHeight: 13,
   },
   subtitle: {
-    fontSize: 9,
-    lineHeight: 11,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: '400',
     color: '#A9B6CC',
     marginTop: 2,
   },
   subtitleNarrow: {
-    fontSize: 8.5,
-    lineHeight: 10,
+    fontSize: 9.5,
+    lineHeight: 11,
   },
   footnote: {
     fontSize: 8,
@@ -305,10 +310,6 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     color: '#74839B',
     marginTop: 2,
-  },
-  footnoteNarrow: {
-    fontSize: 7.5,
-    lineHeight: 9,
   },
   ctaWrap: {
     width: 122,

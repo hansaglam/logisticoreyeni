@@ -136,6 +136,16 @@ export function getEconomyNow(): number {
   return activeClock.now();
 }
 
+/**
+ * Oyuncuya ait lifecycle/offline simulation zamanı.
+ * Global ekonomi epoch'u için kullanılmaz. Duvar saati app askıdayken de ilerler;
+ * geri/ileri cihaz saati sapmaları offline progression katmanında 0/cap ile korunur.
+ */
+export function getSimulationRealNowMs(): number {
+  const value = Date.now();
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /** Test/reset */
 export function resetEconomyClockForTests(): void {
   trustedAnchorServerMs = null;

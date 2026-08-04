@@ -10,9 +10,36 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
+    // Username / profile identity fields are Admin SDK (callable) only.
+    function usernameFieldsUnchanged() {
+      return request.resource.data.get('username', null)
+          == resource.data.get('username', null)
+        && request.resource.data.get('usernameNormalized', null)
+          == resource.data.get('usernameNormalized', null)
+        && request.resource.data.get('usernameUpdatedAt', null)
+          == resource.data.get('usernameUpdatedAt', null)
+        && request.resource.data.get('usernameChangeCount', null)
+          == resource.data.get('usernameChangeCount', null)
+        && request.resource.data.get('usernameSetupCompleted', null)
+          == resource.data.get('usernameSetupCompleted', null);
+    }
+
+    function usernameFieldsAbsentOnCreate() {
+      return !request.resource.data.keys().hasAny([
+        'username',
+        'usernameNormalized',
+        'usernameUpdatedAt',
+        'usernameChangeCount',
+        'usernameSetupCompleted',
+      ]);
+    }
+
     // Private player profile, cloud save and sync metadata.
     match /users/{userId} {
-      allow read, create, update, delete: if isOwner(userId);
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && usernameFieldsAbsentOnCreate();
+      allow update: if isOwner(userId) && usernameFieldsUnchanged();
+      allow delete: if isOwner(userId);
 
       match /saves/{saveId} {
         allow read, delete: if isOwner(userId);
@@ -102,6 +129,17 @@ service cloud.firestore {
 
     match /leaderboardIdempotency/{documentId} {
       allow read, write: if false;
+    }
+
+    // Username reservations — Admin SDK only (setUsername callable).
+    match /usernames/{usernameNormalized} {
+      allow read, write: if false;
+    }
+
+    // Minimal public profile — no email/cash/provider. Admin SDK writes.
+    match /publicProfiles/{userId} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     match /{document=**} {

@@ -128,8 +128,8 @@ export default function WarehouseOverviewGrid({
         <MetricCard
           label="Günlük Gider"
           value={formatMoney(-Math.abs(overview.dailyOperatingCost))}
-          valueColor={warehouseVisual.accentRed}
-          accent={warehouseVisual.accentRed}
+          valueColor={warehouseVisual.accentAmber}
+          accent={warehouseVisual.accentAmber}
           icon="expense"
         />
         <MetricCard
@@ -165,8 +165,8 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     minWidth: 0,
-    minHeight: 88,
-    paddingVertical: 10,
+    minHeight: 76,
+    paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 16,
     backgroundColor: warehouseVisual.surfaceElevated,

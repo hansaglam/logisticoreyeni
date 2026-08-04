@@ -19,6 +19,7 @@ const INCIDENT_PROGRESS_MIN = 0.2;
 const INCIDENT_PROGRESS_MAX = 0.85;
 const MIN_TRAVEL_HOURS_FOR_INCIDENT = 4;
 const MIN_COMPLETED_CONTRACTS_FOR_INCIDENT = 2;
+export const DELIVERY_INCIDENT_COOLDOWN_HOURS = 8;
 
 const INCIDENT_CHANCE_BY_TYPE: Record<ContractType, number> = {
   standard: 0.2,
@@ -29,13 +30,23 @@ const INCIDENT_CHANCE_BY_TYPE: Record<ContractType, number> = {
   refrigerated: 0.25,
 };
 
-const INCIDENT_TYPES: DeliveryIncidentType[] = [
+export const DELIVERY_INCIDENT_TYPES: readonly DeliveryIncidentType[] = [
   'traffic',
   'driver_break',
   'tire_pressure',
   'fuel_deviation',
   'checkpoint',
-];
+  'truck_failure',
+  'customer_request',
+  'warehouse_issue',
+  'market_opportunity',
+  'insurance_penalty',
+  'staff_motivation',
+  'emergency_delivery',
+  'unexpected_cost',
+  'company_reputation',
+  'local_operation',
+] as const;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -146,6 +157,18 @@ export function formatIncidentChoiceEffectSummary(effects: DeliveryIncidentEffec
 
   if (effects.driverXpDelta != null && effects.driverXpDelta > 0) {
     parts.push(`Şoför XP +${effects.driverXpDelta}`);
+  }
+
+  if (effects.playerXpDelta != null && effects.playerXpDelta > 0) {
+    parts.push(`XP +${effects.playerXpDelta}`);
+  }
+
+  if (effects.reputationDelta != null && effects.reputationDelta !== 0) {
+    parts.push(
+      effects.reputationDelta > 0
+        ? `İtibar +${effects.reputationDelta}`
+        : `İtibar ${effects.reputationDelta}`,
+    );
   }
 
   if (parts.length === 0) {
@@ -274,6 +297,106 @@ function buildIncidentTemplate(
           },
         ]),
       };
+    case 'truck_failure':
+      return {
+        type,
+        title: 'Kamyon Arızası Riski',
+        description: 'Araçtan olağan dışı bir mekanik ses geliyor.',
+        choices: withChoiceSummaries([
+          { id: 'roadside_check', label: 'Yol kontrolü yaptır', description: 'Güvenli fakat maliyetli.', effects: { cashDelta: -320, deliveryTimeDeltaHours: 0.75, truckConditionDelta: 2 } },
+          { id: 'continue_carefully', label: 'Temkinli devam et', description: 'Masrafsız; kondisyon kaybı riski.', effects: { deliveryTimeDeltaHours: 0.5, truckConditionDelta: -4 } },
+        ]),
+      };
+    case 'customer_request':
+      return {
+        type,
+        title: 'Müşteri Talebi',
+        description: 'Müşteri teslimat için ek operasyon desteği istiyor.',
+        choices: withChoiceSummaries([
+          { id: 'accept_request', label: 'Talebi kabul et', description: 'Ek gelir ve itibar; kısa gecikme.', effects: { cashDelta: 280, reputationDelta: 1, deliveryTimeDeltaHours: 0.5 } },
+          { id: 'keep_scope', label: 'Planı koru', description: 'Teslimat takvimi değişmez.', effects: {} },
+        ]),
+      };
+    case 'warehouse_issue':
+      return {
+        type,
+        title: 'Depo Operasyon Sorunu',
+        description: 'Varış deposunda boşaltma sırası uzadı.',
+        choices: withChoiceSummaries([
+          { id: 'priority_slot', label: 'Öncelikli alan kirala', description: 'Maliyetli fakat hızlı.', effects: { cashDelta: -260, deliveryTimeDeltaHours: -0.5 } },
+          { id: 'wait_slot', label: 'Sırayı bekle', description: 'Ücretsiz; operasyon gecikir.', effects: { deliveryTimeDeltaHours: 1.25 } },
+        ]),
+      };
+    case 'market_opportunity':
+      return {
+        type,
+        title: 'Piyasa Fırsatı',
+        description: 'Rota üzerindeki bir işletme küçük bir ek yük teklif etti.',
+        choices: withChoiceSummaries([
+          { id: 'take_load', label: 'Ek yükü kabul et', description: 'Kontrollü ek gelir ve gecikme.', effects: { cashDelta: 350, deliveryTimeDeltaHours: 0.75 } },
+          { id: 'decline_load', label: 'Mevcut işe odaklan', description: 'Risk ve gecikme yok.', effects: {} },
+        ]),
+      };
+    case 'insurance_penalty':
+      return {
+        type,
+        title: 'Sigorta Kontrolü',
+        description: 'Operasyon belgesi için ek doğrulama istendi.',
+        choices: withChoiceSummaries([
+          { id: 'pay_processing', label: 'Hızlı işlem ücretini öde', description: 'Masraf karşılığı zaman kazan.', effects: { cashDelta: -210, deliveryTimeDeltaHours: -0.25 } },
+          { id: 'standard_review', label: 'Standart incelemeyi bekle', description: 'Ücretsiz; kısa gecikme.', effects: { deliveryTimeDeltaHours: 1 } },
+        ]),
+      };
+    case 'staff_motivation':
+      return {
+        type,
+        title: 'Personel Motivasyonu',
+        description: 'Şoför zorlu rota sonrası destek bekliyor.',
+        choices: withChoiceSummaries([
+          { id: 'support_driver', label: 'Prim ve mola ver', description: 'Maliyet karşılığı deneyim.', effects: { cashDelta: -180, driverXpDelta: 12, deliveryTimeDeltaHours: 0.5 } },
+          { id: 'thank_driver', label: 'Ekibi takdir et', description: 'Küçük deneyim artışı.', effects: { driverXpDelta: 4 } },
+        ]),
+      };
+    case 'emergency_delivery':
+      return {
+        type,
+        title: 'Acil Teslimat Talebi',
+        description: 'Müşteri planlanandan erken teslimat için prim önerdi.',
+        choices: withChoiceSummaries([
+          { id: 'push_schedule', label: 'Takvimi hızlandır', description: 'Prim; yakıt ve kondisyon maliyeti.', effects: { cashDelta: 300, fuelCostDelta: 100, deliveryTimeDeltaHours: -0.75, truckConditionDelta: -1 } },
+          { id: 'keep_schedule', label: 'Güvenli takvimi koru', description: 'Ek risk alma.', effects: {} },
+        ]),
+      };
+    case 'unexpected_cost':
+      return {
+        type,
+        title: 'Beklenmedik Maliyet',
+        description: 'Rota üzerinde geçici operasyon ücreti uygulanıyor.',
+        choices: withChoiceSummaries([
+          { id: 'pay_fee', label: 'Ücreti öde', description: 'Hızlı ve öngörülebilir.', effects: { cashDelta: -190 } },
+          { id: 'detour', label: 'Alternatif yola sap', description: 'Masrafsız; gecikme ve yıpranma.', effects: { deliveryTimeDeltaHours: 1, truckConditionDelta: -1 } },
+        ]),
+      };
+    case 'company_reputation':
+      return {
+        type,
+        title: 'Şirket İtibarı',
+        description: 'Yerel müşteri teslimat süreci için destek bekliyor.',
+        choices: withChoiceSummaries([
+          { id: 'premium_support', label: 'Ek destek sağla', description: 'Maliyet karşılığı itibar.', effects: { cashDelta: -240, reputationDelta: 2 } },
+          { id: 'standard_service', label: 'Standart hizmet ver', description: 'Ek maliyet oluşmaz.', effects: {} },
+        ]),
+      };
+    case 'local_operation':
+      return {
+        type,
+        title: 'Yerel Operasyon Olayı',
+        description: 'Şehir girişinde geçici trafik düzenlemesi başladı.',
+        choices: withChoiceSummaries([
+          { id: 'local_guide', label: 'Yerel rehber kullan', description: 'Küçük maliyet; zaman kazanımı.', effects: { cashDelta: -140, deliveryTimeDeltaHours: -0.25 } },
+          { id: 'follow_queue', label: 'Mevcut sırayı takip et', description: 'Ücretsiz; kısa gecikme.', effects: { deliveryTimeDeltaHours: 0.75 } },
+        ]),
+      };
     case 'checkpoint':
     default:
       return {
@@ -310,9 +433,22 @@ export function generateDeliveryIncident(
   seed: string,
   currentGameTime: number,
   triggerProgress: number,
+  excludedType?: DeliveryIncidentType,
 ): DeliveryIncident {
+  const truck = player.trucks.find((item) => item.id === delivery.truckId);
+  const contextualTypes: DeliveryIncidentType[] = [...DELIVERY_INCIDENT_TYPES];
+  if ((truck?.condition ?? 100) < 60) contextualTypes.push('truck_failure', 'tire_pressure');
+  if (
+    truck &&
+    (truck.currentFuelL ?? truck.fuelTankCapacityL ?? 1) /
+      Math.max(1, truck.fuelTankCapacityL ?? 1) < 0.3
+  ) contextualTypes.push('fuel_deviation', 'fuel_deviation');
+  if ((player.warehouses?.length ?? 0) > 0) contextualTypes.push('warehouse_issue');
+  if ((player.money ?? 0) > 25_000) contextualTypes.push('market_opportunity');
+  if ((player.reputation ?? 0) < 45) contextualTypes.push('company_reputation');
+  const eligibleTypes = contextualTypes.filter((type) => type !== excludedType);
   const typeRoll = hashStringToUnit(`${seed}:type`);
-  const type = INCIDENT_TYPES[Math.floor(typeRoll * INCIDENT_TYPES.length)] ?? 'traffic';
+  const type = eligibleTypes[Math.floor(typeRoll * eligibleTypes.length)] ?? 'traffic';
   const template = buildIncidentTemplate(type);
 
   return {
@@ -336,7 +472,9 @@ export function createDebugDeliveryIncident(
 ): DeliveryIncident {
   const type =
     incidentType ??
-    INCIDENT_TYPES[Math.floor(Math.random() * INCIDENT_TYPES.length)] ??
+    DELIVERY_INCIDENT_TYPES[
+      Math.floor(Math.random() * DELIVERY_INCIDENT_TYPES.length)
+    ] ??
     'traffic';
   const triggerProgress =
     delivery.progress >= INCIDENT_PROGRESS_MIN && delivery.progress <= INCIDENT_PROGRESS_MAX
@@ -364,13 +502,21 @@ export function tryGenerateDeliveryIncident(
   seed: string,
   currentGameTime: number,
   triggerProgress: number,
+  excludedType?: DeliveryIncidentType,
 ): DeliveryIncident | null {
   const chance = getIncidentChanceForContractType(contract.contractType);
   const roll = hashStringToUnit(`${seed}:roll`);
   if (roll >= chance) {
     return null;
   }
-  return generateDeliveryIncident(delivery, player, seed, currentGameTime, triggerProgress);
+  return generateDeliveryIncident(
+    delivery,
+    player,
+    seed,
+    currentGameTime,
+    triggerProgress,
+    excludedType,
+  );
 }
 
 export function maybeRollDeliveryIncident(
@@ -378,6 +524,7 @@ export function maybeRollDeliveryIncident(
   contract: Contract | undefined,
   player: Player,
   currentGameTime: number,
+  excludedType?: DeliveryIncidentType,
 ): Delivery {
   if (delivery.incidentGenerated) {
     return delivery;
@@ -390,7 +537,10 @@ export function maybeRollDeliveryIncident(
 
   const rolledDelivery: Delivery = { ...delivery, incidentGenerated: true };
 
-  if (!shouldGenerateDeliveryIncident(rolledDelivery, player, contract)) {
+  // Eligibility must inspect the original delivery. Passing rolledDelivery here
+  // caused every production event to reject itself because incidentGenerated
+  // had already been set to true.
+  if (!shouldGenerateDeliveryIncident(delivery, player, contract)) {
     return rolledDelivery;
   }
 
@@ -402,6 +552,7 @@ export function maybeRollDeliveryIncident(
     seed,
     currentGameTime,
     triggerProgress,
+    excludedType,
   );
 
   if (!incident) {
@@ -423,15 +574,29 @@ function normalizeIncidentStatus(value: unknown): DeliveryIncidentStatus {
 
 function normalizeIncidentType(value: unknown): DeliveryIncidentType {
   if (
-    value === 'traffic' ||
-    value === 'driver_break' ||
-    value === 'tire_pressure' ||
-    value === 'fuel_deviation' ||
-    value === 'checkpoint'
+    typeof value === 'string' &&
+    DELIVERY_INCIDENT_TYPES.includes(value as DeliveryIncidentType)
   ) {
-    return value;
+    return value as DeliveryIncidentType;
   }
   return 'traffic';
+}
+
+export function getLatestDeliveryIncident(deliveries: Delivery[]): DeliveryIncident | undefined {
+  return deliveries
+    .map((delivery) => delivery.incident)
+    .filter((incident): incident is DeliveryIncident => incident != null)
+    .sort((left, right) => right.createdAtGameTime - left.createdAtGameTime)[0];
+}
+
+export function isDeliveryIncidentCooldownActive(
+  deliveries: Delivery[],
+  currentGameTime: number,
+): boolean {
+  const latest = getLatestDeliveryIncident(deliveries);
+  return Boolean(
+    latest && currentGameTime - latest.createdAtGameTime < DELIVERY_INCIDENT_COOLDOWN_HOURS,
+  );
 }
 
 function normalizeIncidentChoice(raw: unknown): DeliveryIncidentChoice | null {
@@ -553,6 +718,8 @@ export interface ResolveDeliveryIncidentEffects {
   fuelCostDelta: number;
   truckConditionDelta: number;
   driverXpDelta: number;
+  playerXpDelta: number;
+  reputationDelta: number;
 }
 
 export interface ResolveDeliveryIncidentResult {
@@ -620,6 +787,8 @@ export function resolveDeliveryIncident(
       fuelCostDelta: effects.fuelCostDelta ?? 0,
       truckConditionDelta: effects.truckConditionDelta ?? 0,
       driverXpDelta: effects.driverXpDelta ?? 0,
+      playerXpDelta: effects.playerXpDelta ?? 0,
+      reputationDelta: effects.reputationDelta ?? 0,
     },
   };
 }

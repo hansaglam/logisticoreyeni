@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -10,7 +10,10 @@ import {
 } from 'react-native';
 
 import { useGameStore } from '../store/gameStore';
-import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
+import {
+  isFuelPricePurchaseReady,
+  resolveFuelPriceQuote,
+} from '../simulation/fuelPriceQuote';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney, formatMoneyDecimal, formatUnitPrice } from '../theme/format';
 import type { GameIconName } from '../theme/icons';
@@ -48,7 +51,7 @@ const REFUEL_ERROR_MESSAGES: Record<TruckRefuelReason, string> = {
   'truck-busy': 'Aktif görevdeki araç şehir istasyonundan yakıt alamaz.',
   'truck-not-found': 'Kamyon bulunamadı.',
   'invalid-quantity': 'Geçerli bir yakıt miktarı seç.',
-  'market-unavailable': 'Piyasa verilerine ulaşılamıyor.',
+  'market-unavailable': 'Yakıt fiyatına ulaşılamıyor.',
 };
 
 function formatLiters(value: number): string {
@@ -62,21 +65,61 @@ export default function TruckRefuelSheet({
   onClose,
   onSuccess,
 }: TruckRefuelSheetProps) {
+  if (!visible || !truck) return null;
+
+  return (
+    <TruckRefuelSheetContent
+      visible={visible}
+      truck={truck}
+      onClose={onClose}
+      onSuccess={onSuccess}
+    />
+  );
+}
+
+function TruckRefuelSheetContent({
+  visible,
+  truck,
+  onClose,
+  onSuccess,
+}: TruckRefuelSheetProps) {
   const insets = useAppSafeAreaInsets();
   const liveTruck = useGameStore((state) =>
     truck ? state.player?.trucks.find((candidate) => candidate.id === truck.id) : undefined,
   );
   const cash = useGameStore((state) => state.player?.money ?? 0);
-  const fuelPrice = useGameStore((state) =>
-    getSnapshotFuelPrice(state.cachedGlobalEconomySnapshot, state.globalEconomy),
+  const cachedSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
+  const cachedSnapshotTrusted = useGameStore(
+    (state) => state.cachedGlobalEconomySnapshotTrusted === true,
   );
+  const marketSyncStatus = useGameStore((state) => state.globalMarketSyncStatus);
+  const marketLastSyncedAtMs = useGameStore((state) => state.globalMarketLastSyncedAtMs);
+  const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
   const refuelTruck = useGameStore((state) => state.refuelTruck);
   const [choice, setChoice] = useState<RefuelChoice>('25');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRefreshingPrice, setIsRefreshingPrice] = useState(false);
   const transactionKeyRef = useRef('');
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initializedTruckIdRef = useRef(truck?.id);
+  const renderCountRef = useRef(0);
+  const renderWarningSentRef = useRef(false);
+
+  renderCountRef.current += 1;
+
+  const fuelPriceQuote = useMemo(
+    () =>
+      resolveFuelPriceQuote({
+        snapshot: cachedSnapshot,
+        trusted: cachedSnapshotTrusted,
+        syncStatus: marketSyncStatus,
+        development: typeof __DEV__ !== 'undefined' && __DEV__,
+        lastSyncedAtMs: marketLastSyncedAtMs,
+      }),
+    [cachedSnapshot, cachedSnapshotTrusted, marketLastSyncedAtMs, marketSyncStatus],
+  );
 
   const selectedTruck = liveTruck ?? truck;
   const normalizedTruck = useMemo(
@@ -84,14 +127,19 @@ export default function TruckRefuelSheet({
     [selectedTruck],
   );
 
+  const pricePerLiter = fuelPriceQuote.pricePerLiter;
+  const priceReady = isFuelPricePurchaseReady(fuelPriceQuote);
+
   useEffect(() => {
-    if (!visible) return;
+    if (initializedTruckIdRef.current === truck?.id) return;
+    initializedTruckIdRef.current = truck?.id;
     setChoice('25');
     setErrorMessage(null);
     setSuccessMessage(null);
     setIsSubmitting(false);
+    setIsRefreshingPrice(false);
     transactionKeyRef.current = '';
-  }, [visible, truck?.id]);
+  }, [truck?.id]);
 
   useEffect(
     () => () => {
@@ -100,23 +148,30 @@ export default function TruckRefuelSheet({
     [],
   );
 
+  // Live fiyat geldiğinde stale action hatalarını temizle.
+  useEffect(() => {
+    if (fuelPriceQuote.source === 'live' && fuelPriceQuote.errorCode == null) {
+      setErrorMessage((current) => (current == null ? current : null));
+    }
+  }, [fuelPriceQuote.source, fuelPriceQuote.errorCode, fuelPriceQuote.pricePerLiter]);
+
   const tankCapacity = normalizedTruck?.fuelTankCapacityL ?? 0;
   const currentFuel = normalizedTruck?.currentFuelL ?? 0;
   const availableTankSpace = Math.max(0, tankCapacity - currentFuel);
   const requestedLiters = useMemo(() => {
+    if (!priceReady || pricePerLiter == null) return 0;
     if (choice === '25') return 25;
     if (choice === '50') return 50;
     if (choice === 'full') return availableTankSpace;
-    if (fuelPrice <= 0 || cash <= 0) return 0;
-    return Math.min(availableTankSpace, Math.floor((cash / fuelPrice) * 1000) / 1000);
-  }, [availableTankSpace, cash, choice, fuelPrice]);
-  const quote = useMemo(
-    () =>
-      normalizedTruck
-        ? calculateTruckRefuelQuote(normalizedTruck, requestedLiters, fuelPrice)
-        : null,
-    [normalizedTruck, requestedLiters, fuelPrice],
-  );
+    if (pricePerLiter <= 0 || cash <= 0) return 0;
+    return Math.min(availableTankSpace, Math.floor((cash / pricePerLiter) * 1000) / 1000);
+  }, [availableTankSpace, cash, choice, pricePerLiter, priceReady]);
+
+  const quote = useMemo(() => {
+    if (!normalizedTruck || !priceReady || pricePerLiter == null) return null;
+    return calculateTruckRefuelQuote(normalizedTruck, requestedLiters, pricePerLiter);
+  }, [normalizedTruck, requestedLiters, pricePerLiter, priceReady]);
+
   const fuelPercent = normalizedTruck ? getTruckFuelPercent(normalizedTruck) : 0;
   const rangeKm = normalizedTruck ? getTruckRangeKm(normalizedTruck) : 0;
   const tankFull = availableTankSpace <= 1e-6;
@@ -126,13 +181,52 @@ export default function TruckRefuelSheet({
     !!normalizedTruck &&
     !!quote &&
     quote.litersToAdd > 0 &&
-    fuelPrice > 0 &&
+    Number.isFinite(quote.totalCost) &&
+    priceReady &&
+    pricePerLiter != null &&
+    pricePerLiter > 0 &&
     canAffordQuote &&
-    !isSubmitting;
+    !isSubmitting &&
+    !isRefreshingPrice;
+
+  useEffect(() => {
+    if (
+      typeof __DEV__ !== 'undefined' &&
+      __DEV__ &&
+      renderCountRef.current > 20 &&
+      !renderWarningSentRef.current
+    ) {
+      renderWarningSentRef.current = true;
+      console.warn('[truck-refuel-render-loop]', {
+        renderCount: renderCountRef.current,
+        isVisible: visible,
+        truckIdPresent: Boolean(selectedTruck?.id),
+        selectedLiters: requestedLiters,
+        fillMode: choice,
+        priceSource: fuelPriceQuote.source,
+        totalFinite: quote == null || Number.isFinite(quote.totalCost),
+      });
+    }
+  });
+
+  const handleRefreshPrice = useCallback(async () => {
+    setIsRefreshingPrice(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      await refreshMarketSnapshot();
+    } finally {
+      setIsRefreshingPrice(false);
+      transactionKeyRef.current = '';
+    }
+  }, [refreshMarketSnapshot]);
 
   const handleSubmit = () => {
-    if (!normalizedTruck || !quote || isSubmitting) return;
+    if (!normalizedTruck || !quote || isSubmitting || !priceReady || pricePerLiter == null) {
+      return;
+    }
     setIsSubmitting(true);
+    setSuccessMessage(null);
     if (!transactionKeyRef.current) {
       transactionKeyRef.current =
         `refuel:${normalizedTruck.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
@@ -164,9 +258,13 @@ export default function TruckRefuelSheet({
   const bottomPadding = Math.max(insets.bottom, 12) + spacing.sm;
   const submitLabel = isSubmitting
     ? 'Yakıt dolduruluyor...'
-    : quote
+    : quote && priceReady
       ? `${formatMoneyDecimal(quote.totalCost)} Öde ve Doldur`
       : 'Yakıt Al';
+  const priceDisplay =
+    pricePerLiter != null && Number.isFinite(pricePerLiter)
+      ? formatUnitPrice(pricePerLiter, '/L')
+      : '—';
 
   return (
     <Modal
@@ -225,9 +323,9 @@ export default function TruckRefuelSheet({
                 </View>
                 <View style={styles.metric}>
                   <GameIcon name="fuel" size={15} color={colors.warning} />
-                  <Text style={styles.metricLabel}>Canlı litre fiyatı</Text>
+                  <Text style={styles.metricLabel}>{fuelPriceQuote.priceLabel}</Text>
                   <Text style={[styles.metricValue, styles.priceValue]} numberOfLines={1} adjustsFontSizeToFit>
-                    {formatUnitPrice(fuelPrice, '/L')}
+                    {priceDisplay}
                   </Text>
                 </View>
                 <View style={styles.metric}>
@@ -247,6 +345,38 @@ export default function TruckRefuelSheet({
               </View>
             </View>
 
+            {fuelPriceQuote.statusTone === 'amber' && fuelPriceQuote.statusMessage ? (
+              <View style={styles.amberBanner}>
+                <GameIcon name="warning" size={15} color={colors.warning} />
+                <Text style={styles.amberBannerText}>{fuelPriceQuote.statusMessage}</Text>
+              </View>
+            ) : null}
+
+            {fuelPriceQuote.statusTone === 'danger' && fuelPriceQuote.statusMessage ? (
+              <View style={styles.dangerBanner}>
+                <GameIcon name="warning" size={15} color={colors.danger} />
+                <Text style={styles.dangerBannerText}>{fuelPriceQuote.statusMessage}</Text>
+              </View>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.retryRow}
+              onPress={() => {
+                void handleRefreshPrice();
+              }}
+              disabled={isRefreshingPrice}
+              accessibilityRole="button"
+            >
+              <GameIcon
+                name="refresh"
+                size={14}
+                color={isRefreshingPrice ? colors.textMuted : colors.accentBlue}
+              />
+              <Text style={[styles.retryText, isRefreshingPrice && styles.retryTextDisabled]}>
+                {isRefreshingPrice ? 'Fiyat yenileniyor...' : 'Fiyatı Yenile'}
+              </Text>
+            </TouchableOpacity>
+
             <View style={styles.sectionTitleRow}>
               <View style={styles.sectionLine} />
               <Text style={styles.sectionLabel}>DOLUM SEÇENEKLERİ</Text>
@@ -255,7 +385,7 @@ export default function TruckRefuelSheet({
             <View style={styles.choiceGrid}>
               {CHOICES.map((item) => {
                 const selected = item.id === choice;
-                const disabled = tankFull || !hasUsableCash;
+                const disabled = tankFull || !hasUsableCash || !priceReady;
                 return (
                   <TouchableOpacity
                     key={item.id}
@@ -291,7 +421,7 @@ export default function TruckRefuelSheet({
               })}
             </View>
 
-            {quote ? (
+            {quote && priceReady ? (
               <View style={styles.summaryCard}>
                 <View style={styles.summaryTitleRow}>
                   <GameIcon name="contract" size={15} color={colors.accentBlue} />
@@ -319,8 +449,12 @@ export default function TruckRefuelSheet({
               </View>
             ) : null}
 
+            {!priceReady ? (
+              <Text style={styles.infoText}>Toplam: —</Text>
+            ) : null}
+
             {tankFull ? <Text style={styles.infoText}>Yakıt deposu zaten dolu.</Text> : null}
-            {!tankFull && !hasUsableCash ? (
+            {!tankFull && priceReady && !hasUsableCash ? (
               <View style={styles.cashWarning}>
                 <GameIcon name="warning" size={16} color={colors.warning} />
                 <Text style={styles.cashWarningText}>
@@ -328,10 +462,13 @@ export default function TruckRefuelSheet({
                 </Text>
               </View>
             ) : null}
-            {!tankFull && hasUsableCash && quote && !canAffordQuote ? (
+            {!tankFull && priceReady && hasUsableCash && quote && !canAffordQuote ? (
               <Text style={styles.errorText}>Yakıt almak için yeterli nakdin yok.</Text>
             ) : null}
-            {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+            {/* Action-level errors only; never also show price status danger twice */}
+            {errorMessage && fuelPriceQuote.statusTone !== 'danger' ? (
+              <Text style={styles.errorText}>{errorMessage}</Text>
+            ) : null}
             {successMessage ? (
               <View style={styles.successFeedback}>
                 <GameIcon name="success" size={16} color={colors.success} />
@@ -445,6 +582,39 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 12, fontWeight: '800', color: colors.textPrimary, marginTop: 2 },
   rangeValue: { color: colors.warning },
   priceValue: { color: colors.warning },
+  amberBanner: {
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 170, 0, 0.36)',
+    backgroundColor: colors.warningSoft,
+  },
+  amberBannerText: { ...typography.caption, flex: 1, color: colors.warning, lineHeight: 16 },
+  dangerBanner: {
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 80, 80, 0.35)',
+    backgroundColor: colors.dangerSoft,
+  },
+  dangerBannerText: { ...typography.caption, flex: 1, color: colors.danger, lineHeight: 16 },
+  retryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  retryText: { ...typography.caption, color: colors.accentBlue, fontWeight: '700' },
+  retryTextDisabled: { color: colors.textMuted },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   sectionLine: { flex: 1, height: 1, backgroundColor: colors.divider },
   sectionLabel: {

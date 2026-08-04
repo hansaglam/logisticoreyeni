@@ -11,8 +11,13 @@ import type { AuthCredential } from 'firebase/auth';
 
 import { useAppDialog } from './AppDialogProvider';
 import BackendDiagnosticsPanel from './BackendDiagnosticsPanel';
+import UsernameSetupModal from './username/UsernameSetupModal';
 import { ActionButton, AppCard, AuthProviderButton, GameIcon, StatusBadge } from './ui';
 import type { StatusBadgeVariant } from './ui';
+import {
+  fetchUsernameProfile,
+  type UsernameProfile,
+} from '../services/usernameService';
 import {
   DEFAULT_ACCOUNT_STATUS,
   getAccountStatus,
@@ -292,7 +297,11 @@ function DeveloperCloudStatus({
   );
 }
 
-export default function AccountSection() {
+export default function AccountSection({
+  onOpenLeaderboard,
+}: {
+  onOpenLeaderboard?: () => void;
+}) {
   const { alert: showAlert, showDialog, hideDialog } = useAppDialog();
   const [account, setAccount] = useState<AccountStatus>(DEFAULT_ACCOUNT_STATUS);
   const [cloudStatus, setCloudStatus] = useState<CloudSaveStatusState>(getCloudSaveStatus);
@@ -310,11 +319,26 @@ export default function AccountSection() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [accountSettingsExpanded, setAccountSettingsExpanded] = useState(false);
   const [dangerExpanded, setDangerExpanded] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
-  const [configHint, setConfigHint] = useState<string | null>(null);
+const [configHint, setConfigHint] = useState<string | null>(null);
+  const [usernameProfile, setUsernameProfile] = useState<UsernameProfile | null>(null);
+  const [usernameModal, setUsernameModal] = useState<'setup' | 'edit' | null>(null);
+  const linkTapLock = useRef(false);
   const mountedRef = useRef(true);
   const deleteAccountAndCloudData = useGameStore((state) => state.deleteAccountAndCloudData);
+
+  const refreshUsernameProfile = useCallback(async (openSetupIfNeeded: boolean) => {
+    const result = await fetchUsernameProfile();
+    if (!result.ok) {
+      return;
+    }
+    setUsernameProfile(result.profile);
+    if (openSetupIfNeeded && !result.profile.usernameSetupCompleted) {
+      setUsernameModal('setup');
+    }
+  }, []);
 
   useEffect(() => {
     setCloudSaveAccountConflictPending(
@@ -373,10 +397,24 @@ export default function AccountSection() {
     return subscribeCloudSaveStatus(refreshCloudStatus);
   }, [refreshCloudStatus]);
 
-  const handleManualSync = async () => {
-    if (!__DEV__) {
+  useEffect(() => {
+    const linked =
+      safeAccountStatus.isReady &&
+      !safeAccountStatus.isAnonymous &&
+      safeAccountStatus.provider !== 'guest';
+    if (!linked) {
+      setUsernameProfile(null);
       return;
     }
+    void refreshUsernameProfile(true);
+  }, [
+    refreshUsernameProfile,
+    safeAccountStatus.isAnonymous,
+    safeAccountStatus.isReady,
+    safeAccountStatus.provider,
+  ]);
+
+  const handleManualSync = async () => {
     setIsManualSyncing(true);
     try {
       await useGameStore.getState().saveGame();
@@ -391,9 +429,6 @@ export default function AccountSection() {
   };
 
   const handleCheckCloud = async () => {
-    if (!__DEV__) {
-      return;
-    }
     setIsChecking(true);
     try {
       const candidate = await checkCloudSaveMeta(useGameStore.getState());
@@ -441,9 +476,10 @@ export default function AccountSection() {
   };
 
   const handleLink = async (provider: 'google' | 'apple') => {
-    if (isLinking || isResolvingConflict || isSwitchingAccount) {
+    if (isLinking || isResolvingConflict || isSwitchingAccount || linkTapLock.current) {
       return;
     }
+    linkTapLock.current = true;
 
     setIsLinking(provider);
     setConfigHint(null);
@@ -461,7 +497,7 @@ export default function AccountSection() {
       refreshCloudStatus();
 
       if (result.ok) {
-        if (result.cloudSyncOk) {
+if (result.cloudSyncOk) {
           showAlert('Hesap bağlandı', 'İlerlemen bulut kaydıyla korunuyor.');
         } else {
           showAlert(
@@ -469,6 +505,7 @@ export default function AccountSection() {
             'Hesabın bağlandı. İlk bulut kaydı yeniden denenecek.',
           );
         }
+        await refreshUsernameProfile(true);
         return;
       }
 
@@ -550,6 +587,7 @@ export default function AccountSection() {
       if (mountedRef.current) {
         setIsLinking(null);
       }
+      linkTapLock.current = false;
     }
   };
 
@@ -1106,7 +1144,7 @@ export default function AccountSection() {
 
   const handleGoogleSignOut = () => {
     showDialog({
-      title: 'Google Hesabından Çıkış Yap',
+      title: 'Hesaptan Çıkış Yap',
       message:
         'Önce ilerlemen buluta kaydedilecek. Bu cihazdaki oyun kaydı silinmeyecek.',
       variant: 'warning',
@@ -1181,7 +1219,7 @@ export default function AccountSection() {
   const heroCopy = getAccountConnectionHeroCopy(connectionState);
   const cloudRow = getCloudSaveRowForConnectionState(connectionState);
   const cardVariant = isGuest ? 'guest' : 'linked';
-  const showManualCloudSave =
+const showManualCloudSave =
     !isGuest &&
     (connectionState === 'sync-retry' ||
       connectionState === 'linked-local-only' ||
@@ -1209,6 +1247,20 @@ export default function AccountSection() {
     }
   };
 
+  const providerLabel =
+    safeAccountStatus.provider === 'apple'
+      ? 'Apple'
+      : safeAccountStatus.provider === 'google'
+        ? 'Google'
+        : 'Bağlı';
+  const usernameLabel = usernameProfile?.username?.trim() || null;
+  const avatarLetter = (usernameLabel ?? providerLabel).charAt(0).toUpperCase();
+  const leaderboardStatus = isGuest
+    ? 'Hesap bağlanınca aktif'
+    : usernameProfile?.usernameSetupCompleted
+      ? 'Aktif'
+      : 'Kullanıcı adı gerekli';
+
   return (
     <>
     <AppCard
@@ -1225,15 +1277,11 @@ export default function AccountSection() {
                 : styles.heroIconWrapGuest,
             ]}
           >
-            <GameIcon
-              name={connectionState === 'cloud-protected' ? 'success' : 'warning'}
-              size={22}
-              color={
-                connectionState === 'cloud-protected'
-                  ? colors.success
-                  : colors.accentAmber
-              }
-            />
+{cardVariant === 'linked' ? (
+              <Text style={styles.avatarLetter}>{avatarLetter}</Text>
+            ) : (
+              <GameIcon name="warning" size={20} color={colors.accentAmber} />
+            )}
           </View>
           <View style={styles.heroMain}>
             {!safeAccountStatus.isReady ? (
@@ -1241,17 +1289,43 @@ export default function AccountSection() {
                 <Text style={styles.heroTitle}>Hesap kontrol ediliyor...</Text>
                 <Text style={styles.heroSubtitle}>Oturum bilgisi yükleniyor.</Text>
               </>
-            ) : (
+) : isGuest ? (
               <>
                 <Text style={styles.heroTitle}>{heroCopy.title}</Text>
                 <Text style={styles.heroSubtitle}>{heroCopy.subtitle}</Text>
               </>
+            ) : (
+              <>
+                <Text style={styles.heroTitle} numberOfLines={1}>
+                  {usernameLabel ?? 'Hesap bağlı'}
+                </Text>
+                <Text style={styles.heroSubtitle} numberOfLines={1}>
+                  {providerLabel} · Bulut kaydı aktif
+                </Text>
+              </>
             )}
           </View>
           {safeAccountStatus.isReady && !isGuest ? (
-            <StatusBadge label="Bağlı" variant="success" size="sm" />
+            <StatusBadge label={providerLabel} variant="success" size="sm" />
           ) : null}
         </View>
+
+        {safeAccountStatus.isReady && !isGuest && !usernameProfile?.usernameSetupCompleted ? (
+          <View style={styles.usernameSetupCard}>
+            <View style={styles.usernameSetupCopy}>
+              <Text style={styles.usernameSetupTitle}>Kullanıcı adını belirle</Text>
+              <Text style={styles.usernameSetupDescription}>
+                Liderlik Tablosu ve Araç Pazarı için görünen adını oluştur.
+              </Text>
+            </View>
+            <ActionButton
+              label="Kullanıcı Adı Oluştur"
+              onPress={() => setUsernameModal('setup')}
+              variant="primary"
+              compact
+            />
+          </View>
+        ) : null}
 
         {safeAccountStatus.isReady ? (
           <View style={styles.statusPanel}>
@@ -1270,12 +1344,40 @@ export default function AccountSection() {
               value={formatLastSaveLabel(cloudStatus.lastSyncAt, connectionState)}
               badgeVariant="muted"
             />
-            {LEADERBOARD_ENABLED ? <AccountStatusRow
-              label="Liderlik Tablosu"
-              value={isGuest ? 'Hesap bağlanınca aktif' : 'Aktif'}
-              badgeVariant={isGuest ? 'muted' : 'success'}
-            /> : null}
+            {LEADERBOARD_ENABLED ? (
+              <AccountStatusRow
+                label="Liderlik Tablosu"
+                value={leaderboardStatus}
+                badgeVariant={
+                  !isGuest && usernameProfile?.usernameSetupCompleted ? 'success' : 'muted'
+                }
+              />
+            ) : null}
           </View>
+        ) : null}
+
+        {LEADERBOARD_ENABLED && onOpenLeaderboard ? (
+          <Pressable
+            style={styles.leaderboardEntry}
+            onPress={onOpenLeaderboard}
+            accessibilityRole="button"
+            accessibilityLabel="Liderlik Tablosunu aç"
+          >
+            <View style={styles.leaderboardEntryIcon}>
+              <GameIcon name="trophy" size={17} color={colors.accentAmber} />
+            </View>
+            <View style={styles.leaderboardEntryCopy}>
+              <Text style={styles.leaderboardEntryTitle}>Liderlik Tablosu</Text>
+              <Text style={styles.leaderboardEntrySubtitle} numberOfLines={1}>
+                {isGuest
+                  ? 'Katılmak için hesabını bağla'
+                  : usernameProfile?.usernameSetupCompleted
+                    ? 'Haftalık şirket sıralamanı gör'
+                    : 'Katılmak için kullanıcı adını oluştur'}
+              </Text>
+            </View>
+            <GameIcon name="chevronRight" size={18} color={colors.textMuted} />
+          </Pressable>
         ) : null}
 
         {safeAccountStatus.isReady && isGuest ? (
@@ -1288,6 +1390,7 @@ export default function AccountSection() {
                 variant="primary"
                 disabled={Boolean(isLinking)}
                 loading={isLinking === 'google'}
+                style={[styles.authButton, styles.primaryLinkButton]}
               />
             ) : null}
             {showApple ? (
@@ -1298,13 +1401,14 @@ export default function AccountSection() {
                 variant="secondary"
                 disabled={Boolean(isLinking)}
                 loading={isLinking === 'apple'}
+                style={[styles.authButton, styles.appleLinkButton]}
               />
             ) : null}
             {configHint ? <Text style={styles.configHintText}>{configHint}</Text> : null}
           </View>
         ) : null}
 
-        {showManualCloudSave ? (
+{showManualCloudSave ? (
           <ActionButton
             label={isManualSyncing ? 'Kaydediliyor...' : 'Şimdi Kaydet'}
             onPress={() => void handleManualCloudSave()}
@@ -1314,6 +1418,70 @@ export default function AccountSection() {
             style={styles.manualSaveButton}
           />
         ) : null}
+
+        {safeAccountStatus.isReady && !isGuest ? (
+          <View style={styles.linkedActions}>
+            <View style={styles.primaryActionRow}>
+              <ActionButton
+                label={usernameProfile?.usernameSetupCompleted ? 'Kullanıcı Adını Düzenle' : 'Kullanıcı Adı Oluştur'}
+                onPress={() => setUsernameModal(usernameProfile?.usernameSetupCompleted ? 'edit' : 'setup')}
+                variant="secondary"
+                compact
+                style={styles.primaryAccountAction}
+              />
+              <ActionButton
+                label={isManualSyncing ? 'Senkronize ediliyor…' : 'Senkronize Et'}
+                onPress={() => void handleManualCloudSave()}
+                variant="primary"
+                compact
+                disabled={isManualSyncing || isChecking}
+                style={styles.primaryAccountAction}
+              />
+            </View>
+
+            <View style={styles.accountSettings}>
+              <Pressable
+                style={styles.accountSettingsToggle}
+                onPress={() => setAccountSettingsExpanded((open) => !open)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: accountSettingsExpanded }}
+              >
+                <Text style={styles.accountSettingsTitle}>Hesap Ayarları</Text>
+                <GameIcon
+                  name={accountSettingsExpanded ? 'chevronUp' : 'chevronDown'}
+                  size={16}
+                  color={colors.textMuted}
+                />
+              </Pressable>
+              {accountSettingsExpanded ? (
+                <View style={styles.accountSettingsActions}>
+                  <ActionButton
+                    label={isChecking ? 'Kontrol ediliyor…' : 'Bulut Kaydını Kontrol Et'}
+                    onPress={() => void handleCheckCloud()}
+                    variant="secondary"
+                    compact
+                    disabled={isManualSyncing || isChecking}
+                  />
+                  {safeAccountStatus.provider === 'google' ? (
+                    <ActionButton
+                      label={isSwitchingAccount ? 'Hesap değiştiriliyor…' : 'Hesap Değiştir'}
+                      onPress={handleAccountSwitch}
+                      variant="secondary"
+                      compact
+                      disabled={isSwitchingAccount || isSigningOut || isDeleting}
+                    />
+                  ) : null}
+                  <ActionButton
+                    label={isSigningOut ? 'Çıkış yapılıyor…' : 'Çıkış Yap'}
+                    onPress={handleGoogleSignOut}
+                    variant="secondary"
+                    compact
+                    disabled={isSwitchingAccount || isSigningOut || isDeleting}
+                  />
+                </View>
+              ) : null}
+            </View>
+          </View>
 
         {safeAccountStatus.isReady && !isGuest && heroCopy.footnote ? (
           <Text
@@ -1338,36 +1506,6 @@ export default function AccountSection() {
           </Pressable>
           {dangerExpanded ? (
             <View style={styles.dangerActions}>
-              {!isGuest && safeAccountStatus.provider === 'google' ? (
-                <>
-                  <ActionButton
-                    label={
-                      isSwitchingAccount
-                        ? 'Hesap değiştiriliyor...'
-                        : 'Hesap Değiştir'
-                    }
-                    onPress={handleAccountSwitch}
-                    variant="primary"
-                    compact
-                    disabled={
-                      isSwitchingAccount || isSigningOut || isDeleting
-                    }
-                  />
-                  <ActionButton
-                    label={
-                      isSigningOut
-                        ? 'Çıkış yapılıyor...'
-                        : 'Google Hesabından Çıkış Yap'
-                    }
-                    onPress={handleGoogleSignOut}
-                    variant="secondary"
-                    compact
-                    disabled={
-                      isSwitchingAccount || isSigningOut || isDeleting
-                    }
-                  />
-                </>
-              ) : null}
               <ActionButton
                 label={
                   isDeleting
@@ -1390,19 +1528,36 @@ export default function AccountSection() {
             </View>
           ) : null}
         </View>
-
-        {__DEV__ ? (
-          <DeveloperCloudStatus
-            status={cloudStatus}
-            onManualSync={() => void handleManualSync()}
-            onCheckCloud={() => void handleCheckCloud()}
-            isManualSyncing={isManualSyncing}
-            isChecking={isChecking}
-          />
-        ) : null}
       </View>
     </AppCard>
     <BackendDiagnosticsPanel />
+    <UsernameSetupModal
+      visible={usernameModal != null}
+      mode={usernameModal === 'edit' ? 'edit' : 'setup'}
+      initialUsername={usernameProfile?.username}
+      suggestedUsername={usernameProfile?.suggestedUsername}
+      nextChangeAvailableAtMs={usernameProfile?.nextChangeAvailableAtMs}
+      onClose={() => setUsernameModal(null)}
+      onSaved={(username) => {
+        setUsernameProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                username,
+                usernameSetupCompleted: true,
+              }
+            : {
+                username,
+                usernameSetupCompleted: true,
+                usernameChangeCount: 0,
+                usernameUpdatedAtMs: Date.now(),
+                suggestedUsername: username,
+                nextChangeAvailableAtMs: Date.now() + 30 * 24 * 60 * 60 * 1000,
+              },
+        );
+        void refreshUsernameProfile(false);
+      }}
+    />
     </>
   );
 }
@@ -1480,11 +1635,44 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
   },
+  leaderboardEntry: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 170, 0, 0.32)',
+    backgroundColor: 'rgba(255, 170, 0, 0.06)',
+  },
+  leaderboardEntryIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.amberSoft,
+  },
+  leaderboardEntryCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  leaderboardEntryTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  leaderboardEntrySubtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
   linkButtons: {
     gap: 13,
     marginTop: spacing.xs,
   },
-  configHintText: {
+configHintText: {
     ...typography.caption,
     color: colors.textMuted,
     textAlign: 'center',
@@ -1492,12 +1680,82 @@ const styles = StyleSheet.create({
     marginTop: 2,
     paddingHorizontal: spacing.xs,
   },
-  secureFootnote: {
+  authButton: {
+    alignSelf: 'stretch',
+    minHeight: 56,
+  },
+  primaryLinkButton: {
+    alignSelf: 'stretch',
+  },
+  appleLinkButton: {
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(8, 20, 38, 0.98)',
+    borderWidth: 1,
+    borderColor: 'rgba(35, 136, 255, 0.55)',
+  },
+  linkedActions: {
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  primaryActionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: spacing.sm,
+  },
+  primaryAccountAction: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 44,
+  },
+  usernameSetupCard: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 170, 0, 0.42)',
+    backgroundColor: colors.amberSoft,
+  },
+  usernameSetupCopy: {
+    gap: 3,
+  },
+  usernameSetupTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  usernameSetupDescription: {
     ...typography.caption,
+    color: colors.textSecondary,
+    lineHeight: 16,
+  },
+  accountSettings: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardSoft,
+    overflow: 'hidden',
+  },
+  accountSettingsToggle: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.sm,
+  },
+  accountSettingsTitle: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  accountSettingsActions: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+    paddingTop: 0,
+  },
+  avatarLetter: {
     color: colors.success,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 2,
+    fontWeight: '800',
+    fontSize: 16,
   },
   secureFootnoteAmber: {
     color: colors.accentAmber,

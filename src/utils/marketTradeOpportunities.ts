@@ -36,7 +36,7 @@ export interface MarketTradeOpportunity {
 }
 
 export interface DetectMarketTradeOpportunitiesInput {
-  player: Player;
+  player: Pick<Player, 'money' | 'warehouses'>;
   cities: City[];
   products: Product[];
   currentTime: number;

@@ -273,6 +273,9 @@ export async function createVehicleListingTransaction(
     }
     const playerRef = stateRef(firestore, identity.uid);
     const stateSnapshot = await transaction.get(playerRef);
+    const userProfileSnap = await transaction.get(
+      firestore.doc(`users/${identity.uid}`),
+    );
     let state: MarketplacePlayerState;
     let stateWasCreated = false;
     if (stateSnapshot.exists) {
@@ -295,6 +298,12 @@ export async function createVehicleListingTransaction(
       state = built.state;
       stateWasCreated = true;
     }
+    const usernameRaw = userProfileSnap.data()?.username;
+    const sellerUsername =
+      typeof usernameRaw === 'string' ? usernameRaw.trim().slice(0, 20) : '';
+    if (!sellerUsername || userProfileSnap.data()?.usernameSetupCompleted !== true) {
+      return failure(input, 'username-required');
+    }
     const vehicle = state.ownedTruckSnapshots.find(
       (item) => item.truckId === input.truckId,
     );
@@ -316,7 +325,7 @@ export async function createVehicleListingTransaction(
     const listing: MarketplaceListingDocument = {
       id: listingId,
       sellerUid: identity.uid,
-      sellerDisplayName: identity.displayName?.trim() || 'Anonim Şirket',
+      sellerDisplayName: sellerUsername,
       vehicleType: 'truck',
       truckSnapshot: transferableSnapshot(vehicle),
       askingPrice: Math.round(input.askingPrice),

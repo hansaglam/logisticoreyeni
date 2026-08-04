@@ -107,6 +107,8 @@ module.exports = () => {
       },
       ads: {
         mode: process.env.EXPO_PUBLIC_ADS_MODE ?? '',
+        enabled: process.env.EXPO_PUBLIC_ADS_ENABLED ?? '',
+        useTestIds: process.env.EXPO_PUBLIC_ADS_USE_TEST_IDS ?? '',
       },
       features: {
         vehicleMarketplaceEnabled:

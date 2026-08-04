@@ -1,6 +1,7 @@
 export type LeaderboardFailureReason =
   | 'auth-required'
   | 'anonymous-not-supported'
+  | 'username-required'
   | 'save-not-found'
   | 'invalid-player-state'
   | 'invalid-request'
@@ -22,6 +23,7 @@ export interface SubmitLeaderboardScoreInput {
 
 export interface LeaderboardEntryDocument {
   uid: string;
+  username: string;
   companyName: string;
   companyScore: number;
   level: number;
@@ -35,6 +37,7 @@ export interface LeaderboardEntryDocument {
 
 export interface LeaderboardPublicEntry {
   uid: string;
+  username: string;
   companyName: string;
   companyScore: number;
   level: number;
@@ -66,6 +69,7 @@ export type SubmitLeaderboardScoreResult =
       updated: boolean;
       reason?: 'score-not-improved';
       entry: {
+        username: string;
         companyName: string;
         companyScore: number;
         level: number;

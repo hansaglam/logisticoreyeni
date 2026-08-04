@@ -634,7 +634,7 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
   drivers,
   onBoostSuccess,
 }: ActiveDeliveryCardProps) {
-  const currentTime = useGameStore((state) => state.currentTime);
+  const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
   const monetization = useGameStore((state) => state.monetization);
   const playerLevel = useGameStore(
     (state) => Math.max(1, state.player?.level ?? state.player?.companyLevel ?? 1),
@@ -829,6 +829,26 @@ export default function ContractsScreen() {
   const drivers = player?.drivers ?? [];
   const trailers = player?.trailers ?? [];
   const completedDeliveryCount = player?.completedContracts ?? 0;
+  const previewTruckKey = trucks
+    .map((truck) =>
+      truck.status === 'idle'
+        ? `${truck.id}:${truck.currentCityId}:${truck.capacity}:${Math.floor(truck.currentFuelL ?? 0)}`
+        : `${truck.id}:${truck.status}`,
+    )
+    .join('|');
+  const previewDriverKey = drivers
+    .map((driver) => `${driver.id}:${driver.status}:${driver.currentCityId ?? ''}`)
+    .join('|');
+  const previewTrucks = useMemo(
+    () => trucks.filter((truck) => truck.status === 'idle'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [previewTruckKey],
+  );
+  const previewDrivers = useMemo(
+    () => drivers.filter((driver) => driver.status === 'idle'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [previewDriverKey],
+  );
   const showTruckLocationHint = shouldShowPostDeliveryLocationHint(completedDeliveryCount);
 
   const needsContractPreviews =
@@ -896,9 +916,9 @@ export default function ContractsScreen() {
         buildContractPreview({
           contract,
           globalEconomy,
-          trucks,
+          trucks: previewTrucks,
           trailers,
-          drivers,
+          drivers: previewDrivers,
           companyLevel: playerLevel,
           currentTime,
           activeWorldEvents,
@@ -908,14 +928,14 @@ export default function ContractsScreen() {
       );
     }
     return previews;
-  }, [activeSegment, availableContracts, trucks, trailers, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
+  }, [activeSegment, availableContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
 
   const playableContractCount = useMemo(
     () =>
       countPlayableContracts(
         availableContracts,
-        trucks,
-        drivers,
+        previewTrucks,
+        previewDrivers,
         playerLevel,
         currentTime,
         {
@@ -928,8 +948,8 @@ export default function ContractsScreen() {
       ),
     [
       availableContracts,
-      trucks,
-      drivers,
+      previewTrucks,
+      previewDrivers,
       playerLevel,
       currentTime,
       player?.money,
@@ -943,8 +963,8 @@ export default function ContractsScreen() {
     if (!globalEconomy) return [];
     return sortContractsForDisplay(
       availableContracts,
-      trucks,
-      drivers,
+      previewTrucks,
+      previewDrivers,
       playerLevel,
       LIST_FILTER,
       contractPreviewById,
@@ -954,8 +974,8 @@ export default function ContractsScreen() {
     );
   }, [
     availableContracts,
-    trucks,
-    drivers,
+    previewTrucks,
+    previewDrivers,
     playerLevel,
     globalEconomy,
     contractPreviewById,
@@ -1009,9 +1029,9 @@ export default function ContractsScreen() {
         buildContractPreview({
           contract,
           globalEconomy,
-          trucks,
+          trucks: previewTrucks,
           trailers,
-          drivers,
+          drivers: previewDrivers,
           companyLevel: playerLevel,
           currentTime,
           activeWorldEvents,
@@ -1021,7 +1041,7 @@ export default function ContractsScreen() {
       );
     }
     return previews;
-  }, [activeSegment, completedContracts, trucks, trailers, drivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
+  }, [activeSegment, completedContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
 
   const tabSegments = useMemo<TabSegment[]>(
     () => [

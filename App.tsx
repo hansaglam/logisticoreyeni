@@ -4,7 +4,7 @@
  * Internal test: StartScreen yok — kayıt varsa yükle, yoksa yeni oyun, Dashboard açılır.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Platform, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
@@ -52,6 +52,8 @@ import MarketScreen from './src/screens/MarketScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import VehicleMarketplaceScreen from './src/screens/VehicleMarketplaceScreen';
 import OfflineProgressSummaryModal from './src/components/offline/OfflineProgressSummaryModal';
+import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
+import DeliveryIncidentModal from './src/components/delivery/DeliveryIncidentModal';
 import { UI } from './src/theme/ui';
 
 const MAIN_TABS: TabDefinition[] = [
@@ -92,14 +94,64 @@ function renderActiveScreen(
   }
 }
 
-function AppShell() {
-  useGameLoop();
+const TAB_PERFORMANCE_LOG_ENABLED =
+  (typeof __DEV__ !== 'undefined' && __DEV__) ||
+  process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true';
+
+function readPerformanceNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function ActiveScreenFrame({
+  tab,
+  transition,
+  children,
+}: {
+  tab: TabKey;
+  transition: React.MutableRefObject<{ from: TabKey; to: TabKey; startedAt: number } | null>;
+  children: React.ReactNode;
+}) {
+  const renderCount = useRef(0);
+  renderCount.current += 1;
+
+  useLayoutEffect(() => {
+    const pending = transition.current;
+    if (!pending || pending.to !== tab) return;
+    const transitionMs = Math.max(0, readPerformanceNow() - pending.startedAt);
+    if (TAB_PERFORMANCE_LOG_ENABLED) {
+      console.log('[tab-transition-performance]', {
+        from: pending.from,
+        to: pending.to,
+        transitionMs: Math.round(transitionMs * 10) / 10,
+        targetRenderCount: renderCount.current,
+        heavySelectorCount: 0,
+        mountedScreens: [tab],
+        jsThreadBlockedMs: Math.max(0, Math.round((transitionMs - 16.7) * 10) / 10),
+      });
+    }
+    transition.current = null;
+  }, [tab, transition]);
+
+  return <View style={styles.screenContainer}>{children}</View>;
+}
+
+function AppShell({ isAppActive }: { isAppActive: boolean }) {
+  useGameLoop(isAppActive);
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const transitionRef = useRef<{ from: TabKey; to: TabKey; startedAt: number } | null>(null);
   const isGameReady = useGameStore((state) => state.isGameReady);
   const navigationRequest = useGameStore((state) => state.navigationRequest);
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
   const pendingOfflineProgressSummary = useGameStore((state) => state.pendingOfflineProgressSummary);
   const dismissOfflineProgressSummary = useGameStore((state) => state.dismissOfflineProgressSummary);
+  const pendingIncidentDeliveryId = useGameStore((state) =>
+    state.activeDeliveries.find(
+      (delivery) =>
+        delivery.incident?.status === 'pending' && delivery.incidentResolved !== true,
+    )?.id,
+  );
 
   useSpotlightTutorialTriggers({ activeTab, isGameReady });
 
@@ -113,9 +165,18 @@ function AppShell() {
     };
   }, []);
 
-  const handleOpenWarehouse = () => {
-    navigateToManagementModule('Warehouses');
-  };
+  const handleTabPress = useCallback((nextTab: TabKey) => {
+    if (nextTab === activeTab) return;
+    transitionRef.current = { from: activeTab, to: nextTab, startedAt: readPerformanceNow() };
+    setActiveTab(nextTab);
+  }, [activeTab]);
+
+  const handleOpenWarehouse = useCallback(() => {
+    useGameStore.setState({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: 'warehouse',
+    });
+  }, []);
 
   const navigateToManagementModule = (module: ManagementModule) => {
     const target = getManagementNavigationTarget(module);
@@ -126,7 +187,7 @@ function AppShell() {
       });
       return;
     }
-    setActiveTab(target.tab);
+    handleTabPress(target.tab);
   };
 
   const handleQuickAccess = (action: QuickAccessAction) => {
@@ -135,19 +196,45 @@ function AppShell() {
       navigateToManagementModule(module);
       return;
     }
-    if (action === 'settings') {
-      useGameStore.setState({
-        navigationRequest: { tab: 'more' },
-        pendingMoreSubRoute: 'menu',
-      });
+    switch (action) {
+      case 'fleet':
+        handleTabPress('fleet');
+        break;
+      case 'shop':
+        handleTabPress('shop');
+        break;
+      case 'warehouse':
+        handleOpenWarehouse();
+        break;
+      case 'finance':
+        useGameStore.setState({
+          navigationRequest: { tab: 'more' },
+          pendingMoreSubRoute: 'finance',
+        });
+        break;
+      case 'missions':
+        useGameStore.setState({
+          navigationRequest: { tab: 'more' },
+          pendingMoreSubRoute: 'missions',
+        });
+        break;
+      case 'vehicleMarketplace':
+        handleTabPress('vehicleMarketplace');
+        break;
+      case 'settings':
+      case 'account':
+        handleTabPress('more');
+        break;
+      default:
+        break;
     }
   };
 
   useEffect(() => {
     if (!navigationRequest) return;
-    setActiveTab(navigationRequest.tab);
+    handleTabPress(navigationRequest.tab);
     clearNavigationRequest();
-  }, [navigationRequest, clearNavigationRequest]);
+  }, [navigationRequest, clearNavigationRequest, handleTabPress]);
 
   return (
     <View
@@ -159,20 +246,26 @@ function AppShell() {
       }}
     >
       <StatusBar hidden />
-      <View style={styles.screenContainer}>
-        {renderActiveScreen(activeTab, setActiveTab, handleOpenWarehouse)}
-      </View>
+      <ActiveScreenFrame tab={activeTab} transition={transitionRef}>
+        <ScreenErrorBoundary key={activeTab} screenName={activeTab}>
+          {renderActiveScreen(activeTab, handleTabPress, handleOpenWarehouse)}
+        </ScreenErrorBoundary>
+      </ActiveScreenFrame>
       <GameToast />
       <OfflineProgressSummaryModal
         visible={pendingOfflineProgressSummary != null}
         summary={pendingOfflineProgressSummary}
         onDismiss={dismissOfflineProgressSummary}
       />
+      <DeliveryIncidentModal
+        pendingDeliveryId={pendingIncidentDeliveryId}
+        enabled={activeTab === 'dashboard' && pendingOfflineProgressSummary == null}
+      />
       {ENABLE_SPOTLIGHT_TUTORIAL ? <TutorialOverlay layer="root" /> : null}
       <GameTabBar
         tabs={MAIN_TABS}
         activeTab={activeTab}
-        onTabPress={setActiveTab}
+        onTabPress={handleTabPress}
         onQuickAccess={handleQuickAccess}
       />
     </View>
@@ -190,6 +283,8 @@ function GameLoadingScreen() {
 
 export default function App() {
   const isGameReady = useGameStore((state) => state.isGameReady);
+  const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
+  const appStateRef = useRef(AppState.currentState);
 
   useEffect(() => {
     void enableImmersiveGameMode();
@@ -230,9 +325,15 @@ export default function App() {
     });
 
     const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextState;
+      const wasActive = previousState === 'active';
+      const isActive = nextState === 'active';
+      setIsAppActive(isActive);
+
+      if (!wasActive && isActive) {
         useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
-        useGameStore.getState().applyOfflineProgressionIfNeeded();
+        useGameStore.getState().applyOfflineProgressionIfNeeded('foreground');
       }
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {
@@ -262,7 +363,7 @@ export default function App() {
     <GestureHandlerRootView style={styles.root}>
       <AppSafeAreaProvider>
         <AppDialogProvider>
-          {isGameReady ? <AppShell /> : <GameLoadingScreen />}
+          {isGameReady ? <AppShell isAppActive={isAppActive} /> : <GameLoadingScreen />}
         </AppDialogProvider>
       </AppSafeAreaProvider>
     </GestureHandlerRootView>

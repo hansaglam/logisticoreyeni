@@ -123,7 +123,7 @@ export default function OwnedWarehouseCard({
           </View>
           <View style={styles.metricCell}>
             <Text style={styles.metricLabel}>Gider</Text>
-            <Text style={[styles.metricValue, { color: warehouseVisual.accentRed }]} numberOfLines={1}>
+            <Text style={[styles.metricValue, { color: warehouseVisual.accentAmber }]} numberOfLines={1}>
               {formatMoney(card.dailyCost)}
             </Text>
           </View>

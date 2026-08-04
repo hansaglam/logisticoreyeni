@@ -27,6 +27,7 @@ import {
   calculateOfflineElapsed,
   createOfflineProgressSnapshot,
   MAX_OFFLINE_PROGRESS_HOURS,
+  MIN_OFFLINE_PROGRESS_MS,
   MIN_OFFLINE_PROGRESS_MINUTES,
   normalizeOfflineProgressFields,
   resolveOfflineBaselineMs,
@@ -200,7 +201,7 @@ console.log('1. Elapsed guards');
 
 {
   const now = Date.now();
-  const lastSeen = now - 3 * MS_MIN;
+  const lastSeen = now - Math.max(1, MIN_OFFLINE_PROGRESS_MS - 1);
   const short = calculateOfflineElapsed(lastSeen, now);
   assert(!short.shouldApply, 'elapsed < 5dk (teslimatsız) ise uygulanmaz');
   assert(short.reason === 'below_minimum', 'below_minimum reason');
@@ -420,7 +421,7 @@ console.log('\n5. Duplicate apply & summary');
 {
   const now = Date.now();
   const lastSeen = now - 30 * MS_MIN;
-  const lastApplied = now - 2 * MS_MIN;
+  const lastApplied = now - Math.max(1, Math.floor(MIN_OFFLINE_PROGRESS_MS / 2));
   assert(
     shouldSkipDuplicateOfflineApply(lastSeen, lastApplied, now),
     'aynı offline süre iki kez uygulanmaz (yakın apply)',
@@ -493,7 +494,10 @@ console.log('\n6. Save migration');
 
 console.log('\n7. Config sanity');
 {
-  assert(MIN_OFFLINE_PROGRESS_MINUTES === 5, 'MIN_OFFLINE_PROGRESS_MINUTES = 5');
+  assert(
+    MIN_OFFLINE_PROGRESS_MINUTES === GAME_LOOP_TICK_MS / MS_MIN,
+    'minimum offline pencere bir normal game tick ile aynÄ±',
+  );
   assert(MAX_OFFLINE_PROGRESS_HOURS === 24, 'MAX_OFFLINE_PROGRESS_HOURS = 24 saat');
   assert(
     MAX_OFFLINE_PROGRESS_HOURS * 3_600_000 === 86_400_000,
@@ -541,10 +545,9 @@ console.log('\n8. Online/offline time parity');
 
 {
   const appSource = readFileSync('App.tsx', 'utf8');
-  const lines = appSource.split('\n');
-  const activeLineIdx = lines.findIndex((line) => line.includes("nextState === 'active'"));
+  const activeLineIdx = appSource.indexOf('!wasActive && isActive');
   assert(activeLineIdx >= 0, 'AppState active handler bulundu');
-  const activeBlock = lines.slice(activeLineIdx, activeLineIdx + 4).join('\n');
+  const activeBlock = appSource.slice(activeLineIdx, activeLineIdx + 180);
   assert(
     activeBlock.includes('applyOfflineProgressionIfNeeded'),
     'active olunca applyOfflineProgressionIfNeeded çağrılır',
@@ -585,7 +588,7 @@ console.log('\n8. Online/offline time parity');
 
 {
   const now = Date.now();
-  const lastSeen = now - (MAX_OFFLINE_PROGRESS_HOURS + 2) * MS_HOUR;
+  const lastSeen = now - (MAX_OFFLINE_PROGRESS_HOURS + 3) * MS_HOUR;
   const capped = calculateOfflineElapsed(lastSeen, now);
   const hoursFromApplied = realMsToGameHours(capped.appliedMs, 1);
   const hoursFromRaw = realMsToGameHours(capped.elapsedMs, 1);

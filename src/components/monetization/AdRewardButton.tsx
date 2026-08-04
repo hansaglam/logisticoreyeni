@@ -42,6 +42,7 @@ export default function AdRewardButton({
   );
   const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const providerAvailable = isAdProviderAvailable();
@@ -65,7 +66,12 @@ export default function AdRewardButton({
     return null;
   }
 
-  const buttonLabel = shouldShowTestAdLabel() ? `${label} (Test reklam)` : label;
+  const baseLabel = shouldShowTestAdLabel() ? `${label} (Test reklam)` : label;
+  const buttonLabel = loading
+    ? 'Reklam hazırlanıyor…'
+    : failed
+      ? 'Tekrar Dene'
+      : baseLabel;
 
   const handlePress = async () => {
     if (loading) {
@@ -86,12 +92,17 @@ export default function AdRewardButton({
     }
 
     setLoading(true);
+    setFailed(false);
     setErrorText(null);
     try {
       const result = await applyAdReward(slotId, context);
       if (!result.ok) {
-        const reason = result.reason ?? 'Reklam ödülü alınamadı.';
+        const reason =
+          result.reason === 'Reklam yüklenemedi.'
+            ? 'Reklam şu anda kullanılamıyor.'
+            : result.reason ?? 'Reklam ödülü alınamadı.';
         setErrorText(reason);
+        setFailed(true);
         if (typeof __DEV__ !== 'undefined' && __DEV__ === true) {
           console.warn('[AdRewardButton] applyAdReward failed', {
             slotId,
@@ -101,6 +112,7 @@ export default function AdRewardButton({
         }
         return;
       }
+      setFailed(false);
       if (typeof __DEV__ !== 'undefined' && __DEV__ === true && slotId === 'delivery_boost') {
         const delivery = useGameStore
           .getState()
@@ -112,7 +124,8 @@ export default function AdRewardButton({
       }
       onSuccess?.();
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Reklam ödülü alınamadı.');
+      setFailed(true);
+      setErrorText(error instanceof Error ? error.message : 'Reklam şu anda kullanılamıyor.');
     } finally {
       setLoading(false);
     }
@@ -126,16 +139,16 @@ export default function AdRewardButton({
         </Text>
       ) : null}
       <ActionButton
-        label={loading ? 'Reklam yükleniyor…' : buttonLabel}
+        label={buttonLabel}
         onPress={handlePress}
-        disabled={loading}
+        disabled={loading || (!eligibility.ok && !failed)}
         variant={variant}
         compact={compact}
         icon={loading ? undefined : 'play'}
         iconSize={13}
         style={styles.button}
       />
-      {!eligibility.ok && eligibility.reason ? (
+      {!eligibility.ok && eligibility.reason && !failed ? (
         <Text style={styles.disabledReason} numberOfLines={2}>
           {eligibility.reason}
         </Text>

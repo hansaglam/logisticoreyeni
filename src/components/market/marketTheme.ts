@@ -15,6 +15,7 @@ export { getMarketProductColumnWidths } from '../../utils/marketCardLayout';
 export const MARKET_HORIZONTAL_PADDING = LAYOUT_HORIZONTAL_PADDING;
 export const MARKET_SECTION_GAP = 11;
 export const MARKET_SECTION_GAP_TIGHT = 7;
+export const MARKET_SCROLL_BOTTOM_EXTRA = 16;
 export const MARKET_NARROW_BREAKPOINT = LAYOUT_NARROW_BREAKPOINT;
 
 export const MARKET_HEADER_HEIGHT = 60;

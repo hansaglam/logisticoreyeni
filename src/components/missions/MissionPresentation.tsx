@@ -320,14 +320,7 @@ export const PremiumMissionCard = React.memo(function PremiumMissionCard({
             {progressLabel}
           </Text>
         </View>
-      ) : (
-        <View style={styles.completedRow}>
-          <GameIcon name="success" size={14} color={colors.success} />
-          <Text style={styles.completedTime}>
-            Son tamamlanma: {formatMissionCompletionTime(completedAt, currentTime)}
-          </Text>
-        </View>
-      )}
+      ) : null}
 
       <View style={styles.cardFooter}>
         <View style={styles.rewardRow}>
@@ -468,10 +461,10 @@ const styles = StyleSheet.create({
     opacity: 0.86,
   },
   summary: {
-    minHeight: 66,
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -535,9 +528,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(35,136,255,0.3)',
   },
   card: {
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-    padding: spacing.md,
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+    padding: spacing.sm,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: 'rgba(35,136,255,0.28)',
@@ -552,8 +545,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,170,0,0.34)',
   },
   cardCompleted: {
-    borderColor: 'rgba(18,214,107,0.3)',
-    backgroundColor: '#071D19',
+    borderColor: 'rgba(18,214,107,0.52)',
+    backgroundColor: '#081526',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -561,8 +554,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   iconFrame: {
-    width: 48,
-    height: 48,
+    width: 42,
+    height: 42,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
@@ -602,7 +595,7 @@ const styles = StyleSheet.create({
   },
   statusPill: {
     maxWidth: 96,
-    minHeight: 25,
+    minHeight: 23,
     flexShrink: 0,
     justifyContent: 'center',
     paddingHorizontal: spacing.sm,
@@ -625,22 +618,8 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     fontWeight: '700',
   },
-  completedRow: {
-    minHeight: 25,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    backgroundColor: 'rgba(18,214,107,0.08)',
-  },
-  completedTime: {
-    ...typography.caption,
-    color: '#8FE6B5',
-    fontWeight: '600',
-  },
   cardFooter: {
-    minHeight: 40,
+    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,

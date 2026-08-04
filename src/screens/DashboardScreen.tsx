@@ -44,7 +44,7 @@ import {
 } from '../onboarding/onboardingProgress';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import type { Player } from '../types/game';
-import { shouldShowPostDeliveryLocationHint } from '../utils/truckLocationUx';
+import { navigateFromGameTip } from '../components/dashboard/SmartGameTipBanner';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
@@ -227,7 +227,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const fuelPrice = getSnapshotFuelPrice(globalSnapshot, globalEconomy);
   const playerDiamonds = Math.max(0, player.diamonds ?? 0);
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
-  const showTruckLocationHint = shouldShowPostDeliveryLocationHint(player.completedContracts ?? 0);
   const onboardingCompleted = onboarding?.completed === true;
 
   const handleDailyOpsBonusSuccess = (amount: number) => {
@@ -259,6 +258,26 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     useGameStore.setState({
       navigationRequest: { tab: 'more' },
       pendingMoreSubRoute: 'warehouse',
+    });
+  };
+
+  const handleOpenMoreSubRoute = (
+    sub: 'warehouse' | 'finance' | 'leaderboard' | null,
+  ) => {
+    useGameStore.setState({
+      navigationRequest: { tab: 'more' },
+      pendingMoreSubRoute: sub,
+    });
+  };
+
+  const handleTipPress = (
+    target: Parameters<typeof navigateFromGameTip>[0],
+  ) => {
+    navigateFromGameTip(target, {
+      navigateTab: (tab) => {
+        if (tab) handleNavigate(tab);
+      },
+      openMoreSubRoute: handleOpenMoreSubRoute,
     });
   };
 
@@ -361,12 +380,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
       <View style={dashboardStyles.lowerSection}>
       <DashboardModuleGrid
-        showLocationHint={showTruckLocationHint}
         onNavigate={handleNavigate}
         onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
         idleTrucks={fleetSnapshot.idleTrucks}
         activeDeliveries={runningDeliveries.length}
         warehouseFillRatio={warehouseFillRatio}
+        onPressTip={(target) => handleTipPress(target)}
       />
 
       <DashboardDailyOpsBonusCard

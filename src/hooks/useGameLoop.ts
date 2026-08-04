@@ -9,14 +9,14 @@ import { useGameStore } from '../store/gameStore';
 
 export { GAME_LOOP_TICK_MS, getGameHoursPerTick } from '../config/balance';
 
-export function useGameLoop() {
+export function useGameLoop(isAppActive = true) {
   const isGameReady = useGameStore((state) => state.isGameReady);
   const isPaused = useGameStore((state) => state.isPaused);
   const gameSpeed = useGameStore((state) => state.gameSpeed);
   const lastSimulationGameSpeed = useGameStore((state) => state.lastSimulationGameSpeed);
 
   useEffect(() => {
-    if (!isGameReady || isPaused) {
+    if (!isGameReady || isPaused || !isAppActive) {
       return;
     }
 
@@ -35,5 +35,5 @@ export function useGameLoop() {
     }, GAME_LOOP_TICK_MS);
 
     return () => clearInterval(intervalId);
-  }, [gameSpeed, isGameReady, isPaused, lastSimulationGameSpeed]);
+  }, [gameSpeed, isAppActive, isGameReady, isPaused, lastSimulationGameSpeed]);
 }

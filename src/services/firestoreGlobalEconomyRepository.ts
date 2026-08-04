@@ -18,7 +18,6 @@ import {
 } from 'firebase/firestore';
 
 import { ECONOMY_CONFIG_VERSION } from '../simulation/economyClock';
-import { isSupportedGlobalEconomySnapshot } from '../simulation/globalMarketAvailability';
 import type {
   GlobalEconomySnapshot,
   GlobalMarketHistoryEntry,
@@ -28,6 +27,9 @@ import type {
   GlobalMarketHistoryQuery,
   GlobalSnapshotReadResult,
 } from './globalEconomyRepository';
+import { parseGlobalEconomyCurrentDocument } from './globalEconomyClient';
+
+const MAX_INITIAL_HISTORY_RECORDS = 3_000;
 
 export class FirestoreGlobalEconomyRepository implements GlobalEconomyRepository {
   constructor(private readonly firestore: Firestore) {}
@@ -35,24 +37,17 @@ export class FirestoreGlobalEconomyRepository implements GlobalEconomyRepository
   async getCurrentSnapshot(): Promise<GlobalSnapshotReadResult> {
     const current = await getDoc(doc(this.firestore, 'globalEconomy', 'current'));
     if (!current.exists()) return { snapshot: null, source: 'backend' };
-    const data = current.data() as {
-      snapshot?: GlobalEconomySnapshot;
-      serverTimeMs?: number;
-    } & Partial<GlobalEconomySnapshot>;
-    const snapshot = data.snapshot ?? (data as GlobalEconomySnapshot);
-    if (
-      !isSupportedGlobalEconomySnapshot(snapshot) ||
-      (data.configVersion != null &&
-        data.configVersion !== ECONOMY_CONFIG_VERSION)
-    ) {
+    const data = current.data();
+    const parsed = parseGlobalEconomyCurrentDocument(data);
+    if (data.configVersion != null && data.configVersion !== ECONOMY_CONFIG_VERSION) {
       throw new Error(
-        `UNSUPPORTED_GLOBAL_ECONOMY_SNAPSHOT:${snapshot.version}:${snapshot.configVersion}`,
+        `UNSUPPORTED_GLOBAL_ECONOMY_SNAPSHOT:${parsed.snapshot.version}:${parsed.snapshot.configVersion}`,
       );
     }
     return {
-      snapshot,
+      snapshot: parsed.snapshot,
       source: 'backend',
-      serverTimeMs: Number.isFinite(data.serverTimeMs) ? data.serverTimeMs : undefined,
+      serverTimeMs: parsed.serverTimeMs,
     };
   }
 
@@ -66,17 +61,22 @@ export class FirestoreGlobalEconomyRepository implements GlobalEconomyRepository
   async getHistory(
     input: GlobalMarketHistoryQuery,
   ): Promise<GlobalMarketHistoryEntry[]> {
+    const boundedLimit = Math.max(
+      1,
+      Math.min(MAX_INITIAL_HISTORY_RECORDS, input.limit ?? MAX_INITIAL_HISTORY_RECORDS),
+    );
     const result = await getDocs(query(
       collection(this.firestore, 'globalMarketHistory'),
       where('epoch', '>=', input.fromEpoch),
       where('epoch', '<=', input.toEpoch),
-      orderBy('epoch', 'asc'),
-      limit(input.limit ?? 2_000),
+      orderBy('epoch', 'desc'),
+      limit(boundedLimit),
     ));
     return result.docs
       .map((item) => item.data() as GlobalMarketHistoryEntry)
       .filter((entry) =>
         (!input.cityId || entry.cityId === input.cityId) &&
-        (!input.productId || entry.productId === input.productId));
+        (!input.productId || entry.productId === input.productId))
+      .sort((left, right) => left.epoch - right.epoch);
   }
 }

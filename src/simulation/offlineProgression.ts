@@ -3,7 +3,11 @@
  * Arka planda loop çalıştırmaz; oyuncu döndüğünde catch-up yapar.
  */
 
-import { operatingCostBalance, realMsToGameHours } from '../config/balance';
+import {
+  GAME_LOOP_TICK_MS,
+  operatingCostBalance,
+  realMsToGameHours,
+} from '../config/balance';
 import { getEconomyNow, HOUR_MS, MINUTE_MS } from './economyClock';
 import {
   isDeliveryProgressComplete,
@@ -24,9 +28,13 @@ export const OFFLINE_PROGRESS_VERSION = 1;
 /** Offline catch-up için tüketilebilecek gerçek zaman penceresi. */
 export const MAX_OFFLINE_PROGRESS_HOURS = operatingCostBalance.maxOfflineProgressHours;
 export const MAX_OFFLINE_PROGRESS_MS = MAX_OFFLINE_PROGRESS_HOURS * HOUR_MS;
-/** Genel (teslimatsız) minimum — aktif teslimat varken düşürülür. */
-export const MIN_OFFLINE_PROGRESS_MINUTES = 5;
-export const MIN_OFFLINE_PROGRESS_MS = MIN_OFFLINE_PROGRESS_MINUTES * MINUTE_MS;
+/**
+ * A lifecycle pause longer than one normal game tick is real elapsed time and
+ * must not be discarded. The old five-minute threshold made short Android
+ * background sessions look frozen.
+ */
+export const MIN_OFFLINE_PROGRESS_MS = GAME_LOOP_TICK_MS;
+export const MIN_OFFLINE_PROGRESS_MINUTES = MIN_OFFLINE_PROGRESS_MS / MINUTE_MS;
 
 export interface OfflineElapsedResult {
   elapsedMs: number;
@@ -40,6 +48,65 @@ export interface OfflineSimulationResult {
   rawSimulationHours: number;
   appliedSimulationHours: number;
   capped: boolean;
+}
+
+export interface OfflineProgressPlan {
+  baselineMs: number | null;
+  elapsed: OfflineElapsedResult;
+  simulation: OfflineSimulationResult;
+  duplicatePrevented: boolean;
+  invalidTimestamp: boolean;
+}
+
+export function applyOfflineProgress(params: {
+  nowMs: number;
+  lastSimulatedRealTimeMs?: number | null;
+  lastOfflineProgressAppliedAt?: number | null;
+  lastSeenRealTimeMs?: number | null;
+  metaLastSimulatedRealTimeMs?: number | null;
+  gameState: { gameSpeed?: number; lastSimulationGameSpeed?: number };
+}): OfflineProgressPlan {
+  const nowMs = Number.isFinite(params.nowMs) && params.nowMs > 0 ? params.nowMs : 0;
+  const baselineMs = nowMs > 0
+    ? resolveOfflineBaselineMs({
+        stateLastSimulated: params.lastSimulatedRealTimeMs,
+        metaLastSimulated: params.metaLastSimulatedRealTimeMs,
+        stateLastSeen: params.lastSeenRealTimeMs,
+        nowMs,
+      })
+    : null;
+  const invalidTimestamp = nowMs <= 0 || baselineMs == null;
+  const duplicatePrevented =
+    baselineMs != null &&
+    shouldSkipDuplicateOfflineApply(
+      baselineMs,
+      params.lastOfflineProgressAppliedAt,
+      nowMs,
+    );
+  const elapsed = duplicatePrevented
+    ? {
+        elapsedMs: Math.max(0, nowMs - (baselineMs ?? nowMs)),
+        appliedMs: 0,
+        capped: false,
+        shouldApply: false,
+        reason: 'non_positive' as const,
+      }
+    : calculateOfflineElapsed(baselineMs, nowMs);
+  const gameSpeed = Math.max(
+    0.25,
+    Number.isFinite(params.gameState.lastSimulationGameSpeed)
+      ? params.gameState.lastSimulationGameSpeed!
+      : Number.isFinite(params.gameState.gameSpeed)
+        ? params.gameState.gameSpeed!
+        : 1,
+  );
+  return {
+    baselineMs,
+    elapsed,
+    simulation: calculateOfflineSimulationHours(elapsed.appliedMs, gameSpeed),
+    duplicatePrevented,
+    invalidTimestamp,
+  };
 }
 
 export interface TimeProgressionAudit {
@@ -60,6 +127,8 @@ export interface OfflineProgressSummary {
   appliedMs: number;
   capped: boolean;
   completedDeliveries: number;
+  completedTruckTransfers: number;
+  completedWarehouseTransfers: number;
   lateDeliveries: number;
   earnings: number;
   expenses: number;
@@ -449,6 +518,8 @@ export function buildOfflineProgressSummary(
     earnings?: number;
     expenses?: number;
     completedDeliveries?: number;
+    completedTruckTransfers?: number;
+    completedWarehouseTransfers?: number;
     lateDeliveries?: number;
     worldEventsUpdated?: boolean;
     marketUpdated?: boolean;
@@ -463,6 +534,8 @@ export function buildOfflineProgressSummary(
     extras.completedDeliveries ?? 0,
     Math.max(0, (after.player.completedContracts ?? 0) - before.completedContracts),
   );
+  const completedTruckTransfers = Math.max(0, extras.completedTruckTransfers ?? 0);
+  const completedWarehouseTransfers = Math.max(0, extras.completedWarehouseTransfers ?? 0);
   const lateDeliveries =
     extras.lateDeliveries ??
     Math.max(0, (after.player.lateDeliveries ?? 0) - before.lateDeliveries);
@@ -482,6 +555,8 @@ export function buildOfflineProgressSummary(
 
   const hasMeaningfulChanges =
     completedDeliveries > 0 ||
+    completedTruckTransfers > 0 ||
+    completedWarehouseTransfers > 0 ||
     lateDeliveries > 0 ||
     Math.abs(netChange) >= 1 ||
     driverLevelUps.length > 0 ||
@@ -495,6 +570,8 @@ export function buildOfflineProgressSummary(
     appliedMs: elapsed.appliedMs,
     capped: elapsed.capped,
     completedDeliveries,
+    completedTruckTransfers,
+    completedWarehouseTransfers,
     lateDeliveries,
     earnings,
     expenses,

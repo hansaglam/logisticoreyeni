@@ -5,21 +5,65 @@
  *
  * TODO (production release öncesi — iOS):
  * - App Tracking Transparency (expo-tracking-transparency) entegrasyonu
- * - Google UMP consent (EEA kullanıcıları, kişiselleştirilmiş / non-personalized ads)
- * - userTrackingUsageDescription app.config.js içinde tanımlı; runtime izin akışı eklenmeli
+ * - Google UMP consent (EEA kullanıcıları)
  */
 
+import Constants from 'expo-constants';
 import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
 import {
+  getAdsConfigAudit,
+  getConfiguredAppId,
   getProductionRewardedAdUnitId,
+  isAdsEnabled,
   isRunningInExpoGo,
   resolveAdsMode,
+  shouldUseTestAdUnitIds,
   type AdsMode,
 } from '../config/adMob';
 import type { AdRewardSlotId } from '../types/monetization';
 
 export type AdShowResult = 'completed' | 'skipped' | 'failed';
+
+export type RewardedAdLifecycle =
+  | 'idle'
+  | 'loading'
+  | 'loaded'
+  | 'showing'
+  | 'reward-earned'
+  | 'closed'
+  | 'failed';
+
+export type RewardedAdErrorCategory =
+  | 'no-fill'
+  | 'network-error'
+  | 'invalid-request'
+  | 'app-id-missing'
+  | 'ad-unit-id-missing'
+  | 'ad-not-loaded'
+  | 'internal-error'
+  | 'consent-required'
+  | 'sdk-not-initialized'
+  | 'ads-disabled'
+  | 'unsupported-platform'
+  | 'module-unavailable'
+  | 'timeout'
+  | 'unknown';
+
+export type AdsDiagnosticsSnapshot = {
+  sdkInitialized: boolean;
+  appIdConfigured: boolean;
+  platformUnitConfigured: boolean;
+  testIdActive: boolean;
+  adsEnabled: boolean;
+  mode: AdsMode;
+  lifecycle: RewardedAdLifecycle;
+  rewardedLoaded: boolean;
+  lastErrorCategory: RewardedAdErrorCategory | null;
+  lastRewardEvent: 'earned' | 'skipped' | 'failed' | null;
+  adapterCount: number | null;
+  platform: string;
+};
 
 declare const __DEV__: boolean | undefined;
 
@@ -28,9 +72,16 @@ const REWARDED_LOAD_TIMEOUT_MS = 20_000;
 const REWARDED_SHOW_TIMEOUT_MS = 120_000;
 
 let isShowingAd = false;
-let mobileAdsInitPromise: Promise<void> | null = null;
-let nativeModuleChecked = false;
-let nativeModuleAvailable = false;
+let mobileAdsInitPromise: Promise<boolean> | null = null;
+let sdkInitialized = false;
+let adapterCount: number | null = null;
+let lifecycle: RewardedAdLifecycle = 'idle';
+let lastErrorCategory: RewardedAdErrorCategory | null = null;
+let lastRewardEvent: AdsDiagnosticsSnapshot['lastRewardEvent'] = null;
+let rewardedLoaded = false;
+let diagnosticsListeners = new Set<() => void>();
+
+type MobileAdsModule = typeof import('react-native-google-mobile-ads');
 
 function isDevEnvironment(): boolean {
   return typeof __DEV__ !== 'undefined' && __DEV__ === true;
@@ -40,10 +91,91 @@ function isSupportedPlatform(): boolean {
   return Platform.OS === 'android' || Platform.OS === 'ios';
 }
 
-type MobileAdsModule = typeof import('react-native-google-mobile-ads');
+function isExpoGo(): boolean {
+  return Constants.appOwnership === 'expo';
+}
+
+function notifyDiagnostics(): void {
+  for (const listener of [...diagnosticsListeners]) {
+    listener();
+  }
+}
+
+function setLifecycle(next: RewardedAdLifecycle): void {
+  lifecycle = next;
+  rewardedLoaded = next === 'loaded' || next === 'showing' || next === 'reward-earned';
+  notifyDiagnostics();
+}
+
+function categorizeAdError(error: unknown): RewardedAdErrorCategory {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  const message =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: unknown }).message ?? '')
+        : String(error ?? '');
+  const blob = `${code} ${message}`.toLowerCase();
+
+  if (blob.includes('no-fill') || blob.includes('error_code_no_fill') || blob.includes('no fill')) {
+    return 'no-fill';
+  }
+  if (blob.includes('network') || blob.includes('offline') || blob.includes('error_code_network')) {
+    return 'network-error';
+  }
+  if (blob.includes('invalid') || blob.includes('error_code_invalid_request')) {
+    return 'invalid-request';
+  }
+  if (blob.includes('consent') || blob.includes('ump')) {
+    return 'consent-required';
+  }
+  if (blob.includes('not loaded') || blob.includes('ad-not-loaded')) {
+    return 'ad-not-loaded';
+  }
+  if (blob.includes('timeout')) {
+    return 'timeout';
+  }
+  if (blob.includes('internal')) {
+    return 'internal-error';
+  }
+  return 'unknown';
+}
+
+function logRewardedFailure(input: {
+  stage: string;
+  category: RewardedAdErrorCategory;
+  usingTestId: boolean;
+  networkOnline: boolean | null;
+}): void {
+  lastErrorCategory = input.category;
+  notifyDiagnostics();
+  console.warn('[rewarded-ad-failed]', {
+    platform: Platform.OS,
+    stage: input.stage,
+    code: input.category,
+    messageCategory: input.category,
+    usingTestId: input.usingTestId,
+    sdkInitialized,
+    adLoaded: rewardedLoaded,
+    networkOnline: input.networkOnline,
+  });
+}
+
+function getNetworkOnline(): boolean | null {
+  if (typeof navigator !== 'undefined' && 'onLine' in navigator) {
+    return navigator.onLine;
+  }
+  return null;
+}
+
+let nativeModuleChecked = false;
+let nativeModuleAvailable = false;
 
 function getMobileAdsModule(): MobileAdsModule | null {
-  if (!isSupportedPlatform() || isRunningInExpoGo()) {
+  if (!isSupportedPlatform() || isRunningInExpoGo() || isExpoGo()) {
     return null;
   }
 
@@ -84,26 +216,24 @@ function getMobileAdsModule(): MobileAdsModule | null {
   }
 }
 
-function resolveRewardedAdUnitId(mode: AdsMode): string | null {
-  const mod = getMobileAdsModule();
-  if (!mod) {
-    return null;
+function resolveRewardedAdUnitId(
+  mode: AdsMode,
+  mod: MobileAdsModule,
+): { unitId: string | null; usingTestId: boolean } {
+  if (mode === 'test' || shouldUseTestAdUnitIds()) {
+    return { unitId: mod.TestIds.REWARDED, usingTestId: true };
   }
-
-  if (mode === 'test') {
-    return mod.TestIds.REWARDED;
-  }
-
   if (mode === 'production') {
-    return getProductionRewardedAdUnitId();
+    return { unitId: getProductionRewardedAdUnitId(), usingTestId: false };
   }
-
-  return null;
+  return { unitId: null, usingTestId: false };
 }
 
 async function ensureMobileAdsInitialized(): Promise<boolean> {
   const mod = getMobileAdsModule();
   if (!mod) {
+    lastErrorCategory = 'module-unavailable';
+    notifyDiagnostics();
     return false;
   }
 
@@ -111,28 +241,59 @@ async function ensureMobileAdsInitialized(): Promise<boolean> {
     mobileAdsInitPromise = mod
       .default()
       .initialize()
-      .then(() => undefined)
+      .then((status) => {
+        sdkInitialized = true;
+        const adapters =
+          status && typeof status === 'object' ? Object.keys(status as object).length : null;
+        adapterCount = adapters;
+        console.info('[ads-sdk-init]', {
+          platform: Platform.OS,
+          initialized: true,
+          adapterCount: adapters,
+          adsEnabled: isAdsEnabled(),
+          appIdConfigured: getAdsConfigAudit().androidAppIdConfigured || getAdsConfigAudit().iosAppIdConfigured,
+          mode: resolveAdsMode(),
+          testIdActive: resolveAdsMode() === 'test' || shouldUseTestAdUnitIds(),
+        });
+        notifyDiagnostics();
+        return true;
+      })
       .catch((error) => {
         mobileAdsInitPromise = null;
+        sdkInitialized = false;
+        lastErrorCategory = 'sdk-not-initialized';
+        console.warn('[ads-sdk-init]', {
+          platform: Platform.OS,
+          initialized: false,
+          adapterCount: null,
+          adsEnabled: isAdsEnabled(),
+          appIdConfigured: Boolean(getConfiguredAppId()),
+          errorCategory: 'sdk-not-initialized',
+        });
         if (isDevEnvironment()) {
           console.warn('[adProvider] mobileAds initialize failed', error);
         }
-        throw error;
+        notifyDiagnostics();
+        return false;
       });
   }
 
-  try {
-    await mobileAdsInitPromise;
-    return true;
-  } catch {
-    return false;
-  }
+  return mobileAdsInitPromise;
 }
 
-/** Uygulama açılışında çağrılabilir — SDK init (stub modda no-op). */
+/** Uygulama açılışında çağrılır — SDK init (stub/Expo Go'da no-op). */
 export async function initializeAdProvider(): Promise<void> {
+  if (!isAdsEnabled()) {
+    console.info('[ads-sdk-init]', {
+      platform: Platform.OS,
+      initialized: false,
+      adsEnabled: false,
+      appIdConfigured: getAdsConfigAudit().androidAppIdConfigured,
+    });
+    return;
+  }
   const mode = resolveAdsMode();
-  if (mode === 'stub' || !isSupportedPlatform()) {
+  if (mode === 'stub' || !isSupportedPlatform() || isExpoGo()) {
     return;
   }
   await ensureMobileAdsInitialized();
@@ -144,41 +305,107 @@ export function getAdsMode(): AdsMode {
 
 /** Stub: yalnızca __DEV__. Test/production: native modül mevcut olmalı. */
 export function isAdProviderAvailable(): boolean {
+  if (!isAdsEnabled()) {
+    return false;
+  }
   const mode = resolveAdsMode();
   if (mode === 'stub') {
     return isDevEnvironment();
   }
-  return isSupportedPlatform() && getMobileAdsModule() != null;
+  return isSupportedPlatform() && !isExpoGo() && getMobileAdsModule() != null;
+}
+
+export function getAdsDiagnosticsSnapshot(): AdsDiagnosticsSnapshot {
+  const audit = getAdsConfigAudit();
+  const platformUnitConfigured =
+    Platform.OS === 'ios' ? audit.iosUnitConfigured : audit.androidUnitConfigured;
+  const appIdConfigured =
+    Platform.OS === 'ios' ? audit.iosAppIdConfigured : audit.androidAppIdConfigured;
+  return {
+    sdkInitialized,
+    appIdConfigured,
+    platformUnitConfigured,
+    testIdActive: audit.useTestIds,
+    adsEnabled: audit.adsEnabled,
+    mode: audit.mode,
+    lifecycle,
+    rewardedLoaded,
+    lastErrorCategory,
+    lastRewardEvent,
+    adapterCount,
+    platform: Platform.OS,
+  };
+}
+
+export function subscribeAdsDiagnostics(listener: () => void): () => void {
+  diagnosticsListeners.add(listener);
+  return () => {
+    diagnosticsListeners.delete(listener);
+  };
 }
 
 async function showStubRewardedAd(): Promise<AdShowResult> {
+  setLifecycle('showing');
   await new Promise((resolve) => setTimeout(resolve, STUB_AD_DELAY_MS));
+  setLifecycle('reward-earned');
+  lastRewardEvent = 'earned';
+  setLifecycle('closed');
+  notifyDiagnostics();
   return 'completed';
 }
 
 async function showNativeRewardedAd(_slotId: AdRewardSlotId): Promise<AdShowResult> {
   if (isShowingAd) {
+    logRewardedFailure({
+      stage: 'double-tap',
+      category: 'internal-error',
+      usingTestId: resolveAdsMode() === 'test',
+      networkOnline: getNetworkOnline(),
+    });
     return 'failed';
   }
 
   const mode = resolveAdsMode();
   const mod = getMobileAdsModule();
-  const adUnitId = resolveRewardedAdUnitId(mode);
+  if (!mod) {
+    logRewardedFailure({
+      stage: 'module',
+      category: 'module-unavailable',
+      usingTestId: false,
+      networkOnline: getNetworkOnline(),
+    });
+    return 'failed';
+  }
 
-  if (!mod || !adUnitId) {
+  const { unitId, usingTestId } = resolveRewardedAdUnitId(mode, mod);
+  if (!unitId) {
+    logRewardedFailure({
+      stage: 'unit-id',
+      category: 'ad-unit-id-missing',
+      usingTestId,
+      networkOnline: getNetworkOnline(),
+    });
     return 'failed';
   }
 
   const initialized = await ensureMobileAdsInitialized();
   if (!initialized) {
+    logRewardedFailure({
+      stage: 'initialize',
+      category: 'sdk-not-initialized',
+      usingTestId,
+      networkOnline: getNetworkOnline(),
+    });
     return 'failed';
   }
 
   isShowingAd = true;
+  setLifecycle('loading');
+  let rewardGrantedForImpression = false;
 
   try {
     const { RewardedAd, RewardedAdEventType, AdEventType } = mod;
-    const rewarded = RewardedAd.createForAdRequest(adUnitId);
+    const rewarded = RewardedAd.createForAdRequest(unitId);
 
     return await new Promise<AdShowResult>((resolve) => {
       let earned = false;
@@ -191,31 +418,75 @@ async function showNativeRewardedAd(_slotId: AdRewardSlotId): Promise<AdShowResu
         }
         settled = true;
         cleanup();
+        lastRewardEvent =
+          result === 'completed' ? 'earned' : result === 'skipped' ? 'skipped' : 'failed';
+        setLifecycle(result === 'failed' ? 'failed' : 'closed');
+        notifyDiagnostics();
         resolve(result);
       };
 
-      const loadTimeout = setTimeout(() => finish('failed'), REWARDED_LOAD_TIMEOUT_MS);
-      const showTimeout = setTimeout(() => finish('failed'), REWARDED_SHOW_TIMEOUT_MS);
+      const loadTimeout = setTimeout(() => {
+        logRewardedFailure({
+          stage: 'load-timeout',
+          category: 'timeout',
+          usingTestId,
+          networkOnline: getNetworkOnline(),
+        });
+        finish('failed');
+      }, REWARDED_LOAD_TIMEOUT_MS);
+
+      const showTimeout = setTimeout(() => {
+        logRewardedFailure({
+          stage: 'show-timeout',
+          category: 'timeout',
+          usingTestId,
+          networkOnline: getNetworkOnline(),
+        });
+        finish('failed');
+      }, REWARDED_SHOW_TIMEOUT_MS);
 
       const unsubLoaded = rewarded.addAdEventListener(RewardedAdEventType.LOADED, () => {
         clearTimeout(loadTimeout);
+        setLifecycle('loaded');
         if (shown) {
           return;
         }
         shown = true;
-        void rewarded.show().catch(() => finish('failed'));
+        setLifecycle('showing');
+        void rewarded.show().catch((error) => {
+          logRewardedFailure({
+            stage: 'show',
+            category: categorizeAdError(error),
+            usingTestId,
+            networkOnline: getNetworkOnline(),
+          });
+          finish('failed');
+        });
       });
 
       const unsubEarned = rewarded.addAdEventListener(RewardedAdEventType.EARNED_REWARD, () => {
+        // Ödül yalnız EARNED_REWARD ile; impression başına tek kez.
+        if (rewardGrantedForImpression) {
+          return;
+        }
+        rewardGrantedForImpression = true;
         earned = true;
+        setLifecycle('reward-earned');
       });
 
       const unsubClosed = rewarded.addAdEventListener(AdEventType.CLOSED, () => {
         clearTimeout(showTimeout);
+        // Kapama tek başına ödül vermez.
         finish(earned ? 'completed' : 'skipped');
       });
 
-      const unsubError = rewarded.addAdEventListener(AdEventType.ERROR, () => {
+      const unsubError = rewarded.addAdEventListener(AdEventType.ERROR, (error) => {
+        logRewardedFailure({
+          stage: 'ad-error',
+          category: categorizeAdError(error),
+          usingTestId,
+          networkOnline: getNetworkOnline(),
+        });
         finish('failed');
       });
 
@@ -236,6 +507,12 @@ async function showNativeRewardedAd(_slotId: AdRewardSlotId): Promise<AdShowResu
 }
 
 export async function showRewardedAd(slotId: AdRewardSlotId): Promise<AdShowResult> {
+  if (!isAdsEnabled()) {
+    lastErrorCategory = 'ads-disabled';
+    notifyDiagnostics();
+    return 'failed';
+  }
+
   const mode = resolveAdsMode();
 
   if (mode === 'stub') {
@@ -243,6 +520,12 @@ export async function showRewardedAd(slotId: AdRewardSlotId): Promise<AdShowResu
       return 'failed';
     }
     return showStubRewardedAd();
+  }
+
+  if (!isSupportedPlatform()) {
+    lastErrorCategory = 'unsupported-platform';
+    notifyDiagnostics();
+    return 'failed';
   }
 
   return showNativeRewardedAd(slotId);

@@ -221,9 +221,9 @@ const styles = StyleSheet.create({
     color: '#F3F7FF',
   },
   rewardSub: {
-    fontSize: 8.5,
+    fontSize: 9.5,
     fontWeight: '500',
-    lineHeight: 11,
+    lineHeight: 12,
     color: SUBTITLE_COLOR,
     marginTop: 1,
   },

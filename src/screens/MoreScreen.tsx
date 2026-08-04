@@ -61,39 +61,6 @@ interface ModuleItem {
   placeholder?: boolean;
 }
 
-const PRODUCTION_MODULE_ITEMS: ModuleItem[] = [
-  {
-    key: 'finance',
-    label: 'Finans',
-    subtitle: 'Gelir, gider ve şirket sağlığını görüntüle',
-    icon: 'cash',
-  },
-  {
-    key: 'warehouse',
-    label: 'Depolar',
-    subtitle: 'Stok, kapasite ve ticaret ürünlerini yönet',
-    icon: 'warehouse',
-  },
-  {
-    key: 'missions',
-    label: 'Görevler',
-    subtitle: 'Hedeflerini ve ödüllerini takip et',
-    icon: 'contract',
-  },
-  {
-    key: 'leaderboard',
-    label: 'Liderlik Tablosu',
-    subtitle: 'Haftalık şirket puanı sıralaması',
-    icon: 'company',
-  },
-  {
-    key: 'upgrades',
-    label: 'Geliştirmeler',
-    subtitle: 'Filo ve şirket yükseltmeleri',
-    icon: 'upgrade',
-  },
-];
-
 const DEV_MODULE_ITEMS: ModuleItem[] = [
   {
     key: 'stats',
@@ -119,14 +86,6 @@ const DEV_MODULE_ITEMS: ModuleItem[] = [
     badge: { label: 'DEBUG', variant: 'amber' },
   },
 ];
-
-const ENABLED_PRODUCTION_MODULE_ITEMS = PRODUCTION_MODULE_ITEMS.filter(
-  (item) => item.key !== 'leaderboard' || LEADERBOARD_ENABLED,
-);
-
-const VISIBLE_MODULE_ITEMS = __DEV__
-  ? [...ENABLED_PRODUCTION_MODULE_ITEMS, ...DEV_MODULE_ITEMS]
-  : ENABLED_PRODUCTION_MODULE_ITEMS;
 
 const PLACEHOLDER_ALERT_MESSAGE = 'Bu özellik yakında eklenecek.';
 
@@ -326,7 +285,10 @@ export default function MoreScreen() {
   if (route === 'leaderboard' && LEADERBOARD_ENABLED) {
     return (
       <View style={styles.embeddedRoot}>
-        <LeaderboardScreen onBack={() => setRoute('menu')} />
+        <LeaderboardScreen
+          onBack={() => setRoute('menu')}
+          onOpenAccountSettings={() => setRoute('menu')}
+        />
       </View>
     );
   }
@@ -369,7 +331,7 @@ export default function MoreScreen() {
     <AppScreen scroll scrollRef={menuScrollRef}>
       <ScreenHeader
         title="Şirket"
-        subtitle="Şirket özeti, gelişim ve yönetim modülleri"
+        subtitle="Şirket özeti, gelişim ve hesap"
         titleIcon="company"
         compact
       />
@@ -404,30 +366,37 @@ export default function MoreScreen() {
       ) : null}
 
       <View onLayout={handleAccountSectionLayout} collapsable={false}>
-        <AccountSection />
+        <AccountSection
+          onOpenLeaderboard={
+            LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined
+          }
+        />
       </View>
 
-      <SectionTitle title="Yönetim Modülleri" compact />
+      {/* Finans / Depolar / Görevler / Geliştirmeler bu ekranda tekrarlanmaz —
+          mevcut tab ve deep-link (pendingMoreSubRoute) girişleri korunur. */}
 
-      <View style={styles.moduleList}>
-        {VISIBLE_MODULE_ITEMS.map((item) => (
-          <ListRowCard
-            key={item.key}
-            title={item.label}
-            subtitle={item.subtitle}
-            icon={item.icon}
-            onPress={() => handleModulePress(item)}
-            right={
-              <View style={styles.moduleRight}>
-                {__DEV__ && item.badge ? (
-                  <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
-                ) : null}
-                <ModuleChevron />
-              </View>
-            }
-          />
-        ))}
-      </View>
+      {__DEV__ ? (
+        <View style={styles.moduleList}>
+          {DEV_MODULE_ITEMS.filter((item) => item.key === 'debug').map((item) => (
+            <ListRowCard
+              key={item.key}
+              title={item.label}
+              subtitle={item.subtitle}
+              icon={item.icon}
+              onPress={() => handleModulePress(item)}
+              right={
+                <View style={styles.moduleRight}>
+                  {item.badge ? (
+                    <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
+                  ) : null}
+                  <ModuleChevron />
+                </View>
+              }
+            />
+          ))}
+        </View>
+      ) : null}
 
       {__DEV__ && ENABLE_SPOTLIGHT_TUTORIAL ? (
         <AppCard variant="soft" style={styles.debugNoteCard} padded>

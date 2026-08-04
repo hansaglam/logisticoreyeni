@@ -25,7 +25,10 @@ import {
   getActiveMaintenanceDiscountToken,
 } from '../../simulation/adRewardGrants';
 import { calculateTruckResaleValue, type TruckSellCheck } from '../../simulation/fleetManagement';
-import { selectDriverForTransfer } from '../../simulation/truckTransfer';
+import {
+  getTruckTransferBlockedReason,
+  selectDriverForTransfer,
+} from '../../simulation/truckTransfer';
 import { useGameStore } from '../../store/gameStore';
 import { colors, formatMoney } from '../../theme';
 import { getCityName } from '../../utils/entityLookup';
@@ -163,7 +166,8 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const truckCityId = resolveTruckCityId(truck, homeCityId);
   const truckCityName = getCityName(truckCityId);
   const hasIdleDriver = !!selectDriverForTransfer(truck.id, drivers);
-  const canTransfer = isIdle && hasIdleDriver && !isLeased;
+  const transferBlockedReason = getTruckTransferBlockedReason(truck, hasIdleDriver);
+  const canTransfer = transferBlockedReason == null;
   const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
   const resaleValue = isLeased ? 0 : calculateTruckResaleValue(truck);
   const displayValue = isLeased ? 0 : resaleValue > 0 ? resaleValue : truck.purchasePrice ?? 0;
@@ -441,6 +445,12 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
         </Pressable>
       </View>
 
+      {transferBlockedReason ? (
+        <Text style={styles.transferBlockedReason} numberOfLines={1}>
+          Yönlendirme kullanılamıyor: {transferBlockedReason}
+        </Text>
+      ) : null}
+
       {moreOpen ? (
         <View style={styles.morePanel}>
           <Pressable style={styles.moreAction} onPress={() => onRefuel(truck)}>
@@ -476,8 +486,8 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
                   <Text style={styles.marketplaceActionSubtitle} numberOfLines={1}>
                     Oyuncu pazarında ilan oluştur
                   </Text>
-                </View>
-              </View>
+        </View>
+      </View>
             </Pressable>
           ) : null}
           {showMaintenanceAdOffer ? (
@@ -719,6 +729,12 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 6,
     alignItems: 'flex-start',
+  },
+  transferBlockedReason: {
+    marginTop: 5,
+    fontSize: 10,
+    lineHeight: 13,
+    color: colors.textMuted,
   },
   repairActionWrap: {
     flex: 1,

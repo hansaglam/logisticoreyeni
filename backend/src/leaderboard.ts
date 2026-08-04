@@ -65,8 +65,13 @@ function toPublicEntry(
       : typeof updatedAt?.toMillis === 'function'
         ? updatedAt.toMillis()
         : 0;
+  const username =
+    typeof data.username === 'string' && data.username.trim().length > 0
+      ? data.username.trim().slice(0, 20)
+      : '';
   return {
     uid: typeof data.uid === 'string' ? data.uid : '',
+    username,
     companyName:
       typeof data.companyName === 'string' && data.companyName.trim().length > 0
         ? data.companyName.trim().slice(0, 48)
@@ -125,8 +130,16 @@ export async function submitLeaderboardScoreTransaction(
       const saveSnap = await transaction.get(
         firestore.doc(`users/${identity.uid}/saves/current`),
       );
+      const userSnap = await transaction.get(firestore.doc(`users/${identity.uid}`));
       if (!saveSnap.exists) {
         return failure(input, 'save-not-found');
+      }
+
+      const usernameRaw = userSnap.data()?.username;
+      const username =
+        typeof usernameRaw === 'string' ? usernameRaw.trim().slice(0, 20) : '';
+      if (!username || userSnap.data()?.usernameSetupCompleted !== true) {
+        return failure(input, 'username-required');
       }
 
       const extracted = extractCanonicalPlayerState(
@@ -161,6 +174,7 @@ export async function submitLeaderboardScoreTransaction(
 
       const entryPayload = {
         uid: identity.uid,
+        username,
         companyName: breakdown.companyName,
         companyScore: breakdown.totalScore,
         level: breakdown.level,
@@ -178,11 +192,12 @@ export async function submitLeaderboardScoreTransaction(
         transaction.set(ref, entryPayload, { merge: true });
         updated = true;
       } else if (existingSnap.exists) {
-        // Keep higher score; refresh display snapshot fields only when equal/lower.
+        // Keep higher score; refresh username/display snapshot when equal/lower.
         reason = 'score-not-improved';
         transaction.set(
           ref,
           {
+            username,
             companyName: breakdown.companyName,
             level: breakdown.level,
             reputation: breakdown.reputation,
@@ -207,6 +222,7 @@ export async function submitLeaderboardScoreTransaction(
         updated,
         ...(reason ? { reason } : {}),
         entry: {
+          username,
           companyName: breakdown.companyName,
           companyScore: Math.max(existingScore, breakdown.totalScore),
           level: breakdown.level,

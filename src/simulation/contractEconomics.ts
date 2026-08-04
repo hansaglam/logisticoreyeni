@@ -374,7 +374,11 @@ export function calculateBalancedContractPayment(input: ContractPaymentInput): n
     payment = minPaymentForProfit;
   }
 
-  payment = clamp(payment, levelCap.paymentMin, maxPayment);
+  // paymentMin erken oyunda güvenlik tabanı olarak tasarlanmıştı; ancak tüm düşük
+  // maliyetli işleri aynı değere ($2.000) kilitliyordu. Net kâr tabanı zaten
+  // sürdürülebilirliği koruyor; alt sınırı maliyete bağlı bırakarak mesafe, tonaj
+  // ve ürün değerinin fiyatı gerçekten ayırmasına izin veriyoruz.
+  payment = clamp(payment, minPaymentForProfit, maxPayment);
   payment = applyHighPaymentGuard(payment, amount, requiredLevel);
   payment = Math.min(payment, contractPaymentBalance.absolutePaymentMax);
 

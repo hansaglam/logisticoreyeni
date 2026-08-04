@@ -544,7 +544,17 @@ export type DeliveryIncidentType =
   | 'driver_break'
   | 'tire_pressure'
   | 'fuel_deviation'
-  | 'checkpoint';
+  | 'checkpoint'
+  | 'truck_failure'
+  | 'customer_request'
+  | 'warehouse_issue'
+  | 'market_opportunity'
+  | 'insurance_penalty'
+  | 'staff_motivation'
+  | 'emergency_delivery'
+  | 'unexpected_cost'
+  | 'company_reputation'
+  | 'local_operation';
 
 export type DeliveryIncidentStatus = 'pending' | 'resolved' | 'expired';
 
@@ -554,6 +564,8 @@ export interface DeliveryIncidentEffects {
   progressDelta?: number;
   truckConditionDelta?: number;
   driverXpDelta?: number;
+  playerXpDelta?: number;
+  reputationDelta?: number;
   fuelCostDelta?: number;
   riskDelta?: number;
 }
@@ -1468,6 +1480,8 @@ export interface StoreGameState {
   globalMarketHistory?: GlobalMarketHistoryEntry[];
   globalMarketSyncStatus?: GlobalMarketSyncStatus;
   globalMarketLastSyncedAtMs?: number;
+  /** Son live read hatasÄ±; live baÅŸarÄ±sÄ±nda temizlenir. */
+  globalMarketErrorCode?: import('../services/globalEconomyClient').GlobalEconomyLoadErrorCode | null;
   marketNews: MarketNews[];
   /** Oyuncu ve geliştirici olay günlüğü */
   eventLog: GameEvent[];

@@ -173,6 +173,8 @@ import {
 } from '../simulation/trailerOps';
 import { getEffectiveTruckCapacityTons } from '../simulation/cargoCapacity';
 import {
+  getLatestDeliveryIncident,
+  isDeliveryIncidentCooldownActive,
   maybeRollDeliveryIncident,
   createDebugDeliveryIncident,
   resolveDeliveryIncident as resolveDeliveryIncidentSim,
@@ -186,14 +188,11 @@ import {
 import {
   buildOfflineProgressSummary,
   buildTimeProgressionAudit,
-  calculateOfflineElapsed,
-  calculateOfflineSimulationHours,
+  applyOfflineProgress,
   createOfflineProgressSnapshot,
   OFFLINE_PROGRESS_VERSION,
   realMsToGameHours,
-  resolveOfflineBaselineMs,
   shouldShowOfflineSummary,
-  shouldSkipDuplicateOfflineApply,
   type OfflineProgressSummary,
 } from '../simulation/offlineProgression';
 import { loadOfflineMeta, saveOfflineMeta } from '../storage/offlineMeta';
@@ -355,6 +354,7 @@ import {
   DAY_MS,
   getEconomyClock,
   getEconomyNow,
+  getSimulationRealNowMs,
   getMarketEpoch,
   HOUR_MS,
   MINUTE_MS,
@@ -369,7 +369,21 @@ import {
   materializeSnapshotCities,
 } from '../simulation/globalMarketSnapshot';
 import { resolveGlobalMarketAvailability } from '../simulation/globalMarketAvailability';
+import {
+  isFuelPricePurchaseReady,
+  resolveFuelPriceQuote,
+} from '../simulation/fuelPriceQuote';
 import { getGlobalEconomyRepository } from '../services/globalEconomyRepository';
+import {
+  canReadGlobalEconomy,
+  categorizeGlobalEconomyClientError,
+  validateGlobalEconomySnapshot,
+  type GlobalEconomyLoadErrorCode,
+} from '../services/globalEconomyClient';
+import {
+  loadGlobalEconomyCache,
+  saveGlobalEconomyCache,
+} from '../services/globalEconomyCache';
 import type { WorldEventType } from '../types/game';
 import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
 import { getMissionById } from '../config/missions';
@@ -460,18 +474,28 @@ const REPUTATION_LOSS = reputationBalance.failedDeliveryLoss;
 const HIGH_PAYMENT_CONTRACT_THRESHOLD = 8_000;
 const FUEL_PRICE_CHANGE_THRESHOLD = 0.05;
 const MIN_TRUCK_CONDITION_FOR_DELIVERY = 30;
+const INITIAL_GLOBAL_HISTORY_DAYS = 30;
+const INITIAL_GLOBAL_HISTORY_LIMIT = 3_000;
 
-function categorizeGlobalEconomyError(code: string): string {
-  const lower = code.toLowerCase();
-  if (lower.includes('permission-denied')) return 'permission-denied';
-  if (lower.includes('unavailable')) return 'unavailable';
-  if (lower.includes('unauthenticated')) return 'unauthenticated';
-  if (lower.includes('not-found')) return 'not-found';
-  if (lower.includes('deadline-exceeded')) return 'deadline-exceeded';
-  if (lower.includes('failed-precondition')) return 'failed-precondition';
-  if (lower.includes('invalid-argument')) return 'invalid-argument';
-  if (lower.includes('unsupported_global_economy')) return 'failed-precondition';
-  return 'unknown';
+type GlobalEconomyLoadAudit = {
+  success: boolean;
+  code: GlobalEconomyLoadErrorCode | null;
+  projectId: string | null;
+  path: 'globalEconomy/current';
+  authReady: boolean;
+  userPresent: boolean;
+  userAnonymous: boolean | null;
+  online: boolean | null;
+  documentExists: boolean;
+  snapshotEpochPresent: boolean;
+  fuelPricePresent: boolean;
+  validationPassed: boolean;
+  cacheAvailable: boolean;
+  cacheAgeMs: number | null;
+};
+
+function logGlobalEconomyLoadResult(audit: GlobalEconomyLoadAudit): void {
+  console.info('[global-economy-load-result]', audit);
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +511,11 @@ let lastSaveReason: AutoSaveReason | null = null;
 let isLoadingSave = false;
 let hasHydratedGame = false;
 let gameInitPromise: Promise<void> | null = null;
+let globalMarketRefreshInFlight: Promise<{
+  success: boolean;
+  source: 'backend' | 'development-fallback' | 'cache' | 'unavailable';
+  stale: boolean;
+}> | null = null;
 
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
 const completedDeliveryNotificationIds = new Set<string>();
@@ -1265,6 +1294,24 @@ function hasUsableGlobalMarketSnapshot(
   }).priceCriticalOperationsAllowed;
 }
 
+function resolveStoreFuelPriceQuote(
+  state: Pick<
+    StoreGameState,
+    | 'cachedGlobalEconomySnapshot'
+    | 'cachedGlobalEconomySnapshotTrusted'
+    | 'globalMarketSyncStatus'
+    | 'globalMarketLastSyncedAtMs'
+  >,
+) {
+  return resolveFuelPriceQuote({
+    snapshot: state.cachedGlobalEconomySnapshot,
+    trusted: state.cachedGlobalEconomySnapshotTrusted === true,
+    syncStatus: state.globalMarketSyncStatus,
+    development: typeof __DEV__ !== 'undefined' && __DEV__,
+    lastSyncedAtMs: state.globalMarketLastSyncedAtMs,
+  });
+}
+
 /** GDD Bölüm 6'ya göre başlangıç oyun durumu */
 export function createInitialGameState(): StoreGameState {
   const initialEconomyNowMs = getEconomyNow();
@@ -1402,6 +1449,7 @@ export function createInitialGameState(): StoreGameState {
     cachedGlobalEconomySnapshotTrusted: false,
     globalMarketHistory: [],
     globalMarketSyncStatus: 'idle',
+    globalMarketErrorCode: null,
     marketNews: [
       {
         id: createNewsId(0, 'welcome'),
@@ -1524,7 +1572,7 @@ export interface GameStore extends StoreGameState {
   setGameSpeed: (speed: number) => void;
   advanceTime: (hours: number) => void;
   recordLastSeenRealTimeMs: () => void;
-  applyOfflineProgressionIfNeeded: () => void;
+  applyOfflineProgressionIfNeeded: (trigger?: 'cold-start' | 'foreground') => void;
   dismissOfflineProgressSummary: () => void;
   replenishContractsIfNeeded: () => void;
   runEconomyTick: () => void;
@@ -2021,7 +2069,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   notifyContractsScreenOpened: () => {
     const state = get();
     const tutorial = state.tutorial ?? createDefaultTutorialState();
-    set({ tutorial: tutorialOnContractsOpened(tutorial) });
+    const nextTutorial = tutorialOnContractsOpened(tutorial);
+    if (nextTutorial === tutorial) {
+      return;
+    }
+    set({ tutorial: nextTutorial });
     get().markSaveDirty();
   },
 
@@ -2062,7 +2114,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
     const tutorial = state.tutorial ?? createDefaultTutorialState();
-    set({ tutorial: tutorialOnActiveDeliverySeen(tutorial) });
+    const nextTutorial = tutorialOnActiveDeliverySeen(tutorial);
+    if (nextTutorial === tutorial) {
+      return;
+    }
+    set({ tutorial: nextTutorial });
     get().markSaveDirty();
   },
 
@@ -2080,6 +2136,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   notifyMarketScreenOpened: () => {
     const state = get();
     const missions = state.missions ?? createDefaultMissionsState();
+    const tutorial = state.tutorial ?? createDefaultTutorialState();
+    if (missions.flags.marketOpened && tutorial.isCompleted) {
+      return;
+    }
     const nextMissions = syncMissionsState(
       {
         ...missions,
@@ -2090,7 +2150,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       },
       state,
     );
-    const tutorial = state.tutorial ?? createDefaultTutorialState();
     set({
       tutorial: tutorialOnMarketOpened(tutorial),
       missions: nextMissions,
@@ -2994,7 +3053,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         patchSaveStatus(set, { isLoadingSave: false });
         get().refreshContractsFromMarket();
         get().checkMarketPriceAlerts({ sendLocal: false });
-        get().applyOfflineProgressionIfNeeded();
+        get().applyOfflineProgressionIfNeeded('cold-start');
       }
     })();
 
@@ -3436,7 +3495,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   recordLastSeenRealTimeMs: () => {
-    const nowMs = getEconomyNow();
+    const nowMs = getSimulationRealNowMs();
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(get());
     set({ lastSeenRealTimeMs: nowMs, lastSimulatedRealTimeMs: nowMs });
     persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
@@ -3446,21 +3505,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ pendingOfflineProgressSummary: null });
   },
 
-  applyOfflineProgressionIfNeeded: () => {
+  applyOfflineProgressionIfNeeded: (trigger = 'foreground') => {
     if (offlineProgressApplying || isLoadingSave || !get().isGameReady) {
       return;
     }
 
     const state = get();
-    const nowMs = getEconomyNow();
+    const nowMs = getSimulationRealNowMs();
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
-    const hasActiveDeliveries = countActiveRouteDeliveriesInList(state.activeDeliveries) > 0;
-    const baselineMs = resolveOfflineBaselineMs({
-      stateLastSimulated: state.lastSimulatedRealTimeMs,
-      metaLastSimulated: cachedOfflineMetaLastSimulated,
-      stateLastSeen: state.lastSeenRealTimeMs,
+const hasActiveDeliveries = countActiveRouteDeliveriesInList(state.activeDeliveries) > 0;
+    const plan = applyOfflineProgress({
       nowMs,
+      lastSimulatedRealTimeMs: state.lastSimulatedRealTimeMs,
+      lastOfflineProgressAppliedAt: state.lastOfflineProgressAppliedAt,
+      lastSeenRealTimeMs: state.lastSeenRealTimeMs,
+      metaLastSimulatedRealTimeMs: cachedOfflineMetaLastSimulated,
+      gameState: state,
     });
+    const baselineMs = plan.baselineMs;
 
     if (baselineMs == null) {
       set({
@@ -3474,20 +3536,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    if (
-      shouldSkipDuplicateOfflineApply(
-        baselineMs,
-        state.lastOfflineProgressAppliedAt,
-        nowMs,
-        { hasActiveDeliveries },
-      )
-    ) {
+if (plan.duplicatePrevented) {
+      if (
+        (typeof __DEV__ !== 'undefined' && __DEV__) ||
+        process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true'
+      ) {
+        console.log('[offline-progress]', {
+          trigger,
+          elapsedRealMs: Math.max(0, nowMs - baselineMs),
+          appliedSimHours: 0,
+          capped: false,
+          deliveriesAdvanced: 0,
+          deliveriesCompleted: 0,
+          transfersCompleted: 0,
+          fuelStops: 0,
+          costsProcessed: 0,
+          duplicatePrevented: true,
+        });
+      }
       set({ lastSeenRealTimeMs: nowMs, lastSimulatedRealTimeMs: nowMs });
       persistOfflineMetaImmediate(nowMs, simulationGameSpeed);
       return;
     }
 
-    const elapsed = calculateOfflineElapsed(baselineMs, nowMs, { hasActiveDeliveries });
+const elapsed = plan.elapsed;
     if (!elapsed.shouldApply) {
       set({
         lastSeenRealTimeMs: nowMs,
@@ -3512,10 +3584,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const beforeSnapshot = createOfflineProgressSnapshot(state);
-    const simulation = calculateOfflineSimulationHours(
-      elapsed.appliedMs,
-      simulationGameSpeed,
-    );
+const simulation = plan.simulation;
     const deliveryCatchUpHours = computeRequiredDeliveryCatchUpGameHours({
       deliveries: state.activeDeliveries,
       nowMs,
@@ -3550,6 +3619,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const cashBefore = state.player.money ?? 0;
+    const truckTransferIdsBefore = new Set((state.activeTransfers ?? []).map((job) => job.id));
+    const warehouseTransferIdsBefore = new Set(
+      (state.activeWarehouseStockTransfers ?? []).map((job) => job.id),
+    );
 
     try {
       if (gameHours > 0) {
@@ -3699,6 +3772,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
 
     const afterState = get();
+    const activeTruckTransferIdsAfter = new Set(
+      (afterState.activeTransfers ?? []).map((job) => job.id),
+    );
+    const activeWarehouseTransferIdsAfter = new Set(
+      (afterState.activeWarehouseStockTransfers ?? []).map((job) => job.id),
+    );
+    const completedTruckTransfers = [...truckTransferIdsBefore].filter(
+      (id) => !activeTruckTransferIdsAfter.has(id),
+    ).length;
+    const completedWarehouseTransfers = [...warehouseTransferIdsBefore].filter(
+      (id) => !activeWarehouseTransferIdsAfter.has(id),
+    ).length;
     const collector = offlineProgressCollector ?? {
       earnings: 0,
       expenses: 0,
@@ -3722,11 +3807,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
       earnings: collector.earnings,
       expenses: collector.expenses,
       completedDeliveries: collector.completedDeliveries,
+      completedTruckTransfers,
+      completedWarehouseTransfers,
       lateDeliveries: collector.lateDeliveries,
       worldEventsUpdated: collector.worldEventsUpdated,
       marketUpdated: collector.marketUpdated,
       dailyCostsApplied: false,
     });
+
+    if (
+      (typeof __DEV__ !== 'undefined' && __DEV__) ||
+      process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true'
+    ) {
+      const fuelStops = [
+        ...afterState.activeDeliveries,
+        ...(afterState.activeTransfers ?? []),
+        ...(afterState.activeWarehouseStockTransfers ?? []),
+      ].filter((job) => job.status === 'paused' && job.pausedReason === 'out-of-fuel').length;
+      console.log('[offline-progress]', {
+        trigger,
+        elapsedRealMs: elapsed.elapsedMs,
+        appliedSimHours: gameHours,
+        capped: elapsed.capped || simulation.capped,
+        deliveriesAdvanced: deliveryTicksApplied,
+        deliveriesCompleted: summary.completedDeliveries,
+        transfersCompleted: completedTruckTransfers + completedWarehouseTransfers,
+        fuelStops,
+        costsProcessed: periodic.periodsCharged,
+        duplicatePrevented: plan.duplicatePrevented,
+      });
+    }
 
     if (__DEV__) {
       if (summary.completedDeliveries > 0 && summary.earnings <= 0) {
@@ -3763,7 +3873,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
     if (!offlineProgressionActive) {
-      const nowMs = getEconomyNow();
+      const nowMs = getSimulationRealNowMs();
       set({ lastSimulationGameSpeed: simulationGameSpeed, lastSimulatedRealTimeMs: nowMs });
       schedulePersistOfflineMeta(nowMs, simulationGameSpeed, {
         hasActiveDeliveries: countActiveRouteDeliveriesInList(state.activeDeliveries) > 0,
@@ -4131,13 +4241,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
     void get().refreshMarketSnapshot();
   },
 
-  refreshMarketSnapshot: async () => {
-    const before = get();
+  refreshMarketSnapshot: () => {
+    if (globalMarketRefreshInFlight) return globalMarketRefreshInFlight;
+    const operation = (async () => {
+    let before = get();
+    if (!before.cachedGlobalEconomySnapshot) {
+      const persistedCache = await loadGlobalEconomyCache();
+      if (persistedCache) {
+        set({
+          cachedGlobalEconomySnapshot: persistedCache.snapshot,
+          cachedGlobalEconomySnapshotTrusted: true,
+          globalMarketSyncStatus: 'offline-cache',
+          globalMarketLastSyncedAtMs: persistedCache.loadedAt,
+          globalMarketErrorCode: null,
+        });
+        before = get();
+      }
+    }
     const canUseCachedSnapshot =
       !!before.cachedGlobalEconomySnapshot &&
-      (before.cachedGlobalEconomySnapshotTrusted === true ||
-        (typeof __DEV__ !== 'undefined' && __DEV__));
-    set({ globalMarketSyncStatus: 'syncing' });
+      before.cachedGlobalEconomySnapshotTrusted === true &&
+      validateGlobalEconomySnapshot(before.cachedGlobalEconomySnapshot).marketDataValid;
+    const cacheAgeMs =
+      canUseCachedSnapshot && before.globalMarketLastSyncedAtMs != null
+        ? Math.max(0, getEconomyNow() - before.globalMarketLastSyncedAtMs)
+        : null;
+    set({ globalMarketSyncStatus: 'syncing', globalMarketErrorCode: null });
 
     const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? null;
     const online =
@@ -4177,12 +4306,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
       );
       recordGlobalEconomyResult({
         success: false,
-        code: 'auth-bootstrap-failed',
+        code: 'unauthenticated',
+        diagnostics: {
+          documentExists: false,
+          validationPassed: canUseCachedSnapshot,
+          source: canUseCachedSnapshot ? 'cached' : 'unavailable',
+          snapshotAgeMs: cacheAgeMs,
+          fuelPriceFinite: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+          cacheAvailable: canUseCachedSnapshot,
+          cacheAgeMs,
+        },
       });
       set({
         globalMarketSyncStatus: canUseCachedSnapshot
           ? 'offline-cache'
           : 'error',
+        globalMarketErrorCode: 'unauthenticated',
+      });
+      logGlobalEconomyLoadResult({
+        success: false,
+        code: 'unauthenticated',
+        projectId,
+        path: 'globalEconomy/current',
+        authReady: false,
+        userPresent: false,
+        userAnonymous: null,
+        online,
+        documentExists: false,
+        snapshotEpochPresent: Boolean(before.cachedGlobalEconomySnapshot?.epoch),
+        fuelPricePresent: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+        validationPassed: canUseCachedSnapshot,
+        cacheAvailable: canUseCachedSnapshot,
+        cacheAgeMs,
       });
       return {
         success: canUseCachedSnapshot,
@@ -4191,7 +4346,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
-    if (!authReady || !authUser) {
+    if (!canReadGlobalEconomy({ authReady, userPresent: Boolean(authUser) })) {
       console.warn('[global-economy-load-failed]', {
         code: 'unauthenticated',
         projectId,
@@ -4210,11 +4365,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
         success: false,
         code: 'unauthenticated',
         detail: 'no-current-user-before-economy-read',
+        diagnostics: {
+          documentExists: false,
+          validationPassed: canUseCachedSnapshot,
+          source: canUseCachedSnapshot ? 'cached' : 'unavailable',
+          snapshotAgeMs: cacheAgeMs,
+          fuelPriceFinite: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+          cacheAvailable: canUseCachedSnapshot,
+          cacheAgeMs,
+        },
       });
       set({
         globalMarketSyncStatus: canUseCachedSnapshot
           ? 'offline-cache'
           : 'error',
+        globalMarketErrorCode: 'unauthenticated',
+      });
+      logGlobalEconomyLoadResult({
+        success: false,
+        code: 'unauthenticated',
+        projectId,
+        path: 'globalEconomy/current',
+        authReady,
+        userPresent: Boolean(authUser),
+        userAnonymous: authUser?.isAnonymous ?? null,
+        online,
+        documentExists: false,
+        snapshotEpochPresent: Boolean(before.cachedGlobalEconomySnapshot?.epoch),
+        fuelPricePresent: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+        validationPassed: canUseCachedSnapshot,
+        cacheAvailable: canUseCachedSnapshot,
+        cacheAgeMs,
       });
       return {
         success: canUseCachedSnapshot,
@@ -4236,10 +4417,43 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
     }
     if (!repository) {
+      const { recordGlobalEconomyResult } = await import(
+        '../services/backendDiagnostics'
+      );
+      recordGlobalEconomyResult({
+        success: false,
+        code: 'unavailable',
+        diagnostics: {
+          documentExists: false,
+          validationPassed: canUseCachedSnapshot,
+          source: canUseCachedSnapshot ? 'cached' : 'unavailable',
+          snapshotAgeMs: cacheAgeMs,
+          fuelPriceFinite: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+          cacheAvailable: canUseCachedSnapshot,
+          cacheAgeMs,
+        },
+      });
       set({
         globalMarketSyncStatus: canUseCachedSnapshot
           ? 'offline-cache'
           : 'error',
+        globalMarketErrorCode: 'unavailable',
+      });
+      logGlobalEconomyLoadResult({
+        success: false,
+        code: 'unavailable',
+        projectId,
+        path: 'globalEconomy/current',
+        authReady,
+        userPresent: Boolean(authUser),
+        userAnonymous: authUser?.isAnonymous ?? null,
+        online,
+        documentExists: false,
+        snapshotEpochPresent: Boolean(before.cachedGlobalEconomySnapshot?.epoch),
+        fuelPricePresent: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+        validationPassed: canUseCachedSnapshot,
+        cacheAvailable: canUseCachedSnapshot,
+        cacheAgeMs,
       });
       return {
         success: canUseCachedSnapshot,
@@ -4258,11 +4472,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
         recordGlobalEconomyResult({
           success: false,
           code: 'not-found',
+          diagnostics: {
+            documentExists: false,
+            validationPassed: canUseCachedSnapshot,
+            source: canUseCachedSnapshot ? 'cached' : 'unavailable',
+            snapshotAgeMs: cacheAgeMs,
+            fuelPriceFinite: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+            cacheAvailable: canUseCachedSnapshot,
+            cacheAgeMs,
+          },
         });
         set({
           globalMarketSyncStatus: canUseCachedSnapshot
             ? 'offline-cache'
             : 'error',
+          globalMarketErrorCode: 'not-found',
+        });
+        logGlobalEconomyLoadResult({
+          success: false,
+          code: 'not-found',
+          projectId,
+          path: 'globalEconomy/current',
+          authReady,
+          userPresent: Boolean(authUser),
+          userAnonymous: authUser?.isAnonymous ?? null,
+          online,
+          documentExists: false,
+          snapshotEpochPresent: Boolean(before.cachedGlobalEconomySnapshot?.epoch),
+          fuelPricePresent: Number.isFinite(before.cachedGlobalEconomySnapshot?.fuelPricePerLiter),
+          validationPassed: canUseCachedSnapshot,
+          cacheAvailable: canUseCachedSnapshot,
+          cacheAgeMs,
         });
         return {
           success: canUseCachedSnapshot,
@@ -4274,82 +4514,165 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (result.serverTimeMs != null) {
         getEconomyClock().syncFromServer?.(result.serverTimeMs);
       }
-      const epochsPerDay = Math.round(
-        DAY_MS / (snapshot.validUntil - snapshot.generatedAt),
-      );
-      const history = await repository.getHistory({
-        fromEpoch: Math.max(0, snapshot.epoch - epochsPerDay * 30),
-        toEpoch: snapshot.epoch,
-        limit: CITIES.length * PRODUCTS.length * epochsPerDay * 30,
-      });
+      const validation = validateGlobalEconomySnapshot(snapshot);
+      if (!validation.marketDataValid) {
+        throw Object.assign(new Error('GLOBAL_ECONOMY_INVALID_SNAPSHOT'), {
+          code: 'invalid-snapshot',
+        });
+      }
       const live = get();
       const globalEconomy = normalizeGlobalEconomy({
         ...live.globalEconomy,
-        fuelPrice: snapshot.fuelPricePerLiter,
+        fuelPrice: validation.fuelPriceValid
+          ? snapshot.fuelPricePerLiter
+          : live.globalEconomy.fuelPrice,
         globalDemandMultiplier: snapshot.modifiers.demandMultiplier,
         eventMultiplier: snapshot.activeEvents.length > 0 ? 1.05 : 1,
       });
+      const loadedAt = result.serverTimeMs ?? getEconomyNow();
+
+      // Current snapshot is canonical. Optional history failure must not discard it.
       set({
         cachedGlobalEconomySnapshot: snapshot,
         cachedGlobalEconomySnapshotTrusted: result.source === 'backend',
-        globalMarketHistory: history,
         globalMarketSyncStatus:
           result.source === 'backend' ? 'online' : 'offline-cache',
-        globalMarketLastSyncedAtMs: result.serverTimeMs ?? getEconomyNow(),
+        globalMarketLastSyncedAtMs: loadedAt,
+        globalMarketErrorCode: null,
         lastSeenMarketEpoch: snapshot.epoch,
         cachedSnapshotVersion: snapshot.version,
         cachedSnapshotGeneratedAt: snapshot.generatedAt,
         globalEconomy,
-        cities: materializeSnapshotCities(CITIES, snapshot, history),
+        cities: materializeSnapshotCities(CITIES, snapshot, live.globalMarketHistory),
         worldEvents: snapshot.activeEvents,
       });
+      if (result.source === 'backend') {
+        await saveGlobalEconomyCache(snapshot, loadedAt).catch(() => undefined);
+      }
       get().markSaveDirty();
       get().checkMarketPriceAlerts();
       const { recordGlobalEconomyResult } = await import(
         '../services/backendDiagnostics'
       );
-      recordGlobalEconomyResult({ success: true, code: null });
+      recordGlobalEconomyResult({
+        success: true,
+        code: null,
+        detail: `source=${result.source};fuel=${validation.fuelPriceValid ? 'valid' : 'invalid'}`,
+        diagnostics: {
+          documentExists: true,
+          validationPassed: validation.marketDataValid,
+          source: result.source === 'backend' ? 'live' : 'cached',
+          snapshotAgeMs: Math.max(0, loadedAt - snapshot.generatedAt),
+          fuelPriceFinite: validation.fuelPriceValid,
+          cacheAvailable: true,
+          cacheAgeMs: 0,
+        },
+      });
+      logGlobalEconomyLoadResult({
+        success: true,
+        code: null,
+        projectId,
+        path: 'globalEconomy/current',
+        authReady,
+        userPresent: true,
+        userAnonymous: authUser?.isAnonymous ?? null,
+        online,
+        documentExists: true,
+        snapshotEpochPresent: Number.isFinite(snapshot.epoch),
+        fuelPricePresent: validation.fuelPriceValid,
+        validationPassed: validation.marketDataValid,
+        cacheAvailable: true,
+        cacheAgeMs: 0,
+      });
+
+      try {
+        const epochDurationMs = Math.max(1, snapshot.validUntil - snapshot.generatedAt);
+        const epochsPerDay = Math.max(1, Math.round(DAY_MS / epochDurationMs));
+        const history = await repository.getHistory({
+          fromEpoch: Math.max(
+            0,
+            snapshot.epoch - epochsPerDay * INITIAL_GLOBAL_HISTORY_DAYS,
+          ),
+          toEpoch: snapshot.epoch,
+          limit: INITIAL_GLOBAL_HISTORY_LIMIT,
+        });
+        set({
+          globalMarketHistory: history,
+          cities: materializeSnapshotCities(CITIES, snapshot, history),
+        });
+      } catch (historyError) {
+        console.warn('[global-economy-history-load-result]', {
+          success: false,
+          code: categorizeGlobalEconomyClientError(historyError),
+          currentSnapshotPreserved: true,
+          requestedLimit: INITIAL_GLOBAL_HISTORY_LIMIT,
+        });
+      }
       return {
         success: true,
         source: result.source,
         stale: result.source !== 'backend',
       };
     } catch (error) {
-      const code =
+      const firebaseCode =
         error && typeof error === 'object' && 'code' in error
           ? String((error as { code?: unknown }).code ?? '')
           : error instanceof Error
             ? error.message
             : String(error);
-      const category = categorizeGlobalEconomyError(code);
-      const permissionWithoutAuth =
-        category === 'permission-denied' && !authUser;
+      const category = categorizeGlobalEconomyClientError(error);
       console.warn('[global-economy-load-failed]', {
-        code: code || null,
+        firebaseCode: firebaseCode || null,
+        code: category,
         projectId,
         path: 'globalEconomy/current',
         authReady,
         userPresent: Boolean(authUser),
         anonymous: authUser?.isAnonymous ?? null,
         online,
-        category,
-        detail: permissionWithoutAuth
-          ? 'permission-denied with request.auth missing'
-          : category === 'permission-denied'
-            ? 'permission-denied despite signed-in user'
-            : null,
       });
       const { recordGlobalEconomyResult } = await import(
         '../services/backendDiagnostics'
       );
       recordGlobalEconomyResult({
         success: false,
-        code: code || category,
+        code: category,
+        detail: firebaseCode || null,
+        diagnostics: {
+          documentExists: category === 'invalid-snapshot' || category === 'parse-failed',
+          validationPassed: canUseCachedSnapshot,
+          source: canUseCachedSnapshot ? 'cached' : 'unavailable',
+          snapshotAgeMs: cacheAgeMs,
+          fuelPriceFinite: Number.isFinite(
+            before.cachedGlobalEconomySnapshot?.fuelPricePerLiter,
+          ),
+          cacheAvailable: canUseCachedSnapshot,
+          cacheAgeMs,
+        },
       });
       set({
         globalMarketSyncStatus: canUseCachedSnapshot
           ? 'offline-cache'
           : 'error',
+        globalMarketErrorCode: category,
+      });
+      logGlobalEconomyLoadResult({
+        success: false,
+        code: category,
+        projectId,
+        path: 'globalEconomy/current',
+        authReady,
+        userPresent: Boolean(authUser),
+        userAnonymous: authUser?.isAnonymous ?? null,
+        online,
+        documentExists: category === 'invalid-snapshot' || category === 'parse-failed',
+        snapshotEpochPresent: Boolean(before.cachedGlobalEconomySnapshot?.epoch),
+        fuelPricePresent: Number.isFinite(
+          before.cachedGlobalEconomySnapshot?.fuelPricePerLiter,
+        ),
+        validationPassed: canUseCachedSnapshot,
+        cacheAvailable: canUseCachedSnapshot,
+        cacheAgeMs,
       });
       return {
         success: canUseCachedSnapshot,
@@ -4357,6 +4680,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         stale: true,
       };
     }
+    })();
+    globalMarketRefreshInFlight = operation;
+    void operation.finally(() => {
+      if (globalMarketRefreshInFlight === operation) {
+        globalMarketRefreshInFlight = null;
+      }
+    });
+    return operation;
   },
 
   refreshContractsFromMarket: (options?: { bypassCooldown?: boolean }) => {
@@ -4732,6 +5063,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
       };
     }
 
+    if (truck.status === 'marketplace_locked') {
+      return {
+        success: false,
+        errorCode: 'TRUCK_BUSY',
+        message: 'Bu kamyon Araç Pazarı’nda olduğu için yönlendirilemez.',
+      };
+    }
+
+    if (truck.leaseExpired) {
+      return {
+        success: false,
+        errorCode: 'TRUCK_BUSY',
+        message: 'Kiralama süresi dolan kamyon yönlendirilemez.',
+      };
+    }
+
     if (truck.status !== 'idle') {
       return {
         success: false,
@@ -5067,7 +5414,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       message: string;
       key: string;
     }> = [];
+    const incidentNotifications: Array<{ deliveryId: string; title: string }> = [];
     const contractById = new Map(state.contracts.map((contract) => [contract.id, contract]));
+    const latestIncident = getLatestDeliveryIncident(state.activeDeliveries);
+    let pendingIncidentReserved = state.activeDeliveries.some(
+      (delivery) => delivery.incident?.status === 'pending' && !delivery.incidentResolved,
+    );
+    const incidentCooldownActive = isDeliveryIncidentCooldownActive(
+      state.activeDeliveries,
+      state.currentTime,
+    );
 
     let updatedTrucks = state.player.trucks;
     const updatedDeliveries = state.activeDeliveries.map((delivery) => {
@@ -5100,6 +5456,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
           }
         }
         return delivery;
+      }
+
+      // A pending player decision survives background/cold-start and pauses only
+      // that delivery. It must not be discarded or complete behind the modal.
+      if (
+        delivery.incident?.status === 'pending' &&
+        !delivery.incidentResolved
+      ) {
+        return { ...delivery, currentSpeedKmh: 0 };
       }
 
       // Arıza / kaza riski — offline catch-up sırasında uygulanmaz
@@ -5160,27 +5525,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       if (
         !offlineProgressionActive &&
+        !pendingIncidentReserved &&
+        !incidentCooldownActive &&
         !updated.incidentGenerated &&
         updated.progress >= 0.2 &&
         updated.progress <= 0.85 &&
         state.player
       ) {
         const contract = contractById.get(updated.contractId);
-        updated = maybeRollDeliveryIncident(
+        const rolled = maybeRollDeliveryIncident(
           updated,
           contract,
           state.player,
           state.currentTime,
+          latestIncident?.type,
         );
-      }
-
-      if (offlineProgressionActive && updated.incident?.status === 'pending') {
-        updated = {
-          ...updated,
-          incident: undefined,
-          incidentGenerated: true,
-          incidentResolved: true,
-        };
+        if (rolled.incident?.status === 'pending') {
+          pendingIncidentReserved = true;
+          incidentNotifications.push({
+            deliveryId: rolled.id,
+            title: rolled.incident.title,
+          });
+        }
+        updated = rolled;
       }
 
       if (isDeliveryProgressComplete(updated.progress)) {
@@ -5207,6 +5574,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: warning.message,
         actionLabel: 'Haritada Gör',
         actionTarget: 'map',
+      });
+    }
+
+    for (const incident of incidentNotifications) {
+      get().addNotification({
+        id: `delivery-incident:${incident.deliveryId}`,
+        time: state.currentTime,
+        type: 'warning',
+        title: 'Operasyon kararı gerekiyor',
+        message: incident.title,
+        actionLabel: 'Kararı Gör',
+        actionTarget: 'contracts',
       });
     }
 
@@ -5329,6 +5708,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         success: false,
         errorCode: 'TRUCK_NOT_FOUND',
         message: 'Kamyon bulunamadı.',
+      };
+    }
+
+    if (truck.leaseExpired) {
+      return {
+        success: false,
+        errorCode: 'TRUCK_BUSY',
+        message: 'Kiralama süresi dolan kamyon yönlendirilemez.',
       };
     }
 
@@ -6941,7 +7328,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const contract = state.contracts.find((item) => item.id === delivery.contractId);
     const incidentTitle = result.delivery.incident?.title ?? 'Teslimat';
-    const cashDelta = result.effects.cashDelta + result.effects.fuelCostDelta;
+    // fuelCostDelta describes cost direction: positive is extra cost, negative
+    // is savings. Convert it to the inverse cash movement exactly once.
+    const cashDelta = result.effects.cashDelta - result.effects.fuelCostDelta;
     let nextPlayer = state.player;
     let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | undefined;
 
@@ -7008,6 +7397,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
           }
           return applyDriverXp(driver, result.effects!.driverXpDelta, contract).driver;
         }),
+      };
+    }
+
+    if (result.effects.playerXpDelta > 0) {
+      nextPlayer = applyXpToPlayer(nextPlayer, result.effects.playerXpDelta).player;
+    }
+
+    if (result.effects.reputationDelta !== 0) {
+      nextPlayer = {
+        ...nextPlayer,
+        reputation: Math.min(
+          100,
+          Math.max(0, nextPlayer.reputation + result.effects.reputationDelta),
+        ),
       };
     }
 
@@ -8196,11 +8599,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   refuelTruck: ({ truckId, liters, expectedUnitPrice, idempotencyKey }) => {
     const state = get();
-    if (!hasUsableGlobalMarketSnapshot(state)) {
+    const fuelQuote = resolveStoreFuelPriceQuote(state);
+    if (!isFuelPricePurchaseReady(fuelQuote) || fuelQuote.pricePerLiter == null) {
       return {
         success: false,
         reason: 'market-unavailable',
-        message: 'Piyasa verilerine ulaşılamıyor. Yakıt işlemi için yeniden bağlan.',
+        message: 'Yakıt fiyatına ulaşılamıyor. Tekrar dene.',
       };
     }
     if (idempotencyKey && (state.fuelTransactionKeys ?? []).includes(idempotencyKey)) {
@@ -8217,10 +8621,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: 'Kamyon bulunamadı.',
       };
     }
-    const unitPrice = getSnapshotFuelPrice(
-      state.cachedGlobalEconomySnapshot,
-      state.globalEconomy,
-    );
+    const unitPrice = fuelQuote.pricePerLiter;
     const validation = validateTruckRefuelRequest({
       truck,
       requestedLiters: liters,
@@ -8294,11 +8695,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   purchaseRoadsideFuel: ({ jobId, liters, expectedUnitPrice, idempotencyKey }) => {
     const state = get();
-    if (!hasUsableGlobalMarketSnapshot(state)) {
+    const fuelQuote = resolveStoreFuelPriceQuote(state);
+    if (!isFuelPricePurchaseReady(fuelQuote) || fuelQuote.pricePerLiter == null) {
       return {
         success: false,
         reason: 'market-unavailable',
-        message: 'Piyasa verilerine ulaşılamıyor. Acil yakıt işlemi için yeniden bağlan.',
+        message: 'Yakıt fiyatına ulaşılamıyor. Tekrar dene.',
+        source: 'roadside-emergency',
       };
     }
     if (idempotencyKey && (state.fuelTransactionKeys ?? []).includes(idempotencyKey)) {
@@ -8317,10 +8720,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const truck = job
       ? state.player.trucks.find((candidate) => candidate.id === job.truckId)
       : undefined;
-    const unitPrice = getSnapshotFuelPrice(
-      state.cachedGlobalEconomySnapshot,
-      state.globalEconomy,
-    );
+    const unitPrice = fuelQuote.pricePerLiter;
     const validation = validateRoadsideFuelPurchase({
       job,
       truck,

@@ -65,6 +65,16 @@ function buildSave(uid: string, overrides: Record<string, unknown> = {}) {
 }
 
 async function seedSave(uid: string, overrides: Record<string, unknown> = {}) {
+  await adminFirestore.doc(`users/${uid}`).set(
+    {
+      uid,
+      username: `user_${uid.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 12) || 'player'}`,
+      usernameNormalized: `user_${uid.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 12) || 'player'}`.toLowerCase(),
+      usernameSetupCompleted: true,
+      usernameChangeCount: 0,
+    },
+    { merge: true },
+  );
   await adminFirestore.doc(`users/${uid}/saves/current`).set(buildSave(uid, overrides));
 }
 
@@ -125,6 +135,20 @@ test('trusted score submit writes backend-calculated score', async () => {
   assert.equal(snap.exists, true);
   assert.equal(snap.data()?.companyScore, expected);
   assert.equal(snap.data()?.uid, 'player-1');
+  assert.equal(typeof snap.data()?.username, 'string');
+  assert.ok(String(snap.data()?.username).length > 0);
+});
+
+test('submit without username is rejected', async () => {
+  await adminFirestore.doc('users/no-name/saves/current').set(buildSave('no-name'));
+  const result = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: 'no-name', displayName: 'Ignored' },
+    { transactionId: 'tx-nouser', idempotencyKey: 'idem-nouser' },
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.reason, 'username-required');
 });
 
 test('lower score does not overwrite higher score', async () => {

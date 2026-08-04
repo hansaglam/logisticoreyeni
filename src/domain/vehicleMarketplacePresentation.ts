@@ -99,6 +99,8 @@ export function getMarketplaceErrorMessage(reason?: string): string {
     case 'auth-required':
     case 'unauthenticated':
       return 'Araç Pazarı’nı kullanmak için hesabını bağla.';
+    case 'username-required':
+      return 'Araç Pazarı’nı kullanmadan önce kullanıcı adını belirlemelisin.';
     case 'marketplace-state-missing':
       return 'Araç Pazarı hesabın henüz hazırlanmadı. Hesabını senkronize edip tekrar dene.';
     case 'save-conflict':

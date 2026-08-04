@@ -1550,6 +1550,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     globalMarketSyncStatus: cachedSnapshot
       ? 'offline-cache'
       : 'idle',
+    globalMarketErrorCode: null,
     appliedEconomyPeriodKeys: Array.isArray(payload.appliedEconomyPeriodKeys)
       ? payload.appliedEconomyPeriodKeys.filter((k): k is string => typeof k === 'string').slice(-48)
       : undefined,

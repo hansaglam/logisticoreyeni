@@ -151,7 +151,12 @@ assert.match(saveSource, /soldTruckIds: state\.vehicleMarketplace\.soldTruckIds\
 assert.doesNotMatch(saveSource, /globalMarketHistory:\s*structuredClone/);
 assert.doesNotMatch(saveSource, /mapRoadSegments:/);
 assert.match(backend, /recursiveDelete/);
-assert.match(backend, /collectionGroup\('entries'\)/);
+assert.match(backend, /releaseUsernameForUid|collectionGroup\('entries'\)/);
+const leaderboardBackend = readFileSync(
+  resolve(__dirname, '../backend/src/leaderboard.ts'),
+  'utf8',
+);
+assert.match(leaderboardBackend, /collectionGroup\('entries'\)/);
 
 for (const scenario of [
   'Google restore', 'Apple restore', 'anonymous -> Google', 'anonymous -> Apple',

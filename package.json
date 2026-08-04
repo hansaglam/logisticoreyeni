@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npx tsx scripts/check-require-cycles.ts",
     "validate:production-build": "npx tsx scripts/validate-production-build-config.ts",
+    "production:backend-check": "npx tsx scripts/global-economy-production-health-test.ts && npx tsx scripts/production-backend-health-check.ts",
     "android:bundle:release": "npm run validate:production-build && cd android && gradlew.bat bundleRelease",
     "backend:build": "npm --prefix backend run build",
     "backend:typecheck": "npm --prefix backend run typecheck",

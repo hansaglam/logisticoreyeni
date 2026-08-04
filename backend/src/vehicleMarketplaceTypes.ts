@@ -76,6 +76,7 @@ export interface MarketplaceListingDocument {
 }
 
 export type MarketplaceFailureReason =
+  | 'username-required'
   | 'auth-required'
   | 'marketplace-state-missing'
   | 'unauthenticated'

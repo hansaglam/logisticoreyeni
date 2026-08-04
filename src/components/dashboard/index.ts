@@ -5,6 +5,7 @@ export { default as DashboardHeroCard } from './DashboardHeroCard';
 export { default as DashboardNextActionCard } from './DashboardNextActionCard';
 export { default as DashboardStatGrid, buildDashboardStatTiles } from './DashboardStatGrid';
 export { default as DashboardModuleGrid } from './DashboardModuleGrid';
+export { default as SmartGameTipBanner, navigateFromGameTip } from './SmartGameTipBanner';
 export { default as DashboardOpportunitiesSection } from './DashboardOpportunitiesSection';
 export { default as DashboardMarketOpportunitiesSection } from './DashboardMarketOpportunitiesSection';
 export { default as DashboardRetentionCard } from './DashboardRetentionCard';

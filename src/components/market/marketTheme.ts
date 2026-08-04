@@ -7,14 +7,14 @@ export const MARKET_HORIZONTAL_PADDING = 16;
 export const MARKET_SECTION_GAP = 11;
 export const MARKET_SECTION_GAP_TIGHT = 7;
 export const MARKET_SCROLL_BOTTOM_EXTRA = 16;
-export const MARKET_NARROW_BREAKPOINT = 360;
+export const MARKET_NARROW_BREAKPOINT = 400;
 
 export const MARKET_HEADER_HEIGHT = 60;
 export const MARKET_METRIC_HEIGHT = 58;
 export const MARKET_WORLD_EVENT_HEIGHT = 72;
 export const MARKET_SUMMARY_STRIP_HEIGHT = 58;
 export const MARKET_PRODUCT_CARD_HEIGHT = 110;
-export const MARKET_PRODUCT_CARD_HEIGHT_NARROW = 104;
+export const MARKET_PRODUCT_CARD_HEIGHT_NARROW = 116;
 
 export const MARKET_CARD_BG = '#081426';
 export const MARKET_CARD_BORDER = 'rgba(50,95,150,0.30)';
@@ -40,8 +40,8 @@ export function getMarketProductColumnWidths(screenWidth: number): {
   const isNarrow = screenWidth < MARKET_NARROW_BREAKPOINT;
   return {
     leftCol: isNarrow ? 92 : 106,
-    actionCol: isNarrow ? 80 : 88,
-    chartMinWidth: isNarrow ? 68 : 80,
+    actionCol: isNarrow ? 108 : 96,
+    chartMinWidth: isNarrow ? 70 : 80,
   };
 }
 

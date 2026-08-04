@@ -43,7 +43,7 @@ export default function OfflineProgressSummaryModal({
   }
 
   const elapsedLabel = formatOfflineElapsedDuration(summary.appliedMs);
-  const cappedNote = summary.capped ? ' (12 saat sınırı uygulandı)' : '';
+  const cappedNote = summary.capped ? ' (24 saat sınırı uygulandı)' : '';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss}>
@@ -67,6 +67,12 @@ export default function OfflineProgressSummaryModal({
 
           <View style={styles.body}>
             <SummaryRow label="Tamamlanan teslimatlar" value={String(summary.completedDeliveries)} />
+            {summary.completedTruckTransfers > 0 ? (
+              <SummaryRow label="Ulaşan kamyonlar" value={String(summary.completedTruckTransfers)} />
+            ) : null}
+            {summary.completedWarehouseTransfers > 0 ? (
+              <SummaryRow label="Tamamlanan depo transferleri" value={String(summary.completedWarehouseTransfers)} />
+            ) : null}
             {summary.lateDeliveries > 0 ? (
               <SummaryRow
                 label="Geciken teslimatlar"

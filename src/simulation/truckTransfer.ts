@@ -19,6 +19,34 @@ import {
 
 const MIN_TRANSFER_HOURS = 1;
 const DEFAULT_SPEED_KMH = deliveryBalance.defaultAverageSpeed;
+
+export type TruckTransferBlockedReason =
+  | 'Teslimatta'
+  | 'Transferde'
+  | 'Araç Pazarı’nda'
+  | 'Yakıt yetersiz'
+  | 'Araç müsait değil'
+  | 'Kiralama süresi doldu'
+  | 'Müsait şoför yok';
+
+/**
+ * UI ve transfer başlangıcı için ortak uygunluk açıklaması.
+ * Aktif bir kiralama transfer engeli değildir; yalnız süresi bitmiş kiralamalar engellenir.
+ */
+export function getTruckTransferBlockedReason(
+  truck: Pick<Truck, 'status' | 'leaseExpired'>,
+  hasIdleDriver: boolean,
+): TruckTransferBlockedReason | null {
+  if (truck.status === 'transferring') return 'Transferde';
+  if (truck.status === 'on_route') return 'Teslimatta';
+  if (truck.status === 'marketplace_locked') return 'Araç Pazarı’nda';
+  if (truck.status === 'out_of_fuel') return 'Yakıt yetersiz';
+  if (truck.status !== 'idle') return 'Araç müsait değil';
+  if (truck.leaseExpired) return 'Kiralama süresi doldu';
+  if (!hasIdleDriver) return 'Müsait şoför yok';
+  return null;
+}
+
 export function getActiveTransfers(transfers: TruckTransfer[] | undefined): TruckTransfer[] {
   return (transfers ?? []).filter(
     (transfer) => transfer.status === 'active' || transfer.status === 'paused',

@@ -27,6 +27,7 @@ export const LEADERBOARD_CALLABLES = {
 export type LeaderboardErrorCode =
   | 'auth-required'
   | 'anonymous-not-supported'
+  | 'username-required'
   | 'save-not-found'
   | 'invalid-player-state'
   | 'invalid-request'
@@ -40,6 +41,7 @@ export type LeaderboardErrorCode =
 
 export interface LeaderboardEntry {
   uid: string;
+  username: string;
   companyName: string;
   companyScore: number;
   level: number;
@@ -129,6 +131,7 @@ function normalizeEntry(
 ): LeaderboardRankedEntry {
   const entry: LeaderboardRankedEntry = {
     uid: typeof raw.uid === 'string' ? raw.uid : '',
+    username: typeof raw.username === 'string' ? raw.username : '',
     companyName:
       typeof raw.companyName === 'string' ? raw.companyName : 'LogistiCore Lojistik',
     companyScore: typeof raw.companyScore === 'number' ? raw.companyScore : 0,

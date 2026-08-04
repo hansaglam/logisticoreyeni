@@ -205,14 +205,14 @@ export default function WarehouseOpportunityCard({
 const styles = StyleSheet.create({
   card: {
     borderRadius: 16,
-    padding: 14,
+    padding: 11,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: 'rgba(35, 136, 255, 0.28)',
     backgroundColor: '#0E1C34',
     borderLeftWidth: 3,
     borderLeftColor: colors.accentBlue,
-    gap: 8,
+    gap: 6,
   },
   header: {
     flexDirection: 'row',
@@ -235,7 +235,7 @@ const styles = StyleSheet.create({
   optionsRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 8,
+    marginTop: 4,
   },
   optionsStacked: {
     flexDirection: 'column',
@@ -271,7 +271,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
     marginTop: 4,
-    minHeight: 36,
+    minHeight: 44,
     borderRadius: 12,
     backgroundColor: colors.accentBlueSoft,
     borderWidth: 1,

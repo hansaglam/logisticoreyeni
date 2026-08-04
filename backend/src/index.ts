@@ -14,6 +14,16 @@ import {
 } from './leaderboard';
 import { isValidLeaderboardSeasonKey } from './leaderboardSeason';
 import {
+  checkUsernameAvailabilityTransaction,
+  getUsernameProfileForUid,
+  releaseUsernameForUid,
+  setUsernameTransaction,
+} from './username';
+import {
+  suggestUsernameFromDisplayName,
+  USERNAME_CHANGE_COOLDOWN_MS,
+} from './usernameValidation';
+import {
   cancelVehicleListingTransaction,
   cleanupVehicleMarketplaceEphemeralRecords,
   createVehicleListingTransaction,
@@ -48,6 +58,8 @@ const RATE_LIMITS = {
   accountDeletion: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
   leaderboardSubmit: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
   leaderboardGet: { windowMs: 60 * 1000, maxRequests: 60 },
+  setUsername: { windowMs: 60 * 60 * 1000, maxRequests: 10 },
+  checkUsername: { windowMs: 60 * 1000, maxRequests: 60 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -191,6 +203,20 @@ function callableIdentity(request: {
   };
 }
 
+function resolveSignInProvider(token: Record<string, unknown> | undefined): string {
+  const firebaseToken = token?.firebase;
+  if (
+    firebaseToken &&
+    typeof firebaseToken === 'object' &&
+    'sign_in_provider' in firebaseToken
+  ) {
+    return String(
+      (firebaseToken as { sign_in_provider?: unknown }).sign_in_provider ?? '',
+    );
+  }
+  return '';
+}
+
 function resolveLeaderboardIdentity(request: {
   auth?: { uid: string; token: Record<string, unknown> };
 }):
@@ -199,16 +225,7 @@ function resolveLeaderboardIdentity(request: {
   if (!request.auth?.uid) {
     return { ok: false, reason: 'auth-required' };
   }
-  const firebaseToken = request.auth.token.firebase;
-  const signInProvider =
-    firebaseToken &&
-    typeof firebaseToken === 'object' &&
-    'sign_in_provider' in firebaseToken
-      ? String(
-          (firebaseToken as { sign_in_provider?: unknown }).sign_in_provider ??
-            '',
-        )
-      : '';
+  const signInProvider = resolveSignInProvider(request.auth.token);
   if (signInProvider === 'anonymous') {
     return { ok: false, reason: 'anonymous-not-supported' };
   }
@@ -220,6 +237,39 @@ function resolveLeaderboardIdentity(request: {
         typeof request.auth.token.name === 'string'
           ? request.auth.token.name
           : null,
+    },
+  };
+}
+
+/** Username callables: linked hesap zorunlu (misafir oluşturamaz). */
+function resolveUsernameIdentity(request: {
+  auth?: { uid: string; token: Record<string, unknown> };
+}):
+  | {
+      ok: true;
+      identity: {
+        uid: string;
+        displayName: string | null;
+        signInProvider: string;
+      };
+    }
+  | { ok: false; reason: 'auth-required' | 'anonymous-not-supported' } {
+  if (!request.auth?.uid) {
+    return { ok: false, reason: 'auth-required' };
+  }
+  const signInProvider = resolveSignInProvider(request.auth.token);
+  if (signInProvider === 'anonymous' || !signInProvider) {
+    return { ok: false, reason: 'anonymous-not-supported' };
+  }
+  return {
+    ok: true,
+    identity: {
+      uid: request.auth.uid,
+      displayName:
+        typeof request.auth.token.name === 'string'
+          ? request.auth.token.name
+          : null,
+      signInProvider,
     },
   };
 }
@@ -511,6 +561,7 @@ export const prepareVehicleMarketplaceAccountDeletion = onCall(
       firestore,
       identity.uid,
     );
+    const usernameCleanup = await releaseUsernameForUid(firestore, identity.uid);
     // Admin SDK recursive delete profile, saves/meta, alarms, notification
     // tokens ve bounded restore receipt alt koleksiyonlarını kapsar.
     await firestore.recursiveDelete(firestore.doc(`users/${identity.uid}`));
@@ -521,12 +572,98 @@ export const prepareVehicleMarketplaceAccountDeletion = onCall(
     logger.info('[account-deletion-cleanup]', {
       uidHash: uidHash(identity.uid),
       leaderboardEntriesDeleted,
+      usernameReleased: usernameCleanup.usernameReleased,
       ...marketplace,
     });
     return {
       ok: true,
       ...marketplace,
       leaderboardEntriesDeleted,
+      usernameReleased: usernameCleanup.usernameReleased,
+    };
+  },
+);
+
+export const setUsername = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS, async (request) => {
+  const startedAt = Date.now();
+  const auth = resolveUsernameIdentity(request);
+  const record = requestRecord(request.data);
+  if (!auth.ok) {
+    return { ok: false, reason: auth.reason };
+  }
+  if (
+    !hasOnlyKeys(record, ['username']) ||
+    typeof record.username !== 'string' ||
+    record.username.length > 40
+  ) {
+    return { ok: false, reason: 'invalid-request' };
+  }
+  if (!(await consumeRateLimit(auth.identity.uid, 'setUsername'))) {
+    return { ok: false, reason: 'rate-limited' };
+  }
+  const result = await setUsernameTransaction(
+    getFirestore(),
+    auth.identity,
+    record.username,
+  );
+  logger.info('[username-set]', {
+    uidHash: uidHash(auth.identity.uid),
+    ok: result.ok,
+    reason: result.ok ? 'success' : result.reason,
+    durationMs: Date.now() - startedAt,
+  });
+  return result;
+});
+
+export const checkUsernameAvailability = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveUsernameIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (
+      !hasOnlyKeys(record, ['username']) ||
+      typeof record.username !== 'string' ||
+      record.username.length > 40
+    ) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'checkUsername'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return checkUsernameAvailabilityTransaction(
+      getFirestore(),
+      auth.identity,
+      record.username,
+    );
+  },
+);
+
+export const getUsernameProfile = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveUsernameIdentity(request);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    const record = requestRecord(request.data);
+    if (!hasOnlyKeys(record, [])) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    const profile = await getUsernameProfileForUid(getFirestore(), auth.identity.uid);
+    return {
+      ok: true,
+      username: profile.username,
+      usernameSetupCompleted: profile.usernameSetupCompleted,
+      usernameChangeCount: profile.usernameChangeCount,
+      usernameUpdatedAtMs: profile.usernameUpdatedAtMs,
+      suggestedUsername: suggestUsernameFromDisplayName(auth.identity.displayName),
+      nextChangeAvailableAtMs:
+        profile.usernameUpdatedAtMs != null && profile.usernameSetupCompleted
+          ? profile.usernameUpdatedAtMs + USERNAME_CHANGE_COOLDOWN_MS
+          : null,
     };
   },
 );

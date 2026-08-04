@@ -41,10 +41,8 @@ const QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = (
         }]
       : []),
     { key: 'missions', label: 'Görevler', icon: 'contract' },
-    { key: 'settings', label: 'Ayarlar', icon: 'settings' },
-    { key: 'account', label: 'Hesap', icon: 'account' },
   ] as QuickAccessItemDef[]
-).filter((item) => __DEV__ || item.key !== 'settings');
+);
 
 interface QuickAccessMenuProps {
   visible: boolean;
@@ -83,7 +81,7 @@ export default function QuickAccessMenu({
   onQuickAccess,
 }: QuickAccessMenuProps) {
   const missionsReadyCount = useMissionsReadyBadge();
-  const maxPanelHeight = Dimensions.get('window').height * 0.55;
+  const maxPanelHeight = Dimensions.get('window').height * 0.52;
 
   const handleItemPress = (action: QuickAccessAction) => {
     onClose();
@@ -188,11 +186,12 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: TILE_GAP,
+    columnGap: TILE_GAP,
+    rowGap: TILE_GAP,
     paddingBottom: 2,
   },
   tile: {
-    width: '47.5%',
+    width: '48.4%',
     alignItems: 'center',
     gap: 6,
     paddingVertical: 12,
@@ -200,7 +199,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardSoft,
     borderWidth: 1,
     borderColor: colors.border,
-    minHeight: 88,
+    height: 84,
     justifyContent: 'center',
   },
   tileIconWrap: {

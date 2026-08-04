@@ -62,47 +62,65 @@ interface GameTabBarProps {
 }
 
 function useTabBadges(): Partial<Record<TabKey, number>> {
-  const contracts = useGameStore((state) => state.contracts);
-  const trucks = useGameStore((state) => state.player.trucks);
-  const drivers = useGameStore((state) => state.player.drivers);
-  const trailers = useGameStore((state) => state.player.trailers);
-  const homeCityId = useGameStore((state) => state.player.homeCityId);
-  const playerReputation = useGameStore((state) => state.player.reputation ?? 0);
-  const playerLevel = useGameStore(
-    (state) => Math.max(1, state.player.level ?? state.player.companyLevel ?? 1),
+  const eligibilitySignature = useGameStore((state) => {
+    const contractKey = (state.contracts ?? [])
+      .map((contract) => `${contract.id}:${contract.status}:${contract.requiredLevel ?? 1}`)
+      .join('|');
+    const truckKey = (state.player.trucks ?? [])
+      .map((truck) =>
+        truck.status === 'idle'
+          ? `${truck.id}:idle:${truck.currentCityId}:${truck.capacity}:${Math.floor(truck.currentFuelL ?? 0)}`
+          : `${truck.id}:${truck.status}`,
+      )
+      .join('|');
+    const driverKey = (state.player.drivers ?? [])
+      .map((driver) => `${driver.id}:${driver.status}:${driver.currentCityId ?? ''}`)
+      .join('|');
+    const trailerKey = (state.player.trailers ?? [])
+      .map((trailer) => `${trailer.id}:${trailer.status}:${trailer.attachedTruckId ?? ''}`)
+      .join('|');
+    return [
+      contractKey,
+      truckKey,
+      driverKey,
+      trailerKey,
+      state.player.homeCityId,
+      state.player.reputation ?? 0,
+      state.player.level ?? state.player.companyLevel ?? 1,
+    ].join('~');
+  });
+  const alertCount = useGameStore((state) =>
+    MARKET_ALARMS_ENABLED ? countActiveMarketAlerts(state.marketAlerts ?? []) : 0,
   );
-  const marketAlerts = useGameStore((state) => state.marketAlerts);
 
   return useMemo(() => {
+    const state = useGameStore.getState();
     const badges: Partial<Record<TabKey, number>> = {};
 
-    const playableCount = contracts.filter(
+    const playableCount = (state.contracts ?? []).filter(
       (contract) =>
         contract.status === 'available' &&
         getContractAvailability(
           contract,
-          trucks,
-          drivers,
-          playerLevel,
+          state.player.trucks ?? [],
+          state.player.drivers ?? [],
+          Math.max(1, state.player.level ?? state.player.companyLevel ?? 1),
           0,
-          playerReputation,
-          homeCityId,
-          trailers,
+          state.player.reputation ?? 0,
+          state.player.homeCityId,
+          state.player.trailers ?? [],
         ).canStart,
     ).length;
     if (playableCount > 0) {
       badges.contracts = playableCount;
     }
 
-    const alertCount = MARKET_ALARMS_ENABLED
-      ? countActiveMarketAlerts(marketAlerts ?? [])
-      : 0;
     if (alertCount > 0) {
       badges.market = alertCount;
     }
 
     return badges;
-  }, [contracts, trucks, drivers, trailers, homeCityId, playerReputation, playerLevel, marketAlerts]);
+  }, [alertCount, eligibilitySignature]);
 }
 
 const TabBadge = React.memo(function TabBadge({ count }: { count: number }) {

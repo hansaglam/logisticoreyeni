@@ -8,14 +8,15 @@ import {
 } from 'react-native';
 
 import type { TabKey } from '../../navigation/tabTypes';
+import type { GameTipDefinition, GameTipTargetRoute } from '../../data/gameTips';
 import { radius, spacing } from '../../theme';
 import { GameIcon } from '../ui';
-import { TRUCK_LOCATION_EDUCATION_MESSAGE } from '../../utils/truckLocationUx';
 import {
   DASHBOARD_MODULE_CARD_BG,
   DASHBOARD_MODULE_CARD_HEIGHT,
   DASHBOARD_MODULE_GAP,
 } from './dashboardTheme';
+import SmartGameTipBanner from './SmartGameTipBanner';
 
 export type DashboardModuleKey = 'shop' | 'fleet' | 'warehouse';
 
@@ -78,7 +79,7 @@ interface DashboardModuleGridProps {
   idleTrucks: number;
   activeDeliveries: number;
   warehouseFillRatio: number;
-  showLocationHint?: boolean;
+  onPressTip?: (target: GameTipTargetRoute | null, tip: GameTipDefinition) => void;
 }
 
 interface ModuleStatusInput {
@@ -166,7 +167,7 @@ export default function DashboardModuleGrid({
   idleTrucks,
   activeDeliveries,
   warehouseFillRatio,
-  showLocationHint = false,
+  onPressTip,
 }: DashboardModuleGridProps) {
   const handlePress = (module: DashboardModule) => {
     if (module.key === 'warehouse') {
@@ -197,16 +198,7 @@ export default function DashboardModuleGrid({
     <View style={styles.section}>
       <View style={styles.sectionAtmosphere} pointerEvents="none" />
 
-      {showLocationHint ? (
-        <View style={styles.hintStrip}>
-          <View style={styles.hintIconWrap}>
-            <GameIcon name="city" size={14} color="#39A0FF" />
-          </View>
-          <Text style={styles.hintText} numberOfLines={2}>
-            {TRUCK_LOCATION_EDUCATION_MESSAGE}
-          </Text>
-        </View>
-      ) : null}
+      <SmartGameTipBanner onPressTip={onPressTip} />
 
       <View style={styles.grid}>{cards}</View>
     </View>
@@ -226,35 +218,6 @@ const styles = StyleSheet.create({
     bottom: -6,
     borderRadius: radius.xl,
     backgroundColor: 'rgba(40, 198, 232, 0.03)',
-  },
-  hintStrip: {
-    height: 46,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    marginBottom: spacing.sm,
-    backgroundColor: 'rgba(35, 136, 255, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(35, 136, 255, 0.28)',
-  },
-  hintIconWrap: {
-    width: 29,
-    height: 29,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(35, 136, 255, 0.12)',
-    flexShrink: 0,
-  },
-  hintText: {
-    flex: 1,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: '500',
-    color: '#A9B6CC',
   },
   grid: {
     flexDirection: 'row',

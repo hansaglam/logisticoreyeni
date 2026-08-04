@@ -42,6 +42,7 @@ export interface VehicleMarketplaceListing {
 
 export type VehicleMarketplaceFailureReason =
   | 'auth-required'
+  | 'username-required'
   | 'marketplace-state-missing'
   | 'network-error'
   | 'function-not-found'

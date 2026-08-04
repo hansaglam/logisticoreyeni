@@ -32,12 +32,14 @@ import {
   isLeaderboardEligible,
   type LeaderboardRankedEntry,
 } from '../services/leaderboardService';
+import { fetchUsernameProfile } from '../services/usernameService';
 import { leaderboardConfig } from '../config/leaderboard';
 import { getWeeklySeasonLabel } from '../utils/leaderboardSeason';
 import { colors, spacing, typography } from '../theme';
 
 interface LeaderboardScreenProps {
   onBack?: () => void;
+  onOpenAccountSettings?: () => void;
 }
 
 const LEADERBOARD_LOAD_ERROR_MESSAGE =
@@ -132,7 +134,7 @@ const LeaderboardRow = React.memo(function LeaderboardRow({
         <View style={styles.mainCol}>
           <View style={styles.nameRow}>
             <Text style={styles.companyName} numberOfLines={1} ellipsizeMode="tail">
-              {entry.companyName}
+              {entry.username?.trim() || entry.companyName}
             </Text>
             {isPlayer ? <StatusBadge label="Sen" variant="amber" size="sm" /> : null}
           </View>
@@ -155,7 +157,13 @@ function PlayerSummaryCard({
   rank,
   outsideTop,
 }: {
-  entry: { companyName: string; companyScore: number; level: number; reputation: number };
+  entry: {
+    username?: string;
+    companyName: string;
+    companyScore: number;
+    level: number;
+    reputation: number;
+  };
   rank: number | null;
   outsideTop: boolean;
 }) {
@@ -166,7 +174,7 @@ function PlayerSummaryCard({
         <Text style={styles.playerTitle}>Senin sıralaman</Text>
       </View>
       <Text style={styles.playerCompany} numberOfLines={1}>
-        {entry.companyName}
+        {entry.username?.trim() || entry.companyName}
       </Text>
       <View style={styles.playerStats}>
         <View style={styles.playerStat}>
@@ -214,7 +222,26 @@ function GuestPromptCard() {
   );
 }
 
-export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
+function UsernamePromptCard({ onOpenAccountSettings }: { onOpenAccountSettings?: () => void }) {
+  return (
+    <AppCard variant="soft" style={styles.guestCard} padded>
+      <View style={styles.guestHeader}>
+        <GameIcon name="account" size={20} color={colors.accentAmber} />
+        <Text style={styles.guestTitle}>Liderlik Tablosuna katılmak için kullanıcı adı oluştur</Text>
+      </View>
+      <Text style={styles.guestText}>
+        Görünen adın, haftalık sıralama ve Araç Pazarı’nda kullanılır.
+      </Text>
+      {onOpenAccountSettings ? (
+        <Text style={styles.usernameCta} onPress={onOpenAccountSettings} accessibilityRole="button">
+          Kullanıcı Adı Oluştur
+        </Text>
+      ) : null}
+    </AppCard>
+  );
+}
+
+export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: LeaderboardScreenProps) {
   const [account, setAccount] = useState<AccountStatus>(DEFAULT_ACCOUNT_STATUS);
   const [fetchResult, setFetchResult] = useState<Awaited<
     ReturnType<typeof fetchWeeklyLeaderboard>
@@ -222,6 +249,7 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [usernameReady, setUsernameReady] = useState<boolean | null>(null);
 
   const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);
   const eligible = isLeaderboardEligible();
@@ -270,6 +298,22 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
     const unsub = subscribeAuthState(refreshAccount);
     return unsub;
   }, [refreshAccount]);
+
+  useEffect(() => {
+    if (!eligible) {
+      setUsernameReady(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchUsernameProfile().then((result) => {
+      if (!cancelled) {
+        setUsernameReady(result.ok && result.profile.usernameSetupCompleted);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [eligible, account.uid]);
 
   useEffect(() => {
     void loadLeaderboard();
@@ -321,6 +365,9 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
         </AppCard>
 
         {!eligible ? <GuestPromptCard /> : null}
+        {eligible && usernameReady === false ? (
+          <UsernamePromptCard onOpenAccountSettings={onOpenAccountSettings} />
+        ) : null}
 
         {eligible && playerEntry ? (
           <PlayerSummaryCard
@@ -333,7 +380,7 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
         <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
       </View>
     ),
-    [seasonLabel, eligible, playerEntry, playerRank, entries.length],
+    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, entries.length],
   );
 
   if (isLoading && entries.length === 0) {
@@ -464,6 +511,13 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     lineHeight: 16,
+  },
+  usernameCta: {
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
+    color: colors.accentBlue,
+    fontSize: 13,
+    fontWeight: '800',
   },
   playerCard: {
     gap: spacing.sm,

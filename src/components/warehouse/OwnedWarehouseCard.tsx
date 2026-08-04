@@ -115,7 +115,7 @@ export default function OwnedWarehouseCard({
           </View>
           <View style={styles.metricCell}>
             <Text style={styles.metricLabel}>Gider</Text>
-            <Text style={[styles.metricValue, { color: warehouseVisual.accentRed }]} numberOfLines={1}>
+            <Text style={[styles.metricValue, { color: warehouseVisual.accentAmber }]} numberOfLines={1}>
               {formatMoney(card.dailyCost)}
             </Text>
           </View>
@@ -325,7 +325,7 @@ const styles = StyleSheet.create({
   },
   primaryBtn: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 44,
     borderRadius: 12,
     backgroundColor: warehouseVisual.accentBlue,
     flexDirection: 'row',
@@ -340,7 +340,7 @@ const styles = StyleSheet.create({
   },
   transferBtn: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 44,
     borderRadius: 12,
     backgroundColor: warehouseVisual.accentAmber,
     flexDirection: 'row',
@@ -354,8 +354,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   moreBtn: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: warehouseVisual.border,

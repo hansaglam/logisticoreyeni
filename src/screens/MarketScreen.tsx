@@ -32,7 +32,6 @@ import {
   MARKET_PRODUCT_CARD_HEIGHT_NARROW,
   MARKET_REFRESH_BG,
   MARKET_REFRESH_BORDER,
-  MARKET_SCROLL_BOTTOM_EXTRA,
   MARKET_SECTION_GAP,
   MARKET_SECTION_GAP_TIGHT,
   MARKET_SEGMENT_BG,
@@ -63,7 +62,8 @@ import {
   getPrimaryWorldEventLabel,
   getProductPriceEventMultiplier,
 } from '../simulation/worldEvents';
-import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
+import { resolveGlobalEconomyClientState } from '../services/globalEconomyClient';
+import { selectFuelPriceState } from '../simulation/fuelPriceQuote';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import {
   calculateStockRatio,
@@ -319,7 +319,7 @@ function MarketMetricTile({ label, value, icon, accentColor }: MarketMetricTileP
 }
 
 interface MarketMetricStripProps {
-  fuelPrice: number;
+  fuelPrice: number | null;
   currentTime: number;
   criticalCount: number;
   opportunityCount: number;
@@ -351,9 +351,15 @@ function MarketMetricStrip({
     <View style={styles.metricStrip}>
       <MarketMetricTile
         label="Yakıt Fiyatı"
-        value={formatUnitPrice(fuelPrice, '/L')}
+        value={fuelPrice == null ? '—' : formatUnitPrice(fuelPrice, '/L')}
         icon="fuel"
-        accentColor={isFuelExpensiveForDisplay(fuelPrice) ? colors.danger : colors.accentAmber}
+        accentColor={
+          fuelPrice == null
+            ? colors.textMuted
+            : isFuelExpensiveForDisplay(fuelPrice)
+              ? colors.danger
+              : colors.accentAmber
+        }
       />
       <MarketMetricTile
         label="Piyasa"
@@ -678,7 +684,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
           disabled={buyButtonDisabled}
         >
           <GameIcon name="cash" size={narrowScreen ? 12 : 13} color="#FFFFFF" />
-          <Text style={styles.productBuyBtnText} numberOfLines={1}>
+          <Text style={styles.productBuyBtnText} numberOfLines={2}>
             {buyButtonLabel}
           </Text>
         </Pressable>
@@ -862,14 +868,12 @@ interface MarketScreenProps {
 export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const { alert: showAlert } = useAppDialog();
   const { width: screenWidth } = useWindowDimensions();
-  const { tabBarHeight } = useTabBarLayout();
-  const marketScrollBottomPadding = tabBarHeight + MARKET_SCROLL_BOTTOM_EXTRA;
+  const { scrollBottomPadding: marketScrollBottomPadding } = useTabBarLayout();
   const productLayout = useMemo(() => getMarketProductColumnWidths(screenWidth), [screenWidth]);
-  const narrowScreen = screenWidth < 360;
+  const narrowScreen = screenWidth < 400;
   const productCardHeight = narrowScreen
     ? MARKET_PRODUCT_CARD_HEIGHT_NARROW
     : MARKET_PRODUCT_CARD_HEIGHT;
-  const player = useGameStore((state) => state.player);
   const playerMoney = useGameStore((state) => state.player?.money ?? 0);
   const playerWarehouses = useGameStore((state) => state.player?.warehouses ?? []);
   const cities = useGameStore((state) => state.cities) ?? [];
@@ -878,11 +882,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const globalSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
+  const globalSnapshotTrusted = useGameStore(
+    (state) => state.cachedGlobalEconomySnapshotTrusted === true,
+  );
   const marketSyncStatus = useGameStore((state) => state.globalMarketSyncStatus);
+  const marketErrorCode = useGameStore((state) => state.globalMarketErrorCode);
   const marketLastSyncedAtMs = useGameStore(
     (state) => state.globalMarketLastSyncedAtMs,
   );
-  const currentTime = useGameStore((state) => state.currentTime);
+  const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
 
   const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
   const openContractsForMarketOpportunity = useGameStore(
@@ -935,10 +943,35 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const activeWorldEvents = globalSnapshot?.activeEvents ?? [];
 
-  const fuelPrice = useMemo(
-    () => getSnapshotFuelPrice(globalSnapshot, globalEconomy),
-    [globalEconomy, globalSnapshot],
+  const marketClientState = useMemo(
+    () =>
+      resolveGlobalEconomyClientState({
+        snapshot: globalSnapshot,
+        trusted: globalSnapshotTrusted,
+        syncStatus: marketSyncStatus,
+        loadedAt: marketLastSyncedAtMs,
+        errorCode: marketErrorCode,
+      }),
+    [
+      globalSnapshot,
+      globalSnapshotTrusted,
+      marketErrorCode,
+      marketLastSyncedAtMs,
+      marketSyncStatus,
+    ],
   );
+  const fuelPriceState = useMemo(
+    () =>
+      selectFuelPriceState({
+        snapshot: marketClientState.snapshot,
+        trusted: globalSnapshotTrusted,
+        syncStatus: marketSyncStatus,
+        development: typeof __DEV__ !== 'undefined' && __DEV__,
+        lastSyncedAtMs: marketLastSyncedAtMs,
+      }),
+    [marketClientState.snapshot, globalSnapshotTrusted, marketLastSyncedAtMs, marketSyncStatus],
+  );
+  const fuelPrice = fuelPriceState.pricePerLiter;
 
   useEffect(() => {
     notifyMarketScreenOpened();
@@ -964,22 +997,22 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       setShowSuccessBanner(false);
       return;
     }
-    if (marketSyncStatus === 'error') {
+    if (marketClientState.source === 'unavailable') {
       setFetchUiStatus('error');
       setShowSuccessBanner(false);
       return;
     }
-    if (marketSyncStatus === 'offline-cache') {
+    if (marketClientState.source === 'cached') {
       setFetchUiStatus('stale');
       setShowSuccessBanner(false);
       return;
     }
-    if (marketSyncStatus === 'online') {
+    if (marketClientState.source === 'live') {
       setFetchUiStatus((prev) =>
         prev === 'error' || prev === 'stale' || prev === 'loading' ? 'idle' : prev,
       );
     }
-  }, [marketSyncStatus]);
+  }, [marketClientState.source, marketSyncStatus]);
 
   useEffect(() => {
     if (!showSuccessBanner) return;
@@ -1032,15 +1065,15 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   );
 
   const tradeOpportunities = useMemo(() => {
-    if (!player) return [];
+    if (activeTab !== 'opportunities') return [];
     return detectMarketTradeOpportunities({
-      player,
+      player: { money: playerMoney, warehouses: playerWarehouses },
       cities,
       products,
       currentTime,
       limit: 6,
     });
-  }, [player, cities, products, currentTime]);
+  }, [activeTab, cities, currentTime, playerMoney, playerWarehouses, products]);
 
   const availableContracts = useMemo(
     () => contracts.filter((contract) => contract.status === 'available'),
@@ -1131,8 +1164,8 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const showColdWarehouseSuggestion = useMemo(() => {
     if (!selectedCity || !tradeProduct) return false;
-    return !cityHasWarehouseType(player?.warehouses ?? [], selectedCity.id, 'cold');
-  }, [player?.warehouses, selectedCity, tradeProduct]);
+    return !cityHasWarehouseType(playerWarehouses, selectedCity.id, 'cold');
+  }, [playerWarehouses, selectedCity, tradeProduct]);
 
   const selectedCityTotalFreeCapacity = useMemo(
     () =>
@@ -1546,16 +1579,6 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     setStatusMessage('İşler ekranında ilgili sözleşmeler öne çıkarıldı.');
   };
 
-  if (!player) {
-    return (
-      <AppScreen>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
-        </View>
-      </AppScreen>
-    );
-  }
-
   if (cities.length === 0 || products.length === 0) {
     return (
       <AppScreen>
@@ -1603,7 +1626,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               <View style={styles.statusBannerRow}>
                 <GameIcon name="alert" size={14} color={colors.warning} />
                 <Text style={styles.statusBannerText}>
-                  Piyasa verilerine ulaşılamıyor
+                  Çevrimdışı piyasa verisi
                 </Text>
               </View>
               <Text style={styles.statusBannerSubtext}>
@@ -1661,21 +1684,27 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
         {activeTab === 'products' ? (
           <View style={styles.tabContent}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              nestedScrollEnabled
-              contentContainerStyle={styles.cityChipRow}
-            >
-              {cities.map((city) => (
-                <MarketCityChip
-                  key={city.id}
-                  label={city.name}
-                  selected={city.id === selectedCityId}
-                  onPress={() => setSelectedCityId(city.id)}
-                />
-              ))}
-            </ScrollView>
+            <View style={styles.cityScrollerRow}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                nestedScrollEnabled
+                style={styles.cityScroller}
+                contentContainerStyle={styles.cityChipRow}
+              >
+                {cities.map((city) => (
+                  <MarketCityChip
+                    key={city.id}
+                    label={city.name}
+                    selected={city.id === selectedCityId}
+                    onPress={() => setSelectedCityId(city.id)}
+                  />
+                ))}
+              </ScrollView>
+              <View style={styles.cityScrollCue} pointerEvents="none">
+                <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
+              </View>
+            </View>
 
             {MARKET_ALARMS_ENABLED ? <ActiveMarketAlertsSection
               alerts={activeMarketAlerts}
@@ -1883,7 +1912,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               )
             : undefined
         }
-        playerCash={player?.money ?? 0}
+        playerCash={playerMoney}
         onConfirm={handleConfirmTrade}
         onOpenWarehouses={handleOpenWarehouses}
         onClose={closeTradeModal}
@@ -2125,6 +2154,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 7,
     paddingVertical: 2,
+    paddingRight: 8,
+  },
+  cityScrollerRow: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  cityScroller: {
+    flex: 1,
+  },
+  cityScrollCue: {
+    width: 24,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: 1,
+    borderLeftColor: colors.divider,
   },
   cityChip: {
     height: 34,
@@ -2241,9 +2288,12 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   productBuyBtnText: {
-    fontSize: 10.5,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: '800',
     color: '#FFFFFF',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   productSellBtnText: {
     fontSize: 9.5,

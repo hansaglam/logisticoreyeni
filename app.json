@@ -2,13 +2,13 @@
   "expo": {
     "name": "LogistiCore",
     "slug": "logisticore",
-    "version": "1.0.6",
+    "version": "1.0.9",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "android": {
       "package": "com.ethemsincar.logisticore",
-      "versionCode": 7
+      "versionCode": 10
     },
     "ios": {
       "bundleIdentifier": "com.ethemsincar.logisticore"

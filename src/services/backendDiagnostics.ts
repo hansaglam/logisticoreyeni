@@ -5,6 +5,12 @@
 
 import Constants from 'expo-constants';
 
+import {
+  getAdsDiagnosticsSnapshot,
+  subscribeAdsDiagnostics,
+  type AdsDiagnosticsSnapshot,
+} from './adProvider';
+
 export type BackendDiagStatus = 'idle' | 'ok' | 'failed' | 'skipped' | 'pending';
 
 export type BackendDiagEntry = {
@@ -12,6 +18,16 @@ export type BackendDiagEntry = {
   code?: string | null;
   detail?: string | null;
   updatedAtMs?: number;
+};
+
+export type GlobalEconomyDiagnostics = {
+  documentExists: boolean | null;
+  validationPassed: boolean | null;
+  source: 'live' | 'cached' | 'unavailable';
+  snapshotAgeMs: number | null;
+  fuelPriceFinite: boolean | null;
+  cacheAvailable: boolean;
+  cacheAgeMs: number | null;
 };
 
 export type BackendDiagnosticsSnapshot = {
@@ -23,13 +39,19 @@ export type BackendDiagnosticsSnapshot = {
   authReady: boolean;
   anonymousSignIn: BackendDiagEntry;
   globalEconomy: BackendDiagEntry;
+  globalEconomyDetails: GlobalEconomyDiagnostics;
   googleSignIn: BackendDiagEntry;
   marketplaceCallable: BackendDiagEntry;
+  ads: AdsDiagnosticsSnapshot;
 };
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
+
+function notify(): void {
+  for (const listener of [...listeners]) listener();
+}
 
 let snapshot: BackendDiagnosticsSnapshot = {
   projectId: 'logisticore-53ab4',
@@ -40,13 +62,27 @@ let snapshot: BackendDiagnosticsSnapshot = {
   authReady: false,
   anonymousSignIn: { status: 'idle' },
   globalEconomy: { status: 'idle' },
+  globalEconomyDetails: {
+    documentExists: null,
+    validationPassed: null,
+    source: 'unavailable',
+    snapshotAgeMs: null,
+    fuelPriceFinite: null,
+    cacheAvailable: false,
+    cacheAgeMs: null,
+  },
   googleSignIn: { status: 'idle' },
   marketplaceCallable: { status: 'idle' },
+  ads: getAdsDiagnosticsSnapshot(),
 };
 
-function notify(): void {
-  for (const listener of [...listeners]) listener();
-}
+subscribeAdsDiagnostics(() => {
+  snapshot = {
+    ...snapshot,
+    ads: getAdsDiagnosticsSnapshot(),
+  };
+  notify();
+});
 
 function touch(
   entry: BackendDiagEntry,
@@ -113,6 +149,7 @@ export function recordGlobalEconomyResult(input: {
   success: boolean;
   code?: string | null;
   detail?: string | null;
+  diagnostics?: Partial<GlobalEconomyDiagnostics>;
 }): void {
   snapshot = {
     ...snapshot,
@@ -121,6 +158,10 @@ export function recordGlobalEconomyResult(input: {
       code: input.code ?? null,
       detail: input.detail ?? null,
     }),
+    globalEconomyDetails: {
+      ...snapshot.globalEconomyDetails,
+      ...(input.diagnostics ?? {}),
+    },
   };
   notify();
 }
@@ -174,13 +215,13 @@ export function resolveCurrentUserKind(user: {
 }
 
 export function isBackendDiagnosticsEnabled(): boolean {
+  // Production store build: tamamen gizli.
+  // Internal/dev: yalnız açık flag veya __DEV__.
   if (typeof __DEV__ !== 'undefined' && __DEV__) return true;
   if (process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true') return true;
   const extra = Constants.expoConfig?.extra as
     | { features?: Record<string, unknown> }
     | undefined;
   if (extra?.features?.backendDiagnosticsEnabled === 'true') return true;
-  if (extra?.features?.vehicleMarketplaceEnabled === 'true') return true;
-  if (process.env.EXPO_PUBLIC_VEHICLE_MARKETPLACE_ENABLED === 'true') return true;
   return false;
 }

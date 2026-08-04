@@ -1284,21 +1284,23 @@ export function generateContracts(
 
   const selected: Contract[] = [];
   const batchDedupeKeys = new Set(existingDedupeKeys);
+  const selectedRouteKeys = new Set<string>();
+  const selectedProductIds = new Set<string>();
   const maxRiskyNegativeContracts = Math.floor(
     maxNewContracts * contractGenerationBalance.maxRiskyNegativeShare,
   );
   let selectedRiskyNegativeContracts = 0;
 
-  for (const candidate of candidates) {
-    if (selected.length >= maxNewContracts) break;
+  const trySelectCandidate = (candidate: ContractCandidate): boolean => {
+    if (selected.length >= maxNewContracts) return false;
     const key = getContractDedupeKey(candidate.contract);
-    if (batchDedupeKeys.has(key)) continue;
+    if (batchDedupeKeys.has(key)) return false;
     const candidateRoute = getRouteBetweenCities(
       routes,
       candidate.contract.originCityId,
       candidate.contract.destinationCityId,
     );
-    if (!candidateRoute) continue;
+    if (!candidateRoute) return false;
     const candidateViability = evaluateContractViability({
       contract: candidate.contract,
       route: candidateRoute,
@@ -1315,11 +1317,37 @@ export function generateContracts(
       isRiskyNegative &&
       selectedRiskyNegativeContracts >= maxRiskyNegativeContracts
     ) {
-      continue;
+      return false;
     }
     batchDedupeKeys.add(key);
     selected.push(candidate.contract);
+    selectedRouteKeys.add(`${candidate.contract.originCityId}-${candidate.contract.destinationCityId}`);
+    selectedProductIds.add(candidate.contract.productId);
     if (isRiskyNegative) selectedRiskyNegativeContracts += 1;
+    return true;
+  };
+
+  // En yüksek skorlu adaylar korunur; ilk turda aynı rotanın veya ürünün tüm
+  // havuzu kaplamasına izin vermeyerek kartlarda gerçek pazar çeşitliliği sağlanır.
+  for (const candidate of candidates) {
+    if (selected.length >= maxNewContracts) break;
+    const routeKey = `${candidate.contract.originCityId}-${candidate.contract.destinationCityId}`;
+    if (selectedRouteKeys.has(routeKey) || selectedProductIds.has(candidate.contract.productId)) {
+      continue;
+    }
+    trySelectCandidate(candidate);
+  }
+
+  for (const candidate of candidates) {
+    if (selected.length >= maxNewContracts) break;
+    const routeKey = `${candidate.contract.originCityId}-${candidate.contract.destinationCityId}`;
+    if (selectedRouteKeys.has(routeKey)) continue;
+    trySelectCandidate(candidate);
+  }
+
+  for (const candidate of candidates) {
+    if (selected.length >= maxNewContracts) break;
+    trySelectCandidate(candidate);
   }
 
   return selected;

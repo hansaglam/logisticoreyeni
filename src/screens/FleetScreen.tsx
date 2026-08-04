@@ -15,7 +15,6 @@ import OwnedTrailerCard from '../components/fleet/OwnedTrailerCard';
 import {
   FLEET_HEADER_HEIGHT,
   FLEET_METRIC_HEIGHT,
-  FLEET_SCROLL_BOTTOM_EXTRA,
   FLEET_SECTION_GAP,
   FLEET_SEGMENT_BG,
   FLEET_SEGMENT_BORDER,
@@ -197,9 +196,12 @@ export default function FleetScreen() {
   const { showDialog, alert: showAlert } = useAppDialog();
   const { width: screenWidth } = useWindowDimensions();
   const driverHireLayout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
-  const { tabBarHeight } = useTabBarLayout();
-  const fleetScrollBottomPadding = tabBarHeight + FLEET_SCROLL_BOTTOM_EXTRA;
-  const player = useGameStore((state) => state.player);
+  const { scrollBottomPadding: fleetScrollBottomPadding } = useTabBarLayout();
+  const trucks = useGameStore((state) => state.player.trucks ?? []);
+  const trailers = useGameStore((state) => state.player.trailers ?? []);
+  const drivers = useGameStore((state) => state.player.drivers ?? []);
+  const playerMoney = useGameStore((state) => state.player.money ?? 0);
+  const homeCityId = useGameStore((state) => state.player.homeCityId);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const monetization = useGameStore((state) => state.monetization);
@@ -242,11 +244,6 @@ export default function FleetScreen() {
     const timeout = setTimeout(() => setStatusMessage(null), STATUS_MESSAGE_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [statusMessage]);
-
-  const trucks = useMemo(() => player?.trucks ?? [], [player?.trucks]);
-  const trailers = useMemo(() => player?.trailers ?? [], [player?.trailers]);
-  const drivers = useMemo(() => player?.drivers ?? [], [player?.drivers]);
-  const playerMoney = player?.money ?? 0;
 
   const fleetSummary = useMemo(
     () => ({
@@ -341,12 +338,12 @@ export default function FleetScreen() {
           truck.status === 'idle' &&
           (truck.ownershipType ?? 'owned') === 'owned' &&
           !truck.leaseExpired &&
-          resolveTruckCityId(truck, player?.homeCityId) === trailer.city &&
+          resolveTruckCityId(truck, homeCityId) === trailer.city &&
           !trailers.some(
             (item) => item.attachedTruckId === truck.id && item.id !== trailer.id,
           ),
       ),
-    [trucks, trailers, player?.homeCityId],
+    [trucks, trailers, homeCityId],
   );
 
   const handleAttachTrailer = useCallback(
@@ -666,7 +663,7 @@ export default function FleetScreen() {
     if (activeDelivery && ACTIVE_DELIVERY_STATUSES.includes(activeDelivery.status)) {
       routeText = `${getCityName(activeDelivery.originCityId)} → ${getCityName(activeDelivery.destinationCityId)}`;
     } else if (assignedTruck) {
-      routeText = getCityName(resolveTruckCityId(assignedTruck, player?.homeCityId));
+      routeText = getCityName(resolveTruckCityId(assignedTruck, homeCityId));
     }
 
     showDialog({
@@ -700,7 +697,7 @@ export default function FleetScreen() {
     deliveryByDriverId,
     fleetManagementState,
     handleFireDriver,
-    player?.homeCityId,
+    homeCityId,
     playerMoney,
     showAlert,
     showDialog,
@@ -715,16 +712,6 @@ export default function FleetScreen() {
     setTransferTargetCityId(targetCityId);
     setTransferModalTruck(truck);
   }, [drivers]);
-
-  if (!player) {
-    return (
-      <AppScreen>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Oyun başlatılıyor...</Text>
-        </View>
-      </AppScreen>
-    );
-  }
 
   if (managingUpgradesTruckId) {
     return (
@@ -800,7 +787,7 @@ export default function FleetScreen() {
                   delivery={deliveryByTruckId.get(truck.id)}
                   transfer={transferByTruckId.get(truck.id)}
                   drivers={drivers}
-                  homeCityId={player.homeCityId}
+                  homeCityId={homeCityId}
                   monetization={monetization}
                   sellCheck={sellCheckByTruckId.get(truck.id) ?? { canSell: false }}
                   onRepair={handleRepair}
@@ -897,7 +884,7 @@ export default function FleetScreen() {
                 key={driver.id}
                 driver={driver}
                 trucks={trucks}
-                homeCityId={player.homeCityId}
+                homeCityId={homeCityId}
                 activeDelivery={deliveryByDriverId.get(driver.id)}
                 onAssign={handleAssignDriver}
                 onTraining={handleDriverTraining}

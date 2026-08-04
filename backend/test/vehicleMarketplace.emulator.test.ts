@@ -75,6 +75,15 @@ async function seedState(
     soldTruckTombstones: [],
     ...overrides,
   };
+  await adminFirestore.doc(`users/${uid}`).set(
+    {
+      uid,
+      username: `seller_${uid.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 10) || 'user'}`,
+      usernameNormalized: `seller_${uid.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 10) || 'user'}`.toLowerCase(),
+      usernameSetupCompleted: true,
+    },
+    { merge: true },
+  );
   await adminFirestore.doc(`users/${uid}/marketplaceState/current`).set(state);
   return state;
 }
@@ -190,6 +199,12 @@ test('valid listing locks vehicle, charges listing fee once and duplicate is ide
 
 test('new user marketplace state is initialized once from trusted cloud save', async () => {
   const uid = 'new-user';
+  await adminFirestore.doc(`users/${uid}`).set({
+    uid,
+    username: 'new_user_seller',
+    usernameNormalized: 'new_user_seller',
+    usernameSetupCompleted: true,
+  });
   await adminFirestore.doc(`users/${uid}/saves/current`).set({
     saveVersion: 3,
     gameState: {

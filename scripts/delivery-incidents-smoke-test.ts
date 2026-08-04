@@ -154,12 +154,10 @@ console.log('\nResolve effects');
   const player = basePlayer();
   const contract = baseContract();
   const triggerProgress = 0.45;
-  const incident = generateDeliveryIncident(
+  const incident = createDebugDeliveryIncident(
     baseDelivery({ progress: triggerProgress }),
-    player,
-    'delivery_test_1:contract_test_1:5',
     150,
-    triggerProgress,
+    'traffic',
   );
   const delivery = baseDelivery({
     progress: triggerProgress,

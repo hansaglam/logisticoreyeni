@@ -2,6 +2,7 @@
  * Aktif teslimat ödüllü reklam hızlandırma — eligibility, idempotency, simulation.
  */
 
+import { AD_PRIVACY_ACTION_CTA } from '../domain/adPrivacyState';
 import {
   DELIVERY_AD_BOOST_COOLDOWN_MS,
   DELIVERY_AD_BOOST_ENABLED,
@@ -10,14 +11,20 @@ import {
   DELIVERY_AD_BOOST_MAX_USES,
   DELIVERY_AD_BOOST_MIN_REMAINING_MS,
   DELIVERY_AD_BOOST_REDUCTION_RATIO,
+  DELIVERY_BOOST_MIN_REMAINING_SECONDS,
 } from '../config/deliveryAdBoost';
 import { GAME_LOOP_TICK_MS, getMsPerGameHour, realMsToGameHours } from '../config/balance';
 import type { Delivery, DeliveryAdBoostState, Truck } from '../types/game';
+import { normalizeJobProgress } from '../utils/deliveryMetrics';
 import {
   isDeliveryFuelProgressComplete,
   isDeliveryProgressComplete,
   updateDeliveryProgressWithFuel,
 } from './delivery';
+import {
+  getDeliveryRemainingMsFromSnapshot,
+  getDeliveryRemainingGameHours,
+} from './deliveryTiming';
 
 declare const __DEV__: boolean | undefined;
 
@@ -147,19 +154,27 @@ export function getDeliveryOriginalDurationMs(
 export function getDeliveryRemainingMs(
   delivery: Delivery,
   gameSpeed = 1,
+  currentGameTime?: number,
 ): number {
-  const progress = Math.max(0, Math.min(1, Number(delivery.progress) || 0));
-  const remainingGameHours = Math.max(0, (1 - progress) * Math.max(delivery.travelHours, 0.1));
-  return remainingGameHours * getMsPerGameHour(gameSpeed);
+  const remainingMs = getDeliveryRemainingMsFromSnapshot(delivery, gameSpeed, currentGameTime);
+  if (remainingMs == null || !Number.isFinite(remainingMs)) {
+    return 0;
+  }
+  return Math.max(0, remainingMs);
 }
 
 export function calculateDeliveryBoostReductionMs(params: {
   delivery: Delivery;
   gameSpeed?: number;
+  currentGameTime?: number;
 }): number {
   const gameSpeed = params.gameSpeed ?? 1;
   const boost = normalizeDeliveryAdBoostState(params.delivery.deliveryAdBoost);
-  const remainingMs = getDeliveryRemainingMs(params.delivery, gameSpeed);
+  const remainingMs = getDeliveryRemainingMs(
+    params.delivery,
+    gameSpeed,
+    params.currentGameTime,
+  );
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
     return 0;
   }
@@ -178,17 +193,23 @@ export function getDeliveryAdBoostEligibility(params: {
   truck?: Truck | null;
   nowMs?: number;
   gameSpeed?: number;
+  currentGameTime?: number;
   adState?: DeliveryAdBoostAdState;
 }): DeliveryAdBoostEligibilityResult {
   const nowMs = params.nowMs ?? Date.now();
   const gameSpeed = params.gameSpeed ?? 1;
   const adState = params.adState ?? {};
   const boost = normalizeDeliveryAdBoostState(params.delivery.deliveryAdBoost);
-  const remainingMs = getDeliveryRemainingMs(params.delivery, gameSpeed);
+  const remainingMs = getDeliveryRemainingMs(
+    params.delivery,
+    gameSpeed,
+    params.currentGameTime,
+  );
   const usesRemaining = Math.max(0, DELIVERY_AD_BOOST_MAX_USES - boost.usedCount);
   const estimatedReductionMs = calculateDeliveryBoostReductionMs({
     delivery: params.delivery,
     gameSpeed,
+    currentGameTime: params.currentGameTime,
   });
 
   const ineligible = (
@@ -211,8 +232,24 @@ export function getDeliveryAdBoostEligibility(params: {
     return ineligible('delivery-not-active', 'Aktif teslimat yok.');
   }
 
-  if (params.delivery.progress >= 1 || isDeliveryProgressComplete(params.delivery.progress)) {
+  const progress = normalizeJobProgress(params.delivery.progress);
+  if (isDeliveryProgressComplete(progress)) {
     return ineligible('delivery-not-active', 'Teslimat tamamlanmak üzere.');
+  }
+
+  if (remainingMs <= 0 && getDeliveryRemainingGameHours(params.delivery, params.currentGameTime) == null) {
+    return ineligible('invalid-state', 'Teslimat bilgisi hazırlanıyor.');
+  }
+
+  const remainingGameHours = getDeliveryRemainingGameHours(params.delivery, params.currentGameTime);
+  if (
+    remainingGameHours != null &&
+    remainingGameHours * 3600 <= DELIVERY_BOOST_MIN_REMAINING_SECONDS
+  ) {
+    return ineligible(
+      'remaining-time-too-short',
+      'Teslimat tamamlanmak üzere olduğu için hızlandırma artık kullanılamaz.',
+    );
   }
 
   if (hasPendingDeliveryIncident(params.delivery)) {
@@ -232,10 +269,6 @@ export function getDeliveryAdBoostEligibility(params: {
 
   if (boost.usedCount >= DELIVERY_AD_BOOST_MAX_USES) {
     return ineligible('limit-reached', 'Bu teslimat için hızlandırma sınırına ulaştın.');
-  }
-
-  if (remainingMs < DELIVERY_AD_BOOST_MIN_REMAINING_MS) {
-    return ineligible('remaining-time-too-short', 'Kalan süre hızlandırma için çok kısa.');
   }
 
   const originalDurationMs = getDeliveryOriginalDurationMs(params.delivery, gameSpeed);
@@ -262,7 +295,7 @@ export function getDeliveryAdBoostEligibility(params: {
   }
 
   if (adState.consentReady === false) {
-    return ineligible('consent-not-ready', 'Gizlilik tercihi gerekli.');
+    return ineligible('consent-not-ready', AD_PRIVACY_ACTION_CTA);
   }
 
   if (adState.adLoaded === false) {
@@ -338,6 +371,7 @@ export function applyDeliveryRewardedBoost(
     truck: params.truck,
     nowMs: earnedAt,
     gameSpeed,
+    currentGameTime: params.currentGameTime,
   });
 
   if (!eligibility.eligible) {
@@ -430,7 +464,7 @@ export function eligibilityReasonToUserMessage(
     case 'ad-not-ready':
       return 'Reklam hazırlanıyor…';
     case 'consent-not-ready':
-      return 'Gizlilik tercihi gerekli.';
+      return AD_PRIVACY_ACTION_CTA;
     case 'limit-reached':
       return 'Bu teslimat için hızlandırma sınırına ulaştın.';
     case 'incident-pending':
@@ -438,7 +472,7 @@ export function eligibilityReasonToUserMessage(
     case 'cooldown':
       return 'Kısa süre sonra tekrar deneyebilirsin.';
     case 'remaining-time-too-short':
-      return 'Kalan süre hızlandırma için çok kısa.';
+      return 'Teslimat tamamlanmak üzere olduğu için hızlandırma artık kullanılamaz.';
     default:
       return 'Hızlandırma şu an kullanılamıyor.';
   }

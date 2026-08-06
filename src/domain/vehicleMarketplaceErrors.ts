@@ -1,3 +1,7 @@
+import {
+  isMarketplaceTimeoutError,
+  mapFirebaseErrorToMarketplaceKind,
+} from './marketplaceErrorModel';
 import type { VehicleMarketplaceFailureReason } from '../types/vehicleMarketplace';
 
 function record(value: unknown): Record<string, unknown> {
@@ -27,21 +31,31 @@ export function getMarketplaceBackendReason(
 export function mapMarketplaceCallableError(
   error: unknown,
 ): VehicleMarketplaceFailureReason {
+  if (isMarketplaceTimeoutError(error)) return 'timeout';
   const backendReason = getMarketplaceBackendReason(error);
   if (backendReason) return backendReason;
-  switch (getMarketplaceFirebaseErrorCode(error)) {
-    case 'functions/unauthenticated':
+
+  const kind = mapFirebaseErrorToMarketplaceKind(error);
+  switch (kind) {
+    case 'unauthenticated':
       return 'auth-required';
-    case 'functions/permission-denied':
+    case 'permission-denied':
       return 'permission-denied';
-    case 'functions/not-found':
+    case 'not-found':
       return 'function-not-found';
-    case 'functions/deadline-exceeded':
-    case 'functions/cancelled':
+    case 'timeout':
+      return 'timeout';
+    case 'offline':
       return 'network-error';
-    case 'functions/failed-precondition':
+    case 'rate-limited':
+      return 'rate-limited';
+    case 'conflict':
       return 'save-conflict';
-    case 'functions/unavailable':
+    case 'invalid-response':
+      return 'invalid-request';
+    case 'index-building':
+    case 'server-error':
+    case 'unknown':
       return 'service-unavailable';
     default:
       return 'service-unavailable';

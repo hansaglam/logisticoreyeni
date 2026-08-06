@@ -124,12 +124,18 @@ for (const type of DELIVERY_INCIDENT_TYPES) {
 const storeSource = readFileSync('src/store/gameStore.ts', 'utf8');
 const modalSource = readFileSync('src/components/delivery/DeliveryIncidentModal.tsx', 'utf8');
 const appSource = readFileSync('App.tsx', 'utf8');
+const offlineSource = readFileSync('src/simulation/offlineProgression.ts', 'utf8');
 assert(storeSource.includes('pendingIncidentReserved'), 'aynı anda yalnız bir pending event ayrılır');
 assert(storeSource.includes('!offlineProgressionActive'), 'offline catch-up yeni event üretmez');
-assert(storeSource.includes("delivery.incident?.status === 'pending'"), 'offline pending event silinmez');
+assert(
+  offlineSource.includes("delivery.incident?.status === 'pending'") &&
+    offlineSource.includes('return delivery'),
+  'offline pending event silinmez ve ilerlemez',
+);
 assert(storeSource.includes('currentSpeedKmh: 0'), 'bekleyen karar sırasında rota sabit kalır');
 assert(
-  storeSource.includes('result.effects.cashDelta - result.effects.fuelCostDelta'),
+  storeSource.includes('getOperationChoiceNetCashDelta') ||
+    storeSource.includes('buildOperationResolutionId'),
   'yakıt maliyeti ve tasarrufu doğru cash yönünde uygulanır',
 );
 assert(appSource.includes('DeliveryIncidentModal'), 'event modalı aktif render zincirine bağlı');

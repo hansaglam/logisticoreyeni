@@ -16,6 +16,10 @@ export const DELIVERY_AD_BOOST_MAX_TOTAL_RATIO = 0.5;
 /** Kalan süre bu değerin altındaysa hızlandırma kapalı (gerçek ms). */
 export const DELIVERY_AD_BOOST_MIN_REMAINING_MS = 5 * 60 * 1000;
 
+/** Canonical minimum kalan süre (saniye). */
+export const DELIVERY_BOOST_MIN_REMAINING_SECONDS =
+  DELIVERY_AD_BOOST_MIN_REMAINING_MS / 1000;
+
 /** Ardışık hızlandırma reklamları arası minimum bekleme (gerçek ms). */
 export const DELIVERY_AD_BOOST_COOLDOWN_MS = 30 * 1000;
 

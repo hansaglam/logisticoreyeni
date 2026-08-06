@@ -8,10 +8,13 @@ import {
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
 } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import TradeProductModal from '../components/TradeProductModal';
 import WarehouseStockTransferModal from '../components/WarehouseStockTransferModal';
 import {
@@ -22,7 +25,6 @@ import {
   WarehouseStrategyTips,
   WarehouseTransfersSection,
 } from '../components/warehouse';
-import { logWarehouseLayout } from '../components/warehouse/warehouseLayoutDebug';
 import {
   AppScreen,
   EmptyState,
@@ -48,7 +50,6 @@ const GUIDE_MESSAGE =
   'Transfer için kaynak şehirde boş kamyon, uyumlu dorse ve müsait şoför gerekir.';
 
 export default function WarehouseScreen() {
-  const { width } = useWindowDimensions();
   const { scrollBottomPadding } = useTabBarLayout();
   const { alert: showAlert, showDialog } = useAppDialog();
 
@@ -75,6 +76,7 @@ export default function WarehouseScreen() {
   const [transferModalVisible, setTransferModalVisible] = useState(false);
   const [transferWarehouse, setTransferWarehouse] = useState<Warehouse | null>(null);
   const [transferProductId, setTransferProductId] = useState<ProductId | null>(null);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const transfersOffsetRef = useRef(0);
@@ -309,29 +311,37 @@ export default function WarehouseScreen() {
   }
 
   const limitLabel = `${viewModel.limits.currentCount} / ${viewModel.limits.maxCount} depo`;
+  const hasWarehouses = (player.warehouses ?? []).length > 0;
+
+  const warehouseTutorial = useScreenAppTutorial({
+    tutorialId: 'warehouses',
+    layoutReady,
+    blockingModals: tradeModalVisible || transferModalVisible,
+    stepOptions: { hasWarehouses },
+    scrollRef,
+  });
 
   return (
-    <AppScreen
-      scroll
-      scrollRef={scrollRef}
-      embedded
-      scrollBottomPadding={scrollBottomPadding}
-    >
-      <View
-        style={styles.header}
-        onLayout={(event) => {
-          logWarehouseLayout({
-            width,
-            headerHeight: Math.round(event.nativeEvent.layout.height),
-          });
-        }}
+    <View style={styles.screenRoot}>
+      <AppScreen
+        scroll
+        scrollRef={scrollRef}
+        embedded
+        scrollBottomPadding={scrollBottomPadding}
+        onScroll={warehouseTutorial.handleScroll}
+        onScrollEndDrag={warehouseTutorial.handleScrollEnd}
+        onMomentumScrollEnd={warehouseTutorial.handleScrollEnd}
+        scrollEventThrottle={16}
       >
-        <View style={styles.headerText}>
+        <View onLayout={() => setLayoutReady(true)}>
+      <View style={styles.header}>
+        <AppTutorialTarget tutorialId="warehouses" targetId="warehouse-header" style={styles.headerText}>
           <Text style={styles.pageTitle}>Depolar</Text>
           <Text style={styles.pageSubtitle} numberOfLines={1}>
             Stoklarını ve şehirler arası ürün akışını yönet
           </Text>
-        </View>
+        </AppTutorialTarget>
+        <AppTutorialHelpButton {...warehouseTutorial.helpButtonProps} />
         <IconButton
           icon="plus"
           onPress={() => scrollTo(opportunitiesOffsetRef.current)}
@@ -356,25 +366,28 @@ export default function WarehouseScreen() {
         onViewTransfers={() => scrollTo(transfersOffsetRef.current)}
       />
 
-      <WarehouseInfoBanner onPress={handleShowGuide} />
+      <AppTutorialTarget tutorialId="warehouses" targetId="special-products">
+        <WarehouseInfoBanner onPress={handleShowGuide} />
+      </AppTutorialTarget>
 
-      {/* Aktif transfer varken de hemen Depolarım altında kalır */}
-      <OwnedWarehousesSection
-        warehouses={viewModel.warehouses}
-        limitLabel={limitLabel}
-        expandedWarehouseId={expandedWarehouseId}
-        onToggleWarehouse={(id) =>
-          setExpandedWarehouseId((current) => (current === id ? null : id))
-        }
-        onManageStock={handleManageStock}
-        onTransfer={handleTransferFromWarehouse}
-        onUpgrade={handleUpgrade}
-        onMore={handleWarehouseMore}
-        onGoToMarket={handleGoToMarket}
-        onSellStock={handleSellStock}
-        onTransferStock={handleTransferStock}
-        onOpenNewWarehouse={() => scrollTo(opportunitiesOffsetRef.current)}
-      />
+      <AppTutorialTarget tutorialId="warehouses" targetId="stock-management">
+        <OwnedWarehousesSection
+          warehouses={viewModel.warehouses}
+          limitLabel={limitLabel}
+          expandedWarehouseId={expandedWarehouseId}
+          onToggleWarehouse={(id) =>
+            setExpandedWarehouseId((current) => (current === id ? null : id))
+          }
+          onManageStock={handleManageStock}
+          onTransfer={handleTransferFromWarehouse}
+          onUpgrade={handleUpgrade}
+          onMore={handleWarehouseMore}
+          onGoToMarket={handleGoToMarket}
+          onSellStock={handleSellStock}
+          onTransferStock={handleTransferStock}
+          onOpenNewWarehouse={() => scrollTo(opportunitiesOffsetRef.current)}
+        />
+      </AppTutorialTarget>
 
       <WarehouseTransfersSection
         activeTransfers={viewModel.activeTransfers}
@@ -439,11 +452,17 @@ export default function WarehouseScreen() {
         onStarted={(message) => setStatusMessage(message)}
         onError={(message) => showAlert('Transfer başlatılamadı', message)}
       />
-    </AppScreen>
+        </View>
+      </AppScreen>
+      <AppTutorialOverlay {...warehouseTutorial.overlayProps} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',

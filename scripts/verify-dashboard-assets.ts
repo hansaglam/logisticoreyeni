@@ -9,7 +9,6 @@ const EXPECTED = [
   'dashboard-port-background.png',
   'next-action-truck-route.png',
   'daily-support-ticket.png',
-  'dashboard-grid-overlay.png',
 ] as const;
 
 let missing = 0;

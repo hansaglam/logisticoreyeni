@@ -457,20 +457,19 @@ export function applyOfflineDeliveries(
       return delivery;
     }
 
+    // Bekleyen operasyon kararı — offline catch-up ilerletmez ve silmez.
+    if (
+      delivery.incident?.status === 'pending' &&
+      delivery.incidentResolved !== true
+    ) {
+      return delivery;
+    }
+
     const beforeProgress = delivery.progress ?? 0;
     let updatedDelivery = updateDeliveryProgress(delivery, elapsedGameHours);
 
     if ((updatedDelivery.progress ?? 0) > beforeProgress) {
       progressedCount += 1;
-    }
-
-    if (updatedDelivery.incident?.status === 'pending') {
-      updatedDelivery = {
-        ...updatedDelivery,
-        incident: undefined,
-        incidentGenerated: true,
-        incidentResolved: true,
-      };
     }
 
     if (isDeliveryProgressComplete(updatedDelivery.progress)) {

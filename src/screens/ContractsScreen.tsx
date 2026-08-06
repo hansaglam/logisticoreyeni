@@ -57,6 +57,10 @@ import {
   isRouteContractFilter,
 } from '../utils/contractSorting';
 import { useGameStore } from '../store/gameStore';
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
@@ -771,6 +775,7 @@ export default function ContractsScreen() {
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
   const [quickSheetContract, setQuickSheetContract] = useState<Contract | null>(null);
   const [quickSheetVisible, setQuickSheetVisible] = useState(false);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   useEffect(() => {
     notifyContractsScreenOpened();
@@ -822,6 +827,13 @@ export default function ContractsScreen() {
     () => selectAvailableContractsForUi(contracts),
     [contracts],
   );
+
+  const contractsTutorial = useScreenAppTutorial({
+    tutorialId: 'contracts',
+    layoutReady,
+    blockingModals: assignmentModalVisible || quickSheetVisible,
+    stepOptions: { hasContracts: availableContracts.length > 0 },
+  });
 
   useEffect(() => {
     if (typeof __DEV__ === 'undefined' || !__DEV__) {
@@ -1204,18 +1216,22 @@ export default function ContractsScreen() {
         }
 
         return (
-          <TutorialTarget
-            id="contract-first-card"
-            onTutorialPress={() => openQuickSheet(item.contract)}
-            scrollIntoView={scrollTutorialContractIntoView}
-          >
-            {card}
-          </TutorialTarget>
+          <AppTutorialTarget tutorialId="contracts" targetId="payment-risk">
+            <AppTutorialTarget tutorialId="contracts" targetId="assignment">
+              <TutorialTarget
+                id="contract-first-card"
+                onTutorialPress={() => openQuickSheet(item.contract)}
+                scrollIntoView={scrollTutorialContractIntoView}
+              >
+                {card}
+              </TutorialTarget>
+            </AppTutorialTarget>
+          </AppTutorialTarget>
         );
       }
 
       if (item.type === 'active') {
-        return (
+        const deliveryCard = (
           <ActiveDeliveryCard
             delivery={item.delivery}
             trucks={player.trucks ?? []}
@@ -1223,6 +1239,14 @@ export default function ContractsScreen() {
             onBoostSuccess={handleDeliveryBoostSuccess}
           />
         );
+        if (runningDeliveries[0]?.id === item.delivery.id) {
+          return (
+            <AppTutorialTarget tutorialId="contracts" targetId="active-delivery">
+              {deliveryCard}
+            </AppTutorialTarget>
+          );
+        }
+        return deliveryCard;
       }
 
       const linkedDelivery = findDeliveryForContract(item.contract.id, activeDeliveries);
@@ -1244,6 +1268,7 @@ export default function ContractsScreen() {
       completedPreviewById,
       openQuickSheet,
       handleDeliveryBoostSuccess,
+      runningDeliveries,
     ],
   );
 
@@ -1350,10 +1375,17 @@ export default function ContractsScreen() {
 
   return (
     <View style={styles.screenRoot}>
-      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
+      <View
+        style={[styles.safeArea, { paddingTop: screenTopPadding }]}
+        onLayout={() => setLayoutReady(true)}
+      >
         <View style={styles.header}>
-          <View style={styles.headerSideSlot} />
-          <Text style={styles.headerTitle}>Sözleşmeler</Text>
+          <View style={styles.headerSideSlot}>
+            <AppTutorialHelpButton {...contractsTutorial.helpButtonProps} />
+          </View>
+          <AppTutorialTarget tutorialId="contracts" targetId="contracts-header">
+            <Text style={styles.headerTitle}>Sözleşmeler</Text>
+          </AppTutorialTarget>
           <View style={styles.headerSideSlot}>
             <IconButton
               icon="refresh"
@@ -1400,13 +1432,15 @@ export default function ContractsScreen() {
           />
         ) : null}
 
-        <ContractsSummaryStrip
-          availableCount={availableContracts.length}
-          activeCount={runningDeliveries.length}
-          bestPayment={topSummary.bestPayment}
-          playableCount={playableContractCount}
-          trucks={trucks}
-        />
+        <AppTutorialTarget tutorialId="contracts" targetId="city-truck-requirement">
+          <ContractsSummaryStrip
+            availableCount={availableContracts.length}
+            activeCount={runningDeliveries.length}
+            bestPayment={topSummary.bestPayment}
+            playableCount={playableContractCount}
+            trucks={trucks}
+          />
+        </AppTutorialTarget>
 
         {showTruckLocationHint ? (
           <TruckLocationHintRow style={styles.truckLocationHint} />
@@ -1429,11 +1463,13 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        <ContractsTabBar
-          segments={tabSegments}
-          activeKey={activeSegment}
-          onChange={setActiveSegment}
-        />
+        <AppTutorialTarget tutorialId="contracts" targetId="available-jobs">
+          <ContractsTabBar
+            segments={tabSegments}
+            activeKey={activeSegment}
+            onChange={setActiveSegment}
+          />
+        </AppTutorialTarget>
 
         <FlatList
           ref={scrollRef}
@@ -1444,6 +1480,10 @@ export default function ContractsScreen() {
           ListHeaderComponent={listHeader}
           ListEmptyComponent={listEmpty}
           style={styles.listScroll}
+          onScroll={contractsTutorial.handleScroll}
+          onScrollEndDrag={contractsTutorial.handleScrollEnd}
+          onMomentumScrollEnd={contractsTutorial.handleScrollEnd}
+          scrollEventThrottle={16}
           contentContainerStyle={[
             styles.listScrollContent,
             { paddingBottom: scrollBottomPadding },
@@ -1482,6 +1522,7 @@ export default function ContractsScreen() {
         onConfirm={handleConfirmAssignment}
         onGoToFleet={handleGoToFleet}
       />
+      <AppTutorialOverlay {...contractsTutorial.overlayProps} />
     </View>
   );
 }

@@ -10,6 +10,7 @@ import {
   shortestHeadingDeltaDegrees,
 } from '../src/components/map/mapRoadUtils';
 import {
+  TRUCK_ASSET_FORWARD_OFFSET_DEG,
   TRUCK_ASSET_HEADING_OFFSET_DEG,
   TRUCK_ICON_BASE_ROTATION_DEG,
 } from '../src/components/map/mapTheme';
@@ -32,19 +33,23 @@ function angularDistance(a: number, b: number): number {
 }
 
 function displayRotation(headingDeg: number): number {
-  return normalizeHeadingDegrees(headingDeg + TRUCK_ICON_BASE_ROTATION_DEG);
+  return normalizeHeadingDegrees(headingDeg + TRUCK_ASSET_FORWARD_OFFSET_DEG);
 }
 
 console.log('\n=== Truck Route Heading Test ===\n');
 
 console.log('Asset base rotation');
 assert(
-  TRUCK_ICON_BASE_ROTATION_DEG === 180,
-  'truck-outline 0° faces left → TRUCK_ICON_BASE_ROTATION_DEG is 180°',
+  TRUCK_ASSET_FORWARD_OFFSET_DEG === 0,
+  'truck-outline 0° faces right → TRUCK_ASSET_FORWARD_OFFSET_DEG is 0°',
 );
 assert(
-  TRUCK_ASSET_HEADING_OFFSET_DEG === TRUCK_ICON_BASE_ROTATION_DEG,
-  'legacy alias matches canonical base rotation',
+  TRUCK_ICON_BASE_ROTATION_DEG === TRUCK_ASSET_FORWARD_OFFSET_DEG,
+  'legacy alias matches canonical forward offset',
+);
+assert(
+  TRUCK_ASSET_HEADING_OFFSET_DEG === TRUCK_ASSET_FORWARD_OFFSET_DEG,
+  'legacy heading alias matches canonical forward offset',
 );
 
 console.log('\nCardinal synthetic headings');
@@ -63,8 +68,8 @@ assert(angularDistance(westH, 180) < 0.001, 'west = 180°');
 assert(angularDistance(eastH, westH) > 179.9, 'west = east + ~180°');
 assert(angularDistance(southH, 90) < 0.001, 'south = 90° (Y-down screen)');
 assert(angularDistance(northH, -90) < 0.001, 'north = -90° (Y-down screen)');
-assert(angularDistance(displayRotation(eastH), 180) < 0.001, 'east display rotation ≈ 180°');
-assert(angularDistance(displayRotation(westH), 0) < 0.001, 'west display rotation ≈ 0°');
+assert(angularDistance(displayRotation(eastH), 0) < 0.001, 'east display rotation ≈ 0°');
+assert(angularDistance(displayRotation(westH), 180) < 0.001, 'west display rotation ≈ 180°');
 
 console.log('\nEndpoint / duplicate safety');
 assert(
@@ -103,13 +108,15 @@ assert(shortestHeadingDeltaDegrees(10, 350) === -20, 'shortest-angle prefers -20
 assert(shortestHeadingDeltaDegrees(350, 10) === 20, 'shortest-angle prefers +20 over -340');
 assert(Math.abs(shortestHeadingDeltaDegrees(0, 180)) === 180, 'shortest-angle 180° is exact');
 
-console.log('\nCurved route — current → next segment');
+console.log('\nCurved route — active segment tangent');
 const curve = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }];
 const curveMid = getRouteHeadingAtProgress({
   points: curve,
   progress: 0.5,
 });
-assert(angularDistance(curveMid, 90) < 0.001, 'L-route corner uses next segment (south ≈ 90°)');
+assert(angularDistance(curveMid, 0) < 0.001, 'L-route corner at vertex keeps first segment (east ≈ 0°)');
+const curveLate = getRouteHeadingAtProgress({ points: curve, progress: 0.75 });
+assert(angularDistance(curveLate, 90) < 0.001, 'L-route second leg faces south ≈ 90°');
 const curveEarly = getRouteHeadingAtProgress({ points: curve, progress: 0.25 });
 assert(angularDistance(curveEarly, 0) < 0.001, 'L-route first leg faces east ≈ 0°');
 

@@ -625,6 +625,17 @@ export interface DeliveryIncident {
   resolvedAtGameTime?: number;
 }
 
+/** Operasyon kararı audit kaydı — save/load ile korunur. */
+export interface DeliveryIncidentResolutionRecord {
+  eventId: string;
+  choiceId: string;
+  resolvedAt: number;
+  cashDelta: number;
+  remainingTimeDeltaSeconds: number;
+  deliveryId: string;
+  outcomeCode: string;
+}
+
 /** Aktif veya tamamlanmış bir taşıma görevi */
 export interface Delivery {
   id: string;
@@ -688,6 +699,8 @@ export interface Delivery {
   incidentGenerated?: boolean;
   /** Olay kararı verildi mi */
   incidentResolved?: boolean;
+  /** Çözülmüş operasyon kararları (audit) */
+  incidentResolutionHistory?: DeliveryIncidentResolutionRecord[];
   /** Ödüllü reklam ile hızlandırma geçmişi */
   deliveryAdBoost?: DeliveryAdBoostState;
 }
@@ -1526,6 +1539,8 @@ export interface StoreGameState {
   /** Piyasa ekranı eğitimi — ilk giriş / yardım */
   marketTutorialCompleted?: boolean;
   marketTutorialVersion?: number;
+  /** Ekran bazlı ilk giriş rehberleri */
+  tutorialProgress?: import('../tutorial/app/types').TutorialProgressState;
   /** Oyuncu tanımlı piyasa fiyat alarmları */
   marketAlerts: MarketPriceAlert[];
   /** Aktif piyasa/şehir olayları — Retention Pack V1 Phase 2 */
@@ -1567,6 +1582,8 @@ export interface StoreGameState {
   lastRoadsideFuelAssistanceAt?: number;
   /** Başarılı yakıt transaction retry anahtarları; save sırasında son N kayıt tutulur. */
   fuelTransactionKeys?: string[];
+  /** Son itibar değişimleri — save'e yazılır (sınırlı liste). */
+  reputationHistory?: import('../domain/reputationModel').ReputationHistoryEntry[];
 }
 
 /**

@@ -1,4 +1,11 @@
 import type { TutorialLayoutRect } from '../../tutorial/types';
+import {
+  clearAppTutorialTargets,
+  hasAppTutorialTarget,
+  measureAppTutorialTarget,
+  registerAppTutorialTarget,
+  scrollAppTutorialTargetIntoView,
+} from '../../tutorial/app/targetRegistry';
 
 export type MarketTutorialTargetId =
   | 'city-chips'
@@ -10,53 +17,36 @@ export type MarketTutorialTargetId =
   | 'refresh-button'
   | 'products-section';
 
-type MeasureFn = () => Promise<TutorialLayoutRect | null>;
-type ScrollIntoViewFn = () => Promise<void>;
+const MARKET_TUTORIAL_ID = 'market' as const;
 
-interface MarketTutorialTargetEntry {
-  measure: MeasureFn;
-  scrollIntoView?: ScrollIntoViewFn;
-}
-
-const targets = new Map<MarketTutorialTargetId, MarketTutorialTargetEntry>();
+type MarketTutorialTargetEntry = {
+  measure: () => Promise<TutorialLayoutRect | null>;
+  scrollIntoView?: () => Promise<void>;
+};
 
 export function registerMarketTutorialTarget(
   id: MarketTutorialTargetId,
   entry: MarketTutorialTargetEntry,
 ): () => void {
-  targets.set(id, entry);
-  return () => {
-    const current = targets.get(id);
-    if (current === entry) {
-      targets.delete(id);
-    }
-  };
+  return registerAppTutorialTarget(MARKET_TUTORIAL_ID, id, entry);
 }
 
 export async function measureMarketTutorialTarget(
   id: MarketTutorialTargetId,
 ): Promise<TutorialLayoutRect | null> {
-  const entry = targets.get(id);
-  if (!entry) {
-    return null;
-  }
-  return entry.measure();
+  return measureAppTutorialTarget(MARKET_TUTORIAL_ID, id);
 }
 
 export async function scrollMarketTutorialTargetIntoView(
   id: MarketTutorialTargetId,
 ): Promise<void> {
-  const entry = targets.get(id);
-  if (!entry?.scrollIntoView) {
-    return;
-  }
-  await entry.scrollIntoView();
+  return scrollAppTutorialTargetIntoView(MARKET_TUTORIAL_ID, id);
 }
 
 export function hasMarketTutorialTarget(id: MarketTutorialTargetId): boolean {
-  return targets.has(id);
+  return hasAppTutorialTarget(MARKET_TUTORIAL_ID, id);
 }
 
 export function clearMarketTutorialTargets(): void {
-  targets.clear();
+  clearAppTutorialTargets(MARKET_TUTORIAL_ID);
 }

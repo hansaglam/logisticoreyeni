@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Image,
+  Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -8,6 +9,8 @@ import {
 } from 'react-native';
 
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
+import type { ReputationSummary } from '../../domain/reputationModel';
+import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { GameIcon, ProgressBar } from '../ui';
 import { formatCompanyScore } from '../../simulation/companyScore';
 import type { GameIconName } from '../../theme/icons';
@@ -21,7 +24,6 @@ import {
   DASHBOARD_HERO_BORDER,
   DASHBOARD_HERO_PADDING,
   DASHBOARD_HERO_RADIUS,
-  DASHBOARD_HERO_PORT_OPACITY,
   dashboardHeroElevation,
   getDashboardMoneyColor,
 } from './dashboardTheme';
@@ -37,9 +39,10 @@ interface DashboardHeroCardProps {
   isMaxLevel: boolean;
   money: number;
   companyScore: number;
-  reputation: number;
+  reputationSummary: ReputationSummary;
   idleTrucks: number;
   activeDeliveries: number;
+  onReputationPress?: () => void;
 }
 
 interface MetricTileProps {
@@ -100,32 +103,21 @@ export default function DashboardHeroCard({
   isMaxLevel,
   money,
   companyScore,
-  reputation,
+  reputationSummary,
   idleTrucks,
   activeDeliveries,
+  onReputationPress,
 }: DashboardHeroCardProps) {
   const { width } = useWindowDimensions();
   const compact = width < 360;
   const effectiveXpProgress = isMaxLevel ? 1 : Math.min(1, Math.max(0, xpProgress));
-  const reputationDisplay = `${Math.round(Math.min(100, Math.max(0, reputation)))}/100`;
+  const reputationDisplay = `${reputationSummary.score}/100`;
   const moneyColor = getDashboardMoneyColor(money);
   const fleetLabel = compact ? 'BOŞTA · AKTİF' : 'BOŞTA / AKTİF';
   const fleetValue = `${idleTrucks} / ${activeDeliveries}`;
 
   return (
     <View style={[styles.card, dashboardHeroElevation]}>
-      {dashboardAssetFlags.usePortBackground ? (
-        <>
-          <Image
-            source={dashboardAssets.portBackground}
-            style={styles.portAccent}
-            resizeMode="cover"
-          />
-          <View style={styles.portMute} pointerEvents="none" />
-          <View style={styles.portEdgeFade} pointerEvents="none" />
-        </>
-      ) : null}
-
       <View style={styles.content}>
         <View style={styles.topRow}>
           <View style={styles.emblemSlot}>
@@ -194,7 +186,70 @@ export default function DashboardHeroCard({
         <View style={styles.metricRow}>
           <MetricTile label="Nakit" value={formatMoney(money)} icon="cash" color={moneyColor} compact={compact} />
           <MetricTile label="Puan" value={formatCompanyScore(companyScore)} icon="xp" color={colors.primaryLight} compact={compact} />
-          <MetricTile label="İtibar" value={reputationDisplay} icon="reputation" color={colors.purple} compact={compact} />
+          <AppTutorialTarget tutorialId="dashboard" targetId="reputation-card">
+          <Pressable
+            style={({ pressed }) => [styles.reputationTile, pressed && styles.reputationTilePressed]}
+            onPress={onReputationPress}
+            disabled={!onReputationPress}
+            accessibilityRole="button"
+            accessibilityLabel={`İtibar ${reputationDisplay}, ${reputationSummary.tierLabel}`}
+          >
+            <View style={[styles.metricTile, styles.reputationMetricInner, { borderColor: `${colors.purple}32`, backgroundColor: `${colors.purple}0C` }]}>
+              <View
+                style={[
+                  styles.metricIconWrap,
+                  {
+                    width: compact ? 28 : 30,
+                    height: compact ? 28 : 30,
+                    backgroundColor: `${colors.purple}20`,
+                  },
+                ]}
+              >
+                <GameIcon name="reputation" size={compact ? 13 : 14} color={colors.purple} />
+              </View>
+              <Text
+                style={styles.metricLabel}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
+                İtibar
+              </Text>
+              <Text
+                style={[styles.metricValue, { color: colors.purple, fontSize: compact ? 15 : 16 }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {reputationDisplay}
+              </Text>
+              <Text style={styles.reputationTier} numberOfLines={1}>
+                {reputationSummary.tierLabel}
+              </Text>
+              <ProgressBar
+                progress={reputationSummary.progressToNextTier}
+                color={colors.purple}
+                height={3}
+                trackColor={colors.surface3}
+              />
+              {reputationSummary.recentChange != null && reputationSummary.recentChange !== 0 ? (
+                <Text
+                  style={[
+                    styles.reputationBadge,
+                    reputationSummary.recentChange > 0
+                      ? styles.reputationBadgePositive
+                      : styles.reputationBadgeNegative,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {reputationSummary.recentChange > 0
+                    ? `+${reputationSummary.recentChange}`
+                    : reputationSummary.recentChange}
+                </Text>
+              ) : null}
+            </View>
+          </Pressable>
+          </AppTutorialTarget>
           <MetricTile
             label={fleetLabel}
             value={fleetValue}
@@ -219,32 +274,6 @@ const styles = StyleSheet.create({
     borderColor: DASHBOARD_HERO_BORDER,
     backgroundColor: colors.surface,
     overflow: 'hidden',
-  },
-  portAccent: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: '34%',
-    height: '100%',
-    opacity: DASHBOARD_HERO_PORT_OPACITY,
-    backgroundColor: 'transparent',
-  },
-  portMute: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: '36%',
-    height: '100%',
-    backgroundColor: 'rgba(4, 10, 20, 0.48)',
-  },
-  portEdgeFade: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: '50%',
-    width: '16%',
-    backgroundColor: colors.surface,
-    opacity: 0.94,
   },
   content: {
     padding: DASHBOARD_HERO_PADDING,
@@ -432,5 +461,36 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     textAlign: 'center',
     width: '100%',
+  },
+  reputationTile: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 44,
+  },
+  reputationTilePressed: {
+    opacity: 0.92,
+  },
+  reputationMetricInner: {
+    gap: 2,
+    paddingBottom: 4,
+  },
+  reputationTier: {
+    color: colors.textMuted,
+    fontSize: 9,
+    fontWeight: '600',
+    textAlign: 'center',
+    width: '100%',
+  },
+  reputationBadge: {
+    fontSize: 8.5,
+    fontWeight: '700',
+    textAlign: 'center',
+    width: '100%',
+  },
+  reputationBadgePositive: {
+    color: '#4ADE80',
+  },
+  reputationBadgeNegative: {
+    color: '#F87171',
   },
 });

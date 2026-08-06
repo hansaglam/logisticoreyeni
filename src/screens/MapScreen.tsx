@@ -27,7 +27,11 @@ import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
 import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
 import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
 import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { GameIcon } from '../components/ui';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
@@ -220,8 +224,16 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [mapGestureActive, setMapGestureActive] = useState(false);
   const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
+  const [layoutReady, setLayoutReady] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const mapRef = useRef<WorldMapCanvasHandle>(null);
+
+  const mapTutorial = useScreenAppTutorial({
+    tutorialId: 'map',
+    layoutReady,
+    blockingModals: roadsideFuelJobId != null,
+    scrollRef,
+  });
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -465,13 +477,21 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
       <ScrollView
         ref={scrollRef}
         scrollEnabled={!mapGestureActive}
+        onScroll={mapTutorial.handleScroll}
+        onScrollEndDrag={mapTutorial.handleScrollEnd}
+        onMomentumScrollEnd={mapTutorial.handleScrollEnd}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
+        onLayout={() => setLayoutReady(true)}
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: scrollBottomPadding },
         ]}
       >
-        <MapHeader onRefresh={handleRefreshMarket} />
+        <MapHeader
+          onRefresh={handleRefreshMarket}
+          helpAction={<AppTutorialHelpButton {...mapTutorial.helpButtonProps} />}
+        />
 
         {onboardingHint ? (
           <OnboardingHintCard
@@ -484,18 +504,22 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           />
         ) : null}
 
-        <MapFilterTabs
-          selectedFilter={selectedMapFilter}
-          onChange={setSelectedMapFilter}
-        />
+        <AppTutorialTarget tutorialId="map" targetId="map-filters">
+          <MapFilterTabs
+            selectedFilter={selectedMapFilter}
+            onChange={setSelectedMapFilter}
+          />
+        </AppTutorialTarget>
 
-        <MapStatsStrip
-          cityCount={mapCities.length}
-          routeCount={routeCount}
-          jobCount={availableContracts.length}
-          activeCount={runningDeliveries.length}
-          idleCount={idleTrucks.length}
-        />
+        <AppTutorialTarget tutorialId="map" targetId="active-routes">
+          <MapStatsStrip
+            cityCount={mapCities.length}
+            routeCount={routeCount}
+            jobCount={availableContracts.length}
+            activeCount={runningDeliveries.length}
+            idleCount={idleTrucks.length}
+          />
+        </AppTutorialTarget>
 
         {statusMessage ? (
           <View style={styles.statusToast}>
@@ -503,18 +527,20 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           </View>
         ) : null}
 
-        <TurkeyNetworkCard>
-          <WorldMapCanvas
-            ref={mapRef}
-            calibrationMode={debugConfig.mapCalibrationEnabled}
-            activeDeliveries={activeDeliveries}
-            activeTransfers={activeTransfers}
-            selectedFilter={selectedMapFilter}
-            selectedDeliveryId={selectedDeliveryId}
-            onDeliveryPress={handleDeliveryPress}
-            onMapGestureActiveChange={setMapGestureActive}
-          />
-        </TurkeyNetworkCard>
+        <AppTutorialTarget tutorialId="map" targetId="cities-warehouses">
+          <TurkeyNetworkCard>
+            <WorldMapCanvas
+              ref={mapRef}
+              calibrationMode={debugConfig.mapCalibrationEnabled}
+              activeDeliveries={activeDeliveries}
+              activeTransfers={activeTransfers}
+              selectedFilter={selectedMapFilter}
+              selectedDeliveryId={selectedDeliveryId}
+              onDeliveryPress={handleDeliveryPress}
+              onMapGestureActiveChange={setMapGestureActive}
+            />
+          </TurkeyNetworkCard>
+        </AppTutorialTarget>
 
         {showRecommendedAction ? (
           <CompactRecommendedActionRow
@@ -523,19 +549,22 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           />
         ) : null}
 
-        <MapTruckTrackingSection
-          trucks={trucks}
-          drivers={player.drivers ?? []}
-          deliveries={activeDeliveries}
-          transfers={activeTransfers}
-          idleTruckCountByCity={idleTruckCountByCity}
-          homeCityId={player.homeCityId}
-          currentTime={currentTime}
-          onOpenFleet={handleOpenFleet}
-          onTruckPress={() => handleOpenFleet()}
-          onRoadsideFuel={setRoadsideFuelJobId}
-        />
+        <AppTutorialTarget tutorialId="map" targetId="truck-tracking">
+          <MapTruckTrackingSection
+            trucks={trucks}
+            drivers={player.drivers ?? []}
+            deliveries={activeDeliveries}
+            transfers={activeTransfers}
+            idleTruckCountByCity={idleTruckCountByCity}
+            homeCityId={player.homeCityId}
+            currentTime={currentTime}
+            onOpenFleet={handleOpenFleet}
+            onTruckPress={() => handleOpenFleet()}
+            onRoadsideFuel={setRoadsideFuelJobId}
+          />
+        </AppTutorialTarget>
       </ScrollView>
+      <AppTutorialOverlay {...mapTutorial.overlayProps} />
       <RoadsideFuelSheet
         visible={roadsideFuelJobId != null}
         jobId={roadsideFuelJobId}

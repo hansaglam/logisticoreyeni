@@ -20,6 +20,7 @@ import {
 } from './callableServiceUtils';
 import { FIREBASE_FUNCTIONS_REGION, getFirebaseFunctionsSafe } from './firebase';
 import { notifyUsernameProfileChanged } from './usernameProfileEvents';
+import { submitCurrentLeaderboardScore } from './leaderboardService';
 
 const CALLABLES = {
   setUsername: 'setUsername',
@@ -307,6 +308,7 @@ export async function setUsername(username: string): Promise<SetUsernameClientRe
       usernameLength: local.username.length,
     });
     notifyUsernameProfileChanged();
+    void submitCurrentLeaderboardScore({ force: true });
     return {
       ok: true,
       username: String(data.username ?? local.username),

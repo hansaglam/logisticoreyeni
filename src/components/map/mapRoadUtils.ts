@@ -69,6 +69,14 @@ export interface PointAlongPolylineResult {
   segmentIndex: number;
 }
 
+/** Canonical rota örnekleme sonucu — pozisyon + segment teğet heading. */
+export interface RoutePose {
+  position: MapRoadPoint;
+  /** Piksel uzayında segment teğet açısı (derece, (-180, 180]). */
+  headingDeg: number;
+  segmentIndex: number;
+}
+
 interface PolylineMetrics {
   segmentLengths: number[];
   totalLength: number;
@@ -167,81 +175,95 @@ export interface RouteHeadingAtProgressParams {
 
 export type RouteSamplingOptions = Omit<RouteHeadingAtProgressParams, 'points' | 'progress'>;
 
-function resolveRouteHeadingVector(
+function computeSegmentTangentHeadingDeg(
   points: MapRoadPoint[],
-  current: MapRoadPoint,
   segmentIndex: number,
   coordinateScaleX: number,
   coordinateScaleY: number,
-): { dx: number; dy: number } | null {
-  for (let index = segmentIndex + 1; index < points.length; index += 1) {
-    const candidate = points[index];
-    if (!pointsEqual(candidate, current) && pointDistance(candidate, current) > POINT_EPS) {
-      return {
-        dx: (candidate.x - current.x) * coordinateScaleX,
-        dy: (candidate.y - current.y) * coordinateScaleY,
-      };
+  fallbackHeadingDeg: number,
+): number {
+  const fallback = normalizeHeadingDegrees(fallbackHeadingDeg);
+
+  for (let index = segmentIndex; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    const dx = (end.x - start.x) * coordinateScaleX;
+    const dy = (end.y - start.y) * coordinateScaleY;
+    if (Math.hypot(dx, dy) > POINT_EPS) {
+      const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+      return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallback;
     }
   }
 
-  for (let index = segmentIndex; index >= 0; index -= 1) {
-    const candidate = points[index];
-    if (!pointsEqual(candidate, current) && pointDistance(candidate, current) > POINT_EPS) {
-      return {
-        dx: (current.x - candidate.x) * coordinateScaleX,
-        dy: (current.y - candidate.y) * coordinateScaleY,
-      };
+  for (let index = segmentIndex - 1; index >= 0; index -= 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    const dx = (end.x - start.x) * coordinateScaleX;
+    const dy = (end.y - start.y) * coordinateScaleY;
+    if (Math.hypot(dx, dy) > POINT_EPS) {
+      const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+      return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallback;
     }
   }
 
-  return null;
+  return fallback;
+}
+
+/**
+ * Mesafe bazlı rota örnekleme — pozisyon ve heading aynı segment geometrisinden.
+ * Heading: aktif segmentin başlangıç → bitiş yönü (piksel uzayı).
+ */
+export function getRoutePoseAtProgress(
+  routePoints: MapRoadPoint[],
+  progress: number | undefined | null,
+  options?: RouteSamplingOptions,
+): RoutePose {
+  const fallbackHeadingDeg = normalizeHeadingDegrees(options?.fallbackHeadingDeg ?? 0);
+
+  if (routePoints.length === 0) {
+    return { position: { x: 0, y: 0 }, headingDeg: fallbackHeadingDeg, segmentIndex: 0 };
+  }
+  if (routePoints.length === 1) {
+    return { position: routePoints[0], headingDeg: fallbackHeadingDeg, segmentIndex: 0 };
+  }
+
+  const t = normalizeMapDeliveryProgress(progress);
+  const metrics = getPolylineMetrics(routePoints);
+  const coordinateScaleX =
+    Number.isFinite(options?.coordinateScaleX) && Number(options?.coordinateScaleX) > 0
+      ? Number(options!.coordinateScaleX)
+      : 1;
+  const coordinateScaleY =
+    Number.isFinite(options?.coordinateScaleY) && Number(options?.coordinateScaleY) > 0
+      ? Number(options!.coordinateScaleY)
+      : 1;
+
+  const { point, segmentIndex } = getPointAtPolylineDistance(
+    routePoints,
+    metrics,
+    t * metrics.totalLength,
+  );
+  const headingDeg = computeSegmentTangentHeadingDeg(
+    routePoints,
+    segmentIndex,
+    coordinateScaleX,
+    coordinateScaleY,
+    fallbackHeadingDeg,
+  );
+
+  return { position: point, headingDeg, segmentIndex };
 }
 
 function getRouteHeadingWithMetrics(
   params: RouteHeadingAtProgressParams,
-  metrics: PolylineMetrics,
+  _metrics: PolylineMetrics,
 ): number {
-  const fallbackHeadingDeg = normalizeHeadingDegrees(params.fallbackHeadingDeg ?? 0);
-  if (params.points.length < 2 || metrics.totalLength <= POINT_EPS) {
-    return fallbackHeadingDeg;
-  }
-
-  const progress = normalizeMapDeliveryProgress(params.progress);
-  const centerDistance = progress * metrics.totalLength;
-  const coordinateScaleX =
-    Number.isFinite(params.coordinateScaleX) && Number(params.coordinateScaleX) > 0
-      ? Number(params.coordinateScaleX)
-      : 1;
-  const coordinateScaleY =
-    Number.isFinite(params.coordinateScaleY) && Number(params.coordinateScaleY) > 0
-      ? Number(params.coordinateScaleY)
-      : 1;
-
-  const { point: current, segmentIndex } = getPointAtPolylineDistance(
-    params.points,
-    metrics,
-    centerDistance,
-  );
-  const vector = resolveRouteHeadingVector(
-    params.points,
-    current,
-    segmentIndex,
-    coordinateScaleX,
-    coordinateScaleY,
-  );
-
-  if (!vector) {
-    return fallbackHeadingDeg;
-  }
-
-  const { dx, dy } = vector;
-  if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) <= POINT_EPS) {
-    return fallbackHeadingDeg;
-  }
-
-  // React Native ekran koordinatlarında Y aşağı doğru arttığı için atan2(dy, dx) doğrudur.
-  const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-  return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallbackHeadingDeg;
+  return getRoutePoseAtProgress(params.points, params.progress, {
+    lookAheadDistance: params.lookAheadDistance,
+    fallbackHeadingDeg: params.fallbackHeadingDeg,
+    coordinateScaleX: params.coordinateScaleX,
+    coordinateScaleY: params.coordinateScaleY,
+  }).headingDeg;
 }
 
 export function getRouteHeadingAtProgress(params: RouteHeadingAtProgressParams): number {
@@ -381,32 +403,11 @@ export function getPointAlongPolyline(
   progress: number,
   options?: RouteSamplingOptions,
 ): PointAlongPolylineResult {
-  if (points.length === 0) {
-    const headingDeg = normalizeHeadingDegrees(options?.fallbackHeadingDeg ?? 0);
-    return { point: { x: 0, y: 0 }, angleRadians: (headingDeg * Math.PI) / 180, headingDeg, segmentIndex: 0 };
-  }
-  if (points.length === 1) {
-    const headingDeg = normalizeHeadingDegrees(options?.fallbackHeadingDeg ?? 0);
-    return { point: points[0], angleRadians: (headingDeg * Math.PI) / 180, headingDeg, segmentIndex: 0 };
-  }
-
-  const t = normalizeMapDeliveryProgress(progress);
-  const metrics = getPolylineMetrics(points);
-  const position = getPointAtPolylineDistance(points, metrics, t * metrics.totalLength);
-  const headingDeg = getRouteHeadingWithMetrics(
-    {
-      points,
-      progress: t,
-      lookAheadDistance: options?.lookAheadDistance,
-      fallbackHeadingDeg: options?.fallbackHeadingDeg,
-      coordinateScaleX: options?.coordinateScaleX,
-      coordinateScaleY: options?.coordinateScaleY,
-    },
-    metrics,
-  );
-  const normalizedHeading = normalizeHeadingDegrees(headingDeg);
+  const pose = getRoutePoseAtProgress(points, progress, options);
+  const normalizedHeading = normalizeHeadingDegrees(pose.headingDeg);
   return {
-    ...position,
+    point: pose.position,
+    segmentIndex: pose.segmentIndex,
     angleRadians: (normalizedHeading * Math.PI) / 180,
     headingDeg: normalizedHeading,
   };

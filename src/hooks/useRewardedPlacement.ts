@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import type { RewardedPlacement } from '../config/rewardedPlacements';
+import { subscribeAdsConsentState } from '../services/adsConsentService';
 import {
   getRewardedPlacementState,
   preloadRewardedPlacement,
@@ -12,12 +13,20 @@ export function useRewardedPlacement(placement: RewardedPlacement): RewardedPlac
   const [state, setState] = useState(() => getRewardedPlacementState(placement));
 
   useEffect(() => {
-    preloadRewardedPlacement(placement);
     const refresh = () => {
       setState(getRewardedPlacementState(placement));
     };
+    preloadRewardedPlacement(placement);
     refresh();
-    return subscribeRewardedPlacementState(refresh);
+    const unsubPlacement = subscribeRewardedPlacementState(refresh);
+    const unsubConsent = subscribeAdsConsentState(() => {
+      preloadRewardedPlacement(placement);
+      refresh();
+    });
+    return () => {
+      unsubPlacement();
+      unsubConsent();
+    };
   }, [placement]);
 
   return state;
@@ -28,7 +37,7 @@ export function getRewardedPlacementStatusMessage(
 ): string | null {
   switch (placementState.status) {
     case 'consent-required':
-      return 'Reklamları kullanmak için gizlilik tercihini tamamla.';
+      return null;
     case 'loading':
     case 'idle':
       return 'Reklam hazırlanıyor…';

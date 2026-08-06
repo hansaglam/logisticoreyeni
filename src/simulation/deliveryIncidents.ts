@@ -16,6 +16,11 @@ import type {
 } from '../types/game';
 
 import { normalizeDeliveryAdBoostFields } from './deliveryAdBoost';
+import {
+  formatOperationChoiceEffectSummary,
+  resolveDeliveryOperationChoice,
+  type ResolveDeliveryOperationChoiceEffects,
+} from './deliveryOperationChoice';
 
 const INCIDENT_PROGRESS_MIN = 0.2;
 const INCIDENT_PROGRESS_MAX = 0.85;
@@ -100,89 +105,8 @@ export function shouldGenerateDeliveryIncident(
   return true;
 }
 
-function formatMoneyAmount(amount: number): string {
-  return `$${Math.abs(Math.round(amount))}`;
-}
-
-function formatTimeDeltaLabel(hours: number): string {
-  const absHours = Math.abs(hours);
-  if (absHours >= 1) {
-    const value = absHours % 1 === 0 ? `${absHours}` : absHours.toFixed(1).replace(/\.0$/, '');
-    return hours > 0 ? `${value} saat gecikme` : `${value} saat kazan`;
-  }
-
-  const minutes = Math.round(absHours * 60);
-  return hours > 0 ? `${minutes} dk gecikme` : `${minutes} dk kazan`;
-}
-
 export function formatIncidentChoiceEffectSummary(effects: DeliveryIncidentEffects): string {
-  const parts: string[] = [];
-  const hasMonetaryCost =
-    (effects.cashDelta ?? 0) < 0 || (effects.fuelCostDelta ?? 0) > 0;
-  const hasMonetaryGain =
-    (effects.cashDelta ?? 0) > 0 || (effects.fuelCostDelta ?? 0) < 0;
-
-  if (effects.cashDelta != null && effects.cashDelta !== 0) {
-    if (effects.cashDelta < 0) {
-      parts.push(`${formatMoneyAmount(effects.cashDelta)} maliyet`);
-    } else {
-      parts.push(`${formatMoneyAmount(effects.cashDelta)} gelir`);
-    }
-  }
-
-  if (effects.fuelCostDelta != null && effects.fuelCostDelta !== 0) {
-    if (effects.fuelCostDelta > 0) {
-      parts.push(`${formatMoneyAmount(effects.fuelCostDelta)} ek yakıt`);
-    } else {
-      parts.push(`${formatMoneyAmount(effects.fuelCostDelta)} tasarruf`);
-    }
-  }
-
-  if (effects.deliveryTimeDeltaHours != null && effects.deliveryTimeDeltaHours !== 0) {
-    parts.push(formatTimeDeltaLabel(effects.deliveryTimeDeltaHours));
-  }
-
-  if (effects.progressDelta != null && effects.progressDelta !== 0) {
-    const pct = Math.round(Math.abs(effects.progressDelta) * 100);
-    parts.push(
-      effects.progressDelta > 0 ? `%${pct} ilerleme` : `%${pct} gerileme`,
-    );
-  }
-
-  if (effects.truckConditionDelta != null && effects.truckConditionDelta !== 0) {
-    if (effects.truckConditionDelta > 0) {
-      parts.push(`Kondisyon +${effects.truckConditionDelta}`);
-    } else {
-      parts.push(`Kondisyon ${effects.truckConditionDelta}`);
-    }
-  }
-
-  if (effects.driverXpDelta != null && effects.driverXpDelta > 0) {
-    parts.push(`Şoför XP +${effects.driverXpDelta}`);
-  }
-
-  if (effects.playerXpDelta != null && effects.playerXpDelta > 0) {
-    parts.push(`XP +${effects.playerXpDelta}`);
-  }
-
-  if (effects.reputationDelta != null && effects.reputationDelta !== 0) {
-    parts.push(
-      effects.reputationDelta > 0
-        ? `İtibar +${effects.reputationDelta}`
-        : `İtibar ${effects.reputationDelta}`,
-    );
-  }
-
-  if (parts.length === 0) {
-    return 'Ücretsiz';
-  }
-
-  const hasTimeEffect = (effects.deliveryTimeDeltaHours ?? 0) !== 0;
-  if (!hasMonetaryCost && !hasMonetaryGain && !hasTimeEffect) {
-    return `Ücretsiz · ${parts.join(' · ')}`;
-  }
-
-  return parts.join(' · ');
+  return formatOperationChoiceEffectSummary(effects);
 }
 
 function withChoiceSummaries(choices: DeliveryIncidentChoice[]): DeliveryIncidentChoice[] {
@@ -697,14 +621,7 @@ export function normalizeDelivery(delivery: Delivery): Delivery {
   });
 }
 
-export interface ResolveDeliveryIncidentEffects {
-  cashDelta: number;
-  fuelCostDelta: number;
-  truckConditionDelta: number;
-  driverXpDelta: number;
-  playerXpDelta: number;
-  reputationDelta: number;
-}
+export interface ResolveDeliveryIncidentEffects extends ResolveDeliveryOperationChoiceEffects {}
 
 export interface ResolveDeliveryIncidentResult {
   ok: boolean;
@@ -717,62 +634,12 @@ export function resolveDeliveryIncident(
   delivery: Delivery,
   choiceId: string,
   currentGameTime: number,
+  options?: { playerMoney?: number },
 ): ResolveDeliveryIncidentResult {
-  if (delivery.status !== 'on_route' && delivery.status !== 'preparing') {
-    return { ok: false, reason: 'Teslimat artık aktif değil.' };
-  }
-
-  const incident = delivery.incident;
-  if (!incident || incident.status !== 'pending') {
-    return { ok: false, reason: 'Bekleyen operasyon olayı yok.' };
-  }
-
-  if (delivery.incidentResolved || incident.resolvedChoiceId) {
-    return { ok: false, reason: 'Bu olay zaten çözüldü.' };
-  }
-
-  const choice = incident.choices.find((item) => item.id === choiceId);
-  if (!choice) {
-    return { ok: false, reason: 'Geçersiz seçim.' };
-  }
-
-  const effects = choice.effects;
-  let nextDelivery: Delivery = {
-    ...delivery,
-    incidentResolved: true,
-    incident: {
-      ...incident,
-      status: 'resolved',
-      resolvedChoiceId: choice.id,
-      resolvedAtGameTime: currentGameTime,
-    },
-  };
-
-  if (effects.deliveryTimeDeltaHours) {
-    nextDelivery = {
-      ...nextDelivery,
-      estimatedArrivalTime:
-        nextDelivery.estimatedArrivalTime + effects.deliveryTimeDeltaHours,
-    };
-  }
-
-  if (effects.progressDelta) {
-    nextDelivery = {
-      ...nextDelivery,
-      progress: clamp(nextDelivery.progress + effects.progressDelta, 0, 1),
-    };
-  }
-
-  return {
-    ok: true,
-    delivery: nextDelivery,
-    effects: {
-      cashDelta: effects.cashDelta ?? 0,
-      fuelCostDelta: effects.fuelCostDelta ?? 0,
-      truckConditionDelta: effects.truckConditionDelta ?? 0,
-      driverXpDelta: effects.driverXpDelta ?? 0,
-      playerXpDelta: effects.playerXpDelta ?? 0,
-      reputationDelta: effects.reputationDelta ?? 0,
-    },
-  };
+  return resolveDeliveryOperationChoice({
+    delivery,
+    choiceId,
+    currentGameTime,
+    playerMoney: options?.playerMoney,
+  });
 }

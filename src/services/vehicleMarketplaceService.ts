@@ -1,4 +1,4 @@
-import { httpsCallable, type Functions } from 'firebase/functions';
+import type { Functions } from 'firebase/functions';
 
 import {
   VEHICLE_MARKETPLACE_ENABLED,
@@ -18,15 +18,21 @@ import type {
   VehicleMarketplacePage,
 } from '../types/vehicleMarketplace';
 import {
+  isAuthSessionReady,
+  waitForInitialAuthState,
+} from './authService';
+import { isCloudSaveAccountConflictPending } from './cloudSaveConflictState';
+import {
   FIREBASE_FUNCTIONS_REGION,
   getFirebaseAppSafe,
   getFirebaseAuthSafe,
   getFirebaseFunctionsSafe,
 } from './firebase';
-import { isCloudSaveAccountConflictPending } from './cloudSaveConflictState';
 import {
-  isAuthSessionReady,
-} from './authService';
+  callMarketplaceFunction,
+  getThrownMarketplaceReason,
+  type MarketplaceCallableName,
+} from './marketplaceCallable';
 import { recordMarketplaceCallableResult } from './backendDiagnostics';
 
 export const VEHICLE_MARKETPLACE_FUNCTIONS_REGION = FIREBASE_FUNCTIONS_REGION;
@@ -51,26 +57,35 @@ function getVehicleMarketplaceFunctions(): Functions | null {
   return getFirebaseFunctionsSafe(VEHICLE_MARKETPLACE_FUNCTIONS_REGION);
 }
 
-function callable<TInput, TOutput>(name: string) {
-  const firebaseApp = getFirebaseAppSafe();
-  const functions = getVehicleMarketplaceFunctions();
-  if (!firebaseApp || !functions) return null;
+async function ensureMarketplaceAuthReady(): Promise<{
+  ok: true;
+  uid: string;
+} | { ok: false; reason: VehicleMarketplaceFailureReason }> {
+  await waitForInitialAuthState();
+  const user = getFirebaseAuthSafe()?.currentUser ?? null;
+  if (!user || user.isAnonymous) {
+    return { ok: false, reason: 'auth-required' };
+  }
+  return { ok: true, uid: user.uid };
+}
+
+function auditCallableConfig(name: MarketplaceCallableName): void {
   if (
     typeof __DEV__ !== 'undefined' &&
     __DEV__ &&
     !callableConfigAudits.has(name)
   ) {
     callableConfigAudits.add(name);
+    const firebaseApp = getFirebaseAppSafe();
     const user = getFirebaseAuthSafe()?.currentUser;
     console.info('[marketplace-callable-config]', {
-      projectId: firebaseApp.options.projectId ?? null,
+      projectId: firebaseApp?.options.projectId ?? null,
       region: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
       callableName: name,
       authenticated: Boolean(user && !user.isAnonymous),
       uidPresent: Boolean(user?.uid),
     });
   }
-  return httpsCallable<TInput, TOutput>(functions, name);
 }
 
 type TimestampLike = number | { seconds?: number; _seconds?: number };
@@ -178,39 +193,67 @@ function anonymizedUid(uid?: string): string | null {
   return uid ? `${uid.slice(0, 4)}…${uid.slice(-3)}` : null;
 }
 
+async function invokeMarketplaceCallable<TRequest, TResponse>(
+  name: MarketplaceCallableName,
+  payload: TRequest,
+): Promise<
+  | { ok: true; data: TResponse }
+  | { ok: false; reason: VehicleMarketplaceFailureReason }
+> {
+  const functions = getVehicleMarketplaceFunctions();
+  if (!getFirebaseAppSafe() || !functions) {
+    return { ok: false, reason: 'service-unavailable' };
+  }
+  auditCallableConfig(name);
+  try {
+    const data = await callMarketplaceFunction<TRequest, TResponse>(
+      name,
+      functions,
+      payload,
+    );
+    return { ok: true, data };
+  } catch (error) {
+    logCallableError(error, name);
+    return { ok: false, reason: getThrownMarketplaceReason(error) };
+  }
+}
+
 export async function createVehicleListing(input: MarketplaceActionEnvelope & {
   truckId: string;
   askingPrice: number;
   clientSaveVersion?: number;
 }): Promise<VehicleMarketplaceActionResult<{ listingId: string; recommendedPrice: number }>> {
-  const user = getFirebaseAuthSafe()?.currentUser;
   if (!isVehicleMarketplaceMutationAllowed()) {
     return failure(input, 'service-unavailable');
   }
   if (isCloudSaveAccountConflictPending()) return failure(input, 'save-conflict');
-  if (!user || user.isAnonymous) {
+  const auth = await ensureMarketplaceAuthReady();
+  if (!auth.ok) {
     logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.create);
-    return failure(input, 'auth-required');
+    return failure(input, auth.reason);
   }
 
-  const action = callable<typeof input, VehicleMarketplaceActionResult<{
-    listingId: string;
-    recommendedPrice: number;
-  }>>(VEHICLE_MARKETPLACE_CALLABLES.create);
-  if (!action) return failure(input, 'service-unavailable');
   marketplaceOperationCount += 1;
   try {
-    const result = (await action(input)).data;
+    const result = await invokeMarketplaceCallable<
+      typeof input,
+      VehicleMarketplaceActionResult<{
+        listingId: string;
+        recommendedPrice: number;
+      }>
+    >(VEHICLE_MARKETPLACE_CALLABLES.create, input);
+    if (!result.ok) return failure(input, result.reason);
+    const data = result.data;
     if (typeof __DEV__ !== 'undefined' && __DEV__ && !createAuditLogged) {
       createAuditLogged = true;
       console.info('[vehicle-marketplace-create-audit]', {
         featureEnabled: VEHICLE_MARKETPLACE_ENABLED,
         authenticated: true,
-        uid: anonymizedUid(user.uid),
+        uid: anonymizedUid(auth.uid),
         functionsRegion: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
         callableName: VEHICLE_MARKETPLACE_CALLABLES.create,
         hasMarketplaceState:
-          result.reason !== 'marketplace-state-missing',
+          data.reason !== 'marketplace-state-missing',
         marketplaceStateVersion: null,
         selectedTruckId: input.truckId,
         requestedPrice: input.askingPrice,
@@ -218,10 +261,7 @@ export async function createVehicleListing(input: MarketplaceActionEnvelope & {
         networkAvailable: currentNetworkAvailability(),
       });
     }
-    return result;
-  } catch (error) {
-    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.create);
-    return failure(input, mapMarketplaceCallableError(error));
+    return data;
   } finally {
     marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
   }
@@ -232,21 +272,19 @@ export async function cancelVehicleListing(input: MarketplaceActionEnvelope & {
   listingVersion: number;
 }): Promise<VehicleMarketplaceActionResult<{ listingId: string }>> {
   if (!isVehicleMarketplaceMutationAllowed()) return failure(input, 'service-unavailable');
-  const user = getFirebaseAuthSafe()?.currentUser;
-  if (!user || user.isAnonymous) {
+  const auth = await ensureMarketplaceAuthReady();
+  if (!auth.ok) {
     logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.cancel);
-    return failure(input, 'auth-required');
+    return failure(input, auth.reason);
   }
-  const action = callable<typeof input, VehicleMarketplaceActionResult<{
-    listingId: string;
-  }>>(VEHICLE_MARKETPLACE_CALLABLES.cancel);
-  if (!action) return failure(input, 'service-unavailable');
   marketplaceOperationCount += 1;
   try {
-    return (await action(input)).data;
-  } catch (error) {
-    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.cancel);
-    return failure(input, mapMarketplaceCallableError(error));
+    const result = await invokeMarketplaceCallable<
+      typeof input,
+      VehicleMarketplaceActionResult<{ listingId: string }>
+    >(VEHICLE_MARKETPLACE_CALLABLES.cancel, input);
+    if (!result.ok) return failure(input, result.reason);
+    return result.data;
   } finally {
     marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
   }
@@ -264,24 +302,24 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
   sellerNet: number;
 }>> {
   if (!isVehicleMarketplaceMutationAllowed()) return failure(input, 'service-unavailable');
-  const user = getFirebaseAuthSafe()?.currentUser;
-  if (!user || user.isAnonymous) {
+  const auth = await ensureMarketplaceAuthReady();
+  if (!auth.ok) {
     logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.purchase);
-    return failure(input, 'auth-required');
+    return failure(input, auth.reason);
   }
-  const action = callable<typeof input, VehicleMarketplaceActionResult<{
-    listingId: string;
-    grossPrice: number;
-    marketplaceFee: number;
-    sellerNet: number;
-  }>>(VEHICLE_MARKETPLACE_CALLABLES.purchase);
-  if (!action) return failure(input, 'service-unavailable');
   marketplaceOperationCount += 1;
   try {
-    return (await action(input)).data;
-  } catch (error) {
-    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.purchase);
-    return failure(input, mapMarketplaceCallableError(error));
+    const result = await invokeMarketplaceCallable<
+      typeof input,
+      VehicleMarketplaceActionResult<{
+        listingId: string;
+        grossPrice: number;
+        marketplaceFee: number;
+        sellerNet: number;
+      }>
+    >(VEHICLE_MARKETPLACE_CALLABLES.purchase, input);
+    if (!result.ok) return failure(input, result.reason);
+    return result.data;
   } finally {
     marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
   }
@@ -291,47 +329,46 @@ export async function getVehicleMarketplaceListings(
   limit = 20,
   cursor?: VehicleMarketplaceCursor,
 ): Promise<VehicleMarketplacePage> {
-  const action = callable<
+  const auth = await ensureMarketplaceAuthReady();
+  if (!auth.ok) {
+    logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.list);
+    return { ok: false, listings: [], hasMore: false, reason: auth.reason };
+  }
+
+  const result = await invokeMarketplaceCallable<
     { limit: number; cursor?: VehicleMarketplaceCursor },
     VehicleMarketplacePage
-  >(VEHICLE_MARKETPLACE_CALLABLES.list);
-  if (!action) {
-    return { ok: false, listings: [], hasMore: false, reason: 'service-unavailable' };
-  }
-  try {
-    const result = (await action({ limit, cursor })).data;
-    if (!result.ok) {
-      const reason = result.reason ?? 'service-unavailable';
-      if (reason === 'auth-required' || reason === 'unauthenticated') {
-        logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.list);
-      } else {
-        recordMarketplaceCallableResult({
-          success: false,
-          code: reason,
-          detail: VEHICLE_MARKETPLACE_CALLABLES.list,
-        });
-      }
-      return {
-        ...result,
-        listings: [],
-        reason,
-      };
-    }
-    recordMarketplaceCallableResult({ success: true, code: null });
-    return {
-      ...result,
-      listings: result.listings.map((listing) =>
-        normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
-    };
-  } catch (error) {
-    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.list);
+  >(VEHICLE_MARKETPLACE_CALLABLES.list, { limit, cursor });
+  if (!result.ok) {
     return {
       ok: false,
       listings: [],
       hasMore: false,
-      reason: mapMarketplaceCallableError(error),
+      reason: result.reason,
     };
   }
+
+  const page = result.data;
+  if (!page.ok) {
+    const reason = page.reason ?? 'service-unavailable';
+    recordMarketplaceCallableResult({
+      success: false,
+      code: reason,
+      detail: VEHICLE_MARKETPLACE_CALLABLES.list,
+    });
+    return {
+      ...page,
+      listings: [],
+      reason,
+    };
+  }
+
+  recordMarketplaceCallableResult({ success: true, code: null });
+  return {
+    ...page,
+    listings: page.listings.map((listing) =>
+      normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
+  };
 }
 
 export async function getMyVehicleListings(): Promise<{
@@ -340,7 +377,13 @@ export async function getMyVehicleListings(): Promise<{
   reconciliation?: AuthoritativeMarketplaceReconciliation | null;
   reason?: VehicleMarketplaceFailureReason;
 }> {
-  const action = callable<
+  const auth = await ensureMarketplaceAuthReady();
+  if (!auth.ok) {
+    logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.myListings);
+    return { ok: false, listings: [], reason: auth.reason };
+  }
+
+  const result = await invokeMarketplaceCallable<
     Record<string, never>,
     {
       ok: boolean;
@@ -348,42 +391,36 @@ export async function getMyVehicleListings(): Promise<{
       reconciliation?: AuthoritativeMarketplaceReconciliation | null;
       reason?: VehicleMarketplaceFailureReason;
     }
-  >(VEHICLE_MARKETPLACE_CALLABLES.myListings);
-  if (!action) return { ok: false, listings: [], reason: 'service-unavailable' };
-  try {
-    const result = (await action({})).data;
-    if (!result.ok) {
-      const reason = result.reason ?? 'service-unavailable';
-      if (reason === 'auth-required' || reason === 'unauthenticated') {
-        logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.myListings);
-      } else {
-        recordMarketplaceCallableResult({
-          success: false,
-          code: reason,
-          detail: VEHICLE_MARKETPLACE_CALLABLES.myListings,
-        });
-      }
-      return { ...result, listings: [], reason };
-    }
-    return {
-      ...result,
-      listings: result.listings.map((listing) =>
-        normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
-    };
-  } catch (error) {
-    logCallableError(error, VEHICLE_MARKETPLACE_CALLABLES.myListings);
-    return {
-      ok: false,
-      listings: [],
-      reason: mapMarketplaceCallableError(error),
-    };
+  >(VEHICLE_MARKETPLACE_CALLABLES.myListings, {});
+  if (!result.ok) {
+    return { ok: false, listings: [], reason: result.reason };
   }
+
+  const payload = result.data;
+  if (!payload.ok) {
+    const reason = payload.reason ?? 'service-unavailable';
+    recordMarketplaceCallableResult({
+      success: false,
+      code: reason,
+      detail: VEHICLE_MARKETPLACE_CALLABLES.myListings,
+    });
+    return { ...payload, listings: [], reason };
+  }
+
+  return {
+    ...payload,
+    listings: payload.listings.map((listing) =>
+      normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
+  };
 }
 
 export async function prepareVehicleMarketplaceAccountDeletion(): Promise<boolean> {
-  const action = callable<Record<string, never>, { ok: boolean }>(
+  const auth = await ensureMarketplaceAuthReady();
+  if (!auth.ok) return false;
+  const result = await invokeMarketplaceCallable<Record<string, never>, { ok: boolean }>(
     VEHICLE_MARKETPLACE_CALLABLES.accountDeletion,
+    {},
   );
-  if (!action) return false;
-  return (await action({})).data.ok;
+  if (!result.ok) return false;
+  return result.data.ok;
 }

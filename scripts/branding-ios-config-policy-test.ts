@@ -28,8 +28,8 @@ assert.equal(appJson.expo?.name, 'LogistiCore');
 assert.ok(appJson.expo?.icon?.includes('assets/branding/icon.png'));
 assert.equal(appJson.expo?.splash?.backgroundColor, '#020712');
 assert.equal(appJson.expo?.android?.adaptiveIcon?.backgroundColor, '#020712');
-assert.equal(appJson.expo?.android?.versionCode, 11);
-assert.equal(appJson.expo?.version, '1.0.10');
+assert.equal(appJson.expo?.android?.versionCode, 13);
+assert.equal(appJson.expo?.version, '1.0.12');
 assert.equal(appJson.expo?.ios?.infoPlist?.NSAppTransportSecurity?.NSAllowsArbitraryLoads, false);
 
 for (const asset of [
@@ -75,5 +75,5 @@ console.log('[branding-ios-config-policy-test] PASS', {
   splashBackground: '#020712',
   atsArbitraryLoads: false,
   adaptiveIconXml: true,
-  appVersionAligned: '1.0.10',
+  appVersionAligned: '1.0.12',
 });

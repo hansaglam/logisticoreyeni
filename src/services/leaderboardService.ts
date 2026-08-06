@@ -10,7 +10,7 @@ import { httpsCallable, type Functions } from 'firebase/functions';
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 import { leaderboardConfig } from '../config/leaderboard';
 import { getLeaderboardSeasonKey } from '../utils/leaderboardSeason';
-import { getAccountStatus, isAuthSessionReady } from './authService';
+import { getAccountStatus, isAuthSessionReady, waitForInitialAuthState } from './authService';
 import {
   getAuthUidSnapshot,
   isAuthContextStale,
@@ -27,6 +27,8 @@ import {
   getFirebaseFunctionsSafe,
   isFirebaseEnabled,
 } from './firebase';
+import { ensureServerStateMigrated } from './serverStateMigrationService';
+import { SAVE_GAME_VERSION } from '../storage/saveGame';
 
 export const LEADERBOARD_CALLABLES = {
   submit: 'submitLeaderboardScore',
@@ -82,6 +84,7 @@ export interface LeaderboardFetchResult {
   playerEntry: LeaderboardEntry | null;
   playerRank: number | null;
   hasMore?: boolean;
+  totalParticipants?: number;
   error?: string;
   errorCode?: LeaderboardErrorCode | string;
 }
@@ -156,6 +159,66 @@ function normalizeEntry(
 function createIdempotencyKey(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${rand}`.slice(0, 120);
+}
+
+const SUBMIT_MIN_INTERVAL_MS = 60_000;
+let lastSuccessfulSubmitAt = 0;
+let lastSubmittedScore: number | undefined;
+
+function isValidFetchPayload(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data && data.ok === true && typeof data.seasonKey === 'string');
+}
+
+/**
+ * Canonical leaderboard upsert — server state migration + trusted submit.
+ */
+export async function submitCurrentLeaderboardScore(options?: {
+  force?: boolean;
+  clientSaveVersion?: number;
+}): Promise<LeaderboardSubmitResult> {
+  if (!LEADERBOARD_ENABLED) {
+    return { ok: false, errorCode: 'feature-disabled' };
+  }
+  await waitForInitialAuthState();
+  if (!isLeaderboardEligible()) {
+    const account = getAccountStatus();
+    return {
+      ok: false,
+      errorCode: account?.isAnonymous ? 'anonymous-not-supported' : 'auth-required',
+    };
+  }
+
+  const now = Date.now();
+  if (
+    !options?.force &&
+    now - lastSuccessfulSubmitAt < SUBMIT_MIN_INTERVAL_MS &&
+    lastSubmittedScore != null
+  ) {
+    return {
+      ok: true,
+      updated: false,
+      score: lastSubmittedScore,
+    };
+  }
+
+  await ensureServerStateMigrated();
+
+  const result = await submitLeaderboardScore({
+    clientSaveVersion: options?.clientSaveVersion ?? SAVE_GAME_VERSION,
+    idempotencyKey: createIdempotencyKey('lb-upsert'),
+  });
+  if (result.ok) {
+    lastSuccessfulSubmitAt = now;
+    if (typeof result.score === 'number') {
+      lastSubmittedScore = result.score;
+    }
+  }
+  return result;
+}
+
+export function resetLeaderboardSubmitCache(): void {
+  lastSuccessfulSubmitAt = 0;
+  lastSubmittedScore = undefined;
 }
 
 /**
@@ -284,12 +347,13 @@ export async function syncLeaderboardEntry(_input: {
 
 export async function fetchWeeklyLeaderboard(
   _uid: string | null,
-  seasonKey: string = getLeaderboardSeasonKey(),
+  _seasonKey?: string,
 ): Promise<LeaderboardFetchResult> {
+  const fallbackSeasonKey = getLeaderboardSeasonKey();
   if (!LEADERBOARD_ENABLED) {
     return {
       ok: false,
-      seasonKey,
+      seasonKey: fallbackSeasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
@@ -300,7 +364,7 @@ export async function fetchWeeklyLeaderboard(
   if (!isFirebaseEnabled()) {
     return {
       ok: false,
-      seasonKey,
+      seasonKey: fallbackSeasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
@@ -309,11 +373,13 @@ export async function fetchWeeklyLeaderboard(
     };
   }
 
+  await waitForInitialAuthState();
+
   const user = getFirebaseAuthSafe()?.currentUser;
   if (!user) {
     return {
       ok: false,
-      seasonKey,
+      seasonKey: fallbackSeasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
@@ -324,7 +390,7 @@ export async function fetchWeeklyLeaderboard(
   if (user.isAnonymous) {
     return {
       ok: false,
-      seasonKey,
+      seasonKey: fallbackSeasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
@@ -345,13 +411,14 @@ export async function fetchWeeklyLeaderboard(
       playerEntry?: Record<string, unknown> | null;
       playerRank?: number | null;
       hasMore?: boolean;
+      totalParticipants?: number;
     }
   >(LEADERBOARD_CALLABLES.get);
 
   if (!fn) {
     return {
       ok: false,
-      seasonKey,
+      seasonKey: fallbackSeasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,
@@ -364,7 +431,6 @@ export async function fetchWeeklyLeaderboard(
   try {
     const response = await withCallableTimeout(
       fn({
-        seasonKey,
         limit: leaderboardConfig.leaderboardSize,
       }),
     );
@@ -378,7 +444,7 @@ export async function fetchWeeklyLeaderboard(
       });
       return {
         ok: false,
-        seasonKey,
+        seasonKey: fallbackSeasonKey,
         entries: [],
         playerEntry: null,
         playerRank: null,
@@ -387,8 +453,10 @@ export async function fetchWeeklyLeaderboard(
       };
     }
     const data = response.data;
-    if (!data?.ok) {
-      const errorCode = toLeaderboardErrorCode(mapBackendReasonToLeaderboardFailure(data?.reason));
+    if (!isValidFetchPayload(data as Record<string, unknown>)) {
+      const errorCode: LeaderboardErrorCode = data?.ok === false
+        ? toLeaderboardErrorCode(mapBackendReasonToLeaderboardFailure(data?.reason))
+        : 'malformed-response';
       logLeaderboardService({
         stage: 'fetch',
         functionName: LEADERBOARD_CALLABLES.get,
@@ -398,16 +466,17 @@ export async function fetchWeeklyLeaderboard(
       });
       return {
         ok: false,
-        seasonKey: data?.seasonKey ?? seasonKey,
+        seasonKey:
+          typeof data?.seasonKey === 'string' ? data.seasonKey : fallbackSeasonKey,
         entries: [],
         playerEntry: null,
         playerRank: null,
         errorCode,
-        error: data?.reason,
+        error: data?.reason ?? 'malformed-response',
       };
     }
 
-    const resolvedSeason = data.seasonKey ?? seasonKey;
+    const resolvedSeason = data.seasonKey ?? fallbackSeasonKey;
     const seenRanks = new Set<number>();
     const entries = (data.entries ?? [])
       .map((entry, index) =>
@@ -444,9 +513,11 @@ export async function fetchWeeklyLeaderboard(
       seasonStartMs: data.seasonStartMs,
       seasonEndMs: data.seasonEndMs,
       entries,
-      playerEntry,
+      playerEntry: playerEntry?.uid ? playerEntry : null,
       playerRank: data.playerRank ?? null,
       hasMore: Boolean(data.hasMore),
+      totalParticipants:
+        typeof data.totalParticipants === 'number' ? data.totalParticipants : entries.length,
     };
   } catch (error) {
     const errorCode = mapCallableError(error);
@@ -459,7 +530,7 @@ export async function fetchWeeklyLeaderboard(
     });
     return {
       ok: false,
-      seasonKey,
+      seasonKey: fallbackSeasonKey,
       entries: [],
       playerEntry: null,
       playerRank: null,

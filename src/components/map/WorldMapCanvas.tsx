@@ -53,7 +53,7 @@ import {
 import {
   getRoadRoute,
   getRouteHeadingDegrees,
-  getTruckPositionAlongRoadRoute,
+  getRoutePoseAtProgress,
   logMapHeadingDebug,
   buildMapHeadingDebugPayload,
   normalizeMapDeliveryProgress,
@@ -87,7 +87,7 @@ import {
   MAP_VIEWPORT_BACKGROUND,
   MAP_VIEWPORT_HEIGHT,
   MAP_VIEWPORT_HEIGHT_COMPACT,
-  TRUCK_ICON_BASE_ROTATION_DEG,
+  TRUCK_ASSET_FORWARD_OFFSET_DEG,
 } from './mapTheme';
 
 const MAP_IMAGE = getTurkeyLogisticsNetworkMap();
@@ -386,15 +386,16 @@ function WorldMapCanvasInner(
       const normalizedProgress = normalizeMapDeliveryProgress(delivery.progress);
       const headingCacheKey = `${delivery.id}:${routeVersion}`;
       const previousHeading = lastValidHeadingByRouteKey.current.get(headingCacheKey);
-      const truckSample = getTruckPositionAlongRoadRoute(roadPoints, delivery.progress, {
+      const samplingOptions = {
         fallbackHeadingDeg: previousHeading,
         coordinateScaleX: roadBounds.width,
         coordinateScaleY: roadBounds.height,
-      });
+      };
+      const routePose = getRoutePoseAtProgress(roadPoints, delivery.progress, samplingOptions);
       const displayHeadingDeg = getRouteHeadingDegrees({
         routePoints: roadPoints,
         progress: delivery.progress,
-        assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         fallbackHeadingDeg: previousHeading,
         previousHeadingDeg: previousHeading,
         coordinateScaleX: roadBounds.width,
@@ -406,7 +407,7 @@ function WorldMapCanvasInner(
       const headingDebug = buildMapHeadingDebugPayload({
         routePoints: roadPoints,
         progress: delivery.progress,
-        assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         coordinateScaleX: roadBounds.width,
         coordinateScaleY: roadBounds.height,
         routeId: delivery.id,
@@ -416,7 +417,7 @@ function WorldMapCanvasInner(
       if (headingDebug) {
         logMapHeadingDebug(headingDebug);
       }
-      const truckPixel = normalizedPointToPixel(truckSample.point, roadBounds);
+      const truckPixel = normalizedPointToPixel(routePose.position, roadBounds);
       const truckAngleRadians = (displayHeadingDeg * Math.PI) / 180;
 
       logTruckPositionDebug({
@@ -426,7 +427,7 @@ function WorldMapCanvasInner(
         normalizedProgress,
         routeStart: roadPoints[0],
         routeEnd: roadPoints[roadPoints.length - 1],
-        calculatedTruckPoint: truckSample.point,
+        calculatedTruckPoint: routePose.position,
       });
 
       const { completedPoints, remainingPoints } = splitPolylineAtProgress(
@@ -528,15 +529,16 @@ function WorldMapCanvasInner(
       const normalizedProgress = normalizeMapDeliveryProgress(transfer.progress);
       const headingCacheKey = `${transfer.id}:${routeVersion}`;
       const previousHeading = lastValidHeadingByRouteKey.current.get(headingCacheKey);
-      const truckSample = getTruckPositionAlongRoadRoute(roadPoints, transfer.progress, {
+      const samplingOptions = {
         fallbackHeadingDeg: previousHeading,
         coordinateScaleX: roadBounds.width,
         coordinateScaleY: roadBounds.height,
-      });
+      };
+      const routePose = getRoutePoseAtProgress(roadPoints, transfer.progress, samplingOptions);
       const displayHeadingDeg = getRouteHeadingDegrees({
         routePoints: roadPoints,
         progress: transfer.progress,
-        assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         fallbackHeadingDeg: previousHeading,
         previousHeadingDeg: previousHeading,
         coordinateScaleX: roadBounds.width,
@@ -551,7 +553,7 @@ function WorldMapCanvasInner(
         routeVersion,
         hasRoute: true,
         routePath: polylineToSvgPath(roadPoints, roadBounds),
-        truckPixel: normalizedPointToPixel(truckSample.point, roadBounds),
+        truckPixel: normalizedPointToPixel(routePose.position, roadBounds),
         truckAngle: (displayHeadingDeg * Math.PI) / 180,
         normalizedProgress,
         opacity,

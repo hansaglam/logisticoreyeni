@@ -183,6 +183,19 @@ import {
   resolveDeliveryIncident as resolveDeliveryIncidentSim,
 } from '../simulation/deliveryIncidents';
 import {
+  buildOperationOutcomeMessage,
+  buildOperationResolutionId,
+  getOperationChoiceNetCashDelta,
+} from '../simulation/deliveryOperationChoice';
+import {
+  buildDeliveryFailureIdempotencyKey,
+  buildDeliverySettlementIdempotencyKey,
+  buildOperationReputationIdempotencyKey,
+  calculateDeliveryReputationResult,
+  deliveryFailureReasonToReputationDelta,
+} from '../simulation/reputationSettlement';
+import { mergeReputationIntoStore } from '../simulation/reputationService';
+import {
   buildOfflineProgressSummary,
   buildTimeProgressionAudit,
   applyOfflineProgress,
@@ -317,7 +330,6 @@ import {
   type RetentionEvent,
 } from '../simulation/retentionProgress';
 import {
-  shouldGrantHighReputationBonus,
   getContractTypePenaltyMultiplier,
   normalizeContractType,
 } from '../simulation/contractTypes';
@@ -332,7 +344,6 @@ import {
   getTruckUpgradeCost,
   type TruckUpgradeType,
 } from '../simulation/truckUpgrades';
-import { HIGH_REPUTATION_SUCCESS_BONUS } from '../config/contractTypes';
 import {
   applyWorldEventImpactToFuelPrice,
   applyWorldEventImpactToProductPrice,
@@ -423,6 +434,11 @@ import {
 } from '../tutorial/spotlightTutorialState';
 import { createCompletedMarketTutorialState } from '../tutorial/marketTutorialState';
 import {
+  applyTutorialCompletion,
+  normalizeTutorialProgress,
+} from '../tutorial/app/persistence';
+import type { AppTutorialId } from '../tutorial/app/types';
+import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
   formatOperatingCostEventLogMessage,
@@ -490,8 +506,6 @@ const MARKET_NEWS_MAX_AGE_HOURS = 72;
 const MARKET_NEWS_MAX_COUNT = 30;
 const EVENT_LOG_MAX_AGE_HOURS = 72;
 const EVENT_LOG_MAX_COUNT = 50;
-const REPUTATION_GAIN = reputationBalance.onTimeDeliveryGain;
-const REPUTATION_LOSS = reputationBalance.failedDeliveryLoss;
 const HIGH_PAYMENT_CONTRACT_THRESHOLD = 8_000;
 const FUEL_PRICE_CHANGE_THRESHOLD = 0.05;
 const MIN_TRUCK_CONDITION_FOR_DELIVERY = 30;
@@ -560,6 +574,9 @@ interface OfflineProgressCollector {
 }
 
 let offlineProgressCollector: OfflineProgressCollector | null = null;
+
+/** Operasyon kararı double-tap / race koruması */
+const operationResolutionInFlight = new Set<string>();
 
 const OFFLINE_META_PERSIST_INTERVAL_MS = 15_000;
 let lastOfflineMetaPersistAt = 0;
@@ -1490,6 +1507,7 @@ export function createInitialGameState(): StoreGameState {
     spotlightTutorial: createDefaultSpotlightTutorialState(),
     marketTutorialCompleted: false,
     marketTutorialVersion: 0,
+    tutorialProgress: {},
     marketAlerts: [],
     worldEvents: initialSnapshot?.activeEvents ?? [],
     worldEventsVersion: 1,
@@ -1500,6 +1518,7 @@ export function createInitialGameState(): StoreGameState {
     lastProcessedEconomyAt: initialEconomyNowMs,
     appliedEconomyPeriodKeys: [],
     offlineProgressVersion: OFFLINE_PROGRESS_VERSION,
+    reputationHistory: [],
   };
 }
 
@@ -1612,6 +1631,11 @@ export interface GameStore extends StoreGameState {
     deliveryId: string,
     choiceId: string,
   ) => Promise<{ ok: boolean; reason?: string }>;
+  resolveDeliveryOperationChoice: (params: {
+    deliveryId: string;
+    eventId: string;
+    choiceId: string;
+  }) => Promise<{ ok: boolean; reason?: string }>;
   forceGeneratePlayableContracts: () => number;
   getContractRefreshRemainingSeconds: () => number;
   /** Debug: manuel sözleşme üretimi */
@@ -1698,6 +1722,7 @@ export interface GameStore extends StoreGameState {
   notifyFirstDeliveryCompleted: () => void;
   notifyMarketScreenOpened: () => void;
   completeMarketTutorial: () => void;
+  completeTutorial: (tutorialId: AppTutorialId) => void;
   createMarketPriceAlert: (input: {
     cityId: string;
     productId: ProductId;
@@ -2180,7 +2205,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   completeMarketTutorial: () => {
-    set(createCompletedMarketTutorialState());
+    set({
+      ...createCompletedMarketTutorialState(),
+      tutorialProgress: applyTutorialCompletion(get().tutorialProgress, 'market'),
+    });
+    get().markSaveDirty();
+  },
+
+  completeTutorial: (tutorialId: AppTutorialId) => {
+    const state = get();
+    const nextProgress = applyTutorialCompletion(state.tutorialProgress, tutorialId);
+    if (tutorialId === 'market') {
+      set({
+        ...createCompletedMarketTutorialState(),
+        tutorialProgress: nextProgress,
+      });
+    } else {
+      set({ tutorialProgress: nextProgress });
+    }
     get().markSaveDirty();
   },
 
@@ -2705,12 +2747,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ? markOnboardingMissionRewardClaimed(currentOnboarding)
         : currentOnboarding;
 
+    const reputationPatch =
+      reputationReward !== 0
+        ? mergeReputationIntoStore(
+            { player: state.player, reputationHistory: state.reputationHistory },
+            {
+              source: 'mission-reward',
+              delta: reputationReward,
+              reason: 'mission-reward',
+              idempotencyKey: `reputation:mission:${missionId}`,
+              createdAt: state.currentTime,
+            },
+          )
+        : null;
+
     set({
       player: {
-        ...state.player,
+        ...(reputationPatch?.player ?? state.player),
         money: rewardTransaction.cashAfter,
-        reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
       },
+      reputationHistory: reputationPatch?.reputationHistory ?? state.reputationHistory,
       missions: {
         ...missions,
         claimedMissionRewardIds,
@@ -2824,12 +2880,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
           })
         : null;
 
+    const reputationPatch =
+      reputationReward !== 0
+        ? mergeReputationIntoStore(
+            { player: state.player, reputationHistory: state.reputationHistory },
+            {
+              source: 'milestone-reward',
+              delta: reputationReward,
+              reason: 'milestone-reward',
+              idempotencyKey: `reputation:milestone:${milestoneId}`,
+              createdAt: state.currentTime,
+            },
+          )
+        : null;
+
     set({
       player: {
-        ...state.player,
+        ...(reputationPatch?.player ?? state.player),
         money: rewardTransaction.cashAfter,
-        reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
       },
+      reputationHistory: reputationPatch?.reputationHistory ?? state.reputationHistory,
       retention: claimResult.retention,
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
@@ -2905,12 +2975,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
           })
         : null;
 
+    const reputationPatch =
+      reputationReward !== 0
+        ? mergeReputationIntoStore(
+            { player: state.player, reputationHistory: state.reputationHistory },
+            {
+              source: 'weekly-reward',
+              delta: reputationReward,
+              reason: 'weekly-reward',
+              idempotencyKey: `reputation:weekly:${seasonKey}:${objectiveId}`,
+              createdAt: state.currentTime,
+            },
+          )
+        : null;
+
     set({
       player: {
-        ...state.player,
+        ...(reputationPatch?.player ?? state.player),
         money: rewardTransaction.cashAfter,
-        reputation: Math.min(100, (state.player.reputation ?? 0) + reputationReward),
       },
+      reputationHistory: reputationPatch?.reputationHistory ?? state.reputationHistory,
       retention: claimResult.retention,
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
@@ -6276,10 +6360,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
       onTime: !isLateDelivery,
       success: true,
     });
-    const reputationBonus =
-      !isLateDelivery && shouldGrantHighReputationBonus(contract)
-        ? HIGH_REPUTATION_SUCCESS_BONUS
-        : 0;
+    const deliveryReputationResult = calculateDeliveryReputationResult({
+      contract,
+      delivery,
+      actualTravelHours,
+    });
+    const reputationPatch = mergeReputationIntoStore(
+      { player: state.player, reputationHistory: state.reputationHistory },
+      {
+        source: 'delivery-settlement',
+        delta: deliveryReputationResult.delta,
+        reason: deliveryReputationResult.reasons[0] ?? 'delivery-on-time',
+        idempotencyKey: buildDeliverySettlementIdempotencyKey(deliveryId),
+        createdAt: state.currentTime,
+        deliveryId,
+        contractId: contract.id,
+      },
+    );
     const truckArrivalMessage = completedTruck
       ? `${completedTruck.name} ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`
       : `Kamyon ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`;
@@ -6358,7 +6455,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         cashDeltaOnCompletion: moneyAfterComplete - beforeMoney,
       },
       player: {
-        ...state.player,
+        ...reputationPatch.player,
         trucks: merged.player!.trucks,
         drivers: updatedDrivers,
         warehouses: merged.player!.warehouses,
@@ -6368,10 +6465,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         lateDeliveries: isLateDelivery
           ? (state.player.lateDeliveries ?? 0) + 1
           : (state.player.lateDeliveries ?? 0),
-        reputation: isLateDelivery
-          ? state.player.reputation
-          : Math.min(100, state.player.reputation + REPUTATION_GAIN + reputationBonus),
       },
+      reputationHistory: reputationPatch.reputationHistory,
       marketNews: [
         {
           id: createNewsId(state.currentTime, `del_ok_${deliveryId}`),
@@ -6408,6 +6503,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
         state.currentTime,
       ),
     });
+
+    if (reputationPatch.result.applied && reputationPatch.result.delta !== 0) {
+      get().addNotification({
+        time: state.currentTime,
+        type: reputationPatch.result.delta > 0 ? 'success' : 'warning',
+        title: 'İtibar güncellendi',
+        message: `${reputationPatch.result.delta > 0 ? '+' : ''}${reputationPatch.result.delta} · ${reputationPatch.result.nextValue}/100`,
+        autoDismissMs: 3500,
+      });
+    }
 
     completedDeliveryNotificationIds.add(deliveryId);
 
@@ -6507,6 +6612,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const moneyAfterFail = penaltyTransaction.cashAfter;
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterFail);
     const settledAt = state.currentTime;
+    const failureReputation = deliveryFailureReasonToReputationDelta(reason);
+    const reputationPatch = mergeReputationIntoStore(
+      { player: state.player, reputationHistory: state.reputationHistory },
+      {
+        source: failureReputation.source,
+        delta: failureReputation.delta,
+        reason: failureReputation.reason,
+        idempotencyKey: buildDeliveryFailureIdempotencyKey(deliveryId),
+        createdAt: state.currentTime,
+        deliveryId,
+        contractId: contract?.id,
+      },
+    );
     const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
       item.id === deliveryId ? { ...item, settledAt } : item,
     );
@@ -6536,18 +6654,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
         cashDeltaOnCompletion: -paidPenaltyAmount,
       },
       player: {
-        ...state.player,
+        ...reputationPatch.player,
         trucks: merged.player!.trucks,
         drivers: merged.player!.drivers,
         warehouses: merged.player!.warehouses,
         money: moneyAfterFail,
-        reputation: Math.max(0, state.player.reputation - REPUTATION_LOSS),
         failedDeliveries: (state.player.failedDeliveries ?? 0) + 1,
         lateDeliveries:
           reason === 'too_late'
             ? (state.player.lateDeliveries ?? 0) + 1
             : (state.player.lateDeliveries ?? 0),
       },
+      reputationHistory: reputationPatch.reputationHistory,
       marketNews: [
         {
           id: createNewsId(state.currentTime, `del_fail_${deliveryId}`),
@@ -6571,6 +6689,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
         state.currentTime,
       ),
     });
+
+    if (reputationPatch.result.applied && reputationPatch.result.delta !== 0) {
+      get().addNotification({
+        time: state.currentTime,
+        type: 'warning',
+        title: 'İtibar güncellendi',
+        message: `${reputationPatch.result.delta} · ${reputationPatch.result.nextValue}/100`,
+        autoDismissMs: 3500,
+      });
+    }
+
     get().autoSave('delivery_failed');
   },
 
@@ -7494,129 +7623,203 @@ export const useGameStore = create<GameStore>((set, get) => ({
   resolveDeliveryIncident: async (deliveryId, choiceId) => {
     const state = get();
     const delivery = state.activeDeliveries.find((item) => item.id === deliveryId);
+    if (!delivery?.incident) {
+      return { ok: false, reason: 'Teslimat bulunamadı.' };
+    }
+    return get().resolveDeliveryOperationChoice({
+      deliveryId,
+      eventId: delivery.incident.id,
+      choiceId,
+    });
+  },
+
+  resolveDeliveryOperationChoice: async ({ deliveryId, eventId, choiceId }) => {
+    const state = get();
+    const delivery = state.activeDeliveries.find((item) => item.id === deliveryId);
     if (!delivery) {
       return { ok: false, reason: 'Teslimat bulunamadı.' };
     }
 
-    const result = resolveDeliveryIncidentSim(delivery, choiceId, state.currentTime);
-    if (!result.ok || !result.delivery || !result.effects) {
-      return { ok: false, reason: result.reason ?? 'Operasyon kararı uygulanamadı.' };
+    const incident = delivery.incident;
+    if (!incident || incident.id !== eventId) {
+      return { ok: false, reason: 'Bekleyen operasyon olayı yok.' };
     }
 
-    const contract = state.contracts.find((item) => item.id === delivery.contractId);
-    const incidentTitle = result.delivery.incident?.title ?? 'Teslimat';
-    // fuelCostDelta describes cost direction: positive is extra cost, negative
-    // is savings. Convert it to the inverse cash movement exactly once.
-    const cashDelta = result.effects.cashDelta - result.effects.fuelCostDelta;
-    let nextPlayer = state.player;
-    let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | undefined;
+    const lockKey = `${deliveryId}:${eventId}`;
+    if (operationResolutionInFlight.has(lockKey)) {
+      return { ok: false, reason: 'Karar uygulanıyor…' };
+    }
+    operationResolutionInFlight.add(lockKey);
 
-    if (cashDelta !== 0) {
-      const incidentTransactionId = `incident:${deliveryId}:${choiceId}:${state.currentTime}`;
-      const incidentTransaction = applyCashTransaction({
-        currentCash: nextPlayer.money,
-        amount: Math.abs(cashDelta),
-        kind: cashDelta >= 0 ? 'income' : 'mandatory-expense',
-        referenceId: `delivery:${deliveryId}:incident`,
-        transactionId: incidentTransactionId,
-        appliedTransactionIds: (state.financeLedger ?? [])
-          .map((entry) => entry.transactionId)
-          .filter((value): value is string => typeof value === 'string'),
-      });
-      nextPlayer = {
-        ...nextPlayer,
-        money: incidentTransaction.cashAfter,
-      };
-      if (incidentTransaction.amount > 0) {
-        ledgerPatch = patchFinanceLedger(state, {
-          time: state.currentTime,
-          type: cashDelta >= 0 ? 'income' : 'expense',
-          category:
-            cashDelta >= 0
-              ? 'other_income'
-              : result.effects.fuelCostDelta !== 0 &&
-                  result.effects.cashDelta === 0
-                ? 'fuel'
-                : 'other_expense',
-          amount: incidentTransaction.amount,
-          description: `Operasyon kararı · ${incidentTitle}`,
-          relatedDeliveryId: deliveryId,
-          transactionId: incidentTransaction.transactionId,
-          referenceId: incidentTransaction.referenceId,
-        });
+    try {
+      const choice = incident.choices.find((item) => item.id === choiceId);
+      if (!choice) {
+        return { ok: false, reason: 'Geçersiz seçim.' };
       }
-    }
 
-    if (result.effects.truckConditionDelta !== 0) {
-      nextPlayer = {
-        ...nextPlayer,
-        trucks: nextPlayer.trucks.map((truck) => {
-          if (truck.id !== delivery.truckId) {
-            return truck;
+      const result = resolveDeliveryIncidentSim(delivery, choiceId, state.currentTime, {
+        playerMoney: state.player.money,
+      });
+      if (!result.ok || !result.delivery || !result.effects) {
+        return { ok: false, reason: result.reason ?? 'Operasyon kararı uygulanamadı.' };
+      }
+
+      const contract = state.contracts.find((item) => item.id === delivery.contractId);
+      const incidentTitle = result.delivery.incident?.title ?? 'Teslimat';
+      const cashDelta = getOperationChoiceNetCashDelta(choice.effects);
+      let nextPlayer = state.player;
+      let ledgerPatch: Pick<StoreGameState, 'financeLedger' | 'financeTotals'> | undefined;
+
+      if (cashDelta !== 0) {
+        const incidentTransactionId = buildOperationResolutionId(
+          deliveryId,
+          eventId,
+          choiceId,
+        );
+        const incidentTransaction = applyCashTransaction({
+          currentCash: nextPlayer.money,
+          amount: Math.abs(cashDelta),
+          kind: cashDelta >= 0 ? 'income' : 'voluntary-expense',
+          referenceId: `delivery:${deliveryId}:incident`,
+          transactionId: incidentTransactionId,
+          appliedTransactionIds: (state.financeLedger ?? [])
+            .map((entry) => entry.transactionId)
+            .filter((value): value is string => typeof value === 'string'),
+        });
+
+        if (!incidentTransaction.ok) {
+          if (incidentTransaction.reason === 'duplicate-transaction') {
+            if (delivery.incidentResolved || incident.resolvedChoiceId) {
+              return { ok: true };
+            }
+            return {
+              ok: false,
+              reason: 'Bu işlem için yeterli nakit yok.',
+            };
           }
-          return {
-            ...truck,
-            condition: Math.min(
-              100,
-              Math.max(0, truck.condition + result.effects!.truckConditionDelta),
+          if (incidentTransaction.reason === 'insufficient-funds') {
+            return { ok: false, reason: 'Bu işlem için yeterli nakit yok.' };
+          }
+          return { ok: false, reason: 'Operasyon kararı uygulanamadı.' };
+        }
+
+        nextPlayer = {
+          ...nextPlayer,
+          money: incidentTransaction.cashAfter,
+        };
+        if (incidentTransaction.amount > 0) {
+          ledgerPatch = patchFinanceLedger(state, {
+            time: state.currentTime,
+            type: cashDelta >= 0 ? 'income' : 'expense',
+            category:
+              cashDelta >= 0
+                ? 'other_income'
+                : result.effects.fuelCostDelta !== 0 &&
+                    result.effects.cashDelta === 0
+                  ? 'fuel'
+                  : 'other_expense',
+            amount: incidentTransaction.amount,
+            description: `Operasyon kararı · ${incidentTitle}`,
+            relatedDeliveryId: deliveryId,
+            transactionId: incidentTransaction.transactionId,
+            referenceId: incidentTransaction.referenceId,
+          });
+        }
+      }
+
+      if (result.effects.truckConditionDelta !== 0) {
+        nextPlayer = {
+          ...nextPlayer,
+          trucks: nextPlayer.trucks.map((truck) => {
+            if (truck.id !== delivery.truckId) {
+              return truck;
+            }
+            return {
+              ...truck,
+              condition: Math.min(
+                100,
+                Math.max(0, truck.condition + result.effects!.truckConditionDelta),
+              ),
+            };
+          }),
+        };
+      }
+
+      if (result.effects.driverXpDelta > 0) {
+        nextPlayer = {
+          ...nextPlayer,
+          drivers: nextPlayer.drivers.map((driver) => {
+            if (driver.id !== delivery.driverId) {
+              return driver;
+            }
+            return applyDriverXp(driver, result.effects!.driverXpDelta, contract).driver;
+          }),
+        };
+      }
+
+      if (result.effects.playerXpDelta > 0) {
+        nextPlayer = applyXpToPlayer(nextPlayer, result.effects.playerXpDelta).player;
+      }
+
+      let operationReputationHistory = state.reputationHistory;
+      if (result.effects.reputationDelta !== 0) {
+        const reputationPatch = mergeReputationIntoStore(
+          { player: nextPlayer, reputationHistory: state.reputationHistory },
+          {
+            source: 'delivery-operation',
+            delta: result.effects.reputationDelta,
+            reason:
+              result.effects.reputationDelta > 0 ? 'operation-positive' : 'operation-negative',
+            idempotencyKey: buildOperationReputationIdempotencyKey(
+              deliveryId,
+              eventId,
+              choiceId,
             ),
-          };
-        }),
-      };
+            createdAt: state.currentTime,
+            deliveryId,
+            eventId,
+          },
+        );
+        nextPlayer = reputationPatch.player;
+        operationReputationHistory = reputationPatch.reputationHistory;
+      }
+
+      const nextDeliveries = state.activeDeliveries.map((item) =>
+        item.id === deliveryId ? result.delivery! : item,
+      );
+
+      set({
+        player: nextPlayer,
+        activeDeliveries: nextDeliveries,
+        reputationHistory: operationReputationHistory,
+        ...(ledgerPatch ?? {}),
+      });
+
+      const outcome = buildOperationOutcomeMessage({
+        choiceLabel: choice.label,
+        netCashDelta: cashDelta,
+        remainingTimeDeltaSeconds: result.effects.remainingTimeDeltaSeconds,
+      });
+
+      get().applyRetentionEventAndSync({ type: 'delivery_incident_resolved' });
+      get().addNotification({
+        time: state.currentTime,
+        type: 'info',
+        title: outcome.title,
+        message: outcome.message,
+        autoDismissMs: 4500,
+      });
+      get().markSaveDirty();
+      get().autoSave('delivery_incident');
+
+      if (isDeliveryProgressComplete(result.delivery.progress)) {
+        get().completeDeliveryById(deliveryId);
+      }
+
+      return { ok: true };
+    } finally {
+      operationResolutionInFlight.delete(lockKey);
     }
-
-    if (result.effects.driverXpDelta > 0) {
-      nextPlayer = {
-        ...nextPlayer,
-        drivers: nextPlayer.drivers.map((driver) => {
-          if (driver.id !== delivery.driverId) {
-            return driver;
-          }
-          return applyDriverXp(driver, result.effects!.driverXpDelta, contract).driver;
-        }),
-      };
-    }
-
-    if (result.effects.playerXpDelta > 0) {
-      nextPlayer = applyXpToPlayer(nextPlayer, result.effects.playerXpDelta).player;
-    }
-
-    if (result.effects.reputationDelta !== 0) {
-      nextPlayer = {
-        ...nextPlayer,
-        reputation: Math.min(
-          100,
-          Math.max(0, nextPlayer.reputation + result.effects.reputationDelta),
-        ),
-      };
-    }
-
-    const nextDeliveries = state.activeDeliveries.map((item) =>
-      item.id === deliveryId ? result.delivery! : item,
-    );
-
-    set({
-      player: nextPlayer,
-      activeDeliveries: nextDeliveries,
-      ...(ledgerPatch ?? {}),
-    });
-
-    get().applyRetentionEventAndSync({ type: 'delivery_incident_resolved' });
-    get().addNotification({
-      time: state.currentTime,
-      type: 'info',
-      title: 'Operasyon kararı uygulandı',
-      message: incidentTitle,
-      autoDismissMs: 3500,
-    });
-    get().markSaveDirty();
-    get().autoSave('delivery_incident');
-
-    if (isDeliveryProgressComplete(result.delivery.progress)) {
-      get().completeDeliveryById(deliveryId);
-    }
-
-    return { ok: true };
   },
 
   upgradeTruck: (truckId, upgradeType) => {

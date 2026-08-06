@@ -13,6 +13,11 @@ import {
   QUICK_ACCESS_TILE_GAP,
   QUICK_ACCESS_TILE_HEIGHT,
 } from '../src/navigation/quickAccessConfig';
+import {
+  MANAGEMENT_GRID_GAP,
+  MANAGEMENT_PANEL_MAX_HEIGHT_RATIO,
+  MANAGEMENT_TILE_MIN_HEIGHT,
+} from '../src/components/management/managementTheme';
 
 let pass = 0;
 let fail = 0;
@@ -48,14 +53,22 @@ console.log('Card config');
 console.log('\nLayout constants');
 {
   assert(
-    QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO >= 0.82 && QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO <= 0.88,
-    'panel max height ratio in 82–88% range',
+    QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO >= 0.72 &&
+      QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO <= 0.78,
+    'panel max height ratio in 72–78% range',
+  );
+  assert(
+    MANAGEMENT_PANEL_MAX_HEIGHT_RATIO >= 0.72 &&
+      MANAGEMENT_PANEL_MAX_HEIGHT_RATIO <= 0.78,
+    'management panel max height ratio in 72–78% range',
   );
   assert(
     QUICK_ACCESS_TILE_GAP >= 12 && QUICK_ACCESS_TILE_GAP <= 16,
     'tile gap in 12–16px range',
   );
-  assert(QUICK_ACCESS_TILE_HEIGHT >= 44, 'tile height exceeds 44px touch target');
+  assert(MANAGEMENT_GRID_GAP === 12, 'management grid gap is 12px');
+  assert(QUICK_ACCESS_TILE_HEIGHT >= 122, 'tile min height in 122–136px range');
+  assert(MANAGEMENT_TILE_MIN_HEIGHT >= 122, 'management tile min height in range');
 }
 
 console.log('\nAccessibility copy');
@@ -81,7 +94,7 @@ console.log('\nNavigation wiring');
 {
   const app = readFileSync('App.tsx', 'utf8');
   const moreScreen = readFileSync('src/screens/MoreScreen.tsx', 'utf8');
-  const quickAccessMenu = readFileSync('src/components/navigation/QuickAccessMenu.tsx', 'utf8');
+  const managementPanel = readFileSync('src/components/management/ManagementPanel.tsx', 'utf8');
   const gameStore = readFileSync('src/store/gameStore.ts', 'utf8');
 
   assert(app.includes("pendingMoreSubRoute: 'leaderboard'"), 'leaderboard route via more tab');
@@ -91,24 +104,36 @@ console.log('\nNavigation wiring');
   assert(moreScreen.includes('AccountCenterScreen'), 'AccountCenterScreen wired in MoreScreen');
   assert(moreScreen.includes("route === 'leaderboard'"), 'leaderboard sub-route always reachable');
   assert(gameStore.includes("'account'"), 'pendingMoreSubRoute includes account');
+  assert(managementPanel.includes('onQuickAccess'), 'management panel forwards navigation actions');
 }
 
 console.log('\nPanel interaction');
 {
-  const quickAccessMenu = readFileSync('src/components/navigation/QuickAccessMenu.tsx', 'utf8');
-  assert(quickAccessMenu.includes('tapLockRef'), 'double-tap lock present');
-  assert(quickAccessMenu.includes('onClose();'), 'panel closes before navigation callback');
-  assert(quickAccessMenu.includes('onRequestClose={onClose}'), 'Android back closes panel');
-  assert(quickAccessMenu.includes('accessibilityRole="button"'), 'tiles expose button role');
-  assert(quickAccessMenu.includes('adjustsFontSizeToFit'), 'font scale support on tile labels');
-  assert(quickAccessMenu.includes('width: \'48.4%\''), '2-column grid tile width');
-  assert(quickAccessMenu.includes('<ScrollView'), 'panel content scrollable');
+  const managementPanel = readFileSync('src/components/management/ManagementPanel.tsx', 'utf8');
+  const managementCard = readFileSync('src/components/management/ManagementCard.tsx', 'utf8');
+  const managementGrid = readFileSync('src/components/management/ManagementGrid.tsx', 'utf8');
+  const dataHook = readFileSync('src/components/management/useManagementPanelData.ts', 'utf8');
+
+  assert(managementPanel.includes('tapLockRef'), 'double-tap lock present');
+  assert(managementPanel.includes('onClose();'), 'panel closes before navigation callback');
+  assert(managementPanel.includes('onRequestClose={onClose}'), 'Android back closes panel');
+  assert(managementPanel.includes('accessibilityViewIsModal'), 'modal accessibility set');
+  assert(managementPanel.includes('scrollRef.current?.scrollTo'), 'panel opens at top scroll');
+  assert(managementCard.includes('accessibilityRole="button"'), 'cards expose button role');
+  assert(managementCard.includes('adjustsFontSizeToFit'), 'font scale support on card labels');
+  assert(managementCard.includes('minWidth: 24'), 'badge min 24px');
+  assert(managementGrid.includes('flexWrap'), '2-column grid uses flex wrap');
+  assert(managementPanel.includes('<ScrollView'), 'panel content scrollable');
+  assert(managementPanel.includes('Şirketini, filonu ve operasyonlarını yönet'), 'new subtitle copy');
+  assert(dataHook.includes('useFleetSubtitle'), 'fleet subtitle from store');
+  assert(dataHook.includes('useWarehouseSubtitle'), 'warehouse subtitle from store');
+  assert(dataHook.includes('useMissionsReadyBadge'), 'missions badge from canonical selector');
 }
 
 console.log('\nExisting cards preserved');
 {
   const labels = buildQuickAccessItems(true).map((item) => item.label);
-  for (const label of ['Filo', 'Mağaza', 'Depolar', 'Finans', 'Araç Pazarı', 'Görevler']) {
+  for (const label of ['Filo', 'Mağaza', 'Depolar', 'Finans', 'Araç Pazarı', 'Görevler', 'Liderlik', 'Hesap']) {
     assert(labels.includes(label), `${label} card still present`);
   }
 }

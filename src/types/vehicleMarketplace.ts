@@ -45,6 +45,7 @@ export type VehicleMarketplaceFailureReason =
   | 'username-required'
   | 'marketplace-state-missing'
   | 'network-error'
+  | 'timeout'
   | 'function-not-found'
   | 'permission-denied'
   | 'service-unavailable'

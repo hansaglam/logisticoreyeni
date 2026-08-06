@@ -13,6 +13,7 @@ import {
   isValidLeaderboardSeasonKey,
 } from './leaderboardSeason';
 import {
+  buildBoundedLegacyMigrationFromCloudSave,
   buildDefaultServerState,
   buildServerStateFromMarketplaceState,
   serverStateRef,
@@ -133,13 +134,15 @@ export async function submitLeaderboardScoreTransaction(
       const marketplaceRef = firestore.doc(
         `users/${identity.uid}/marketplaceState/current`,
       );
-      const [idemSnap, serverSnap, userSnap, existingSnap, marketplaceSnap] =
+      const saveRef = firestore.doc(`users/${identity.uid}/saves/current`);
+      const [idemSnap, serverSnap, userSnap, existingSnap, marketplaceSnap, saveSnap] =
         await Promise.all([
           transaction.get(idemRef),
           transaction.get(serverRef),
           transaction.get(userRef),
           transaction.get(entryDocumentRef),
           transaction.get(marketplaceRef),
+          transaction.get(saveRef),
         ]);
       if (idemSnap.exists) {
         const previous = idemSnap.data()?.result as SubmitLeaderboardScoreResult | undefined;
@@ -158,6 +161,14 @@ export async function submitLeaderboardScoreTransaction(
           marketplaceSnap.data() as MarketplacePlayerState,
           Timestamp.fromMillis(nowMs),
         );
+        serverStateCreated = true;
+      } else if (saveSnap.exists) {
+        const built = buildBoundedLegacyMigrationFromCloudSave(
+          identity.uid,
+          saveSnap.data() ?? {},
+          Timestamp.fromMillis(nowMs),
+        );
+        serverState = built.state;
         serverStateCreated = true;
       } else {
         serverState = buildDefaultServerState(
@@ -372,6 +383,11 @@ export async function getLeaderboardSnapshot(
           }
         : null;
 
+    const totalParticipantsSnap = await firestore
+      .collection(`leaderboards/${seasonKey}/entries`)
+      .count()
+      .get();
+
     return {
       ok: true,
       seasonKey,
@@ -382,6 +398,7 @@ export async function getLeaderboardSnapshot(
       playerRank,
       hasMore: Boolean(nextCursor),
       nextCursor,
+      totalParticipants: totalParticipantsSnap.data().count,
     };
   } catch (error) {
     console.error('[leaderboard-get-failed]', {

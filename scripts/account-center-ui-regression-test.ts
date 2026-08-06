@@ -28,6 +28,18 @@ function assert(condition: boolean, label: string): void {
 }
 
 const screen = readFileSync('src/screens/AccountCenterScreen.tsx', 'utf8');
+const accountCenterDir = [
+  'src/components/accountCenter/AccountProfileTab.tsx',
+  'src/components/accountCenter/AccountConnectionTab.tsx',
+  'src/components/accountCenter/AccountPreferencesTab.tsx',
+  'src/components/accountCenter/AccountSegmentedTabs.tsx',
+  'src/components/accountCenter/ProfileHeroCard.tsx',
+  'src/components/accountCenter/DangerZoneCard.tsx',
+  'src/components/accountCenter/constants.ts',
+]
+  .map((path) => readFileSync(path, 'utf8'))
+  .join('\n');
+const screenBundle = `${screen}\n${accountCenterDir}`;
 const hook = readFileSync('src/hooks/useAccountCenter.ts', 'utf8');
 const moreScreen = readFileSync('src/screens/MoreScreen.tsx', 'utf8');
 const accountSection = readFileSync('src/components/AccountSection.tsx', 'utf8');
@@ -38,66 +50,66 @@ console.log('\n=== Account Center UI Regression ===\n');
 
 console.log('Screen structure');
 {
-  assert(screen.includes('Hesap Merkezi'), 'header title');
-  assert(screen.includes('Profil, bulut kaydı ve uygulama tercihleri'), 'header subtitle');
-  assert(screen.includes("{ key: 'profile', label: 'Profil' }"), 'profile tab');
-  assert(screen.includes("{ key: 'account', label: 'Hesap' }"), 'account tab');
-  assert(screen.includes("{ key: 'preferences', label: 'Tercihler' }"), 'preferences tab');
-  const profileIdx = screen.indexOf("label: 'Profil'");
-  const accountIdx = screen.indexOf("label: 'Hesap'");
-  const prefIdx = screen.indexOf("label: 'Tercihler'");
+  assert(screenBundle.includes('Hesap Merkezi'), 'header title');
+  assert(screenBundle.includes('Profil, bulut kaydı ve uygulama tercihleri'), 'header subtitle');
+  assert(screenBundle.includes("{ key: 'profile', label: 'Profil' }"), 'profile tab');
+  assert(screenBundle.includes("{ key: 'account', label: 'Hesap' }"), 'account tab');
+  assert(screenBundle.includes("{ key: 'preferences', label: 'Tercihler' }"), 'preferences tab');
+  const profileIdx = screenBundle.indexOf("label: 'Profil'");
+  const accountIdx = screenBundle.indexOf("label: 'Hesap'");
+  const prefIdx = screenBundle.indexOf("label: 'Tercihler'");
   assert(profileIdx < accountIdx && accountIdx < prefIdx, 'tab order profile → account → preferences');
-  assert(screen.includes('accessibilityRole="tablist"'), 'tablist accessibility');
-  assert(screen.includes('accessibilityRole="tab"'), 'tab accessibility');
+  assert(screenBundle.includes('accessibilityRole="tablist"'), 'tablist accessibility');
+  assert(screenBundle.includes('accessibilityRole="tab"'), 'tab accessibility');
 }
 
 console.log('\nProfile tab');
 {
-  assert(screen.includes('Oyuncu Kimliği'), 'player identity card');
-  assert(screen.includes('Şirket Kimliği'), 'company identity card');
-  assert(screen.includes('Liderlik Tablosu'), 'leaderboard card');
-  assert(screen.includes('providerBadge'), 'provider badge usage');
+  assert(screenBundle.includes('Oyuncu Kimliği'), 'player identity card');
+  assert(screenBundle.includes('Şirket Kimliği'), 'company identity card');
+  assert(screenBundle.includes('Liderlik Tablosu'), 'leaderboard card');
+  assert(screenBundle.includes('providerBadge'), 'provider badge usage');
   assert(
-    (screen.match(/Kullanıcı Adı Oluştur/g) ?? []).length === 1,
+    (screenBundle.match(/Kullanıcı Adı Oluştur/g) ?? []).length === 1,
     'single username create CTA',
   );
-  assert(screen.includes('Katılmak için kullanıcı adını oluştur'), 'leaderboard no-username state');
+  assert(screenBundle.includes('Katılmak için kullanıcı adını oluştur'), 'leaderboard no-username state');
   assert(
-    screen.includes('Liderlik servisine şu anda ulaşılamıyor'),
+    screenBundle.includes('Liderlik servisine şu anda ulaşılamıyor'),
     'leaderboard unavailable state',
   );
 }
 
 console.log('\nAccount tab');
 {
-  assert(screen.includes('Hesap Bağlantısı'), 'account connection card');
-  assert(screen.includes('Bulut Kaydı'), 'cloud save card');
-  assert(screen.includes('Hesap İşlemleri'), 'account actions card');
+  assert(screenBundle.includes('Hesap Bağlantısı'), 'account connection card');
+  assert(screenBundle.includes('Bulut Kaydı'), 'cloud save card');
+  assert(screenBundle.includes('Hesap İşlemleri'), 'account actions card');
   assert(
     cloudStatusUtil.includes('Şimdi Senkronize Et'),
     'single sync action label',
   );
   assert(
-    !screen.includes('Bulut Kaydını Kontrol Et') || screen.includes('Bulut Kaydını Görüntüle'),
+    !screenBundle.includes('Bulut Kaydını Kontrol Et') || screenBundle.includes('Bulut Kaydını Görüntüle'),
     'no duplicate generic check-cloud CTA in center screen',
   );
-  assert(screen.includes('Hesap Değiştir'), 'account switch action');
-  assert(screen.includes('Hesap geçişi sürüyor'), 'switch in-progress state');
-  assert(screen.includes('Kurtarma gerekli'), 'recovery required state');
+  assert(screenBundle.includes('Hesap Değiştir'), 'account switch action');
+  assert(screenBundle.includes('Hesap geçişi sürüyor'), 'switch in-progress state');
+  assert(screenBundle.includes('Kurtarma gerekli'), 'recovery required state');
 }
 
 console.log('\nPreferences tab');
 {
-  assert(screen.includes('Bildirimler'), 'notification toggle');
-  assert(screen.includes('Titreşim'), 'vibration toggle');
-  assert(screen.includes('Ses'), 'sound toggle');
-  assert(screen.includes('Gelir özeti penceresi'), 'income summary toggle');
-  assert(screen.includes('Gizlilik Politikası'), 'privacy policy link');
-  assert(screen.includes('Gizlilik ve Çerez Ayarları'), 'privacy choices action');
-  assert(screen.includes('showAdsPrivacyOptionsForm'), 'UMP privacy options wired');
-  assert(screen.includes('Tehlikeli İşlemler'), 'danger zone');
-  assert(screen.includes('Hesabı Sil'), 'delete account action');
-  assert(screen.includes('Misafir Kaydını Sil'), 'guest delete label');
+  assert(screenBundle.includes('Bildirimler'), 'notification toggle');
+  assert(screenBundle.includes('Titreşim'), 'vibration toggle');
+  assert(screenBundle.includes('Ses'), 'sound toggle');
+  assert(screenBundle.includes('Gelir özeti penceresi'), 'income summary toggle');
+  assert(screenBundle.includes('Gizlilik Politikası'), 'privacy policy link');
+  assert(screenBundle.includes('Gizlilik ve Çerez Ayarları'), 'privacy choices action');
+  assert(screenBundle.includes('useAdPrivacyAction'), 'UMP privacy options wired via canonical handler');
+  assert(screenBundle.includes('Tehlikeli İşlemler'), 'danger zone');
+  assert(screenBundle.includes('Hesabı Sil'), 'delete account action');
+  assert(screenBundle.includes('Misafir Kaydını Sil'), 'guest delete label');
 }
 
 console.log('\nLegal links');
@@ -106,7 +118,7 @@ console.log('\nLegal links');
   assert(LEGAL_LINKS.privacyChoices.includes('privacy-choices'), 'privacy choices URL');
   assert(LEGAL_LINKS.accountDeletion.includes('account-deletion'), 'account deletion URL');
   assert(LEGAL_LINKS.support.includes('support'), 'support URL');
-  assert(screen.includes('openLegalLink'), 'safe link opener used');
+  assert(screenBundle.includes('openLegalLink') || screen.includes('openLegalLink'), 'safe link opener used');
 }
 
 console.log('\nCloud save states');
@@ -200,11 +212,11 @@ console.log('\nNavigation & platform');
   assert(moreScreen.includes("route === 'account'"), 'account full-screen route');
   assert(moreScreen.includes('AccountCenterScreen'), 'AccountCenterScreen import');
   assert(moreScreen.includes("setRoute('account')"), 'deep-link opens account route');
-  assert(screen.includes('onBack'), 'back navigation support');
-  assert(screen.includes('Switch'), 'native preference switches');
-  assert(screen.includes('accessibilityLabel'), 'accessibility labels present');
-  assert(screen.includes('minHeight: 44') || screen.includes('minHeight: 48'), 'touch targets');
-  assert(screen.includes('width: \'47%\''), 'responsive stat grid for 360px');
+  assert(screenBundle.includes('onBack'), 'back navigation support');
+  assert(screenBundle.includes('Switch'), 'native preference switches');
+  assert(screenBundle.includes('accessibilityLabel'), 'accessibility labels present');
+  assert(screenBundle.includes('minHeight: 44') || screenBundle.includes('minHeight: 48'), 'touch targets');
+  assert(screenBundle.includes('width: \'47%\''), 'responsive stat grid for 360px');
 }
 
 console.log('\nAccount switch B-002 preserved');

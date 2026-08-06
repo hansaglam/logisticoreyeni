@@ -1,7 +1,8 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 
-import { colors, spacing } from '../../theme';
+import AppTutorialHelpButton from '../tutorial/AppTutorialHelpButton';
+import { TUTORIAL_HELP_LABELS } from '../../tutorial/app/definitions';
 
 interface MarketTutorialHelpButtonProps {
   onPress: () => void;
@@ -13,38 +14,13 @@ export default function MarketTutorialHelpButton({
   disabled = false,
 }: MarketTutorialHelpButtonProps) {
   return (
-    <Pressable
-      style={[styles.button, disabled && styles.buttonDisabled]}
+    <AppTutorialHelpButton
       onPress={onPress}
       disabled={disabled}
-      accessibilityRole="button"
-      accessibilityLabel="Piyasa eğitimi"
-      hitSlop={8}
-    >
-      <Text style={styles.label}>?</Text>
-    </Pressable>
+      accessibilityLabel={TUTORIAL_HELP_LABELS.market}
+    />
   );
 }
 
-const styles = StyleSheet.create({
-  button: {
-    minWidth: 44,
-    minHeight: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: `${colors.info}44`,
-    backgroundColor: `${colors.info}14`,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
-  },
-  buttonDisabled: {
-    opacity: 0.45,
-  },
-  label: {
-    color: colors.info,
-    fontSize: 20,
-    fontWeight: '700',
-    lineHeight: 24,
-  },
-});
+// Keep styles export for any legacy references
+const styles = StyleSheet.create({});

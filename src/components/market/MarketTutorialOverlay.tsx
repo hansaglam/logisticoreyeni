@@ -16,6 +16,7 @@ import { SpotlightMask } from '../tutorial/SpotlightMask';
 import { ActionButton } from '../ui';
 import { colors, spacing } from '../../theme';
 import { isValidTutorialRect, type TutorialLayoutRect } from '../../tutorial/types';
+import type { AppTutorialStep } from '../../tutorial/app/types';
 import type { MarketTutorialStep } from './marketTutorialSteps';
 import {
   computeTooltipLayout,
@@ -36,7 +37,7 @@ export type MarketTutorialLogAction =
 
 interface MarketTutorialOverlayProps {
   visible: boolean;
-  steps: MarketTutorialStep[];
+  steps: AppTutorialStep[] | MarketTutorialStep[];
   stepIndex: number;
   marketState: 'live' | 'cached' | 'unavailable';
   cachedNotice?: string | null;

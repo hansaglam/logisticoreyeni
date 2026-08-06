@@ -17,20 +17,26 @@ import {
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
 import { shouldShowTestAdLabel } from '../../config/adMob';
 import { getDailyOpsBonusCash } from '../../config/monetization';
+import {
+  AD_PRIVACY_ACTION_DESCRIPTION,
+  AD_PRIVACY_ERROR_MESSAGE,
+} from '../../domain/adPrivacyState';
+import {
+  resolveRewardedAdAvailability,
+  rewardedAdAvailabilityHelperText,
+  rewardedAdAvailabilityToButtonLabel,
+  shouldEnableRewardedAdCta,
+} from '../../domain/rewardedAdAvailability';
+import { useAdPrivacyAction } from '../../hooks/useAdPrivacyAction';
+import { useAdPrivacyAvailability } from '../../hooks/useAdPrivacyAvailability';
+import { useRewardedPlacement } from '../../hooks/useRewardedPlacement';
 import { areAdsFeatureEnabled } from '../../services/adProvider';
-import { canRequestAdsAfterConsent } from '../../services/adsConsentService';
 import { canGrantAdReward, resetDailyUsageIfNeeded } from '../../simulation/adRewardGrants';
 import { useGameStore } from '../../store/gameStore';
 import { formatMoney } from '../../theme';
 import { GameIcon } from '../ui';
 import { DASHBOARD_NARROW_WIDTH } from '../dashboard/dashboardTheme';
 import type { AdRewardGrantContext } from '../../types/monetization';
-import {
-  getRewardedPlacementStatusMessage,
-  useRewardedPlacement,
-} from '../../hooks/useRewardedPlacement';
-
-declare const __DEV__: boolean | undefined;
 
 const CARD_HEIGHT = 92;
 const CARD_HEIGHT_NARROW = 88;
@@ -56,12 +62,15 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
   );
   const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
   const placementState = useRewardedPlacement('daily_operations');
+  const { availability: privacyAvailability } = useAdPrivacyAvailability();
+  const {
+    loading: privacyLoading,
+    error: privacyError,
+    runPrivacyAction,
+  } = useAdPrivacyAction();
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
-
-  const consentReady = canRequestAdsAfterConsent();
-  const placementMessage = getRewardedPlacementStatusMessage(placementState);
 
   const fullContext = useMemo(
     (): AdRewardGrantContext => ({
@@ -77,40 +86,50 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
     return canGrantAdReward(normalized, 'daily_ops_bonus', fullContext);
   }, [fullContext, monetization]);
 
-  const isDisabled = loading || ((!eligibility.ok || !consentReady) && !failed);
-  const buttonLabel = loading
-    ? 'Reklam hazırlanıyor…'
-    : failed
-      ? 'Tekrar Dene'
-      : !consentReady
-        ? 'Gizlilik tercihi gerekli'
-        : !eligibility.ok
-          ? 'Limit doldu'
-          : placementState.status === 'loading' || placementState.status === 'idle'
-            ? 'Reklam hazırlanıyor…'
-            : shouldShowTestAdLabel()
-              ? 'Reklam İzle (Test)'
-              : 'Reklam İzle';
+  const rewardedAvailability = resolveRewardedAdAvailability({
+    privacy: privacyAvailability,
+    placementStatus: placementState.status,
+  });
+
+  const buttonLabel = privacyLoading
+    ? 'Gizlilik tercihleri açılıyor…'
+    : loading
+      ? 'Reklam hazırlanıyor…'
+      : rewardedAdAvailabilityToButtonLabel(rewardedAvailability, {
+          watchLabel: shouldShowTestAdLabel() ? 'Reklam İzle (Test)' : 'Reklam İzle',
+          retryLabel: failed ? 'Tekrar Dene' : 'Tekrar Dene',
+        });
+
+  const helperText =
+    rewardedAvailability === 'privacy-action-required'
+      ? AD_PRIVACY_ACTION_DESCRIPTION
+      : rewardedAdAvailabilityHelperText(rewardedAvailability);
+
+  const isDisabled =
+    loading ||
+    privacyLoading ||
+    (!shouldEnableRewardedAdCta(rewardedAvailability) && !failed) ||
+    (rewardedAvailability === 'ready' && !eligibility.ok && !failed);
 
   const handlePress = async () => {
-    if (loading) {
+    if (loading || privacyLoading) {
       return;
     }
 
-    if (!consentReady) {
-      setErrorText('Reklamları kullanmak için gizlilik tercihini tamamla.');
+    if (
+      rewardedAvailability === 'privacy-action-required' ||
+      rewardedAvailability === 'privacy-error'
+    ) {
+      await runPrivacyAction();
+      return;
+    }
+
+    if (rewardedAvailability !== 'ready' && !failed) {
       return;
     }
 
     if (!eligibility.ok) {
-      const reason = eligibility.reason ?? 'Ödül şu an kullanılamıyor.';
-      setErrorText(reason);
-      if (typeof __DEV__ !== 'undefined' && __DEV__ === true) {
-        console.warn('[DashboardDailyOpsBonusCard] grant blocked', {
-          slotId: 'daily_ops_bonus',
-          reason,
-        });
-      }
+      setErrorText(eligibility.reason ?? 'Ödül şu an kullanılamıyor.');
       return;
     }
 
@@ -146,17 +165,19 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
           isDisabled && styles.ctaButtonDisabled,
           pressed && !isDisabled && styles.ctaButtonPressed,
         ]}
-        onPress={handlePress}
+        onPress={() => void handlePress()}
         disabled={isDisabled}
+        accessibilityRole="button"
+        accessibilityLabel={buttonLabel}
       >
-        {loading ? (
+        {loading || privacyLoading ? (
           <ActivityIndicator size="small" color="#FFAA00" />
         ) : (
           <>
             <GameIcon name="play" size={14} color={isDisabled ? '#B8924A' : '#FFAA00'} />
             <Text
               style={[styles.ctaLabel, isDisabled && styles.ctaLabelDisabled]}
-              numberOfLines={1}
+              numberOfLines={2}
               adjustsFontSizeToFit
               minimumFontScale={0.78}
             >
@@ -165,13 +186,19 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
           </>
         )}
       </Pressable>
-      {errorText ? (
-        <Text style={styles.ctaError} numberOfLines={1}>
-          {errorText}
+      {helperText ? (
+        <Text style={styles.ctaHint} numberOfLines={3}>
+          {helperText}
         </Text>
-      ) : placementMessage && !consentReady ? (
-        <Text style={styles.ctaError} numberOfLines={1}>
-          {placementMessage}
+      ) : null}
+      {privacyError ? (
+        <Text style={styles.ctaError} numberOfLines={2}>
+          {AD_PRIVACY_ERROR_MESSAGE}
+        </Text>
+      ) : null}
+      {errorText ? (
+        <Text style={styles.ctaError} numberOfLines={2}>
+          {errorText}
         </Text>
       ) : null}
     </View>
@@ -374,6 +401,16 @@ const styles = StyleSheet.create({
   },
   ctaLabelDisabled: {
     color: '#B8924A',
+  },
+  ctaHint: {
+    position: 'absolute',
+    bottom: -12,
+    left: 0,
+    right: 0,
+    fontSize: 7.5,
+    lineHeight: 9,
+    color: '#94A3B8',
+    textAlign: 'center',
   },
   ctaError: {
     position: 'absolute',

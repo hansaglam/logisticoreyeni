@@ -55,3 +55,23 @@ export function getLeaderboardSeasonEndMs(date: Date = new Date()): number {
   const start = getIsoWeekStart(date);
   return start.getTime() + 7 * MS_PER_DAY - 1;
 }
+
+export function formatLeaderboardSeasonRange(
+  startsAtMs?: number,
+  endsAtMs?: number,
+  fallbackDate: Date = new Date(),
+): string {
+  if (
+    typeof startsAtMs === 'number' &&
+    Number.isFinite(startsAtMs) &&
+    typeof endsAtMs === 'number' &&
+    Number.isFinite(endsAtMs)
+  ) {
+    const formatter = new Intl.DateTimeFormat('tr-TR', {
+      day: 'numeric',
+      month: 'short',
+    });
+    return `${formatter.format(new Date(startsAtMs))} – ${formatter.format(new Date(endsAtMs))}`;
+  }
+  return getWeeklySeasonLabel(fallbackDate);
+}

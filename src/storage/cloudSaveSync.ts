@@ -18,7 +18,7 @@ import {
   type CloudSaveMeta,
   type CloudSavePayload,
 } from '../services/cloudSaveService';
-import { submitLeaderboardScore } from '../services/leaderboardService';
+import { submitCurrentLeaderboardScore } from '../services/leaderboardService';
 import { isFirebaseEnabled } from '../services/firebase';
 import { SAVE_GAME_VERSION, serializeGameState, analyzeSavePayloadSize, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
@@ -534,7 +534,7 @@ async function syncLeaderboardFromGameState(_state: StoreGameState): Promise<voi
     return;
   }
 
-  const result = await submitLeaderboardScore();
+  const result = await submitCurrentLeaderboardScore({ force: false });
   if (!result.ok && typeof __DEV__ !== 'undefined' && __DEV__) {
     console.warn('[leaderboard] trusted submit failed', {
       errorCode: result.errorCode,

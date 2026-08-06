@@ -312,6 +312,8 @@ test('getLeaderboard returns top list and own rank', async () => {
   assert.ok(board.playerRank != null && board.playerRank >= 1);
   assert.ok(board.playerEntry != null);
   assert.equal(board.entries[0]?.rank, 1);
+  assert.ok(typeof board.totalParticipants === 'number');
+  assert.ok(board.totalParticipants >= board.entries.length);
   for (let i = 1; i < board.entries.length; i += 1) {
     assert.ok(board.entries[i - 1]!.companyScore >= board.entries[i]!.companyScore);
   }

@@ -14,7 +14,7 @@ import {
   normalizeHeadingDegrees360,
   shortestHeadingDeltaDegrees,
 } from '../src/components/map/mapRoadUtils';
-import { TRUCK_ICON_BASE_ROTATION_DEG } from '../src/components/map/mapTheme';
+import { TRUCK_ASSET_FORWARD_OFFSET_DEG } from '../src/components/map/mapTheme';
 import { getWorldMapCityPosition } from '../src/data/worldMapPositions';
 
 let pass = 0;
@@ -35,7 +35,7 @@ function angularDistance(a: number, b: number): number {
 }
 
 function displayHeading(tangentDeg: number): number {
-  return normalizeHeadingDegrees360(tangentDeg + TRUCK_ICON_BASE_ROTATION_DEG);
+  return normalizeHeadingDegrees360(tangentDeg + TRUCK_ASSET_FORWARD_OFFSET_DEG);
 }
 
 function geoBearing(from: string, to: string): number {
@@ -49,14 +49,14 @@ console.log('\n=== Map Truck Heading Regression ===\n');
 
 console.log('Asset base orientation');
 {
-  assert(TRUCK_ICON_BASE_ROTATION_DEG === 180, 'TRUCK_ICON_BASE_ROTATION_DEG is 180°');
+  assert(TRUCK_ASSET_FORWARD_OFFSET_DEG === 0, 'TRUCK_ASSET_FORWARD_OFFSET_DEG is 0°');
   const marker = readFileSync('src/components/map/AnimatedDeliveryTruckMarker.tsx', 'utf8');
   const roadUtils = readFileSync('src/components/map/mapRoadUtils.ts', 'utf8');
   assert(!marker.includes('scaleX: -1'), 'no scaleX mirror in marker');
   assert(!marker.includes("Platform.OS === 'ios'"), 'no iOS-specific heading hack in marker');
   assert(!marker.includes("Platform.OS === 'android'"), 'no Android-specific heading hack in marker');
-  assert(roadUtils.includes('candidate.x - current.x'), 'vector uses current → next');
-  assert(!roadUtils.includes('current.x - next.x'), 'reverse vector not used');
+  assert(roadUtils.includes('(end.x - start.x) * coordinateScaleX'), 'heading uses segment start → end');
+  assert(roadUtils.includes('getRoutePoseAtProgress'), 'canonical route pose helper exists');
 }
 
 console.log('\nCardinal synthetic headings');
@@ -79,10 +79,10 @@ console.log('\nCardinal synthetic headings');
   const eastDisplay = getRouteHeadingDegrees({
     routePoints: east,
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
   });
   assert(angularDistance(eastDisplay, displayHeading(eastTangent)) < 0.01, 'east display applies base');
-  assert(angularDistance(eastDisplay, 180) < 0.01, 'east display ≈ 180° with base offset');
+  assert(angularDistance(eastDisplay, 0) < 0.01, 'east display ≈ 0° with base offset');
 }
 
 console.log('\nCatalog routes');
@@ -119,7 +119,7 @@ for (const [from, to] of [
     const finalHeading = getRouteHeadingDegrees({
       routePoints: route,
       progress,
-      assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+      assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
       coordinateScaleX: 1080,
       coordinateScaleY: 720,
     });

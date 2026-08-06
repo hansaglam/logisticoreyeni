@@ -5,7 +5,7 @@
 
 import './test-globals';
 
-import { operatingCostBalance } from '../src/config/balance';
+import { GAME_LOOP_TICK_MS, operatingCostBalance } from '../src/config/balance';
 import { STARTER_DRIVER } from '../src/data/drivers';
 import { STARTER_TRUCK } from '../src/data/trucks';
 import {
@@ -21,6 +21,7 @@ import {
   calculateOfflineSimulationHours,
   MAX_OFFLINE_PROGRESS_HOURS,
   MAX_OFFLINE_PROGRESS_MS,
+  MIN_OFFLINE_PROGRESS_MS,
   resolveOfflineBaselineMs,
   shouldSkipDuplicateOfflineApply,
 } from '../src/simulation/offlineProgression';
@@ -64,10 +65,20 @@ assert(HOUR_MS === 3_600_000, 'HOUR_MS canonical');
 assert(DAY_MS === 86_400_000, 'DAY_MS canonical');
 assert(MARKET_EPOCH_MS === 30 * MINUTE_MS, 'MARKET_EPOCH_MS canonical');
 assert(MAX_OFFLINE_PROGRESS_MS === 24 * HOUR_MS, 'MAX_OFFLINE_PROGRESS_MS = 24h');
+assert(MIN_OFFLINE_PROGRESS_MS === GAME_LOOP_TICK_MS, 'minimum offline threshold = one game tick');
+
+const belowTick = calculateOfflineElapsed(
+  trustedNow - Math.max(1, MIN_OFFLINE_PROGRESS_MS - 1),
+  trustedNow,
+);
+assert(!belowTick.shouldApply, 'sub-tick pause discarded');
+assert(belowTick.reason === 'below_minimum', 'sub-tick below_minimum reason');
 
 const oneMinute = calculateOfflineElapsed(trustedNow - MINUTE_MS, trustedNow);
-assert(!oneMinute.shouldApply, '1 dakika minimum eşiğin altında');
-assert(oneMinute.appliedMs === 0, '1 dakika progress üretmez');
+const oneMinuteSimulation = calculateOfflineSimulationHours(oneMinute.appliedMs, 1);
+assert(oneMinute.shouldApply, '1 dakika offline progress uygulanır');
+assert(oneMinute.appliedMs === MINUTE_MS, '1 dakika elapsed tam uygulanır');
+assert(oneMinuteSimulation.appliedSimulationHours > 0, '1 dakika simulation hours > 0');
 
 const oneHour = calculateOfflineElapsed(trustedNow - HOUR_MS, trustedNow);
 const oneHourSimulation = calculateOfflineSimulationHours(oneHour.appliedMs, 1);

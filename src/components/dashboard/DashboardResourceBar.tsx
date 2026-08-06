@@ -13,7 +13,6 @@ import {
 
 interface DashboardResourceBarProps {
   money: number;
-  diamonds: number;
   level: number;
   xpProgress: number;
   isPaused: boolean;
@@ -22,7 +21,6 @@ interface DashboardResourceBarProps {
 
 export default function DashboardResourceBar({
   money,
-  diamonds,
   level,
   xpProgress,
   isPaused,
@@ -35,19 +33,17 @@ export default function DashboardResourceBar({
     <View style={styles.bar}>
       <View style={styles.resourceItem}>
         <GameIcon name="cash" size={14} color={moneyColor} />
-        <Text style={[styles.cashText, { color: moneyColor }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        <Text
+          style={[styles.cashText, { color: moneyColor }]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
           {formatMoney(money)}
         </Text>
       </View>
 
       <View style={styles.divider} />
-
-      <View style={styles.resourceItem}>
-        <GameIcon name="diamond" size={13} color={colors.primaryLight} />
-        <Text style={styles.diamondText} numberOfLines={1}>
-          {diamonds.toLocaleString('en-US')}
-        </Text>
-      </View>
 
       <View style={styles.levelPill}>
         <Text style={styles.levelText}>Lv.{level}</Text>
@@ -78,7 +74,7 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     height: DASHBOARD_RESOURCE_BAR_HEIGHT,
     paddingHorizontal: 11,
     paddingVertical: 7,
@@ -99,13 +95,14 @@ const styles = StyleSheet.create({
   resourceItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 4,
     flexShrink: 1,
     minWidth: 0,
+    maxWidth: '42%',
   },
   divider: {
     width: 1,
-    height: 12,
+    height: 14,
     backgroundColor: colors.divider,
     flexShrink: 0,
   },
@@ -113,12 +110,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
     flexShrink: 1,
-  },
-  diamondText: {
-    fontWeight: '700',
-    color: colors.primaryLight,
-    fontSize: 12,
-    flexShrink: 0,
   },
   levelPill: {
     height: 29,
@@ -137,14 +128,15 @@ const styles = StyleSheet.create({
     color: colors.amber,
   },
   xpTrack: {
-    width: 82,
+    flex: 1,
+    minWidth: 48,
     height: 6,
     borderRadius: radius.pill,
     backgroundColor: colors.surface3,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.border,
-    flexShrink: 0,
+    flexShrink: 1,
   },
   xpFill: {
     height: '100%',
@@ -161,7 +153,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     flexShrink: 0,
-    marginLeft: 'auto',
   },
   pauseBtnActive: {
     backgroundColor: colors.successSoft,

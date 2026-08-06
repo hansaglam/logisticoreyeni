@@ -1549,11 +1549,6 @@ export default function DebugSimulationScreen() {
                 color={COLORS.primary}
               />
               <StatItem
-                label="Diamonds"
-                value={String(Math.max(0, player?.diamonds ?? 0))}
-                color={COLORS.secondary}
-              />
-              <StatItem
                 label="Cash Score"
                 value={formatCompanyScore(companyScoreBreakdown.cashScore)}
                 color={COLORS.success}
@@ -1604,29 +1599,29 @@ export default function DebugSimulationScreen() {
                 color={COLORS.danger}
               />
               <StatItem
-                label="1st Reward"
-                value={`${leaderboardConfig.rewards[1].diamonds} 💎`}
+                label="1st Prestige"
+                value={leaderboardConfig.prestigeLabels[1]}
                 color={COLORS.primary}
               />
               <StatItem
-                label="2nd Reward"
-                value={`${leaderboardConfig.rewards[2].diamonds} 💎`}
+                label="2nd Prestige"
+                value={leaderboardConfig.prestigeLabels[2]}
                 color={COLORS.primary}
               />
               <StatItem
-                label="3rd Reward"
-                value={`${leaderboardConfig.rewards[3].diamonds} 💎`}
+                label="3rd Prestige"
+                value={leaderboardConfig.prestigeLabels[3]}
                 color={COLORS.primary}
               />
               <StatItem
-                label="Cash Rewards"
-                value={leaderboardConfig.cashRewardsEnabled ? 'enabled' : 'disabled'}
-                color={leaderboardConfig.cashRewardsEnabled ? COLORS.danger : COLORS.success}
+                label="Economic Rewards"
+                value={leaderboardConfig.rewardsEnabled ? 'enabled' : 'disabled'}
+                color={leaderboardConfig.rewardsEnabled ? COLORS.danger : COLORS.success}
               />
             </View>
           </View>
           <Text style={styles.debugNoteText}>
-            TODO: Weekly leaderboard and diamond reward distribution will be handled by Firebase
+            TODO: Weekly leaderboard prestige and ranking will be handled by Firebase
             backend / Cloud Functions.
           </Text>
         </Section>

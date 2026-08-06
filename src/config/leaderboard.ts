@@ -1,28 +1,25 @@
 /**
- * Haftalık leaderboard yapılandırması (V1 — sıralama).
+ * Haftalık leaderboard yapılandırması (V1 — sıralama prestiji).
  *
- * Ödül dağıtımı V1'de kapalıdır; yarım çalışan claim sistemi yoktur.
+ * Ekonomik ödül dağıtımı kapalıdır; ilk 3 sıra yalnızca prestij rozeti gösterir.
  */
 
 export const leaderboardConfig = {
   seasonType: 'weekly' as const,
   leaderboardSize: 100,
-  /** V1: ödül UI ve claim kapalı. */
+  /** Ekonomik ödül dağıtımı kapalı — yalnızca prestij/sıralama. */
   rewardsEnabled: false,
-  rewardRanks: [1, 2, 3] as const,
-  rewards: {
-    1: { diamonds: 300 },
-    2: { diamonds: 200 },
-    3: { diamonds: 100 },
-  },
-  rewardCurrency: 'diamonds' as const,
-  cashRewardsEnabled: false,
+  prestigeRanks: [1, 2, 3] as const,
+  prestigeLabels: {
+    1: 'Şampiyon',
+    2: 'İkinci',
+    3: 'Üçüncü',
+  } as const,
 };
 
-export type LeaderboardRewardRank = keyof typeof leaderboardConfig.rewards;
+export type LeaderboardPrestigeRank = keyof typeof leaderboardConfig.prestigeLabels;
 
-export function getLeaderboardDiamondReward(rank: number): number {
-  if (!leaderboardConfig.rewardsEnabled) return 0;
-  const reward = leaderboardConfig.rewards[rank as LeaderboardRewardRank];
-  return reward?.diamonds ?? 0;
+export function getLeaderboardPrestigeLabel(rank: number): string | null {
+  if (rank < 1 || rank > 3) return null;
+  return leaderboardConfig.prestigeLabels[rank as LeaderboardPrestigeRank] ?? null;
 }

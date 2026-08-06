@@ -73,6 +73,12 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow write: if false;
       }
+
+      // Server-owned canonical progression — Admin SDK / Functions only.
+      match /serverState/{documentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
     }
 
     // Active offers are publicly browseable. Historical records are visible

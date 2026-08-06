@@ -25,10 +25,12 @@ assert.notEqual(ANDROID_APP_ID, ANDROID_UNIT, 'app id ≠ unit id');
 
 const root = resolve(__dirname, '..');
 const adMobSrc = readFileSync(resolve(root, 'src/config/adMob.ts'), 'utf8');
-assert.ok(adMobSrc.includes(ANDROID_APP_ID), 'adMob.ts android app id');
-assert.ok(adMobSrc.includes(IOS_APP_ID), 'adMob.ts ios app id');
-assert.ok(adMobSrc.includes(ANDROID_UNIT), 'adMob.ts android unit');
-assert.ok(adMobSrc.includes(IOS_UNIT), 'adMob.ts ios unit');
+const adMobConstantsSrc = readFileSync(resolve(root, 'src/config/adMobConstants.ts'), 'utf8');
+assert.ok(adMobConstantsSrc.includes(ANDROID_APP_ID), 'adMobConstants.ts android app id');
+assert.ok(adMobConstantsSrc.includes(IOS_APP_ID), 'adMobConstants.ts ios app id');
+assert.ok(adMobConstantsSrc.includes(ANDROID_UNIT), 'adMobConstants.ts android unit');
+assert.ok(adMobConstantsSrc.includes(IOS_UNIT), 'adMobConstants.ts ios unit');
+assert.ok(adMobSrc.includes("from './adMobConstants'"), 'adMob.ts re-exports constants');
 assert.ok(adMobSrc.includes('EXPO_PUBLIC_ADS_USE_TEST_IDS'), 'test ids flag');
 assert.ok(adMobSrc.includes('EXPO_PUBLIC_ADS_ENABLED'), 'ads enabled flag');
 
@@ -68,7 +70,7 @@ assert.ok(envExample.includes('EXPO_PUBLIC_ADS_USE_TEST_IDS'), '.env.example tes
 assert.ok(envExample.includes('EXPO_PUBLIC_ADS_ENABLED'), '.env.example enabled flag');
 
 console.log('  ✓ App ID / Unit ID formats');
-console.log('  ✓ adMob.ts + app.config.js plugin');
+console.log('  ✓ adMobConstants.ts + adMob.ts re-export');
 console.log('  ✓ AndroidManifest APPLICATION_ID + NETWORK_STATE');
 console.log('  ✓ adProvider init / lifecycle / test IDs');
 console.log('  ✓ .env.example flags');

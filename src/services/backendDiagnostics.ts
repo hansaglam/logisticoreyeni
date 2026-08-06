@@ -5,6 +5,7 @@
 
 import Constants from 'expo-constants';
 
+import { isInternalBuildProfile, isStoreProductionProfile } from '../config/buildProfile';
 import {
   getAdsDiagnosticsSnapshot,
   subscribeAdsDiagnostics,
@@ -215,13 +216,23 @@ export function resolveCurrentUserKind(user: {
 }
 
 export function isBackendDiagnosticsEnabled(): boolean {
-  // Production store build: tamamen gizli.
-  // Internal/dev: yalnız açık flag veya __DEV__.
-  if (typeof __DEV__ !== 'undefined' && __DEV__) return true;
-  if (process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true') return true;
+  if (isStoreProductionProfile()) {
+    return false;
+  }
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    return true;
+  }
+  if (!isInternalBuildProfile()) {
+    return false;
+  }
+  if (process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true') {
+    return true;
+  }
   const extra = Constants.expoConfig?.extra as
     | { features?: Record<string, unknown> }
     | undefined;
-  if (extra?.features?.backendDiagnosticsEnabled === 'true') return true;
+  if (extra?.features?.backendDiagnosticsEnabled === 'true') {
+    return true;
+  }
   return false;
 }

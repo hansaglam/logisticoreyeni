@@ -4,8 +4,8 @@
  * Premium şirket yönetim merkezi — finans, depolar ve yönetim araçları.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View, type ScrollView } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 
@@ -34,9 +34,18 @@ import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
 import UpgradesScreen from './UpgradesScreen';
 import AccountSection from '../components/AccountSection';
+import AccountCenterScreen from './AccountCenterScreen';
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 
-type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions' | 'leaderboard' | 'upgrades';
+type MoreRoute =
+  | 'menu'
+  | 'warehouse'
+  | 'finance'
+  | 'debug'
+  | 'missions'
+  | 'leaderboard'
+  | 'upgrades'
+  | 'account';
 
 interface ModuleItem {
   key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
@@ -174,6 +183,7 @@ function ModuleChevron() {
 export default function MoreScreen() {
   const { alert: showAlert } = useAppDialog();
   const [route, setRoute] = useState<MoreRoute>('menu');
+  const scrollRef = useRef<ScrollView | null>(null);
   const player = useGameStore((state) => state.player);
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
   const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
@@ -183,7 +193,11 @@ export default function MoreScreen() {
 
   useEffect(() => {
     if (!pendingMoreSubRoute) return;
-    setRoute(pendingMoreSubRoute);
+    if (pendingMoreSubRoute === 'account') {
+      setRoute('account');
+    } else {
+      setRoute(pendingMoreSubRoute);
+    }
     clearPendingMoreSubRoute();
   }, [pendingMoreSubRoute, clearPendingMoreSubRoute]);
 
@@ -226,12 +240,23 @@ export default function MoreScreen() {
     );
   }
 
-  if (route === 'leaderboard' && LEADERBOARD_ENABLED) {
+  if (route === 'leaderboard') {
     return (
       <View style={styles.embeddedRoot}>
         <LeaderboardScreen
           onBack={() => setRoute('menu')}
-          onOpenAccountSettings={() => setRoute('menu')}
+          onOpenAccountSettings={() => setRoute('account')}
+        />
+      </View>
+    );
+  }
+
+  if (route === 'account') {
+    return (
+      <View style={styles.embeddedRoot}>
+        <AccountCenterScreen
+          onBack={() => setRoute('menu')}
+          onOpenLeaderboard={LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined}
         />
       </View>
     );
@@ -272,7 +297,7 @@ export default function MoreScreen() {
   const xpProgress = levelProgress?.progressRatio ?? 0;
 
   return (
-    <AppScreen scroll>
+    <AppScreen scroll scrollRef={scrollRef}>
       <ScreenHeader
         title="Şirket"
         subtitle="Şirket özeti, gelişim ve hesap"
@@ -303,16 +328,13 @@ export default function MoreScreen() {
             <GameIcon name="cash" size={16} color={colors.success} />
             <Text style={styles.cashLabel}>Nakit</Text>
             <Text style={styles.cashValue}>{formatMoney(player.money ?? 0)}</Text>
-            <Text style={styles.diamondStrip}>💎 {Math.max(0, player.diamonds ?? 0)}</Text>
           </View>
-          {/* TODO: Add premium shop and diamond spending system later. */}
         </>
       ) : null}
 
       <AccountSection
-        onOpenLeaderboard={
-          LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined
-        }
+        onOpenLeaderboard={LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined}
+        onOpenAccountCenter={() => setRoute('account')}
       />
 
       {/* Finans / Depolar / Görevler / Geliştirmeler bu ekranda tekrarlanmaz —
@@ -558,12 +580,6 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     fontWeight: '800',
     color: colors.success,
-  },
-  diamondStrip: {
-    ...typography.bodySmall,
-    fontWeight: '800',
-    color: colors.accentBlue,
-    marginLeft: spacing.sm,
   },
 
   moduleList: {

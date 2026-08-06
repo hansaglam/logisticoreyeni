@@ -150,12 +150,15 @@ function calculateWeeklyTradeProfit(
   );
 }
 
+import type { ServerStateDocument } from './serverStateTypes';
+
 export type CanonicalPlayerStateBuildResult =
   | { ok: true; player: Record<string, unknown>; gameState: Record<string, unknown> }
-  | { ok: false; reason: 'save-not-found' | 'invalid-player-state' };
+  | { ok: false; reason: 'save-not-found' | 'invalid-player-state' | 'server-state-not-initialized' };
 
 /**
  * Trusted cloud-save belgesinden canonical player görünümü çıkarır.
+ * @deprecated Marketplace/leaderboard artık serverState kullanır.
  */
 export function extractCanonicalPlayerState(
   save: Record<string, unknown> | null | undefined,
@@ -172,6 +175,41 @@ export function extractCanonicalPlayerState(
   if (!Number.isFinite(money)) {
     return { ok: false, reason: 'invalid-player-state' };
   }
+  return { ok: true, player, gameState };
+}
+
+/**
+ * Server-owned canonical state → leaderboard player görünümü.
+ */
+export function extractCanonicalPlayerStateFromServerState(
+  state: ServerStateDocument | null | undefined,
+): CanonicalPlayerStateBuildResult {
+  if (!state || !state.initialized) {
+    return { ok: false, reason: 'server-state-not-initialized' };
+  }
+  const player = {
+    companyName: state.companyName,
+    money: state.cash,
+    level: state.companyLevel,
+    companyLevel: state.companyLevel,
+    reputation: state.reputation,
+    completedContracts: state.completedDeliveries,
+    failedDeliveries: state.failedDeliveries,
+    lateDeliveries: state.lateDeliveries,
+    trucks: state.ownedTrucks.map((truck) => ({
+      id: truck.truckId,
+      catalogId: truck.templateId,
+      purchasePrice: truck.purchasePrice,
+      condition: truck.condition,
+      ownershipType: truck.ownershipType,
+      leaseExpired: false,
+    })),
+    warehouses: state.warehouses,
+  };
+  const gameState = {
+    currentTime: 0,
+    financeLedger: [],
+  };
   return { ok: true, player, gameState };
 }
 

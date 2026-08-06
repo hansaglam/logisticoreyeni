@@ -20,7 +20,12 @@ export type UsernameClientReason =
   | 'anonymous-not-supported'
   | 'rate-limited'
   | 'invalid-request'
-  | 'service-unavailable';
+  | 'service-unavailable'
+  | 'function-not-found'
+  | 'network-error'
+  | 'timeout'
+  | 'permission-denied'
+  | 'app-check-failed';
 
 const RESERVED = new Set([
   'admin',
@@ -127,7 +132,7 @@ export function usernameReasonMessage(reason: UsernameClientReason | string): st
     case 'username-inappropriate':
       return 'Bu kullanıcı adı kullanılamaz.';
     case 'username-taken':
-      return 'Bu kullanıcı adı kullanımda.';
+      return 'Bu kullanıcı adı kullanılıyor.';
     case 'username-change-cooldown':
       return 'Kullanıcı adını 30 günde bir değiştirebilirsin.';
     case 'username-required':
@@ -137,9 +142,19 @@ export function usernameReasonMessage(reason: UsernameClientReason | string): st
     case 'anonymous-not-supported':
       return 'Kullanıcı adı için hesabını bağlaman gerekir.';
     case 'rate-limited':
-      return 'Çok fazla deneme. Biraz sonra tekrar dene.';
+      return 'Çok fazla deneme yaptın. Biraz sonra tekrar dene.';
+    case 'function-not-found':
+      return 'Kullanıcı adı servisine şu anda ulaşılamıyor.';
+    case 'network-error':
+      return 'Bağlantı kurulamadı. İnternet bağlantını kontrol et.';
+    case 'timeout':
+      return 'İstek zaman aşımına uğradı. Lütfen tekrar dene.';
+    case 'permission-denied':
+      return 'Bu işlem için yetkin yok.';
+    case 'app-check-failed':
+      return 'Uygulama doğrulaması başarısız. Uygulamayı güncelle ve tekrar dene.';
     case 'service-unavailable':
-      return 'Servis geçici olarak kullanılamıyor.';
+      return 'Kullanıcı adı servisine şu anda ulaşılamıyor.';
     default:
       return 'İşlem tamamlanamadı. Lütfen tekrar dene.';
   }

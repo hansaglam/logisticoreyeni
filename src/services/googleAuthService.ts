@@ -441,3 +441,26 @@ export async function clearGoogleSignInSessionStrict(): Promise<{
     return { ok: false, error: 'google-disconnect-failed' };
   }
 }
+
+/**
+ * Mevcut Google oturumundan in-memory rollback credential üretir.
+ * AsyncStorage'a yazılmaz; yalnız account switch rollback için kullanılır.
+ */
+export async function captureGoogleRollbackCredential(): Promise<AuthCredential | null> {
+  if (!configureGoogleSignIn()) {
+    return null;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { GoogleSignin } = require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin');
+    const tokens = await GoogleSignin.getTokens();
+    const idToken = tokens?.idToken;
+    if (!idToken) {
+      return null;
+    }
+    return GoogleAuthProvider.credential(idToken);
+  } catch (error) {
+    devWarn('[google-auth] rollback credential capture failed', error);
+    return null;
+  }
+}

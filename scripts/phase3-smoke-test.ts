@@ -738,7 +738,11 @@ assert(fleetSrc.includes('Geliştirmeleri Yönet'), 'Geliştirmeleri Yönet buto
 assert(fleetSrc.includes('UpgradesScreen'), 'Filo UpgradesScreen yönlendirmesi');
 assert(readFileSync('src/screens/UpgradesScreen.tsx', 'utf8').includes('upgradeTruck'), 'UpgradesScreen mevcut upgrade action');
 assert(readFileSync('src/screens/UpgradesScreen.tsx', 'utf8').includes('Kamyon Değiştir'), 'UpgradesScreen kamyon değiştir strip');
-assert(readFileSync('src/screens/MoreScreen.tsx', 'utf8').includes("key: 'upgrades'"), 'More Geliştirmeler modülü aktif');
+const moreSrc = readFileSync('src/screens/MoreScreen.tsx', 'utf8');
+assert(fleetSrc.includes('Geliştirmeleri Yönet'), 'Filo canonical Geliştirmeler erişimi');
+assert(fleetSrc.includes('UpgradesScreen'), 'Filo UpgradesScreen embed route');
+assert(moreSrc.includes("route === 'upgrades'"), 'More deep-link upgrades route korunur');
+assert(moreSrc.includes('UpgradesScreen'), 'More embedded UpgradesScreen route');
 assert(fleetSrc.includes('getDriverXpProgress'), 'driver XP progress');
 assert(fleetSrc.includes('onTimeRate'), 'on-time oranı');
 

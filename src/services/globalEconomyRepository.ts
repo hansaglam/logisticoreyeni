@@ -145,8 +145,12 @@ export function setGlobalEconomyRepositoryForTests(
 export function getGlobalEconomyRepository(): GlobalEconomyRepository | null {
   if (repositoryOverride) return repositoryOverride;
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    fallbackRepository ??= new InMemoryGlobalEconomyRepository();
-    return fallbackRepository;
+    // Firebase yapılandırılmışsa dev'de de Firestore canonical kaynağı kullan.
+    if (!process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID) {
+      fallbackRepository ??= new InMemoryGlobalEconomyRepository();
+      return fallbackRepository;
+    }
+    return null;
   }
   return null;
 }

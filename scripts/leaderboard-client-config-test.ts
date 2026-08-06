@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { leaderboardConfig } from '../src/config/leaderboard';
+import { leaderboardConfig, getLeaderboardPrestigeLabel } from '../src/config/leaderboard';
 import {
   getLeaderboardSeasonKey,
   getWeeklySeasonKey,
@@ -17,7 +17,7 @@ assert.equal(getWeeklySeasonKey(new Date('2026-07-28T12:00:00Z')).startsWith('we
 assert.ok(getWeeklySeasonLabel().includes('–'));
 assert.equal(leaderboardConfig.leaderboardSize, 100);
 assert.equal(leaderboardConfig.rewardsEnabled, false);
-assert.equal(leaderboardConfig.cashRewardsEnabled, false);
+assert.equal(getLeaderboardPrestigeLabel(1), 'Şampiyon');
 
 console.log('  ✓ season key formats');
 console.log('  ✓ rewards disabled for V1');

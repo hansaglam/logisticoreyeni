@@ -133,7 +133,7 @@ const cloudService = readFileSync(resolve('src/services/cloudSaveService.ts'), '
 const cloudSync = readFileSync(resolve('src/storage/cloudSaveSync.ts'), 'utf8');
 const saveSource = readFileSync(resolve('src/storage/saveGame.ts'), 'utf8');
 const backend = readFileSync(resolve('backend/src/index.ts'), 'utf8');
-const account = readFileSync(resolve('src/components/AccountSection.tsx'), 'utf8');
+const account = readFileSync(resolve('src/hooks/useAccountCenter.ts'), 'utf8');
 
 assert.match(cloudService, /users', uid, 'saves', CURRENT_SAVE_DOC_ID/);
 assert.match(cloudService, /ownerUid: uid/);

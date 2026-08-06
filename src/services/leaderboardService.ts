@@ -12,6 +12,15 @@ import { leaderboardConfig } from '../config/leaderboard';
 import { getLeaderboardSeasonKey } from '../utils/leaderboardSeason';
 import { getAccountStatus, isAuthSessionReady } from './authService';
 import {
+  getAuthUidSnapshot,
+  isAuthContextStale,
+  logLeaderboardService,
+  mapBackendReasonToLeaderboardFailure,
+  mapFirebaseCallableToLeaderboardFailure,
+  withCallableTimeout,
+  type LeaderboardFailureReason,
+} from './callableServiceUtils';
+import {
   FIREBASE_FUNCTIONS_REGION,
   getFirebaseAppSafe,
   getFirebaseAuthSafe,
@@ -37,7 +46,16 @@ export type LeaderboardErrorCode =
   | 'service-unavailable'
   | 'firebase-disabled'
   | 'feature-disabled'
-  | 'network-error';
+  | 'function-not-found'
+  | 'function-unavailable'
+  | 'network-error'
+  | 'timeout'
+  | 'permission-denied'
+  | 'app-check-failed'
+  | 'server-state-missing'
+  | 'backend-not-ready'
+  | 'malformed-response'
+  | 'unknown';
 
 export interface LeaderboardEntry {
   uid: string;
@@ -88,31 +106,15 @@ function callable<TInput, TOutput>(name: string) {
   return httpsCallable<TInput, TOutput>(functions, name);
 }
 
+function toLeaderboardErrorCode(reason: LeaderboardFailureReason): LeaderboardErrorCode {
+  if (reason === 'function-unavailable') {
+    return 'function-not-found';
+  }
+  return reason as LeaderboardErrorCode;
+}
+
 function mapCallableError(error: unknown): LeaderboardErrorCode {
-  if (!error || typeof error !== 'object') return 'network-error';
-  const code = 'code' in error ? String((error as { code?: string }).code ?? '') : '';
-  const message =
-    'message' in error ? String((error as { message?: string }).message ?? '') : '';
-  const details =
-    'details' in error && (error as { details?: unknown }).details
-      ? String((error as { details?: unknown }).details)
-      : '';
-  const blob = `${code} ${message} ${details}`.toLowerCase();
-  if (blob.includes('auth-required') || code === 'functions/unauthenticated') {
-    return 'auth-required';
-  }
-  if (blob.includes('anonymous-not-supported')) return 'anonymous-not-supported';
-  if (blob.includes('save-not-found')) return 'save-not-found';
-  if (blob.includes('invalid-player-state')) return 'invalid-player-state';
-  if (blob.includes('rate-limited') || code === 'functions/resource-exhausted') {
-    return 'rate-limited';
-  }
-  if (blob.includes('season-closed')) return 'season-closed';
-  if (blob.includes('score-not-improved')) return 'score-not-improved';
-  if (code === 'functions/unavailable' || code === 'functions/internal') {
-    return 'service-unavailable';
-  }
-  return 'network-error';
+  return toLeaderboardErrorCode(mapFirebaseCallableToLeaderboardFailure(error));
 }
 
 export function isLeaderboardEligible(): boolean {
@@ -198,23 +200,50 @@ export async function submitLeaderboardScore(options?: {
 
   const transactionId = createIdempotencyKey('lb-tx');
   const idempotencyKey = options?.idempotencyKey ?? createIdempotencyKey('lb-idem');
+  const uidAtStart = getAuthUidSnapshot();
 
   try {
-    const response = await fn({
-      transactionId,
-      idempotencyKey,
-      ...(options?.clientSaveVersion != null
-        ? { clientSaveVersion: options.clientSaveVersion }
-        : {}),
-    });
+    const response = await withCallableTimeout(
+      fn({
+        transactionId,
+        idempotencyKey,
+        ...(options?.clientSaveVersion != null
+          ? { clientSaveVersion: options.clientSaveVersion }
+          : {}),
+      }),
+    );
+    if (isAuthContextStale(uidAtStart)) {
+      logLeaderboardService({
+        stage: 'submit',
+        functionName: LEADERBOARD_CALLABLES.submit,
+        authReady: isAuthSessionReady(),
+        result: 'skipped',
+        failureReason: 'auth-context-stale',
+      });
+      return { ok: false, errorCode: 'auth-required' };
+    }
     const data = response.data;
     if (!data?.ok) {
+      const errorCode = toLeaderboardErrorCode(mapBackendReasonToLeaderboardFailure(data?.reason));
+      logLeaderboardService({
+        stage: 'submit',
+        functionName: LEADERBOARD_CALLABLES.submit,
+        authReady: isAuthSessionReady(),
+        result: 'failure',
+        failureReason: errorCode,
+      });
       return {
         ok: false,
-        errorCode: (data?.reason as LeaderboardErrorCode) ?? 'service-unavailable',
+        errorCode,
         error: data?.reason,
       };
     }
+    logLeaderboardService({
+      stage: 'submit',
+      functionName: LEADERBOARD_CALLABLES.submit,
+      authReady: isAuthSessionReady(),
+      result: 'success',
+    });
     return {
       ok: true,
       updated: Boolean(data.updated),
@@ -224,9 +253,13 @@ export async function submitLeaderboardScore(options?: {
     };
   } catch (error) {
     const errorCode = mapCallableError(error);
-    if (__DEV__) {
-      console.warn('[leaderboard] submit failed', { errorCode, error });
-    }
+    logLeaderboardService({
+      stage: 'submit',
+      functionName: LEADERBOARD_CALLABLES.submit,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: errorCode,
+    });
     return {
       ok: false,
       errorCode,
@@ -326,28 +359,70 @@ export async function fetchWeeklyLeaderboard(
     };
   }
 
+  const uidAtStart = getAuthUidSnapshot();
+
   try {
-    const response = await fn({
-      seasonKey,
-      limit: leaderboardConfig.leaderboardSize,
-    });
+    const response = await withCallableTimeout(
+      fn({
+        seasonKey,
+        limit: leaderboardConfig.leaderboardSize,
+      }),
+    );
+    if (isAuthContextStale(uidAtStart)) {
+      logLeaderboardService({
+        stage: 'fetch',
+        functionName: LEADERBOARD_CALLABLES.get,
+        authReady: isAuthSessionReady(),
+        result: 'skipped',
+        failureReason: 'auth-context-stale',
+      });
+      return {
+        ok: false,
+        seasonKey,
+        entries: [],
+        playerEntry: null,
+        playerRank: null,
+        errorCode: 'auth-required',
+        error: 'auth-context-stale',
+      };
+    }
     const data = response.data;
     if (!data?.ok) {
+      const errorCode = toLeaderboardErrorCode(mapBackendReasonToLeaderboardFailure(data?.reason));
+      logLeaderboardService({
+        stage: 'fetch',
+        functionName: LEADERBOARD_CALLABLES.get,
+        authReady: isAuthSessionReady(),
+        result: 'failure',
+        failureReason: errorCode,
+      });
       return {
         ok: false,
         seasonKey: data?.seasonKey ?? seasonKey,
         entries: [],
         playerEntry: null,
         playerRank: null,
-        errorCode: (data?.reason as LeaderboardErrorCode) ?? 'service-unavailable',
+        errorCode,
         error: data?.reason,
       };
     }
 
     const resolvedSeason = data.seasonKey ?? seasonKey;
-    const entries = (data.entries ?? []).map((entry, index) =>
-      normalizeEntry(entry, resolvedSeason, typeof entry.rank === 'number' ? entry.rank : index + 1),
-    );
+    const seenRanks = new Set<number>();
+    const entries = (data.entries ?? [])
+      .map((entry, index) =>
+        normalizeEntry(entry, resolvedSeason, typeof entry.rank === 'number' ? entry.rank : index + 1),
+      )
+      .filter((entry) => {
+        if (!entry.uid || !entry.username) {
+          return false;
+        }
+        if (seenRanks.has(entry.rank)) {
+          return false;
+        }
+        seenRanks.add(entry.rank);
+        return true;
+      });
     const playerEntry = data.playerEntry
       ? normalizeEntry(
           data.playerEntry,
@@ -355,6 +430,13 @@ export async function fetchWeeklyLeaderboard(
           typeof data.playerRank === 'number' ? data.playerRank : undefined,
         )
       : null;
+
+    logLeaderboardService({
+      stage: 'fetch',
+      functionName: LEADERBOARD_CALLABLES.get,
+      authReady: isAuthSessionReady(),
+      result: 'success',
+    });
 
     return {
       ok: true,
@@ -368,9 +450,13 @@ export async function fetchWeeklyLeaderboard(
     };
   } catch (error) {
     const errorCode = mapCallableError(error);
-    if (__DEV__) {
-      console.warn('[leaderboard] fetch failed', { errorCode, error });
-    }
+    logLeaderboardService({
+      stage: 'fetch',
+      functionName: LEADERBOARD_CALLABLES.get,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: errorCode,
+    });
     return {
       ok: false,
       seasonKey,

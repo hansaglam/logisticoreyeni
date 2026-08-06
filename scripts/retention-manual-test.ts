@@ -41,7 +41,6 @@ function mockPlayer(overrides: Partial<Player> = {}): Player {
     companyLevel: 1,
     xp: 0,
     totalXp: 0,
-    diamonds: 0,
     completedContracts: 0,
     homeCityId: 'istanbul',
     trucks: [

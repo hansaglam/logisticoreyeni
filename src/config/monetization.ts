@@ -58,9 +58,7 @@ export const MONETIZATION_SLOT_CONFIG: Record<AdRewardSlotId, MonetizationSlotCo
     expiresGameHours: 24,
   },
   delivery_boost: {
-    dailyLimit: 1,
-    progressBoost: 0.18,
-    maxGameHoursEquivalent: 4,
+    dailyLimit: 10,
   },
 };
 

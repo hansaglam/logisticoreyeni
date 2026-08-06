@@ -17,18 +17,12 @@ import {
   MAP_TRUCK_MARKER_MIN_SCREEN,
   MAP_TRUCK_MARKER_SIZE,
   MAP_TRUCK_MARKER_ANIM_MS,
-  TRUCK_ICON_BASE_ROTATION_DEG,
 } from './mapTheme';
-
-function toDisplayAngle(angleRadians: number): number {
-  return normalizeAngleRadians(
-    angleRadians + (TRUCK_ICON_BASE_ROTATION_DEG * Math.PI) / 180,
-  );
-}
 
 export interface AnimatedDeliveryTruckMarkerProps {
   pixelX: number;
   pixelY: number;
+  /** Radians — asset base offset already applied by caller. */
   angleRadians: number;
   progress: number;
   opacity?: number;
@@ -51,23 +45,23 @@ function AnimatedDeliveryTruckMarkerInner({
 
   const animatedX = useSharedValue(pixelX);
   const animatedY = useSharedValue(pixelY);
-  const animatedAngle = useSharedValue(toDisplayAngle(angleRadians));
+  const animatedAngle = useSharedValue(normalizeAngleRadians(angleRadians));
 
   useLayoutEffect(() => {
-    const targetDisplayAngle = toDisplayAngle(angleRadians);
+    const targetAngle = normalizeAngleRadians(angleRadians);
     const duration = hasInitialized.current ? MAP_TRUCK_MARKER_ANIM_MS : 0;
     hasInitialized.current = true;
 
     if (duration === 0) {
       animatedX.value = pixelX;
       animatedY.value = pixelY;
-      animatedAngle.value = targetDisplayAngle;
+      animatedAngle.value = targetAngle;
       return;
     }
 
     animatedX.value = withTiming(pixelX, { duration });
     animatedY.value = withTiming(pixelY, { duration });
-    const delta = shortestAngleDelta(animatedAngle.value, targetDisplayAngle);
+    const delta = shortestAngleDelta(animatedAngle.value, targetAngle);
     animatedAngle.value = withTiming(animatedAngle.value + delta, { duration });
   }, [animatedAngle, animatedX, animatedY, angleRadians, pixelX, pixelY, progress]);
 
@@ -80,7 +74,11 @@ function AnimatedDeliveryTruckMarkerInner({
     };
   });
 
-  const contentStyle = useAnimatedStyle(() => {
+  const rotationStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${(animatedAngle.value * 180) / Math.PI}deg` }],
+  }));
+
+  const scaleStyle = useAnimatedStyle(() => {
     const scale = mapScale?.value ?? 1;
     const screenSize = MAP_TRUCK_MARKER_SIZE * scale;
     const clampedScreen = Math.min(
@@ -88,10 +86,8 @@ function AnimatedDeliveryTruckMarkerInner({
       Math.max(MAP_TRUCK_MARKER_MIN_SCREEN, screenSize),
     );
     const inverseScale = screenSize > 0 ? clampedScreen / screenSize : 1;
-    const degrees = (animatedAngle.value * 180) / Math.PI;
-
     return {
-      transform: [{ scale: inverseScale }, { rotate: `${degrees}deg` }],
+      transform: [{ scale: inverseScale }],
     };
   });
 
@@ -100,19 +96,23 @@ function AnimatedDeliveryTruckMarkerInner({
       style={[styles.container, positionStyle]}
       pointerEvents={onPress ? 'box-none' : 'none'}
     >
-      <Animated.View style={styles.glow} />
-      <Animated.View style={[styles.touchTarget, contentStyle]}>
-        {onPress ? (
-          <TouchableOpacity onPress={onPress} activeOpacity={0.88} hitSlop={4} style={styles.pressFill}>
-            <View style={styles.circle}>
-              <GameIcon name="truck" size={14} color={MAP_TRUCK_MARKER_BORDER} />
-            </View>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.circle}>
-            <GameIcon name="truck" size={14} color={MAP_TRUCK_MARKER_BORDER} />
+      <Animated.View style={[styles.rotationLayer, rotationStyle]}>
+        <Animated.View style={[styles.scaleLayer, scaleStyle]}>
+          <Animated.View style={styles.glow} />
+          <View style={styles.touchTarget}>
+            {onPress ? (
+              <TouchableOpacity onPress={onPress} activeOpacity={0.88} hitSlop={4} style={styles.pressFill}>
+                <View style={styles.circle}>
+                  <GameIcon name="truck" size={14} color={MAP_TRUCK_MARKER_BORDER} />
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.circle}>
+                <GameIcon name="truck" size={14} color={MAP_TRUCK_MARKER_BORDER} />
+              </View>
+            )}
           </View>
-        )}
+        </Animated.View>
       </Animated.View>
     </Animated.View>
   );
@@ -143,6 +143,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: MAP_TRUCK_MARKER_SIZE,
     height: MAP_TRUCK_MARKER_SIZE,
+  },
+  rotationLayer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scaleLayer: {
+    width: MAP_TRUCK_MARKER_SIZE,
+    height: MAP_TRUCK_MARKER_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   glow: {
     ...StyleSheet.absoluteFillObject,

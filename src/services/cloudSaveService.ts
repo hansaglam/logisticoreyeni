@@ -11,6 +11,8 @@
 
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+
+import { APP_VERSION } from '../config/appVersion';
 import {
   deleteDoc,
   doc,
@@ -131,7 +133,7 @@ export type CloudSaveLoadResult =
   | { ok: false; reason: CloudSaveLoadFailureReason; errorCode?: string };
 
 function getAppVersion(): string {
-  return Constants.expoConfig?.version ?? '1.0.0';
+  return Constants.expoConfig?.version ?? APP_VERSION;
 }
 
 function getPlatform(): 'ios' | 'android' | 'web' {

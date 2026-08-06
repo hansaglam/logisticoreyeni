@@ -145,11 +145,11 @@ export function getCompactMarketStatusLabel(status: string): string {
     case 'Kritik Kıtlık':
     case 'critical':
     case 'CRITICAL':
-      return 'Yoğun Talep';
+      return 'Kritik stok';
     case 'Kıtlık':
     case 'shortage':
     case 'SHORTAGE':
-      return 'Stok Az';
+      return 'Düşük stok';
     case 'Fazla':
     case 'Yüksek Fazla':
     case 'surplus':

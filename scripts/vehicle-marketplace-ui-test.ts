@@ -1,3 +1,5 @@
+import './test-globals';
+
 import assert from 'node:assert/strict';
 
 import {
@@ -97,7 +99,7 @@ assert.equal(
   getMarketplaceErrorMessage('self-purchase'),
   'Kendi ilanını satın alamazsın.',
 );
-assert.match(getMarketplaceErrorMessage('auth-required'), /Google hesabınla/);
+assert.match(getMarketplaceErrorMessage('auth-required'), /hesabını bağla/);
 assert.match(
   getMarketplaceErrorMessage('marketplace-state-missing'),
   /henüz hazırlanmadı/,

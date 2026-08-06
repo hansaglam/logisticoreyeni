@@ -8,7 +8,6 @@ import './test-globals';
 import { getDailyOpsBonusCash } from '../src/config/monetization';
 import {
   applyAdRewardGrant,
-  calculateDeliveryBoostProgress,
   calculateDiscountedRepairCost,
   canGrantAdReward,
   consumeMaintenanceDiscountToken,
@@ -180,58 +179,39 @@ console.log('\nmarket_analysis unlock');
   assert(otherProduct.ok, 'different product still allowed');
 }
 
-console.log('\ndelivery_boost eligibility');
+console.log('\ndelivery_boost slot eligibility');
 {
   const activeCtx = baseContext({ selectedDeliveryId: 'delivery-active' });
   const allowed = canGrantAdReward(createDefaultMonetizationState(), 'delivery_boost', activeCtx);
-  assert(allowed.ok, 'active delivery with limits grants delivery_boost');
+  assert(allowed.ok, 'delivery_boost slot allows with selectedDeliveryId');
 
   const missingId = canGrantAdReward(
     createDefaultMonetizationState(),
     'delivery_boost',
     baseContext({ selectedDeliveryId: '' }),
   );
-  assert(!missingId.ok, 'selectedDeliveryId missing disables delivery_boost');
-
-  let used = applyAdRewardGrant(
-    createDefaultMonetizationState(),
-    'delivery_boost',
-    baseContext({ selectedDeliveryId: 'delivery-used' }),
-  ).monetization;
-  const dailyBlocked = canGrantAdReward(
-    used,
-    'delivery_boost',
-    baseContext({ selectedDeliveryId: 'delivery-other' }),
-  );
-  assert(!dailyBlocked.ok, 'delivery_boost daily limit blocks second grant same day');
+  assert(!missingId.ok, 'selectedDeliveryId missing disables delivery_boost slot');
 }
 
-console.log('\ndelivery_boost progress helper');
+console.log('\ndelivery_boost grant tracking');
 {
-  assert(
-    Math.abs(calculateDeliveryBoostProgress(0.4, 0.18) - 0.58) < 0.0001,
-    'calculateDeliveryBoostProgress 0.40 → 0.58',
-  );
-  assert(calculateDeliveryBoostProgress(0.9, 0.18) === 1, 'boost progress clamped to 1');
   let state = createDefaultMonetizationState();
   state = applyAdRewardGrant(
     state,
     'delivery_boost',
     baseContext({ selectedDeliveryId: 'delivery-1' }),
   ).monetization;
-  assert(state.boostedDeliveryIds?.includes('delivery-1') === true, 'delivery marked boosted');
-  const blocked = canGrantAdReward(
-    state,
-    'delivery_boost',
-    baseContext({ selectedDeliveryId: 'delivery-1' }),
+  assert(state.lastDeliveryBoostAdAt != null, 'lastDeliveryBoostAdAt recorded');
+  assert(
+    state.adRewardUsage.delivery_boost?.count === 1,
+    'delivery_boost slot usage incremented',
   );
-  assert(!blocked.ok, 'same delivery cannot be boosted twice');
-  const secondDeliveryBlocked = canGrantAdReward(
+  const second = canGrantAdReward(
     state,
     'delivery_boost',
     baseContext({ selectedDeliveryId: 'delivery-2' }),
   );
-  assert(!secondDeliveryBlocked.ok, 'delivery_boost günde 1 kez');
+  assert(second.ok, 'second delivery still allowed at slot level (per-delivery limits separate)');
 }
 
 console.log('\nM1 contract_refresh regression');

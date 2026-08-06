@@ -28,7 +28,14 @@ export async function sha256(nonce: string): Promise<Sha256Result> {
     const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, nonce);
     return { ok: true, hash };
   } catch (error) {
-    console.warn('[auth] expo-crypto unavailable', error);
-    return { ok: false, error: 'crypto-unavailable' };
+    try {
+      const { createHash } = await import('node:crypto');
+      const hash = createHash('sha256').update(nonce, 'utf8').digest('hex');
+      return { ok: true, hash };
+    } catch (fallbackError) {
+      console.warn('[auth] expo-crypto unavailable', error);
+      console.warn('[auth] node:crypto fallback unavailable', fallbackError);
+      return { ok: false, error: 'crypto-unavailable' };
+    }
   }
 }

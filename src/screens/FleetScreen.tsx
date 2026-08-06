@@ -32,6 +32,7 @@ import {
 import type { GameIconName } from '../theme/icons';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { getCityName } from '../utils/entityLookup';
+import { getVisibleFleetTrucks } from '../simulation/rentalTruckLifecycle';
 import { resolveTruckCityId } from '../simulation/delivery';
 import { getTruckEffectiveCapacityTons } from '../simulation/capacity';
 import {
@@ -198,11 +199,16 @@ export default function FleetScreen() {
   const driverHireLayout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
   const { scrollBottomPadding: fleetScrollBottomPadding } = useTabBarLayout();
   const trucks = useGameStore((state) => state.player.trucks ?? []);
+  const currentTime = useGameStore((state) => state.currentTime);
   const trailers = useGameStore((state) => state.player.trailers ?? []);
   const drivers = useGameStore((state) => state.player.drivers ?? []);
   const playerMoney = useGameStore((state) => state.player.money ?? 0);
   const homeCityId = useGameStore((state) => state.player.homeCityId);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const visibleTrucks = useMemo(
+    () => getVisibleFleetTrucks(trucks, currentTime, activeDeliveries),
+    [trucks, currentTime, activeDeliveries],
+  );
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
   const monetization = useGameStore((state) => state.monetization);
   const attachTrailerToTruck = useGameStore((state) => state.attachTrailerToTruck);
@@ -247,7 +253,7 @@ export default function FleetScreen() {
 
   const fleetSummary = useMemo(
     () => ({
-      idleTrucks: trucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
+      idleTrucks: visibleTrucks.filter((t) => t.status === 'idle').length,
       onRouteTrucks: trucks.filter(
         (t) =>
           t.status === 'on_route' ||
@@ -255,9 +261,9 @@ export default function FleetScreen() {
           t.status === 'out_of_fuel',
       ).length,
       idleDrivers: drivers.filter((d) => d.status === 'idle').length,
-      averageCondition: calculateAverageCondition(trucks),
+      averageCondition: calculateAverageCondition(visibleTrucks),
     }),
-    [trucks, drivers],
+    [visibleTrucks, drivers],
   );
 
   const showFleetTip =
@@ -758,7 +764,7 @@ export default function FleetScreen() {
         ) : null}
 
         <FleetMetricStrip
-          truckCount={trucks.length}
+          truckCount={visibleTrucks.length}
           driverCount={drivers.length}
           idleTrucks={fleetSummary.idleTrucks}
           averageCondition={fleetSummary.averageCondition}
@@ -768,7 +774,7 @@ export default function FleetScreen() {
 
         {activeTab === 'trucks' ? (
           <View style={styles.tabContent}>
-            {trucks.length === 0 ? (
+            {visibleTrucks.length === 0 ? (
             <EmptyState
               title="Henüz kamyon yok"
               message="Mağazadan ilk kamyonunu satın al."
@@ -778,7 +784,7 @@ export default function FleetScreen() {
             />
           ) : (
             <>
-              {trucks.map((truck) => (
+              {visibleTrucks.map((truck) => (
                 <OwnedTruckCard
                   key={truck.id}
                   truck={truck}

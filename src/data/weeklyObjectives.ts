@@ -84,8 +84,8 @@ const WEEKLY_OBJECTIVE_TEMPLATES: WeeklyObjectiveTemplate[] = [
     targetOptions: [2, 3, 4],
     rewardOptions: [
       { cash: 2500, xp: 70 },
-      { cash: 3500, xp: 90, diamonds: 1 },
-      { cash: 5000, xp: 120, diamonds: 2 },
+      { cash: 3500, xp: 90 },
+      { cash: 5000, xp: 120 },
     ],
   },
 ];

@@ -258,14 +258,19 @@ console.log('\nD. E2E store + selector — old 5-city save + L11 Ankara');
   );
 }
 
-console.log('\nE. Trabzon / Diyarbakır segments + force mode');
+console.log('\nE. Trabzon / Diyarbakır calibrated routes + generation');
 {
+  invalidateRoadGraphCache();
   for (const segmentId of ['ankara-trabzon', 'adana-diyarbakir'] as const) {
     const seg = getMapRoadSegmentById(segmentId);
     assert(!!seg, `${segmentId} registered`);
-    assert(seg?.isCalibrated === false, `${segmentId} uncalibrated`);
-    assert((seg?.points.length ?? 0) === 0, `${segmentId} empty points`);
+    assert(seg?.isCalibrated === true, `${segmentId} calibrated`);
+    assert((seg?.points.length ?? 0) >= 2, `${segmentId} routable points`);
+    assert(!!seg && isMapRoadSegmentRoutable(seg), `${segmentId} routable`);
   }
+
+  assert(isRoadGraphPairConnected('ankara', 'trabzon'), 'Ankara → Trabzon connected');
+  assert(isRoadGraphPairConnected('adana', 'diyarbakir'), 'Adana → Diyarbakır connected');
 
   const respect = generateDebugContractsFromCurrentCity({
     cities: CITIES,
@@ -279,17 +284,54 @@ console.log('\nE. Trabzon / Diyarbakır segments + force mode');
     maxTruckCapacity: 40,
     respectCityUnlockRules: true,
   });
+  assert(respect.createdDestinations.includes('trabzon'), 'respectRules: trabzon created at L11');
   assert(
-    respect.skippedDestinations.some(
-      (s) => s.destinationCityId === 'trabzon' && s.reason === 'unreachable',
-    ),
-    'respectRules: trabzon unreachable',
+    respect.createdDestinations.includes('diyarbakir'),
+    'respectRules: diyarbakir created at L11',
+  );
+
+  const trabzonContract = respect.contracts.find((c) => c.destinationCityId === 'trabzon');
+  const diyarbakirContract = respect.contracts.find(
+    (c) => c.destinationCityId === 'diyarbakir',
   );
   assert(
-    respect.skippedDestinations.some(
-      (s) => s.destinationCityId === 'diyarbakir' && s.reason === 'unreachable',
+    !!trabzonContract &&
+      Number.isFinite(trabzonContract.distanceKm) &&
+      trabzonContract.distanceKm > 0,
+    'trabzon finite distance',
+  );
+  assert(
+    !!diyarbakirContract &&
+      Number.isFinite(diyarbakirContract.distanceKm) &&
+      diyarbakirContract.distanceKm > 0,
+    'diyarbakir finite distance',
+  );
+  assert(
+    !!trabzonContract && trabzonContract.deadlineHours > 0,
+    'trabzon valid ETA',
+  );
+  assert(
+    !!diyarbakirContract && diyarbakirContract.deadlineHours > 0,
+    'diyarbakir valid ETA',
+  );
+
+  const locked = generateDebugContractsFromCurrentCity({
+    cities: CITIES,
+    routes: ROUTES,
+    products: PRODUCTS,
+    globalEconomy: DEFAULT_GLOBAL_ECONOMY,
+    trucks: [truckAt('ankara')],
+    homeCityId: 'ankara',
+    playerLevel: 3,
+    currentTime: 322,
+    maxTruckCapacity: 40,
+    respectCityUnlockRules: true,
+  });
+  assert(
+    locked.skippedDestinations.some(
+      (s) => s.destinationCityId === 'trabzon' && s.reason === 'locked',
     ),
-    'respectRules: diyarbakir unreachable',
+    'respectRules: trabzon locked below L7',
   );
 
   const force = generateDebugContractsFromCurrentCity({
@@ -299,8 +341,8 @@ console.log('\nE. Trabzon / Diyarbakır segments + force mode');
     globalEconomy: DEFAULT_GLOBAL_ECONOMY,
     trucks: [truckAt('ankara')],
     homeCityId: 'ankara',
-    playerLevel: 11,
-    currentTime: 321,
+    playerLevel: 3,
+    currentTime: 323,
     maxTruckCapacity: 40,
     respectCityUnlockRules: false,
   });

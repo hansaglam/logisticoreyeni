@@ -21,6 +21,10 @@ interface AppScreenProps {
   /** Tab bar üstü ekstra boşluk — verilmezse layout hook değeri kullanılır */
   scrollBottomPadding?: number;
   scrollRef?: React.RefObject<ScrollViewType | null>;
+  onScroll?: (event: { nativeEvent: { contentOffset: { y: number } } }) => void;
+  onScrollEndDrag?: () => void;
+  onMomentumScrollEnd?: () => void;
+  scrollEventThrottle?: number;
 }
 
 function resolveBottomPadding(
@@ -43,6 +47,10 @@ export default function AppScreen({
   contentContainerStyle,
   scrollBottomPadding: scrollBottomPaddingOverride,
   scrollRef,
+  onScroll,
+  onScrollEndDrag,
+  onMomentumScrollEnd,
+  scrollEventThrottle = 16,
 }: AppScreenProps) {
   const { scrollBottomPadding: defaultScrollPadding, screenTopPadding } = useTabBarLayout();
   const bottomPadding = resolveBottomPadding(
@@ -63,6 +71,10 @@ export default function AppScreen({
           <ScrollView
             ref={scrollRef}
             style={styles.scrollView}
+            onScroll={onScroll}
+            onScrollEndDrag={onScrollEndDrag}
+            onMomentumScrollEnd={onMomentumScrollEnd}
+            scrollEventThrottle={scrollEventThrottle}
             contentContainerStyle={[
               paddedStyle,
               contentContainerStyle,

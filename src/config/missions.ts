@@ -11,7 +11,6 @@ export type MissionCategory =
 
 export interface MissionReward {
   money?: number;
-  diamonds?: number;
   xp?: number;
   reputation?: number;
 }
@@ -55,7 +54,7 @@ export const STARTER_MISSIONS: MissionConfig[] = [
     title: 'Piyasayı Keşfet',
     description: 'Piyasa ekranını aç ve ürün fiyatlarını incele.',
     targetValue: 1,
-    reward: { diamonds: 5, xp: 25 },
+    reward: { xp: 50 },
     category: 'market',
   },
   {
@@ -114,7 +113,7 @@ export const CAREER_MISSIONS: MissionConfig[] = [
     title: 'Ticaret Kârı $10.000',
     description: 'Ürün al-sat işlemlerinden toplam $10.000 kâr elde et.',
     targetValue: 10000,
-    reward: { money: 5000, xp: 150, diamonds: 10 },
+    reward: { money: 5000, xp: 150 },
     category: 'career',
   },
   {

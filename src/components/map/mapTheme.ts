@@ -78,10 +78,11 @@ export const MAP_TRUCK_MARKER_BORDER = '#5DD4FF';
 export const MAP_TRUCK_MARKER_FILL = '#031225';
 export const MAP_TRUCK_MARKER_ANIM_MS = 750;
 /**
- * MaterialCommunityIcons `truck-outline` doğal yönü: sağa (kabin + hood x≈20–23).
- * atan2 ekran heading’i 0° = sağa; ek offset gerekmez.
+ * MaterialCommunityIcons `truck-outline` — 0° rotation iken ikon sola (-X) bakar.
+ * Route tangent 0° = sağa (+X); görsel hizalama için +180° gerekir.
+ * Android ve iOS aynı sabit; platform-specific hack yok.
  */
-export const TRUCK_ICON_BASE_ROTATION_DEG = 0;
+export const TRUCK_ICON_BASE_ROTATION_DEG = 180;
 /** @deprecated Use TRUCK_ICON_BASE_ROTATION_DEG */
 export const TRUCK_ASSET_HEADING_OFFSET_DEG = TRUCK_ICON_BASE_ROTATION_DEG;
 

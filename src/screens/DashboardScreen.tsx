@@ -225,7 +225,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   const levelProgress = getLevelProgress(player);
   const fuelPrice = getSnapshotFuelPrice(globalSnapshot, globalEconomy);
-  const playerDiamonds = Math.max(0, player.diamonds ?? 0);
   const showCashWarning = player.money < LOW_CASH_THRESHOLD;
   const onboardingCompleted = onboarding?.completed === true;
 
@@ -312,7 +311,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       >
       <DashboardResourceBar
         money={player.money}
-        diamonds={playerDiamonds}
         level={levelProgress.level}
         xpProgress={levelProgress.progressRatio}
         isPaused={isPaused}

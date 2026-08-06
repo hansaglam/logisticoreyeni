@@ -2,19 +2,45 @@
   "expo": {
     "name": "LogistiCore",
     "slug": "logisticore",
-    "version": "1.0.9",
+    "version": "1.0.11",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "icon": "./assets/branding/icon.png",
+    "splash": {
+      "image": "./assets/branding/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#020712"
+    },
     "android": {
       "package": "com.ethemsincar.logisticore",
-      "versionCode": 10
+      "versionCode": 12,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/branding/adaptive-icon-foreground.png",
+        "backgroundColor": "#020712"
+      }
     },
     "ios": {
-      "bundleIdentifier": "com.ethemsincar.logisticore"
+      "bundleIdentifier": "com.ethemsincar.logisticore",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        },
+        "UIBackgroundModes": ["remote-notification"]
+      }
     },
     "plugins": [
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/branding/splash-icon.png",
+          "imageWidth": 280,
+          "resizeMode": "contain",
+          "backgroundColor": "#020712"
+        }
+      ]
     ]
   }
 }

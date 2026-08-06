@@ -5,14 +5,23 @@ import { resolve } from 'node:path';
 
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { Timestamp, getFirestore } from 'firebase-admin/firestore';
+
+import {
+  buildDefaultServerState,
+  migrateLegacyServerStateTransaction,
+} from '../src/serverState';
+import type { ServerStateDocument } from '../src/serverStateTypes';
 
 import {
   deleteLeaderboardEntriesForUid,
   getLeaderboardSnapshot,
   submitLeaderboardScoreTransaction,
 } from '../src/leaderboard';
-import { calculateLeaderboardScore } from '../src/leaderboardScore';
+import {
+  calculateLeaderboardScore,
+  extractCanonicalPlayerStateFromServerState,
+} from '../src/leaderboardScore';
 import { getLeaderboardSeasonKey } from '../src/leaderboardSeason';
 
 const PROJECT_ID = 'logisticore-leaderboard-emulator';
@@ -64,7 +73,7 @@ function buildSave(uid: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function seedSave(uid: string, overrides: Record<string, unknown> = {}) {
+async function seedServerState(uid: string, overrides: Partial<ServerStateDocument> = {}) {
   await adminFirestore.doc(`users/${uid}`).set(
     {
       uid,
@@ -75,7 +84,25 @@ async function seedSave(uid: string, overrides: Record<string, unknown> = {}) {
     },
     { merge: true },
   );
-  await adminFirestore.doc(`users/${uid}/saves/current`).set(buildSave(uid, overrides));
+  const base = buildDefaultServerState(uid, Timestamp.now());
+  const state: ServerStateDocument = {
+    ...base,
+    ...overrides,
+    ownedTruckIds:
+      overrides.ownedTrucks?.map((truck) => truck.truckId) ?? base.ownedTruckIds,
+    ownedTrucks: overrides.ownedTrucks ?? base.ownedTrucks,
+    warehouses: overrides.warehouses ?? base.warehouses,
+    migrationCompleted: overrides.migrationCompleted ?? true,
+  };
+  const extracted = extractCanonicalPlayerStateFromServerState(state);
+  if (extracted.ok) {
+    state.leaderboardScore = calculateLeaderboardScore(
+      extracted.player,
+      extracted.gameState,
+    ).totalScore;
+  }
+  await adminFirestore.doc(`users/${uid}/serverState/current`).set(state);
+  return state;
 }
 
 before(async () => {
@@ -112,8 +139,31 @@ test('direct client write to leaderboard is denied', async () => {
   );
 });
 
-test('trusted score submit writes backend-calculated score', async () => {
-  await seedSave('player-1');
+test('trusted score submit writes backend-calculated score from serverState', async () => {
+  const state = await seedServerState('player-1', {
+    cash: 250_000,
+    companyLevel: 5,
+    reputation: 60,
+    completedDeliveries: 12,
+    ownedTrucks: [
+      {
+        truckId: 'player-1-truck-1',
+        templateId: 'truck-ford-cargo',
+        currentCityId: 'izmir',
+        condition: 90,
+        totalMileageKm: 0,
+        currentFuelL: 100,
+        fuelTankCapacityL: 300,
+        purchasePrice: 80_000,
+        ownershipType: 'owned',
+        status: 'idle',
+        upgrades: { engine: 0, fuelEfficiency: 0, cargo: 0, durability: 0 },
+      },
+    ],
+    warehouses: [
+      { id: 'player-1-wh-1', cityId: 'izmir', capacityTons: 100, upgradeTier: 2 },
+    ],
+  });
   const result = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'player-1', displayName: 'Player' },
@@ -123,9 +173,12 @@ test('trusted score submit writes backend-calculated score', async () => {
   if (!result.ok) return;
   assert.equal(result.updated, true);
   assert.equal(result.seasonKey, getLeaderboardSeasonKey());
+  const extracted = extractCanonicalPlayerStateFromServerState(state);
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
   const expected = calculateLeaderboardScore(
-    buildSave('player-1').gameState.player,
-    buildSave('player-1').gameState,
+    extracted.player,
+    extracted.gameState,
   ).totalScore;
   assert.equal(result.score, expected);
 
@@ -140,7 +193,10 @@ test('trusted score submit writes backend-calculated score', async () => {
 });
 
 test('submit without username is rejected', async () => {
-  await adminFirestore.doc('users/no-name/saves/current').set(buildSave('no-name'));
+  await adminFirestore.doc('users/no-name').set({ uid: 'no-name' });
+  await adminFirestore
+    .doc('users/no-name/serverState/current')
+    .set(buildDefaultServerState('no-name', Timestamp.now()));
   const result = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'no-name', displayName: 'Ignored' },
@@ -152,8 +208,11 @@ test('submit without username is rejected', async () => {
 });
 
 test('lower score does not overwrite higher score', async () => {
-  await seedSave('player-2', {
-    player: { money: 500_000, completedContracts: 40, level: 10, reputation: 90 },
+  await seedServerState('player-2', {
+    cash: 500_000,
+    completedDeliveries: 40,
+    companyLevel: 10,
+    reputation: 90,
   });
   const first = await submitLeaderboardScoreTransaction(
     adminFirestore,
@@ -163,8 +222,12 @@ test('lower score does not overwrite higher score', async () => {
   assert.equal(first.ok, true);
   if (!first.ok) return;
 
-  await seedSave('player-2', {
-    player: { money: 1_000, completedContracts: 0, level: 1, reputation: 0, trucks: [] },
+  await seedServerState('player-2', {
+    cash: 1_000,
+    completedDeliveries: 0,
+    companyLevel: 1,
+    reputation: 0,
+    ownedTrucks: [],
   });
   const second = await submitLeaderboardScoreTransaction(
     adminFirestore,
@@ -184,7 +247,7 @@ test('lower score does not overwrite higher score', async () => {
 });
 
 test('duplicate submit is idempotent', async () => {
-  await seedSave('player-3');
+  await seedServerState('player-3');
   const a = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'player-3', displayName: null },
@@ -203,7 +266,7 @@ test('duplicate submit is idempotent', async () => {
 });
 
 test('wrong uid payload is ignored — entry owned by auth uid', async () => {
-  await seedSave('real-uid');
+  await seedServerState('real-uid');
   const result = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'real-uid', displayName: null },
@@ -224,13 +287,11 @@ test('wrong uid payload is ignored — entry owned by auth uid', async () => {
 test('getLeaderboard returns top list and own rank', async () => {
   for (let i = 0; i < 5; i += 1) {
     const uid = `rank-${i}`;
-    await seedSave(uid, {
-      player: {
-        money: 100_000 * (i + 1),
-        level: i + 1,
-        reputation: 40 + i,
-        completedContracts: i * 3,
-      },
+    await seedServerState(uid, {
+      cash: 100_000 * (i + 1),
+      companyLevel: i + 1,
+      reputation: 40 + i,
+      completedDeliveries: i * 3,
     });
     await submitLeaderboardScoreTransaction(
       adminFirestore,
@@ -256,8 +317,42 @@ test('getLeaderboard returns top list and own rank', async () => {
   }
 });
 
+test('malicious cloud save write does not change leaderboard score', async () => {
+  await seedServerState('secure-player', {
+    cash: 50_000,
+    companyLevel: 3,
+    reputation: 55,
+    completedDeliveries: 4,
+  });
+  const first = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: 'secure-player', displayName: null },
+    { transactionId: 'tx-secure-1', idempotencyKey: 'idem-secure-1' },
+  );
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  await adminFirestore.doc('users/secure-player/saves/current').set(
+    buildSave('secure-player', {
+      player: {
+        money: 987_654_321,
+        level: 100,
+        reputation: 100,
+        completedContracts: 50_000,
+      },
+    }),
+  );
+  const second = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: 'secure-player', displayName: null },
+    { transactionId: 'tx-secure-2', idempotencyKey: 'idem-secure-2' },
+  );
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.score, first.score);
+});
+
 test('account deletion clears leaderboard entries', async () => {
-  await seedSave('delete-me');
+  await seedServerState('delete-me');
   const submitted = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'delete-me', displayName: null },
@@ -300,13 +395,23 @@ test('cash alone does not dominate score unboundedly', () => {
   assert.ok(whale.financialScore < 500_000_000);
 });
 
-test('save-not-found when cloud save missing', async () => {
+test('leaderboard bootstraps default serverState when canonical state missing', async () => {
+  await adminFirestore.doc('users/missing-save').set({
+    uid: 'missing-save',
+    username: 'missing_user',
+    usernameNormalized: 'missing_user',
+    usernameSetupCompleted: true,
+  });
   const result = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'missing-save', displayName: null },
     { transactionId: 'tx-miss', idempotencyKey: 'idem-miss' },
   );
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.reason, 'save-not-found');
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const serverSnap = await adminFirestore
+    .doc('users/missing-save/serverState/current')
+    .get();
+  assert.equal(serverSnap.exists, true);
+  assert.equal(Number(serverSnap.data()?.cash), 20_000);
 });

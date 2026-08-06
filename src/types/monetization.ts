@@ -46,6 +46,7 @@ export interface MonetizationState {
   marketAnalysisUnlocks?: Record<string, MarketAnalysisUnlock>;
   maintenanceDiscountTokens?: Record<string, MaintenanceDiscountToken>;
   boostedDeliveryIds?: string[];
+  lastDeliveryBoostAdAt?: number;
   recentGrants?: AdRewardRecentGrant[];
 }
 
@@ -76,7 +77,7 @@ export type AdRewardGrantEffect =
       maxDiscountCash: number;
       expiresAtGameTime: number;
     }
-  | { type: 'delivery_boost'; deliveryId: string; progressBoost: number };
+  | { type: 'delivery_boost'; deliveryId: string; appliedReductionMs: number };
 
 export interface ApplyAdRewardGrantResult {
   monetization: MonetizationState;

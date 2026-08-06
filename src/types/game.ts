@@ -267,6 +267,36 @@ export type VehicleClass =
 /** Kamyon kira dönemi */
 export type TruckLeasePeriod = 'daily' | 'weekly' | 'monthly';
 
+/** Kiralık kamyon iade / bildirim yaşam döngüsü */
+export interface RentalTruckLifecycle {
+  expiryWarningSentAt?: number;
+  expiredNotificationSentAt?: number;
+  returnPendingSince?: number;
+  returnedAt?: number;
+}
+
+export type RentalReturnReason =
+  | 'rental-expired-idle'
+  | 'rental-expired-before-delivery'
+  | 'rental-expired-after-delivery'
+  | 'offline-rental-expiry'
+  | 'hydrate-rental-expiry';
+
+export type RentalTruckStatus =
+  | 'active'
+  | 'expiring-soon'
+  | 'expired-idle'
+  | 'expired-assigned'
+  | 'expired-in-delivery'
+  | 'return-pending'
+  | 'returned';
+
+export type RentalNotificationKind =
+  | 'rental-expiring-soon'
+  | 'rental-expired'
+  | 'rental-return-pending'
+  | 'rental-returned';
+
 /** Oyuncuya ait bir kamyon */
 export interface Truck {
   id: string;
@@ -307,8 +337,10 @@ export interface Truck {
   leasePeriod?: TruckLeasePeriod;
   /** Kira bitiş zamanı (oyun saati) */
   leaseExpiresAt?: number | null;
-  /** Kira süresi doldu — pasif */
+  /** Kira süresi doldu — pasif / iade sürecinde */
   leaseExpired?: boolean;
+  /** Kiralık kamyon yaşam döngüsü — bildirim ve iade takibi */
+  rentalLifecycle?: RentalTruckLifecycle;
   /** Mağaza katalog kimliği — aynı modelden birden fazla alımda instance id'den ayrılır */
   catalogId?: string;
   /** Kamyonun bulunduğu şehir */
@@ -656,6 +688,15 @@ export interface Delivery {
   incidentGenerated?: boolean;
   /** Olay kararı verildi mi */
   incidentResolved?: boolean;
+  /** Ödüllü reklam ile hızlandırma geçmişi */
+  deliveryAdBoost?: DeliveryAdBoostState;
+}
+
+export interface DeliveryAdBoostState {
+  usedCount: number;
+  totalReducedMs: number;
+  lastRewardedAt?: number;
+  processedRewardIds: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -975,8 +1016,6 @@ export interface Player extends PlayerProgressFields {
   failedDeliveries?: number;
   /** Gecikmeli teslimat sayısı — company score cezası */
   lateDeliveries?: number;
-  /** Premium para birimi — haftalık leaderboard ödülleri için */
-  diamonds?: number;
   /** Oyuncunun sahip olduğu kamyonlar */
   trucks: Truck[];
   /** Oyuncunun sahip olduğu dorseler */
@@ -1302,7 +1341,6 @@ export interface RetentionReward {
   cash?: number;
   xp?: number;
   reputation?: number;
-  diamonds?: number;
   badgeId?: string;
 }
 
@@ -1485,6 +1523,9 @@ export interface StoreGameState {
   retention: RetentionState;
   /** Başlangıç rehberi (Onboarding Guide V1) */
   onboarding: OnboardingState;
+  /** Piyasa ekranı eğitimi — ilk giriş / yardım */
+  marketTutorialCompleted?: boolean;
+  marketTutorialVersion?: number;
   /** Oyuncu tanımlı piyasa fiyat alarmları */
   marketAlerts: MarketPriceAlert[];
   /** Aktif piyasa/şehir olayları — Retention Pack V1 Phase 2 */

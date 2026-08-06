@@ -21,6 +21,7 @@ import type {
   Truck,
 } from '../types/game';
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
+import { isTruckEligibleForNewAssignment } from './rentalTruckLifecycle';
 import { debugConfig } from '../config/debug';
 import {
   advanceFuelConstrainedProgress,
@@ -171,14 +172,15 @@ export function isTruckLeaseUnavailable(truck: Truck, currentTime: number): bool
 }
 
 /** Kamyon görev atanabilir mi? (kira süresi dolmuş kamyonlar hariç) */
-export function isTruckAvailableForAssignment(truck: Truck, currentTime: number): boolean {
+export function isTruckAvailableForAssignment(
+  truck: Truck,
+  currentTime: number,
+  activeDelivery?: import('../types/game').Delivery | null,
+): boolean {
   if (truck.status !== 'idle') {
     return false;
   }
-  if (truck.leaseExpired) {
-    return false;
-  }
-  return isTruckLeaseActive(truck, currentTime);
+  return isTruckEligibleForNewAssignment(truck, currentTime, activeDelivery);
 }
 
 /** Kamyon boş transferde mi? */

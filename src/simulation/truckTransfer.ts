@@ -16,6 +16,7 @@ import {
   calculateActualSpeedKmh,
   calculateVehicleSpeed,
 } from '../utils/vehiclePerformance';
+import { isRentalReturnPending } from './rentalTruckLifecycle';
 
 const MIN_TRANSFER_HOURS = 1;
 const DEFAULT_SPEED_KMH = deliveryBalance.defaultAverageSpeed;
@@ -34,7 +35,7 @@ export type TruckTransferBlockedReason =
  * Aktif bir kiralama transfer engeli değildir; yalnız süresi bitmiş kiralamalar engellenir.
  */
 export function getTruckTransferBlockedReason(
-  truck: Pick<Truck, 'status' | 'leaseExpired'>,
+  truck: Pick<Truck, 'status' | 'leaseExpired' | 'rentalLifecycle'>,
   hasIdleDriver: boolean,
 ): TruckTransferBlockedReason | null {
   if (truck.status === 'transferring') return 'Transferde';
@@ -42,6 +43,7 @@ export function getTruckTransferBlockedReason(
   if (truck.status === 'marketplace_locked') return 'Araç Pazarı’nda';
   if (truck.status === 'out_of_fuel') return 'Yakıt yetersiz';
   if (truck.status !== 'idle') return 'Araç müsait değil';
+  if (isRentalReturnPending(truck as Truck)) return 'Kiralama süresi doldu';
   if (truck.leaseExpired) return 'Kiralama süresi doldu';
   if (!hasIdleDriver) return 'Müsait şoför yok';
   return null;

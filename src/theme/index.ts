@@ -7,6 +7,7 @@ export {
   formatEventRemaining,
   formatGameTimeCompact,
   formatLiveEconomyCompact,
+  formatMarketSyncCaption,
   formatMoney,
   formatMoneyDecimal,
   formatPriceChangeDisplay,

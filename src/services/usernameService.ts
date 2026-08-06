@@ -8,7 +8,18 @@ import {
   validateUsernameFormat,
   type UsernameClientReason,
 } from '../domain/usernameValidation';
-import { getFirebaseFunctionsSafe } from './firebase';
+import { isAuthSessionReady } from './authService';
+import {
+  getAuthUidSnapshot,
+  isAuthContextStale,
+  logUsernameService,
+  mapBackendReasonToUsernameFailure,
+  mapFirebaseCallableToUsernameFailure,
+  withCallableTimeout,
+  type UsernameFailureReason,
+} from './callableServiceUtils';
+import { FIREBASE_FUNCTIONS_REGION, getFirebaseFunctionsSafe } from './firebase';
+import { notifyUsernameProfileChanged } from './usernameProfileEvents';
 
 const CALLABLES = {
   setUsername: 'setUsername',
@@ -45,28 +56,86 @@ export type CheckUsernameClientResult =
     }
   | { ok: false; reason: UsernameClientReason };
 
-function mapReason(raw: unknown): UsernameClientReason {
-  if (typeof raw === 'string' && raw.length > 0) {
-    return raw as UsernameClientReason;
+function toClientReason(reason: UsernameFailureReason): UsernameClientReason {
+  if (reason === 'function-not-found' || reason === 'function-unavailable') {
+    return 'function-not-found';
   }
-  return 'service-unavailable';
+  if (reason === 'network-error') {
+    return 'network-error';
+  }
+  if (reason === 'timeout') {
+    return 'timeout';
+  }
+  if (reason === 'unauthenticated') {
+    return 'auth-required';
+  }
+  if (reason === 'malformed-response' || reason === 'unknown') {
+    return 'service-unavailable';
+  }
+  if (reason === 'app-check-failed') {
+    return 'app-check-failed';
+  }
+  if (reason === 'permission-denied') {
+    return 'permission-denied';
+  }
+  if (reason === 'invalid-argument') {
+    return 'invalid-request';
+  }
+  return reason as UsernameClientReason;
+}
+
+function mapReason(raw: unknown): UsernameClientReason {
+  return toClientReason(mapBackendReasonToUsernameFailure(raw));
 }
 
 export async function fetchUsernameProfile(): Promise<
   | { ok: true; profile: UsernameProfile }
   | { ok: false; reason: UsernameClientReason }
 > {
+  const uidAtStart = getAuthUidSnapshot();
   const functions = getFirebaseFunctionsSafe();
   if (!functions) {
-    return { ok: false, reason: 'service-unavailable' };
+    logUsernameService({
+      stage: 'fetch-profile',
+      functionName: CALLABLES.getUsernameProfile,
+      region: FIREBASE_FUNCTIONS_REGION,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: 'function-unavailable',
+    });
+    return { ok: false, reason: 'function-not-found' };
   }
   try {
     const callable = httpsCallable(functions, CALLABLES.getUsernameProfile);
-    const response = await callable({});
+    const response = await withCallableTimeout(callable({}));
+    if (isAuthContextStale(uidAtStart)) {
+      logUsernameService({
+        stage: 'fetch-profile',
+        functionName: CALLABLES.getUsernameProfile,
+        authReady: isAuthSessionReady(),
+        result: 'skipped',
+        failureReason: 'auth-context-stale',
+      });
+      return { ok: false, reason: 'auth-required' };
+    }
     const data = response.data as Record<string, unknown>;
     if (data?.ok !== true) {
-      return { ok: false, reason: mapReason(data?.reason) };
+      const reason = mapReason(data?.reason);
+      logUsernameService({
+        stage: 'fetch-profile',
+        functionName: CALLABLES.getUsernameProfile,
+        authReady: isAuthSessionReady(),
+        result: 'failure',
+        failureReason: reason,
+      });
+      return { ok: false, reason };
     }
+    logUsernameService({
+      stage: 'fetch-profile',
+      functionName: CALLABLES.getUsernameProfile,
+      authReady: isAuthSessionReady(),
+      result: 'success',
+    });
     return {
       ok: true,
       profile: {
@@ -83,8 +152,16 @@ export async function fetchUsernameProfile(): Promise<
             : null,
       },
     };
-  } catch {
-    return { ok: false, reason: 'service-unavailable' };
+  } catch (error) {
+    const reason = toClientReason(mapFirebaseCallableToUsernameFailure(error));
+    logUsernameService({
+      stage: 'fetch-profile',
+      functionName: CALLABLES.getUsernameProfile,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: reason,
+    });
+    return { ok: false, reason };
   }
 }
 
@@ -100,17 +177,53 @@ export async function checkUsernameAvailability(
       reason: local.reason,
     };
   }
+  const uidAtStart = getAuthUidSnapshot();
   const functions = getFirebaseFunctionsSafe();
   if (!functions) {
-    return { ok: false, reason: 'service-unavailable' };
+    logUsernameService({
+      stage: 'check-availability',
+      functionName: CALLABLES.checkUsernameAvailability,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: 'function-not-found',
+      usernameLength: local.username.length,
+    });
+    return { ok: false, reason: 'function-not-found' };
   }
   try {
     const callable = httpsCallable(functions, CALLABLES.checkUsernameAvailability);
-    const response = await callable({ username: local.username });
+    const response = await withCallableTimeout(callable({ username: local.username }));
+    if (isAuthContextStale(uidAtStart)) {
+      logUsernameService({
+        stage: 'check-availability',
+        functionName: CALLABLES.checkUsernameAvailability,
+        authReady: isAuthSessionReady(),
+        result: 'skipped',
+        failureReason: 'auth-context-stale',
+        usernameLength: local.username.length,
+      });
+      return { ok: false, reason: 'auth-required' };
+    }
     const data = response.data as Record<string, unknown>;
     if (data?.ok !== true) {
-      return { ok: false, reason: mapReason(data?.reason) };
+      const reason = mapReason(data?.reason);
+      logUsernameService({
+        stage: 'check-availability',
+        functionName: CALLABLES.checkUsernameAvailability,
+        authReady: isAuthSessionReady(),
+        result: 'failure',
+        failureReason: reason,
+        usernameLength: local.username.length,
+      });
+      return { ok: false, reason };
     }
+    logUsernameService({
+      stage: 'check-availability',
+      functionName: CALLABLES.checkUsernameAvailability,
+      authReady: isAuthSessionReady(),
+      result: 'success',
+      usernameLength: local.username.length,
+    });
     return {
       ok: true,
       available: data.available === true,
@@ -120,8 +233,17 @@ export async function checkUsernameAvailability(
           : local.usernameNormalized,
       reason: data.reason ? mapReason(data.reason) : undefined,
     };
-  } catch {
-    return { ok: false, reason: 'service-unavailable' };
+  } catch (error) {
+    const reason = toClientReason(mapFirebaseCallableToUsernameFailure(error));
+    logUsernameService({
+      stage: 'check-availability',
+      functionName: CALLABLES.checkUsernameAvailability,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: reason,
+      usernameLength: local.username.length,
+    });
+    return { ok: false, reason };
   }
 }
 
@@ -130,24 +252,61 @@ export async function setUsername(username: string): Promise<SetUsernameClientRe
   if (!local.ok) {
     return { ok: false, reason: local.reason };
   }
+  const uidAtStart = getAuthUidSnapshot();
   const functions = getFirebaseFunctionsSafe();
   if (!functions) {
-    return { ok: false, reason: 'service-unavailable' };
+    logUsernameService({
+      stage: 'set-username',
+      functionName: CALLABLES.setUsername,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: 'function-not-found',
+      usernameLength: local.username.length,
+    });
+    return { ok: false, reason: 'function-not-found' };
   }
   try {
     const callable = httpsCallable(functions, CALLABLES.setUsername);
-    const response = await callable({ username: local.username });
+    const response = await withCallableTimeout(callable({ username: local.username }));
+    if (isAuthContextStale(uidAtStart)) {
+      logUsernameService({
+        stage: 'set-username',
+        functionName: CALLABLES.setUsername,
+        authReady: isAuthSessionReady(),
+        result: 'skipped',
+        failureReason: 'auth-context-stale',
+        usernameLength: local.username.length,
+      });
+      return { ok: false, reason: 'auth-required' };
+    }
     const data = response.data as Record<string, unknown>;
     if (data?.ok !== true) {
+      const reason = mapReason(data?.reason);
+      logUsernameService({
+        stage: 'set-username',
+        functionName: CALLABLES.setUsername,
+        authReady: isAuthSessionReady(),
+        result: 'failure',
+        failureReason: reason,
+        usernameLength: local.username.length,
+      });
       return {
         ok: false,
-        reason: mapReason(data?.reason),
+        reason,
         nextChangeAvailableAtMs:
           typeof data?.nextChangeAvailableAtMs === 'number'
             ? data.nextChangeAvailableAtMs
             : null,
       };
     }
+    logUsernameService({
+      stage: 'set-username',
+      functionName: CALLABLES.setUsername,
+      authReady: isAuthSessionReady(),
+      result: 'success',
+      usernameLength: local.username.length,
+    });
+    notifyUsernameProfileChanged();
     return {
       ok: true,
       username: String(data.username ?? local.username),
@@ -159,7 +318,16 @@ export async function setUsername(username: string): Promise<SetUsernameClientRe
           ? data.nextChangeAvailableAtMs
           : null,
     };
-  } catch {
-    return { ok: false, reason: 'service-unavailable' };
+  } catch (error) {
+    const reason = toClientReason(mapFirebaseCallableToUsernameFailure(error));
+    logUsernameService({
+      stage: 'set-username',
+      functionName: CALLABLES.setUsername,
+      authReady: isAuthSessionReady(),
+      result: 'failure',
+      failureReason: reason,
+      usernameLength: local.username.length,
+    });
+    return { ok: false, reason };
   }
 }

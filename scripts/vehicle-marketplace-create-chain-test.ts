@@ -44,7 +44,7 @@ assert.equal(
   'truck-busy',
 );
 
-assert.match(getMarketplaceErrorMessage('auth-required'), /Google hesabınla/);
+assert.match(getMarketplaceErrorMessage('auth-required'), /hesabını bağla/);
 assert.match(
   getMarketplaceErrorMessage('marketplace-state-missing'),
   /henüz hazırlanmadı/,
@@ -68,7 +68,7 @@ const backendSource = readFileSync(
 );
 assert.match(
   serviceSource,
-  /getFunctions\(\s*firebaseApp,\s*VEHICLE_MARKETPLACE_FUNCTIONS_REGION/,
+  /getFirebaseFunctionsSafe\(VEHICLE_MARKETPLACE_FUNCTIONS_REGION\)/,
 );
 assert.doesNotMatch(serviceSource, /ensureVehicleMarketplaceState/);
 assert.match(backendSource, /region: 'us-central1'/);
@@ -87,6 +87,14 @@ assert.doesNotMatch(
   backendSource,
   /export const ensureVehicleMarketplaceState/,
 );
+
+const marketplaceUiSource = readFileSync(
+  resolve(process.cwd(), 'src/screens/VehicleMarketplaceScreen.tsx'),
+  'utf8',
+);
+assert.match(marketplaceUiSource, /unavailableReason === 'auth-required'/);
+assert.match(marketplaceUiSource, /Araç Pazarı hesabı gerekli/);
+assert.match(marketplaceUiSource, /getMarketplaceErrorMessage\('auth-required'\)/);
 
 console.log('[vehicle-marketplace-create-chain-test] PASS', {
   structuredErrors: true,

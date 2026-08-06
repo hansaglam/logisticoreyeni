@@ -18,6 +18,14 @@ import type {
   Warehouse,
 } from '../types/game';
 import { formatDailyOperatingCostDescription } from '../utils/financeLedger';
+import {
+  isRentalReturnPending,
+  isRentalTruckReturned,
+  processExpiredTruckLeases,
+} from './rentalTruckLifecycle';
+
+export { processExpiredTruckLeases };
+export type { ExpiredLeaseResult } from './rentalTruckLifecycle';
 
 export interface DailyOperatingCostBreakdown {
   driverSalaries: number;
@@ -43,7 +51,16 @@ export function getWarehouseDailyOperatingCost(warehouse: Warehouse): number {
 }
 
 export function isActiveLeasedTruck(truck: Truck): boolean {
-  return (truck.ownershipType ?? 'owned') === 'leased' && !truck.leaseExpired;
+  if ((truck.ownershipType ?? 'owned') !== 'leased') {
+    return false;
+  }
+  if (isRentalTruckReturned(truck)) {
+    return false;
+  }
+  if (truck.leaseExpired && !isRentalReturnPending(truck)) {
+    return false;
+  }
+  return true;
 }
 
 /** Aktif kiralık kamyonların günlük karşılık toplamı — yalnızca bilgi amaçlı */
@@ -324,41 +341,3 @@ export function summarizeDailyOperatingCostsFromLedger(
   };
 }
 
-export interface ExpiredLeaseResult {
-  trucks: Truck[];
-  expiredTruckNames: string[];
-}
-
-/** Kira süresi dolmuş boşta kamyonları pasifleştirir — V1 auto-renew yok */
-export function processExpiredTruckLeases(
-  trucks: Truck[],
-  currentTime: number,
-): ExpiredLeaseResult {
-  const expiredTruckNames: string[] = [];
-
-  const updatedTrucks = trucks.map((truck) => {
-    if ((truck.ownershipType ?? 'owned') !== 'leased') {
-      return truck;
-    }
-    if (truck.leaseExpired) {
-      return truck;
-    }
-    if (truck.leaseExpiresAt == null) {
-      return truck;
-    }
-    if (truck.leaseExpiresAt > currentTime) {
-      return truck;
-    }
-    if (truck.status !== 'idle') {
-      return truck;
-    }
-
-    expiredTruckNames.push(truck.name);
-    return {
-      ...truck,
-      leaseExpired: true,
-    };
-  });
-
-  return { trucks: updatedTrucks, expiredTruckNames };
-}

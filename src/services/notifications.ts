@@ -10,6 +10,7 @@ import { getCityName, getProductName } from '../utils/entityLookup';
 import type { MarketPriceAlert } from '../types/game';
 
 export const MARKET_ALERT_NOTIFICATION_TYPE = 'market_alert';
+export const FLEET_RENTAL_NOTIFICATION_TYPE = 'fleet_rental';
 
 let handlerConfigured = false;
 
@@ -35,6 +36,12 @@ export async function ensureAndroidNotificationChannel(): Promise<void> {
     importance: Notifications.AndroidImportance.DEFAULT,
     vibrationPattern: [0, 250, 250, 250],
     lightColor: '#1D4ED8',
+  });
+  await Notifications.setNotificationChannelAsync('fleet-updates', {
+    name: 'Filo Güncellemeleri',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    vibrationPattern: [0, 200, 200, 200],
+    lightColor: '#0EA5E9',
   });
 }
 
@@ -166,6 +173,40 @@ export function getMarketAlertFocusFromResponse(
     return null;
   }
   return { cityId: data.cityId, productId: data.productId };
+}
+
+export function isFleetRentalNotificationResponse(
+  response: Notifications.NotificationResponse,
+): boolean {
+  return response.notification.request.content.data?.type === FLEET_RENTAL_NOTIFICATION_TYPE;
+}
+
+export async function sendFleetRentalLocalNotification(input: {
+  notificationId: string;
+  title: string;
+  body: string;
+  truckId: string;
+}): Promise<void> {
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) {
+    return;
+  }
+
+  await ensureAndroidNotificationChannel();
+  await Notifications.scheduleNotificationAsync({
+    identifier: input.notificationId,
+    content: {
+      title: input.title,
+      body: input.body,
+      data: {
+        type: FLEET_RENTAL_NOTIFICATION_TYPE,
+        truckId: input.truckId,
+        notificationId: input.notificationId,
+      },
+      sound: true,
+    },
+    trigger: null,
+  });
 }
 
 export function getDefaultAlertExpiryTime(currentTime: number): number {

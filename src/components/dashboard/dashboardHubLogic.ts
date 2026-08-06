@@ -16,7 +16,7 @@ export type NextActionDispatch =
   | { type: 'claim'; missionId: string }
   | { type: 'open-missions' };
 
-export type RewardChipKey = 'count' | 'money' | 'xp' | 'diamonds' | 'reputation';
+export type RewardChipKey = 'count' | 'money' | 'xp' | 'reputation';
 
 export interface RewardChipData {
   key: RewardChipKey;
@@ -40,7 +40,6 @@ const MAX_REWARD_CHIPS = 3;
 function buildRewardChips(missionIds: string[], includeCount: boolean): RewardChipData[] {
   let money = 0;
   let xp = 0;
-  let diamonds = 0;
   let reputation = 0;
 
   for (const missionId of missionIds) {
@@ -48,7 +47,6 @@ function buildRewardChips(missionIds: string[], includeCount: boolean): RewardCh
     if (!mission) continue;
     money += mission.reward.money ?? 0;
     xp += mission.reward.xp ?? 0;
-    diamonds += mission.reward.diamonds ?? 0;
     reputation += mission.reward.reputation ?? 0;
   }
 
@@ -61,9 +59,6 @@ function buildRewardChips(missionIds: string[], includeCount: boolean): RewardCh
   }
   if (xp > 0) {
     chips.push({ key: 'xp', icon: 'xp', label: `+${xp} XP` });
-  }
-  if (diamonds > 0) {
-    chips.push({ key: 'diamonds', icon: 'diamond', label: `+${diamonds} Elmas` });
   }
   if (reputation > 0) {
     chips.push({ key: 'reputation', icon: 'reputation', label: `+${reputation} İtibar` });

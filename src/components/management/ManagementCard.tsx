@@ -4,6 +4,8 @@ import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-nati
 import { colors, typography } from '../../theme';
 import GameIcon from '../ui/GameIcon';
 import {
+  MANAGEMENT_CARD_ICON_GLYPH,
+  MANAGEMENT_CARD_ICON_SIZE,
   MANAGEMENT_GRID_GAP,
   MANAGEMENT_TONE_STYLES,
   MANAGEMENT_TILE_MIN_HEIGHT,
@@ -91,7 +93,7 @@ export default function ManagementCard({
             },
           ]}
         >
-          <GameIcon name={item.icon} size={26} color={tone.iconColor} />
+          <GameIcon name={item.icon} size={MANAGEMENT_CARD_ICON_GLYPH} color={tone.iconColor} />
         </View>
         {item.badge != null && item.badge > 0 ? (
           <ManagementBadge count={item.badge} />
@@ -124,24 +126,24 @@ export function getManagementCardWidth(params: {
 
 const styles = StyleSheet.create({
   card: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 16,
     backgroundColor: colors.cardSoft,
     borderWidth: 1,
     justifyContent: 'flex-start',
-    gap: 8,
+    gap: 5,
   },
   topRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    minHeight: 52,
+    minHeight: MANAGEMENT_CARD_ICON_SIZE,
   },
   iconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
+    width: MANAGEMENT_CARD_ICON_SIZE,
+    height: MANAGEMENT_CARD_ICON_SIZE,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -149,14 +151,14 @@ const styles = StyleSheet.create({
   title: {
     ...typography.body,
     color: colors.textPrimary,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
-    lineHeight: 20,
+    lineHeight: 18,
   },
   subtitle: {
     ...typography.caption,
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 11,
+    lineHeight: 14,
     color: colors.textMuted,
   },
   countBadge: {

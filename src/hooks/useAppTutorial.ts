@@ -12,6 +12,7 @@ import {
   isMeaningfullyDifferentRect,
   normalizeTutorialRect,
 } from '../tutorial/app/layout';
+import { logTutorialEffectRun } from '../tutorial/app/devInstrumentation';
 import { logAppTutorialDev } from '../tutorial/app/logger';
 import {
   measureScrollViewportInWindow,
@@ -209,7 +210,7 @@ export function useAppTutorial({
       clearTimeout(preparingLabelTimerRef.current);
       preparingLabelTimerRef.current = null;
     }
-    setShowPreparingLabel(false);
+    setShowPreparingLabel((previous) => (previous ? false : previous));
   }, []);
 
   const beginTransitionUi = useCallback(() => {
@@ -306,13 +307,13 @@ export function useAppTutorial({
   const closeTutorial = useCallback(() => {
     transitionSequenceRef.current += 1;
     transitionLockRef.current = false;
-    setVisible(false);
-    setStepIndex(0);
-    setTransitionState('idle');
-    setSpotlightVisible(false);
-    setAnchorRect(null);
-    setLayoutAnchorRect(null);
-    setFallbackMode(false);
+    setVisible((previous) => (previous ? false : previous));
+    setStepIndex((previous) => (previous === 0 ? previous : 0));
+    setTransitionState((previous) => (previous === 'idle' ? previous : 'idle'));
+    setSpotlightVisible((previous) => (previous ? false : previous));
+    setAnchorRect((previous) => (previous === null ? previous : null));
+    setLayoutAnchorRect((previous) => (previous === null ? previous : null));
+    setFallbackMode((previous) => (previous ? false : previous));
     clearPreparingLabelTimer();
   }, [clearPreparingLabelTimer]);
 
@@ -486,31 +487,49 @@ export function useAppTutorial({
       transitionSequenceRef.current += 1;
       transitionLockRef.current = false;
       placementRef.current = null;
-      setStepIndex(0);
-      setAnchorRect(null);
-      setFallbackMode(false);
-      setTransitionState('idle');
+      setStepIndex((previous) => (previous === 0 ? previous : 0));
+      setAnchorRect((previous) => (previous === null ? previous : null));
+      setFallbackMode((previous) => (previous ? false : previous));
+      setTransitionState((previous) => (previous === 'idle' ? previous : 'idle'));
       setManualReplay(mode === 'manual-open');
-      setVisible(true);
+      setVisible((previous) => (previous ? previous : true));
       log(mode === 'manual-open' ? 'replayed' : 'auto-open');
     },
     [isEnabled, log],
   );
 
   useEffect(() => {
-    if (!canAutoStart || autoAttemptedRef.current || visible) {
+    if (!canAutoStart) {
+      if (!visible) {
+        autoAttemptedRef.current = false;
+      }
+      return;
+    }
+    if (autoAttemptedRef.current || visible) {
       return;
     }
     autoAttemptedRef.current = true;
+    logTutorialEffectRun({
+      tutorialId,
+      effect: 'auto-start',
+      details: {
+        shouldAutoStart: canAutoStart,
+        isOpen: visible,
+        layoutReady,
+        blockersClear: !hasBlockers,
+      },
+    });
     const task = InteractionManager.runAfterInteractions(() => {
       requestAnimationFrame(() => {
         if (!hasBlockers) {
           startTutorial('auto-open');
+        } else {
+          autoAttemptedRef.current = false;
         }
       });
     });
     return () => task.cancel();
-  }, [canAutoStart, hasBlockers, startTutorial, visible]);
+  }, [canAutoStart, hasBlockers, layoutReady, startTutorial, tutorialId, visible]);
 
   const prepareStepIndexRef = useRef(prepareStepIndex);
   prepareStepIndexRef.current = prepareStepIndex;
@@ -520,10 +539,10 @@ export function useAppTutorial({
       transitionSequenceRef.current += 1;
       transitionLockRef.current = false;
       placementRef.current = null;
-      setTransitionState('idle');
-      setSpotlightVisible(false);
-      setAnchorRect(null);
-      setLayoutAnchorRect(null);
+      setTransitionState((previous) => (previous === 'idle' ? previous : 'idle'));
+      setSpotlightVisible((previous) => (previous ? false : previous));
+      setAnchorRect((previous) => (previous === null ? previous : null));
+      setLayoutAnchorRect((previous) => (previous === null ? previous : null));
       clearPreparingLabelTimer();
       return;
     }
@@ -556,12 +575,12 @@ export function useAppTutorial({
     (action: 'completed' | 'step-skipped' | 'dismissed') => {
       transitionSequenceRef.current += 1;
       transitionLockRef.current = false;
-      setVisible(false);
-      setStepIndex(0);
-      setTransitionState('idle');
-      setSpotlightVisible(false);
-      setAnchorRect(null);
-      setLayoutAnchorRect(null);
+      setVisible((previous) => (previous ? false : previous));
+      setStepIndex((previous) => (previous === 0 ? previous : 0));
+      setTransitionState((previous) => (previous === 'idle' ? previous : 'idle'));
+      setSpotlightVisible((previous) => (previous ? false : previous));
+      setAnchorRect((previous) => (previous === null ? previous : null));
+      setLayoutAnchorRect((previous) => (previous === null ? previous : null));
       if (!manualReplay) {
         try {
           onCompletePersistence();
@@ -587,43 +606,74 @@ export function useAppTutorial({
   }, [hasBlockers, isEnabled, startTutorial]);
 
   const isTransitioning = transitionState !== 'idle' || transitionLockRef.current;
-  const progressEntry = getTutorialProgressEntry(
-    tutorialProgress,
-    tutorialId,
-    legacyMarket,
+  const progressEntry = useMemo(
+    () => getTutorialProgressEntry(tutorialProgress, tutorialId, legacyMarket),
+    [legacyMarket, tutorialId, tutorialProgress],
   );
 
-  return {
-    visible: isEnabled && visible,
-    stepIndex: clampedStepIndex,
-    steps: safeSteps,
-    isActive: isEnabled && visible,
-    isEnabled,
-    canAutoStart,
-    transitionState,
-    isTransitioning,
-    anchorRect,
-    layoutAnchorRect,
-    fallbackMode,
-    spotlightVisible,
-    showPreparingLabel,
-    placementRef,
-    overlayRootRef,
-    progressEntry,
-    openManual,
-    requestStepChange,
-    notifyScrollEnd,
-    remeasureActiveTarget,
-    onSkip: () => {
-      if (isTransitioning) return;
-      finishTutorial('step-skipped');
-    },
-    onComplete: () => {
-      if (isTransitioning) return;
-      finishTutorial('completed');
-    },
-    log,
-  };
+  const onSkip = useCallback(() => {
+    if (transitionState !== 'idle' || transitionLockRef.current) {
+      return;
+    }
+    finishTutorial('step-skipped');
+  }, [finishTutorial, transitionState]);
+
+  const onComplete = useCallback(() => {
+    if (transitionState !== 'idle' || transitionLockRef.current) {
+      return;
+    }
+    finishTutorial('completed');
+  }, [finishTutorial, transitionState]);
+
+  return useMemo(
+    () => ({
+      visible: isEnabled && visible,
+      stepIndex: clampedStepIndex,
+      steps: safeSteps,
+      isActive: isEnabled && visible,
+      isEnabled,
+      canAutoStart,
+      transitionState,
+      isTransitioning,
+      anchorRect,
+      layoutAnchorRect,
+      fallbackMode,
+      spotlightVisible,
+      showPreparingLabel,
+      placementRef,
+      overlayRootRef,
+      progressEntry,
+      openManual,
+      requestStepChange,
+      notifyScrollEnd,
+      remeasureActiveTarget,
+      onSkip,
+      onComplete,
+      log,
+    }),
+    [
+      anchorRect,
+      canAutoStart,
+      clampedStepIndex,
+      fallbackMode,
+      isEnabled,
+      isTransitioning,
+      layoutAnchorRect,
+      log,
+      notifyScrollEnd,
+      onComplete,
+      onSkip,
+      openManual,
+      progressEntry,
+      remeasureActiveTarget,
+      requestStepChange,
+      safeSteps,
+      showPreparingLabel,
+      spotlightVisible,
+      transitionState,
+      visible,
+    ],
+  );
 }
 
 export { computeTooltipLayout };

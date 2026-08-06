@@ -13,6 +13,7 @@ interface ScreenHeaderProps {
   title: string;
   subtitle?: string;
   onBack?: () => void;
+  leftAction?: React.ReactNode;
   rightAction?: React.ReactNode;
   titleIcon?: GameIconName;
   titleIconColor?: string;
@@ -24,6 +25,7 @@ export default function ScreenHeader({
   title,
   subtitle,
   onBack,
+  leftAction,
   rightAction,
   titleIcon,
   titleIconColor = colors.accentAmber,
@@ -32,14 +34,15 @@ export default function ScreenHeader({
   return (
     <View style={[styles.header, compact && styles.headerCompact]}>
       <View style={styles.sideSlot}>
-        {onBack ? (
-          <IconButton
-            icon="back"
-            onPress={onBack}
-            size={compact ? 20 : 22}
-            color={colors.textPrimary}
-          />
-        ) : null}
+        {leftAction ??
+          (onBack ? (
+            <IconButton
+              icon="back"
+              onPress={onBack}
+              size={compact ? 20 : 22}
+              color={colors.textPrimary}
+            />
+          ) : null)}
       </View>
 
       <View style={styles.center}>
@@ -74,6 +77,7 @@ const styles = StyleSheet.create({
   },
   sideSlot: {
     width: SIDE_SLOT_WIDTH,
+    minWidth: SIDE_SLOT_WIDTH,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: MIN_TOUCH_TARGET,

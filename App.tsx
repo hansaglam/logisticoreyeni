@@ -37,7 +37,7 @@ import { configureGoogleSignIn } from './src/services/googleAuthService';
 import { gatherAdsConsentIfNeeded } from './src/services/adsConsentService';
 import { initializeAdProvider } from './src/services/adProvider';
 import {
-  probeSaveRecoveryOnColdStart,
+  probeSaveRecoveryWithCloudAttempt,
   type SaveRecoveryProbeResult,
 } from './src/services/saveRecoveryService';
 import SaveRecoveryScreen from './src/screens/SaveRecoveryScreen';
@@ -328,7 +328,7 @@ export default function App() {
 
   const handleRecoveryComplete = useCallback(() => {
     void (async () => {
-      const probe = await probeSaveRecoveryOnColdStart();
+      const probe = await probeSaveRecoveryWithCloudAttempt();
       if (probe.required && !probe.quarantine?.userChoseNewGame) {
         setRecoveryProbe(probe);
         setBootPhase('recovery');
@@ -364,7 +364,7 @@ export default function App() {
       await initAnonymousAuth();
       if (cancelled) return;
       logProductionBuildConfigOnce();
-      const probe = await probeSaveRecoveryOnColdStart();
+      const probe = await probeSaveRecoveryWithCloudAttempt();
       if (cancelled) return;
       if (probe.required && !probe.quarantine?.userChoseNewGame) {
         setRecoveryProbe(probe);

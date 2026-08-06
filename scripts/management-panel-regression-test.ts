@@ -15,6 +15,7 @@ import {
 } from '../src/navigation/quickAccessConfig';
 import {
   estimateManagementPanelContentHeight,
+  resolveManagementPanelHeight,
 } from '../src/components/management/managementLayout';
 import {
   MANAGEMENT_GRID_GAP,
@@ -56,24 +57,24 @@ console.log('Card config');
 console.log('\nLayout constants');
 {
   assert(
-    QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO >= 0.72 &&
-      QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO <= 0.78,
-    'panel max height ratio in 72–78% range',
+    QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO >= 0.68 &&
+      QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO <= 0.76,
+    'panel max height ratio in 68–76% range',
   );
   assert(
-    MANAGEMENT_PANEL_MAX_HEIGHT_RATIO >= 0.72 &&
-      MANAGEMENT_PANEL_MAX_HEIGHT_RATIO <= 0.78,
-    'management panel max height ratio in 72–78% range',
+    MANAGEMENT_PANEL_MAX_HEIGHT_RATIO >= 0.68 &&
+      MANAGEMENT_PANEL_MAX_HEIGHT_RATIO <= 0.76,
+    'management panel max height ratio in 68–76% range',
   );
   assert(
-    QUICK_ACCESS_TILE_GAP >= 12 && QUICK_ACCESS_TILE_GAP <= 16,
-    'tile gap in 12–16px range',
+    QUICK_ACCESS_TILE_GAP >= 8 && QUICK_ACCESS_TILE_GAP <= 12,
+    'tile gap in 8–12px range',
   );
-  assert(MANAGEMENT_GRID_GAP === 12, 'management grid gap is 12px');
-  assert(QUICK_ACCESS_TILE_HEIGHT >= 122, 'tile min height in 122–136px range');
-  assert(MANAGEMENT_TILE_MIN_HEIGHT >= 122, 'management tile min height in range');
+  assert(MANAGEMENT_GRID_GAP === 8, 'management grid gap is 8px');
+  assert(QUICK_ACCESS_TILE_HEIGHT >= 90, 'tile min height in compact range');
+  assert(MANAGEMENT_TILE_MIN_HEIGHT >= 90, 'management tile min height in compact range');
   const eightCardHeight = estimateManagementPanelContentHeight(8);
-  assert(eightCardHeight > 500 && eightCardHeight < 900, '8-card natural height is reasonable');
+  assert(eightCardHeight > 380 && eightCardHeight < 620, '8-card natural height is compact');
 }
 
 console.log('\nAccessibility copy');
@@ -112,6 +113,18 @@ console.log('\nNavigation wiring');
   assert(managementPanel.includes('onQuickAccess'), 'management panel forwards navigation actions');
 }
 
+console.log('\nPanel height strategy');
+{
+  const eightItems = resolveManagementPanelHeight({ itemCount: 8, availableHeight: 700 });
+  const cramped = resolveManagementPanelHeight({ itemCount: 8, availableHeight: 300 });
+  assert(eightItems.panelHeight > 0, 'visible panel height is always > 0');
+  assert(eightItems.rowCount === 4, '8 items → 4 rows');
+  assert(eightItems.panelHeight === eightItems.naturalHeight, 'tall screen uses natural height');
+  assert(cramped.needsScroll, 'short available height enables scroll');
+  assert(cramped.panelHeight === 300, 'cramped screen caps at available height');
+  assert(eightItems.naturalHeight > 380 && eightItems.naturalHeight < 620, 'natural height compact');
+}
+
 console.log('\nPanel interaction');
 {
   const managementPanel = readFileSync('src/components/management/ManagementPanel.tsx', 'utf8');
@@ -124,19 +137,23 @@ console.log('\nPanel interaction');
   assert(managementPanel.includes('onRequestClose={onClose}'), 'Android back closes panel');
   assert(managementPanel.includes('accessibilityViewIsModal'), 'modal accessibility set');
   assert(
-    managementPanel.includes('scrollToOffset') || managementPanel.includes('scrollTo'),
+    managementPanel.includes('scrollTo({ y: 0') || managementPanel.includes('scrollToOffset'),
     'panel opens at top scroll',
   );
   assert(managementCard.includes('accessibilityRole="button"'), 'cards expose button role');
   assert(managementCard.includes('adjustsFontSizeToFit'), 'font scale support on card labels');
   assert(managementCard.includes('minWidth: 24'), 'badge min 24px');
-  assert(managementGrid.includes('numColumns={2}'), '2-column grid uses FlatList numColumns');
-  assert(managementGrid.includes('columnWrapperStyle'), 'FlatList column wrapper present');
+  assert(managementGrid.includes('ScrollView'), 'grid uses ScrollView for bounded height');
+  assert(managementGrid.includes('columnRow'), '2-column row layout preserved');
+  assert(managementGrid.includes('flexGrow: 0'), 'grid content does not stretch with dead space');
   assert(managementPanel.includes("width: '100%'"), 'panel stretches to full anchor width');
   assert(managementPanel.includes('panelContentWidth'), 'grid width from window dimensions');
   assert(!managementPanel.includes('panelWidth'), 'no shrink-wrap onLayout width loop');
-  assert(managementPanel.includes('managementLayout'), 'panel height fits content when possible');
-  assert(managementPanel.includes('<ManagementGrid'), 'panel content scrollable via grid FlatList');
+  assert(managementPanel.includes('resolveManagementPanelHeight'), 'panel uses bounded height resolver');
+  assert(managementPanel.includes('height: panelHeight'), 'panel always gets explicit height');
+  assert(!managementPanel.includes('scrollBottomPadding'), 'panel does not double-count tab bar inset');
+  assert(managementPanel.includes('listBottomInset'), 'panel uses compact internal bottom inset');
+  assert(managementPanel.includes('<ManagementGrid'), 'panel content scrollable via grid');
   assert(managementPanel.includes('Şirketini, filonu ve operasyonlarını yönet'), 'new subtitle copy');
   assert(dataHook.includes('useFleetSubtitle'), 'fleet subtitle from store');
   assert(dataHook.includes('useWarehouseSubtitle'), 'warehouse subtitle from store');

@@ -2,6 +2,8 @@
  * Monetization M0/M1 — ödüllü reklam slot yapılandırması.
  */
 
+import { calculateDailyOperationSupportReward } from '../domain/dailyOperationSupportReward';
+import type { Player } from '../types/game';
 import type { AdRewardSlotId } from '../types/monetization';
 
 export const MONETIZATION_GLOBAL_DAILY_AD_CAP = 5;
@@ -14,15 +16,9 @@ export const LOW_LEVEL_ALLOWED_AD_SLOTS: AdRewardSlotId[] = [
   'market_analysis',
 ];
 
-export interface DailyOpsBonusTier {
-  minLevel: number;
-  maxLevel: number;
-  cash: number;
-}
-
 export interface MonetizationSlotConfig {
   dailyLimit: number;
-  cashByLevel?: DailyOpsBonusTier[];
+  cashByLevel?: never;
   bypassCooldownHours?: number;
   unlockGameHours?: number;
   sameProductDailyLimit?: number;
@@ -36,11 +32,6 @@ export interface MonetizationSlotConfig {
 export const MONETIZATION_SLOT_CONFIG: Record<AdRewardSlotId, MonetizationSlotConfig> = {
   daily_ops_bonus: {
     dailyLimit: 1,
-    cashByLevel: [
-      { minLevel: 1, maxLevel: 3, cash: 150 },
-      { minLevel: 4, maxLevel: 10, cash: 200 },
-      { minLevel: 11, maxLevel: 999, cash: 250 },
-    ],
   },
   contract_refresh: {
     dailyLimit: 2,
@@ -62,13 +53,9 @@ export const MONETIZATION_SLOT_CONFIG: Record<AdRewardSlotId, MonetizationSlotCo
   },
 };
 
-export function getDailyOpsBonusCash(playerLevel: number): number {
-  const level = Math.max(1, playerLevel);
-  const tiers = MONETIZATION_SLOT_CONFIG.daily_ops_bonus.cashByLevel ?? [];
-  for (const tier of tiers) {
-    if (level >= tier.minLevel && level <= tier.maxLevel) {
-      return tier.cash;
-    }
-  }
-  return 150;
+/** @deprecated Oyuncu state'i ile calculateDailyOperationSupportReward kullanın. */
+export function getDailyOpsBonusCash(
+  player: Pick<Player, 'drivers' | 'warehouses' | 'trucks'>,
+): number {
+  return calculateDailyOperationSupportReward(player);
 }

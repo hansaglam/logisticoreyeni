@@ -1,30 +1,50 @@
-import React, { useEffect, useRef } from 'react';
-import { InteractionManager, StyleSheet, View, type ViewProps } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import {
+  Dimensions,
+  InteractionManager,
+  StyleSheet,
+  View,
+  type LayoutChangeEvent,
+  type ViewProps,
+} from 'react-native';
 
 import type { TutorialLayoutRect } from '../../tutorial/types';
+import { logLayoutDimensions } from '../../tutorial/app/devLayoutInstrumentation';
 import { APP_TUTORIALS_ENABLED } from '../../tutorial/app/featureFlags';
+import {
+  getTargetLayoutStyle,
+  type TutorialTargetLayoutMode,
+} from '../../tutorial/app/targetLayout';
 import type { AppTutorialId } from '../../tutorial/app/types';
 import { registerAppTutorialTarget } from '../../tutorial/app/targetRegistry';
 
 export interface AppTutorialTargetProps extends ViewProps {
   tutorialId: AppTutorialId;
   targetId: string;
+  layoutMode?: TutorialTargetLayoutMode;
   scrollIntoView?: () => void | Promise<void>;
+  /** Dev-only screen label for layout logging */
+  debugScreen?: string;
 }
 
 export function AppTutorialTarget({
   tutorialId,
   targetId,
+  layoutMode = 'preserve',
   scrollIntoView,
+  debugScreen,
   children,
   style,
+  onLayout,
   ...rest
 }: AppTutorialTargetProps) {
   const viewRef = useRef<View>(null);
-  const tutorialsEnabled = APP_TUTORIALS_ENABLED;
+  const scrollIntoViewRef = useRef(scrollIntoView);
+  scrollIntoViewRef.current = scrollIntoView;
+  const layoutModeStyle = getTargetLayoutStyle(layoutMode);
 
   useEffect(() => {
-    if (!tutorialsEnabled) {
+    if (!APP_TUTORIALS_ENABLED) {
       return;
     }
 
@@ -57,19 +77,41 @@ export function AppTutorialTarget({
 
     return registerAppTutorialTarget(tutorialId, targetId, {
       measure,
-      scrollIntoView: scrollIntoView
-        ? async () => {
-            await scrollIntoView();
-          }
-        : undefined,
+      scrollIntoView: async () => {
+        await scrollIntoViewRef.current?.();
+      },
     });
-  }, [scrollIntoView, targetId, tutorialId, tutorialsEnabled]);
+  }, [targetId, tutorialId]);
+
+  const handleLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      if (debugScreen) {
+        const { width } = event.nativeEvent.layout;
+        logLayoutDimensions({
+          screen: debugScreen,
+          targetId,
+          windowWidth: Dimensions.get('window').width,
+          wrapperWidth: width,
+          layoutMode,
+          wrapperAlignSelf:
+            layoutMode === 'stretch'
+              ? 'stretch'
+              : layoutMode === 'content'
+                ? 'flex-start'
+                : 'inherit',
+        });
+      }
+      onLayout?.(event);
+    },
+    [debugScreen, layoutMode, onLayout, targetId],
+  );
 
   return (
     <View
-      ref={tutorialsEnabled ? viewRef : undefined}
+      ref={APP_TUTORIALS_ENABLED ? viewRef : undefined}
       collapsable={false}
-      style={[styles.target, style]}
+      style={[styles.base, layoutModeStyle, style]}
+      onLayout={handleLayout}
       {...rest}
     >
       {children}
@@ -78,7 +120,7 @@ export function AppTutorialTarget({
 }
 
 const styles = StyleSheet.create({
-  target: {
-    alignSelf: 'flex-start',
+  base: {
+    minWidth: 0,
   },
 });

@@ -150,10 +150,10 @@ console.log('\nHeading — cardinal synthetic segments');
     progress: 0.5,
     assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
   });
-  assert(angularDistance(east, 0) < 0.01, 'horizontal east with base ≈ 0°');
-  assert(angularDistance(west, 180) < 0.01, 'horizontal west with base ≈ 180°');
-  assert(angularDistance(south, 90) < 0.01, 'vertical south with base ≈ 90°');
-  assert(angularDistance(north, 270) < 0.01, 'vertical north with base ≈ 270°');
+  assert(angularDistance(east, 180) < 0.01, 'horizontal east marker rotation ≈ 180°');
+  assert(angularDistance(west, 0) < 0.01, 'horizontal west marker rotation ≈ 0°');
+  assert(angularDistance(south, 270) < 0.01, 'vertical south marker rotation ≈ 270°');
+  assert(angularDistance(north, 90) < 0.01, 'vertical north marker rotation ≈ 90°');
 }
 
 console.log('\nHeading — duplicate points + fallback');
@@ -168,21 +168,25 @@ console.log('\nHeading — duplicate points + fallback');
     assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
     fallbackHeadingDeg: 33,
   });
-  assert(angularDistance(dup, 0) < 0.01, 'duplicate collinear points use next segment (east + base)');
+  assert(angularDistance(dup, 180) < 0.01, 'duplicate collinear points use next segment (east marker)');
   const zero = getRouteHeadingDegrees({
     routePoints: [{ x: 2, y: 2 }, { x: 2, y: 2 }],
     progress: 0.5,
     assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
     fallbackHeadingDeg: 44,
   });
-  assert(zero === 44, 'zero-length tangent keeps fallback + base', String(zero));
+  assert(
+    angularDistance(zero, normalizeHeadingDegrees360(44 - TRUCK_ASSET_FORWARD_OFFSET_DEG)) < 0.01,
+    'zero-length tangent keeps fallback - assetForward',
+    String(zero),
+  );
 }
 
 console.log('\nHeading — normalize + no platform hack');
 {
   assert(normalizeHeadingDegrees360(-90) === 270, 'normalizeHeadingDegrees360(-90) = 270');
   assert(normalizeHeadingDegrees360(720) === 0, 'normalizeHeadingDegrees360(720) = 0');
-  assert(TRUCK_ASSET_FORWARD_OFFSET_DEG === 0, 'asset forward offset is explicit 0° (truck faces right at 0°)');
+  assert(TRUCK_ASSET_FORWARD_OFFSET_DEG === 180, 'asset forward offset is 180° (truck cab faces left at 0°)');
 }
 
 console.log('\nMarker identity — route version changes on topology');

@@ -33,15 +33,15 @@ function angularDistance(a: number, b: number): number {
 }
 
 function displayRotation(headingDeg: number): number {
-  return normalizeHeadingDegrees(headingDeg + TRUCK_ASSET_FORWARD_OFFSET_DEG);
+  return normalizeHeadingDegrees(headingDeg - TRUCK_ASSET_FORWARD_OFFSET_DEG);
 }
 
 console.log('\n=== Truck Route Heading Test ===\n');
 
 console.log('Asset base rotation');
 assert(
-  TRUCK_ASSET_FORWARD_OFFSET_DEG === 0,
-  'truck-outline 0° faces right → TRUCK_ASSET_FORWARD_OFFSET_DEG is 0°',
+  TRUCK_ASSET_FORWARD_OFFSET_DEG === 180,
+  'truck-outline 0° faces left → TRUCK_ASSET_FORWARD_OFFSET_DEG is 180°',
 );
 assert(
   TRUCK_ICON_BASE_ROTATION_DEG === TRUCK_ASSET_FORWARD_OFFSET_DEG,
@@ -68,8 +68,8 @@ assert(angularDistance(westH, 180) < 0.001, 'west = 180°');
 assert(angularDistance(eastH, westH) > 179.9, 'west = east + ~180°');
 assert(angularDistance(southH, 90) < 0.001, 'south = 90° (Y-down screen)');
 assert(angularDistance(northH, -90) < 0.001, 'north = -90° (Y-down screen)');
-assert(angularDistance(displayRotation(eastH), 0) < 0.001, 'east display rotation ≈ 0°');
-assert(angularDistance(displayRotation(westH), 180) < 0.001, 'west display rotation ≈ 180°');
+assert(angularDistance(displayRotation(eastH), 180) < 0.001, 'east marker rotation ≈ 180° (cab faces east)');
+assert(angularDistance(displayRotation(westH), 0) < 0.001, 'west marker rotation ≈ 0° (cab faces west)');
 
 console.log('\nEndpoint / duplicate safety');
 assert(
@@ -108,17 +108,20 @@ assert(shortestHeadingDeltaDegrees(10, 350) === -20, 'shortest-angle prefers -20
 assert(shortestHeadingDeltaDegrees(350, 10) === 20, 'shortest-angle prefers +20 over -340');
 assert(Math.abs(shortestHeadingDeltaDegrees(0, 180)) === 180, 'shortest-angle 180° is exact');
 
-console.log('\nCurved route — active segment tangent');
+console.log('\nCurved route — look-ahead tangent');
 const curve = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }];
+/** Production passes mapBounds width/height as coordinate scales; required for 8px look-ahead. */
+const mapScale = { coordinateScaleX: 400, coordinateScaleY: 600 };
 const curveMid = getRouteHeadingAtProgress({
   points: curve,
   progress: 0.5,
+  ...mapScale,
 });
-assert(angularDistance(curveMid, 0) < 0.001, 'L-route corner at vertex keeps first segment (east ≈ 0°)');
-const curveLate = getRouteHeadingAtProgress({ points: curve, progress: 0.75 });
-assert(angularDistance(curveLate, 90) < 0.001, 'L-route second leg faces south ≈ 90°');
-const curveEarly = getRouteHeadingAtProgress({ points: curve, progress: 0.25 });
-assert(angularDistance(curveEarly, 0) < 0.001, 'L-route first leg faces east ≈ 0°');
+assert(angularDistance(curveMid, 90) < 5, 'L-route midpoint look-ahead faces south ≈ 90°');
+const curveEarly = getRouteHeadingAtProgress({ points: curve, progress: 0.25, ...mapScale });
+assert(angularDistance(curveEarly, 0) < 5, 'L-route first leg look-ahead faces east ≈ 0°');
+const curveLate = getRouteHeadingAtProgress({ points: curve, progress: 0.75, ...mapScale });
+assert(angularDistance(curveLate, 90) < 5, 'L-route second leg look-ahead faces south ≈ 90°');
 
 console.log('\nCatalog routes: Bursa ↔ Ankara');
 const bursaAnkara = getRoadRoute('bursa', 'ankara');
@@ -143,9 +146,18 @@ if (bursaAnkara && ankaraBursa) {
     `${forward.headingDeg.toFixed(1)}°`,
   );
   assert(
-    angularDistance(forward.headingDeg, reverse.headingDeg) > 170,
-    'Ankara → Bursa heading reverses by ~180°',
+    angularDistance(forward.headingDeg, reverse.headingDeg) > 90,
+    'Ankara ↔ Bursa mid-route headings differ (opposite corridor)',
     `${forward.headingDeg.toFixed(1)}° / ${reverse.headingDeg.toFixed(1)}°`,
+  );
+  const reverseComplement = getTruckPositionAlongRoadRoute(ankaraBursa, 1 - 0.5, {
+    coordinateScaleX: 1080,
+    coordinateScaleY: 720,
+  });
+  assert(
+    angularDistance(forward.headingDeg, reverseComplement.headingDeg) > 150,
+    'complementary progress headings oppose by ~180°',
+    `${forward.headingDeg.toFixed(1)}° / ${reverseComplement.headingDeg.toFixed(1)}°`,
   );
   for (const progress of [0, 0.5, 1] as const) {
     const sample = getTruckPositionAlongRoadRoute(bursaAnkara, progress, {

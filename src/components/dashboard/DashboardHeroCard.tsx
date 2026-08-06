@@ -10,6 +10,7 @@ import {
 
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
 import type { ReputationSummary } from '../../domain/reputationModel';
+import { METRIC_CELL_HORIZONTAL_PADDING, METRIC_ROW_GAP } from '../../domain/dashboardMetricGridLayout';
 import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { GameIcon, ProgressBar } from '../ui';
 import { formatCompanyScore } from '../../simulation/companyScore';
@@ -51,12 +52,18 @@ interface MetricTileProps {
   icon: GameIconName;
   color: string;
   compact: boolean;
-  labelMinScale?: number;
+  secondaryText?: string;
 }
 
-function MetricTile({ label, value, icon, color, compact, labelMinScale = 0.72 }: MetricTileProps) {
-  const iconBox = compact ? 28 : 30;
-  const iconGlyph = compact ? 13 : 14;
+function MetricTile({
+  label,
+  value,
+  icon,
+  color,
+  compact,
+  secondaryText,
+}: MetricTileProps) {
+  const iconBox = compact ? 30 : 32;
 
   return (
     <View style={[styles.metricTile, { borderColor: `${color}32`, backgroundColor: `${color}0C` }]}>
@@ -70,24 +77,34 @@ function MetricTile({ label, value, icon, color, compact, labelMinScale = 0.72 }
           },
         ]}
       >
-        <GameIcon name={icon} size={iconGlyph} color={color} />
+        <GameIcon name={icon} size={compact ? 13 : 14} color={color} />
       </View>
       <Text
         style={styles.metricLabel}
         numberOfLines={1}
         adjustsFontSizeToFit
-        minimumFontScale={labelMinScale}
+        minimumFontScale={0.75}
       >
         {label}
       </Text>
       <Text
-        style={[styles.metricValue, { color, fontSize: compact ? 15 : 16 }]}
+        style={[styles.metricValue, { color }]}
         numberOfLines={1}
         adjustsFontSizeToFit
-        minimumFontScale={0.7}
+        minimumFontScale={0.72}
       >
         {value}
       </Text>
+      {secondaryText ? (
+        <Text
+          style={styles.metricSecondary}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.72}
+        >
+          {secondaryText}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -110,11 +127,14 @@ export default function DashboardHeroCard({
 }: DashboardHeroCardProps) {
   const { width } = useWindowDimensions();
   const compact = width < 360;
+
   const effectiveXpProgress = isMaxLevel ? 1 : Math.min(1, Math.max(0, xpProgress));
   const reputationDisplay = `${reputationSummary.score}/100`;
   const moneyColor = getDashboardMoneyColor(money);
-  const fleetLabel = compact ? 'BOŞTA · AKTİF' : 'BOŞTA / AKTİF';
+  const hasReputationBadge =
+    reputationSummary.recentChange != null && reputationSummary.recentChange !== 0;
   const fleetValue = `${idleTrucks} / ${activeDeliveries}`;
+  const fleetSecondary = `${idleTrucks} boşta · ${activeDeliveries} aktif`;
 
   return (
     <View style={[styles.card, dashboardHeroElevation]}>
@@ -183,81 +203,112 @@ export default function DashboardHeroCard({
           <ProgressBar progress={effectiveXpProgress} color={colors.primary} height={5} trackColor={colors.surface3} />
         </View>
 
-        <View style={styles.metricRow}>
-          <MetricTile label="Nakit" value={formatMoney(money)} icon="cash" color={moneyColor} compact={compact} />
-          <MetricTile label="Puan" value={formatCompanyScore(companyScore)} icon="xp" color={colors.primaryLight} compact={compact} />
-          <AppTutorialTarget tutorialId="dashboard" targetId="reputation-card">
-          <Pressable
-            style={({ pressed }) => [styles.reputationTile, pressed && styles.reputationTilePressed]}
-            onPress={onReputationPress}
-            disabled={!onReputationPress}
-            accessibilityRole="button"
-            accessibilityLabel={`İtibar ${reputationDisplay}, ${reputationSummary.tierLabel}`}
-          >
-            <View style={[styles.metricTile, styles.reputationMetricInner, { borderColor: `${colors.purple}32`, backgroundColor: `${colors.purple}0C` }]}>
-              <View
-                style={[
-                  styles.metricIconWrap,
-                  {
-                    width: compact ? 28 : 30,
-                    height: compact ? 28 : 30,
-                    backgroundColor: `${colors.purple}20`,
-                  },
+        <View style={[styles.metricRow, { gap: METRIC_ROW_GAP }]}>
+          <View style={styles.metricCell}>
+            <MetricTile
+              label="Nakit"
+              value={formatMoney(money)}
+              icon="cash"
+              color={moneyColor}
+              compact={compact}
+            />
+          </View>
+          <View style={styles.metricCell}>
+            <MetricTile
+              label="Puan"
+              value={formatCompanyScore(companyScore)}
+              icon="xp"
+              color={colors.primaryLight}
+              compact={compact}
+            />
+          </View>
+          <View style={styles.metricCell}>
+            <AppTutorialTarget tutorialId="dashboard" targetId="reputation-card" layoutMode="preserve" style={styles.metricTarget}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.reputationPressable,
+                  pressed && styles.reputationTilePressed,
                 ]}
+                onPress={onReputationPress}
+                disabled={!onReputationPress}
+                accessibilityRole="button"
+                accessibilityLabel={`İtibar ${reputationDisplay}, ${reputationSummary.tierLabel}`}
               >
-                <GameIcon name="reputation" size={compact ? 13 : 14} color={colors.purple} />
-              </View>
-              <Text
-                style={styles.metricLabel}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-              >
-                İtibar
-              </Text>
-              <Text
-                style={[styles.metricValue, { color: colors.purple, fontSize: compact ? 15 : 16 }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.7}
-              >
-                {reputationDisplay}
-              </Text>
-              <Text style={styles.reputationTier} numberOfLines={1}>
-                {reputationSummary.tierLabel}
-              </Text>
-              <ProgressBar
-                progress={reputationSummary.progressToNextTier}
-                color={colors.purple}
-                height={3}
-                trackColor={colors.surface3}
-              />
-              {reputationSummary.recentChange != null && reputationSummary.recentChange !== 0 ? (
-                <Text
+                <View
                   style={[
-                    styles.reputationBadge,
-                    reputationSummary.recentChange > 0
-                      ? styles.reputationBadgePositive
-                      : styles.reputationBadgeNegative,
+                    styles.metricTile,
+                    styles.reputationMetricInner,
+                    hasReputationBadge && styles.reputationMetricWithBadge,
+                    { borderColor: `${colors.purple}32`, backgroundColor: `${colors.purple}0C` },
                   ]}
-                  numberOfLines={1}
                 >
-                  {reputationSummary.recentChange > 0
-                    ? `+${reputationSummary.recentChange}`
-                    : reputationSummary.recentChange}
-                </Text>
-              ) : null}
-            </View>
-          </Pressable>
-          </AppTutorialTarget>
-          <MetricTile
-            label={fleetLabel}
-            value={fleetValue}
-            icon="truck"
-            color={colors.amber}
-            compact={compact}
-            labelMinScale={0.68}
-          />
+                  {hasReputationBadge ? (
+                    <View
+                      style={[
+                        styles.reputationBadgeChip,
+                        reputationSummary.recentChange! > 0
+                          ? styles.reputationBadgePositive
+                          : styles.reputationBadgeNegative,
+                      ]}
+                    >
+                      <Text style={styles.reputationBadgeText} numberOfLines={1}>
+                        {reputationSummary.recentChange! > 0
+                          ? `+${reputationSummary.recentChange}`
+                          : reputationSummary.recentChange}
+                      </Text>
+                    </View>
+                  ) : null}
+                  <View
+                    style={[
+                      styles.metricIconWrap,
+                      {
+                        width: compact ? 30 : 32,
+                        height: compact ? 30 : 32,
+                        backgroundColor: `${colors.purple}20`,
+                      },
+                    ]}
+                  >
+                    <GameIcon name="reputation" size={compact ? 13 : 14} color={colors.purple} />
+                  </View>
+                  <Text
+                    style={styles.metricLabel}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.75}
+                  >
+                    İtibar
+                  </Text>
+                  <Text
+                    style={[styles.metricValue, { color: colors.purple }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.72}
+                  >
+                    {reputationDisplay}
+                  </Text>
+                  <Text style={styles.reputationTier} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
+                    {reputationSummary.tierLabel}
+                  </Text>
+                  <ProgressBar
+                    progress={reputationSummary.progressToNextTier}
+                    color={colors.purple}
+                    height={3}
+                    trackColor={colors.surface3}
+                  />
+                </View>
+              </Pressable>
+            </AppTutorialTarget>
+          </View>
+          <View style={styles.metricCell}>
+            <MetricTile
+              label="Araçlar"
+              value={fleetValue}
+              secondaryText={fleetSecondary}
+              icon="truck"
+              color={colors.amber}
+              compact={compact}
+            />
+          </View>
         </View>
       </View>
     </View>
@@ -427,20 +478,33 @@ const styles = StyleSheet.create({
   },
   metricRow: {
     flexDirection: 'row',
-    gap: 6,
+    width: '100%',
     marginTop: 2,
+    alignItems: 'stretch',
+  },
+  metricCell: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+  },
+  metricTarget: {
+    flex: 1,
+    minWidth: 0,
+    alignSelf: 'stretch',
   },
   metricTile: {
     flex: 1,
-    minWidth: 0,
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    height: 75,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+    gap: 3,
+    minHeight: 96,
+    paddingHorizontal: METRIC_CELL_HORIZONTAL_PADDING,
+    paddingVertical: 10,
     borderRadius: 14,
     borderWidth: 1,
+    overflow: 'hidden',
+    minWidth: 0,
   },
   metricIconWrap: {
     borderRadius: 11,
@@ -449,7 +513,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   metricLabel: {
-    fontSize: 9.5,
+    fontSize: 10,
     fontWeight: '600',
     color: colors.textMuted,
     letterSpacing: 0.1,
@@ -457,13 +521,22 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   metricValue: {
+    fontSize: 17,
     fontWeight: '800',
     letterSpacing: -0.2,
     textAlign: 'center',
     width: '100%',
   },
-  reputationTile: {
+  metricSecondary: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: colors.textMuted,
+    textAlign: 'center',
+    width: '100%',
+  },
+  reputationPressable: {
     flex: 1,
+    alignSelf: 'stretch',
     minWidth: 0,
     minHeight: 44,
   },
@@ -473,6 +546,10 @@ const styles = StyleSheet.create({
   reputationMetricInner: {
     gap: 2,
     paddingBottom: 4,
+    position: 'relative',
+  },
+  reputationMetricWithBadge: {
+    paddingTop: 16,
   },
   reputationTier: {
     color: colors.textMuted,
@@ -481,16 +558,27 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     width: '100%',
   },
-  reputationBadge: {
-    fontSize: 8.5,
-    fontWeight: '700',
-    textAlign: 'center',
-    width: '100%',
+  reputationBadgeChip: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    zIndex: 1,
+    minWidth: 20,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reputationBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.textPrimary,
   },
   reputationBadgePositive: {
-    color: '#4ADE80',
+    backgroundColor: 'rgba(74, 222, 128, 0.22)',
   },
   reputationBadgeNegative: {
-    color: '#F87171',
+    backgroundColor: 'rgba(248, 113, 113, 0.22)',
   },
 });

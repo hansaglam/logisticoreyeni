@@ -6,6 +6,7 @@ import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  PixelRatio,
   Platform,
   Pressable,
   StyleSheet,
@@ -16,7 +17,7 @@ import {
 
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
 import { shouldShowTestAdLabel } from '../../config/adMob';
-import { getDailyOpsBonusCash } from '../../config/monetization';
+import { calculateDailyOperationSupportReward } from '../../domain/dailyOperationSupportReward';
 import {
   AD_PRIVACY_ACTION_DESCRIPTION,
   AD_PRIVACY_ERROR_MESSAGE,
@@ -33,27 +34,57 @@ import { useRewardedPlacement } from '../../hooks/useRewardedPlacement';
 import { areAdsFeatureEnabled } from '../../services/adProvider';
 import { canGrantAdReward, resetDailyUsageIfNeeded } from '../../simulation/adRewardGrants';
 import { useGameStore } from '../../store/gameStore';
-import { formatMoney } from '../../theme';
+import { colors, formatMoney } from '../../theme';
 import { GameIcon } from '../ui';
-import { DASHBOARD_NARROW_WIDTH } from '../dashboard/dashboardTheme';
 import type { AdRewardGrantContext } from '../../types/monetization';
 
-const CARD_HEIGHT = 92;
-const CARD_HEIGHT_NARROW = 88;
+const CTA_MIN_HEIGHT = 42;
+const STACKED_FONT_SCALE = 1.3;
 
 interface DashboardDailyOpsBonusCardProps {
-  playerLevel: number;
   onboardingCompleted: boolean;
   onSuccess?: (amount: number) => void;
 }
 
-interface DailyOpsAdCtaProps {
-  rewardAmount: number;
-  onSuccess?: (amount: number) => void;
-  isNarrow: boolean;
+function resolveAdStatusLabel(params: {
+  privacyLoading: boolean;
+  loading: boolean;
+  eligibilityOk: boolean;
+  rewardedAvailability: ReturnType<typeof resolveRewardedAdAvailability>;
+  failed: boolean;
+  showTestLabel: boolean;
+}): string {
+  const { privacyLoading, loading, eligibilityOk, rewardedAvailability, failed, showTestLabel } =
+    params;
+  const testPrefix = showTestLabel ? 'Test reklamı · ' : '';
+
+  if (!eligibilityOk) {
+    return `${testPrefix}Günlük destek bugün kullanıldı.`;
+  }
+  if (privacyLoading || loading) {
+    return `${testPrefix}Reklam hazırlanıyor`;
+  }
+  if (failed || rewardedAvailability === 'unavailable' || rewardedAvailability === 'privacy-error') {
+    return `${testPrefix}Reklam yüklenemedi`;
+  }
+  if (rewardedAvailability === 'privacy-action-required') {
+    return AD_PRIVACY_ACTION_DESCRIPTION;
+  }
+  if (rewardedAvailability === 'ready') {
+    return `${testPrefix}Reklam izleyerek al`;
+  }
+  return `${testPrefix}${rewardedAdAvailabilityHelperText(rewardedAvailability)}`;
 }
 
-function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps) {
+export default function DashboardDailyOpsBonusCard({
+  onboardingCompleted,
+  onSuccess,
+}: DashboardDailyOpsBonusCardProps) {
+  const { width } = useWindowDimensions();
+  const fontScale = PixelRatio.getFontScale();
+  const stackedLayout = fontScale >= STACKED_FONT_SCALE;
+  const useTicketArt = dashboardAssetFlags.useDailySupportTicket;
+  const player = useGameStore((state) => state.player);
   const applyAdReward = useGameStore((state) => state.applyAdReward);
   const monetization = useGameStore((state) => state.monetization);
   const currentGameTime = useGameStore((state) => state.currentTime);
@@ -77,8 +108,15 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
       currentGameTime,
       playerLevel,
       hasCompletedOnboarding,
+      playerFleet: player
+        ? {
+            drivers: player.drivers,
+            warehouses: player.warehouses,
+            trucks: player.trucks,
+          }
+        : undefined,
     }),
-    [currentGameTime, hasCompletedOnboarding, playerLevel],
+    [currentGameTime, hasCompletedOnboarding, player, playerLevel],
   );
 
   const eligibility = useMemo(() => {
@@ -91,23 +129,37 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
     placementStatus: placementState.status,
   });
 
-  const buttonLabel = privacyLoading
-    ? 'Gizlilik tercihleri açılıyor…'
-    : loading
-      ? 'Reklam hazırlanıyor…'
-      : rewardedAdAvailabilityToButtonLabel(rewardedAvailability, {
-          watchLabel: shouldShowTestAdLabel() ? 'Reklam İzle (Test)' : 'Reklam İzle',
-          retryLabel: failed ? 'Tekrar Dene' : 'Tekrar Dene',
-        });
+  if (!onboardingCompleted || !areAdsFeatureEnabled()) {
+    return null;
+  }
 
-  const helperText =
-    rewardedAvailability === 'privacy-action-required'
-      ? AD_PRIVACY_ACTION_DESCRIPTION
-      : rewardedAdAvailabilityHelperText(rewardedAvailability);
+  const rewardAmount = player ? calculateDailyOperationSupportReward(player) : 0;
+  const showTestLabel = shouldShowTestAdLabel();
+
+  const buttonLabel = privacyLoading
+    ? 'Gizlilik…'
+    : loading
+      ? 'Hazırlanıyor…'
+      : !eligibility.ok
+        ? 'Yarın'
+        : rewardedAdAvailabilityToButtonLabel(rewardedAvailability, {
+            watchLabel: failed ? 'Tekrar Dene' : 'Ödülü Al',
+            retryLabel: 'Tekrar Dene',
+          });
+
+  const adStatusLabel = resolveAdStatusLabel({
+    privacyLoading,
+    loading,
+    eligibilityOk: eligibility.ok,
+    rewardedAvailability,
+    failed,
+    showTestLabel,
+  });
 
   const isDisabled =
     loading ||
     privacyLoading ||
+    !eligibility.ok ||
     (!shouldEnableRewardedAdCta(rewardedAvailability) && !failed) ||
     (rewardedAvailability === 'ready' && !eligibility.ok && !failed);
 
@@ -141,8 +193,8 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
       if (!result.ok) {
         const reason =
           result.reason === 'Reklam yüklenemedi.'
-            ? 'Reklam şu anda kullanılamıyor.'
-            : result.reason ?? 'Reklam şu anda kullanılamıyor.';
+            ? 'Reklam yüklenemedi'
+            : result.reason ?? 'Reklam yüklenemedi';
         setErrorText(reason);
         setFailed(true);
         return;
@@ -151,119 +203,115 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
       onSuccess?.(rewardAmount);
     } catch (error) {
       setFailed(true);
-      setErrorText(error instanceof Error ? error.message : 'Reklam şu anda kullanılamıyor.');
+      setErrorText(error instanceof Error ? error.message : 'Reklam yüklenemedi');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <View style={[styles.ctaWrap, isNarrow && styles.ctaWrapNarrow]}>
-      <Pressable
-        style={({ pressed }) => [
-          styles.ctaButton,
-          isDisabled && styles.ctaButtonDisabled,
-          pressed && !isDisabled && styles.ctaButtonPressed,
-        ]}
-        onPress={() => void handlePress()}
-        disabled={isDisabled}
-        accessibilityRole="button"
-        accessibilityLabel={buttonLabel}
-      >
-        {loading || privacyLoading ? (
-          <ActivityIndicator size="small" color="#FFAA00" />
-        ) : (
-          <>
-            <GameIcon name="play" size={14} color={isDisabled ? '#B8924A' : '#FFAA00'} />
-            <Text
-              style={[styles.ctaLabel, isDisabled && styles.ctaLabelDisabled]}
-              numberOfLines={2}
-              adjustsFontSizeToFit
-              minimumFontScale={0.78}
-            >
-              {buttonLabel}
-            </Text>
-          </>
-        )}
-      </Pressable>
-      {helperText ? (
-        <Text style={styles.ctaHint} numberOfLines={3}>
-          {helperText}
-        </Text>
-      ) : null}
-      {privacyError ? (
-        <Text style={styles.ctaError} numberOfLines={2}>
-          {AD_PRIVACY_ERROR_MESSAGE}
-        </Text>
-      ) : null}
-      {errorText ? (
-        <Text style={styles.ctaError} numberOfLines={2}>
-          {errorText}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-export default function DashboardDailyOpsBonusCard({
-  playerLevel,
-  onboardingCompleted,
-  onSuccess,
-}: DashboardDailyOpsBonusCardProps) {
-  const { width } = useWindowDimensions();
-  const isNarrow = width < DASHBOARD_NARROW_WIDTH;
-  const useTicketArt = dashboardAssetFlags.useDailySupportTicket;
-
-  if (!onboardingCompleted || !areAdsFeatureEnabled()) {
-    return null;
-  }
-
-  const rewardAmount = getDailyOpsBonusCash(playerLevel);
-  const showTestLabel = shouldShowTestAdLabel();
-
-  const artworkColumnWidth = isNarrow ? 62 : 70;
-  const artworkImageWidth = isNarrow ? 58 : 66;
-  const artworkImageHeight = isNarrow ? 44 : 48;
-
-  return (
     <View style={styles.cardWrap}>
       <View style={styles.cardAtmosphere} pointerEvents="none" />
-      <View style={[styles.card, isNarrow && styles.cardNarrow]}>
-      <View style={[styles.artColumn, { width: artworkColumnWidth }]}>
-        {useTicketArt ? (
-          <Image
-            source={dashboardAssets.dailySupportTicket}
-            style={{ width: artworkImageWidth, height: artworkImageHeight }}
-            resizeMode="contain"
-          />
-        ) : (
-          <View style={styles.iconWrap}>
-            <GameIcon name="cash" size={22} color="#FFAA00" />
+      <View style={[styles.card, stackedLayout && styles.cardStacked]}>
+        <View style={[styles.mainRow, stackedLayout && styles.mainRowStacked]}>
+          <View style={styles.supportVisual}>
+            {useTicketArt ? (
+              <Image
+                source={dashboardAssets.dailySupportTicket}
+                style={styles.ticketImage}
+                resizeMode="contain"
+              />
+            ) : (
+              <View style={styles.iconWrap}>
+                <GameIcon name="cash" size={22} color="#FFAA00" />
+              </View>
+            )}
           </View>
-        )}
-      </View>
 
-      <View style={styles.textBlock}>
-        <Text
-          style={[styles.title, isNarrow && styles.titleNarrow]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.8}
-        >
-          Günlük Operasyon Desteği
-        </Text>
-        <Text
-          style={[styles.subtitle, isNarrow && styles.subtitleNarrow]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.75}
-        >
-          Reklam izle, küçük operasyon desteği al ({formatMoney(rewardAmount)})
-        </Text>
-        {showTestLabel ? <Text style={styles.footnote}>Test reklamı</Text> : null}
-      </View>
+          <View style={styles.supportContent}>
+            <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
+              Günlük Operasyon Desteği
+            </Text>
+            <Text style={styles.subtitle} numberOfLines={2}>
+              Bir günlük temel giderlerini karşıla.
+            </Text>
+            <Text style={styles.rewardLine} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.88}>
+              Bugünkü destek: {formatMoney(rewardAmount)}
+            </Text>
+            <Text style={styles.adStatus} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+              {adStatusLabel}
+            </Text>
+            {privacyError ? (
+              <Text style={styles.inlineError} numberOfLines={1}>
+                {AD_PRIVACY_ERROR_MESSAGE}
+              </Text>
+            ) : null}
+            {errorText ? (
+              <Text style={styles.inlineError} numberOfLines={1}>
+                {errorText}
+              </Text>
+            ) : null}
+          </View>
 
-      <DailyOpsAdCta rewardAmount={rewardAmount} onSuccess={onSuccess} isNarrow={isNarrow} />
+          {!stackedLayout ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.supportAction,
+                isDisabled && styles.supportActionDisabled,
+                pressed && !isDisabled && styles.supportActionPressed,
+              ]}
+              onPress={() => void handlePress()}
+              disabled={isDisabled}
+              accessibilityRole="button"
+              accessibilityLabel={buttonLabel}
+            >
+              {loading || privacyLoading ? (
+                <ActivityIndicator size="small" color="#FFAA00" />
+              ) : (
+                <>
+                  <GameIcon name="play" size={14} color={isDisabled ? '#B8924A' : '#FFAA00'} />
+                  <Text
+                    style={[styles.ctaLabel, isDisabled && styles.ctaLabelDisabled]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.85}
+                  >
+                    {buttonLabel}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
+        </View>
+
+        {stackedLayout ? (
+          <Pressable
+            style={({ pressed }) => [
+              styles.supportAction,
+              styles.supportActionStacked,
+              isDisabled && styles.supportActionDisabled,
+              pressed && !isDisabled && styles.supportActionPressed,
+            ]}
+            onPress={() => void handlePress()}
+            disabled={isDisabled}
+            accessibilityRole="button"
+            accessibilityLabel={buttonLabel}
+          >
+            {loading || privacyLoading ? (
+              <ActivityIndicator size="small" color="#FFAA00" />
+            ) : (
+              <>
+                <GameIcon name="play" size={14} color={isDisabled ? '#B8924A' : '#FFAA00'} />
+                <Text
+                  style={[styles.ctaLabel, isDisabled && styles.ctaLabelDisabled]}
+                  numberOfLines={1}
+                >
+                  {buttonLabel}
+                </Text>
+              </>
+            )}
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -274,7 +322,6 @@ const styles = StyleSheet.create({
     width: '100%',
     position: 'relative',
   },
-  cardWrapNarrow: {},
   cardAtmosphere: {
     position: 'absolute',
     top: -4,
@@ -285,17 +332,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 170, 0, 0.035)',
   },
   card: {
-    height: CARD_HEIGHT,
-    flexDirection: 'row',
-    alignItems: 'center',
     width: '100%',
-    paddingHorizontal: 11,
-    paddingVertical: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(255, 170, 0, 0.48)',
     backgroundColor: '#0B1728',
-    overflow: 'visible',
+    gap: 10,
+    minHeight: 96,
     ...Platform.select({
       android: { elevation: 1 },
       ios: {
@@ -306,94 +351,104 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  cardNarrow: {
-    height: CARD_HEIGHT_NARROW,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+  cardStacked: {
+    gap: 8,
   },
-  artColumn: {
+  mainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+  },
+  mainRowStacked: {
+    alignItems: 'flex-start',
+  },
+  supportVisual: {
+    width: 52,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-    marginRight: 6,
-    backgroundColor: 'transparent',
+  },
+  ticketImage: {
+    width: 48,
+    height: 40,
   },
   iconWrap: {
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 40,
     borderRadius: 12,
     backgroundColor: 'rgba(255, 170, 0, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  textBlock: {
+  supportContent: {
     flex: 1,
     minWidth: 0,
     justifyContent: 'center',
-    paddingHorizontal: 7,
+    gap: 1,
   },
   title: {
-    fontSize: 12,
-    lineHeight: 14,
-    fontWeight: '800',
-    color: '#F3F7FF',
-  },
-  titleNarrow: {
-    fontSize: 11,
-    lineHeight: 13,
+    fontSize: 14,
+    lineHeight: 17,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
   subtitle: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '500',
+    color: colors.textSecondary,
+  },
+  rewardLine: {
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '800',
+    color: colors.success,
+    marginTop: 2,
+  },
+  adStatus: {
     fontSize: 10,
-    lineHeight: 12,
-    fontWeight: '400',
-    color: '#A9B6CC',
-    marginTop: 2,
+    lineHeight: 13,
+    fontWeight: '500',
+    color: colors.textMuted,
+    marginTop: 1,
   },
-  subtitleNarrow: {
-    fontSize: 9.5,
-    lineHeight: 11,
+  inlineError: {
+    fontSize: 10,
+    lineHeight: 13,
+    color: '#F87171',
+    marginTop: 1,
   },
-  footnote: {
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '400',
-    color: '#74839B',
-    marginTop: 2,
-  },
-  ctaWrap: {
-    width: 122,
-    height: 43,
-    flexShrink: 0,
-    justifyContent: 'center',
-  },
-  ctaWrapNarrow: {
-    width: 108,
-    height: 40,
-  },
-  ctaButton: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 13,
+  supportAction: {
+    minWidth: 108,
+    maxWidth: 132,
+    minHeight: CTA_MIN_HEIGHT,
+    paddingHorizontal: 14,
+    borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 10,
+    gap: 5,
+    flexShrink: 0,
     backgroundColor: 'rgba(255, 170, 0, 0.10)',
     borderWidth: 1,
     borderColor: 'rgba(255, 170, 0, 0.70)',
-    gap: 5,
   },
-  ctaButtonDisabled: {
+  supportActionStacked: {
+    width: '100%',
+    maxWidth: '100%',
+  },
+  supportActionDisabled: {
     opacity: 0.52,
     borderColor: 'rgba(255, 170, 0, 0.35)',
     backgroundColor: 'rgba(255, 170, 0, 0.06)',
   },
-  ctaButtonPressed: {
+  supportActionPressed: {
     opacity: 0.9,
     transform: [{ scale: 0.985 }],
   },
   ctaLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
     color: '#FFAA00',
     flexShrink: 1,
@@ -401,25 +456,5 @@ const styles = StyleSheet.create({
   },
   ctaLabelDisabled: {
     color: '#B8924A',
-  },
-  ctaHint: {
-    position: 'absolute',
-    bottom: -12,
-    left: 0,
-    right: 0,
-    fontSize: 7.5,
-    lineHeight: 9,
-    color: '#94A3B8',
-    textAlign: 'center',
-  },
-  ctaError: {
-    position: 'absolute',
-    bottom: -12,
-    left: 0,
-    right: 0,
-    fontSize: 7.5,
-    lineHeight: 9,
-    color: '#F87171',
-    textAlign: 'center',
   },
 });

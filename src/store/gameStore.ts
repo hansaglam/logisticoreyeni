@@ -100,7 +100,11 @@ import {
   processContractGenerationSchedule,
   buildPlayerFleetCityContext,
   countPlayableContracts,
+  countAvailableContracts,
+  countPlayableContractsFromOrigin,
   ensurePlayableContractSupply,
+  ensureMinimumEligibleContracts,
+  shouldRefreshContracts,
   ensurePlayableContractsAfterDelivery,
   type ContractGenerationDebugSnapshot,
 } from '../simulation/contracts';
@@ -1637,7 +1641,11 @@ export interface GameStore extends StoreGameState {
     trigger: 'screen-open' | 'foreground' | 'reconnect' | 'cold-start',
     options?: { force?: boolean },
   ) => void;
-  refreshContractsFromMarket: (options?: { bypassCooldown?: boolean }) => void;
+  refreshContractsFromMarket: (options?: {
+    bypassCooldown?: boolean;
+    emergency?: boolean;
+  }) => { generated: number; cooldownBlocked: boolean };
+  bootstrapContractsIfNeeded: () => void;
   applyAdReward: (
     slotId: AdRewardSlotId,
     context: Omit<AdRewardGrantContext, 'currentGameTime' | 'playerLevel' | 'hasCompletedOnboarding'>,
@@ -2131,11 +2139,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const tutorial = state.tutorial ?? createDefaultTutorialState();
     const nextTutorial = tutorialOnContractsOpened(tutorial);
-    if (nextTutorial === tutorial) {
-      return;
+    if (nextTutorial !== tutorial) {
+      set({ tutorial: nextTutorial });
+      get().markSaveDirty();
     }
-    set({ tutorial: nextTutorial });
-    get().markSaveDirty();
+    get().bootstrapContractsIfNeeded();
   },
 
   notifyContractAssignmentOpened: () => {
@@ -3085,8 +3093,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         set({ saveError: null });
 
         const hadSaveOnDisk = await hasSavedGame();
-        const { probeSaveRecoveryOnColdStart } = await import('../services/saveRecoveryService');
-        const recoveryProbe = await probeSaveRecoveryOnColdStart();
+        const { probeSaveRecoveryWithCloudAttempt } = await import('../services/saveRecoveryService');
+        const recoveryProbe = await probeSaveRecoveryWithCloudAttempt();
         if (recoveryProbe.required && !recoveryProbe.quarantine?.userChoseNewGame) {
           patchSaveStatus(set, { isLoadingSave: false });
           set({
@@ -3191,7 +3199,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         }
         set({ isGameReady: true });
         patchSaveStatus(set, { isLoadingSave: false });
-        get().refreshContractsFromMarket();
+        get().bootstrapContractsIfNeeded();
         get().checkMarketPriceAlerts({ sendLocal: false });
         get().applyOfflineProgressionIfNeeded('cold-start');
       }
@@ -4926,60 +4934,122 @@ const simulation = plan.simulation;
     void get().refreshMarketSnapshot();
   },
 
-  refreshContractsFromMarket: (options?: { bypassCooldown?: boolean }) => {
+  bootstrapContractsIfNeeded: () => {
+    const state = get();
+    if (!state.player || !state.isGameReady) {
+      return;
+    }
+
+    const refreshParams = buildContractRefreshParams(state);
+    const availableCount = countAvailableContracts(state.contracts);
+    const eligibleCount = countPlayableContracts(
+      state.contracts ?? [],
+      refreshParams.trucks,
+      refreshParams.drivers,
+      refreshParams.playerLevel,
+      state.currentTime,
+    );
+    const idleTruckCityCount = refreshParams.idleTruckOriginCityIds.length;
+    const perCitySatisfied = refreshParams.idleTruckOriginCityIds.every(
+      (cityId) =>
+        countPlayableContractsFromOrigin(
+          state.contracts,
+          cityId,
+          refreshParams.trucks,
+          refreshParams.drivers,
+          refreshParams.playerLevel,
+          state.currentTime,
+        ) >= contractGenerationBalance.minAvailableContractsPerIdleTruckCity,
+    );
+
+    const needsBootstrap =
+      shouldRefreshContracts({
+        currentTime: state.currentTime,
+        lastContractGenerationTime: state.lastContractGenerationTime,
+        lastMarketRefreshTime: state.lastMarketRefreshTime,
+        availableCount,
+        eligibleCount,
+        idleTruckCityCount,
+      }) ||
+      (idleTruckCityCount > 0 && !perCitySatisfied);
+
+    if (!needsBootstrap) {
+      return;
+    }
+
+    get().refreshContractsFromMarket({ bypassCooldown: true, emergency: true });
+  },
+
+  refreshContractsFromMarket: (options?: { bypassCooldown?: boolean; emergency?: boolean }) => {
     const state = get();
     if (!state.player) {
-      return;
+      return { generated: 0, cooldownBlocked: false };
     }
 
     const bypassCooldown = options?.bypassCooldown === true;
     const refreshParams = buildContractRefreshParams(state);
     const playerLevel = refreshParams.playerLevel;
-    const playableCount = countPlayableContracts(
-      state.contracts ?? [],
+    const previousContracts = state.contracts ?? [];
+    const availableCount = countAvailableContracts(previousContracts);
+    const eligibleCount = countPlayableContracts(
+      previousContracts,
       refreshParams.trucks,
       refreshParams.drivers,
       playerLevel,
       state.currentTime,
     );
     const idleTruckCount = getIdleTrucks(refreshParams.trucks).length;
-    const previousContracts = state.contracts ?? [];
+    const emergency =
+      options?.emergency === true ||
+      availableCount === 0 ||
+      (idleTruckCount > 0 && eligibleCount === 0);
 
-    if (playableCount === 0 && idleTruckCount > 0) {
-      const playableResult = ensurePlayableContractSupply({
+    if (emergency && idleTruckCount > 0) {
+      const minimumResult = ensureMinimumEligibleContracts({
         ...refreshParams,
         contracts: previousContracts,
-        maxNewContracts: contractGenerationBalance.manualRefreshPlayableContractCount,
         forceFallback: true,
+        maxNewContracts: contractGenerationBalance.bootstrapMaxContractsPerPass,
         lastPlayableContractGeneratedTime: state.lastPlayableContractGeneratedTime ?? 0,
       });
 
-      if (playableResult.newContracts.length > 0) {
+      if (
+        minimumResult.newContracts.length > 0 ||
+        minimumResult.contracts.length !== previousContracts.length ||
+        minimumResult.contracts.some(
+          (contract, index) => previousContracts[index]?.status !== contract.status,
+        )
+      ) {
         set({
-          contracts: playableResult.contracts,
+          contracts: minimumResult.contracts,
           lastPlayableContractGeneratedTime:
-            playableResult.updatedLastPlayableContractGeneratedTime ??
+            minimumResult.updatedLastPlayableContractGeneratedTime ??
             state.lastPlayableContractGeneratedTime,
           lastManualContractRefreshTime: state.currentTime,
         });
         get().markSaveDirty();
-        get().autoSave('contracts_generated');
-      } else {
-        get().refreshMarketSnapshot();
+        if (minimumResult.newContracts.length > 0) {
+          get().autoSave('contracts_generated');
+        }
       }
+
       lastContractMarketRefreshAt = getEconomyNow();
-      return;
+      return {
+        generated: minimumResult.newContracts.length,
+        cooldownBlocked: false,
+      };
     }
 
     const hoursSinceManual =
       state.currentTime - (state.lastManualContractRefreshTime ?? 0);
     if (
       !bypassCooldown &&
+      !emergency &&
       hoursSinceManual < contractGenerationBalance.manualRefreshCooldownHours
     ) {
       get().refreshMarketSnapshot();
       lastContractMarketRefreshAt = getEconomyNow();
-      return;
+      return { generated: 0, cooldownBlocked: true };
     }
 
     const { contracts: updatedContracts, newContracts } = refreshContractsFromMarket(
@@ -4998,7 +5068,7 @@ const simulation = plan.simulation;
     if (!contractsChanged) {
       get().refreshMarketSnapshot();
       set({ lastManualContractRefreshTime: state.currentTime });
-      return;
+      return { generated: 0, cooldownBlocked: false };
     }
 
     const patch: Partial<StoreGameState> = {
@@ -5030,6 +5100,8 @@ const simulation = plan.simulation;
     if (newContracts.length > 0) {
       get().autoSave('contracts_generated');
     }
+
+    return { generated: newContracts.length, cooldownBlocked: false };
   },
 
   forceGeneratePlayableContracts: () => {
@@ -7457,6 +7529,11 @@ const simulation = plan.simulation;
       currentGameTime: state.currentTime,
       playerLevel,
       hasCompletedOnboarding,
+      playerFleet: {
+        drivers: state.player.drivers,
+        warehouses: state.player.warehouses,
+        trucks: state.player.trucks,
+      },
       ...context,
     };
 
@@ -7635,9 +7712,10 @@ const simulation = plan.simulation;
               {
                 time: state.currentTime,
                 type: 'income',
-                category: 'reward',
+                category: 'ad_reward_daily_ops',
                 amount: rewardTransaction.amount,
-                description: 'Reklam ödülü · günlük operasyon bonusu',
+                title: 'Günlük Operasyon Desteği',
+                description: `Günlük Operasyon Desteği · +${rewardTransaction.amount}`,
                 transactionId: rewardTransaction.transactionId,
                 referenceId: rewardTransaction.referenceId,
               },

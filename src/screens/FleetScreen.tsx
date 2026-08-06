@@ -11,6 +11,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import OwnedTruckCard from '../components/fleet/OwnedTruckCard';
@@ -235,7 +236,7 @@ export default function FleetScreen() {
   const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
   const [managingUpgradesTruckId, setManagingUpgradesTruckId] = useState<string | null>(null);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
 
   const fleetTutorial = useScreenAppTutorial({
@@ -763,9 +764,9 @@ export default function FleetScreen() {
         onMomentumScrollEnd={fleetTutorial.handleScrollEnd}
         scrollEventThrottle={16}
       >
-        <View style={styles.screenStack} onLayout={() => setLayoutReady(true)}>
+        <View style={styles.screenStack} onLayout={markLayoutReady}>
           <View style={styles.fleetHeader}>
-            <AppTutorialTarget tutorialId="fleet" targetId="fleet-header" style={styles.fleetHeaderText}>
+            <AppTutorialTarget tutorialId="fleet" targetId="fleet-header" layoutMode="stretch" style={styles.fleetHeaderText}>
               <Text style={styles.fleetTitle}>Filo</Text>
               <Text style={styles.fleetSubtitle}>Araçlarını ve şoförlerini yönet</Text>
             </AppTutorialTarget>
@@ -845,8 +846,8 @@ export default function FleetScreen() {
 
                 if (index === 0) {
                   return (
-                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="truck-status">
-                      <AppTutorialTarget tutorialId="fleet" targetId="fuel-maintenance">
+                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="truck-status" layoutMode="stretch">
+                      <AppTutorialTarget tutorialId="fleet" targetId="fuel-maintenance" layoutMode="stretch">
                         {truckCard}
                       </AppTutorialTarget>
                     </AppTutorialTarget>
@@ -855,7 +856,7 @@ export default function FleetScreen() {
 
                 if (truck.id === firstLeasedTruckId) {
                   return (
-                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="rental-return">
+                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="rental-return" layoutMode="stretch">
                       {truckCard}
                     </AppTutorialTarget>
                   );
@@ -957,7 +958,7 @@ export default function FleetScreen() {
 
               if (index === 0) {
                 return (
-                  <AppTutorialTarget key={driver.id} tutorialId="fleet" targetId="driver-assignment">
+                  <AppTutorialTarget key={driver.id} tutorialId="fleet" targetId="driver-assignment" layoutMode="stretch">
                     {driverCard}
                   </AppTutorialTarget>
                 );

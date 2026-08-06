@@ -619,7 +619,11 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
           </Text>
         </View>
         {showTutorialTargets ? (
-          <MarketTutorialTarget id={priceTargetId} style={styles.tutorialProductPriceTarget}>
+          <MarketTutorialTarget
+            id={priceTargetId}
+            layoutMode="stretch"
+            style={styles.tutorialProductPriceTarget}
+          >
             <Text
               style={styles.productPrice}
               numberOfLines={1}
@@ -670,7 +674,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
 
       {showTutorialTargets ? (
         <View style={[styles.productChartCol, { minWidth: chartMinWidth }]}>
-          <MarketTutorialTarget id={chartTargetId}>
+          <MarketTutorialTarget id={chartTargetId} layoutMode="content">
             <MarketSparkline
               productId={market.productId}
               priceHistory={market.priceHistory}
@@ -682,7 +686,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
           <Text style={styles.productHint} numberOfLines={3}>
             {hint}
           </Text>
-          <MarketTutorialTarget id={transferTargetId}>
+          <MarketTutorialTarget id={transferTargetId} layoutMode="content">
             <Text style={styles.stockMeta} numberOfLines={1}>
               {stockMeta}
               {profitDisplay ? (
@@ -719,7 +723,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
         ]}
       >
         {showTutorialTargets ? (
-          <MarketTutorialTarget id={buyTargetId}>
+          <MarketTutorialTarget id={buyTargetId} layoutMode="content">
             <Pressable
               style={[styles.productBuyBtn, buyButtonDisabled && styles.productBtnDisabled]}
               onPress={() => onBuyPress(market.productId)}
@@ -1823,7 +1827,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                 onPress={marketTutorial.openManual}
                 disabled={pendingOfflineProgressSummary != null || hasPendingDeliveryIncident}
               />
-              <MarketTutorialTarget id="refresh-button">
+              <MarketTutorialTarget id="refresh-button" layoutMode="content">
                 <Pressable style={styles.refreshButton} onPress={handleRefreshMarket}>
                   <GameIcon name="refresh" size={19} color={colors.info} />
                 </Pressable>
@@ -1867,7 +1871,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                 detailModalVisible
               }
             />
-            <MarketTutorialTarget id="refresh-button">
+            <MarketTutorialTarget id="refresh-button" layoutMode="content">
               <Pressable style={styles.refreshButton} onPress={handleRefreshMarket}>
                 <GameIcon name="refresh" size={19} color={colors.info} />
               </Pressable>
@@ -1955,7 +1959,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         {activeTab === 'products' ? (
           <View style={styles.tabContent}>
             <View style={styles.cityScrollerRow}>
-              <MarketTutorialTarget id="city-chips" style={[styles.cityScrollerWrap, styles.tutorialStretchTarget]}>
+              <MarketTutorialTarget id="city-chips" layoutMode="stretch" style={styles.cityScrollerWrap}>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -1990,7 +1994,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
               <EmptyState title="Şehir seç" message="Ürün fiyatlarını görmek için bir şehir seç." icon="city" />
             ) : (
               <>
-                <MarketTutorialTarget id="profit-summary">
+                <MarketTutorialTarget id="profit-summary" layoutMode="stretch">
                   <CompactCitySummary
                     cityName={selectedCity.name}
                     shortages={selectedCityOverview.shortages}
@@ -1999,7 +2003,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                   />
                 </MarketTutorialTarget>
 
-                <MarketTutorialTarget id="products-section">
+                <MarketTutorialTarget id="products-section" layoutMode="stretch">
                   <View style={styles.productsSectionHeader}>
                     <Text style={styles.productsSectionTitle}>Ürün Piyasası</Text>
                     <Text style={styles.productsSectionSubtitle}>
@@ -2240,13 +2244,6 @@ const styles = StyleSheet.create({
   cityScrollerWrap: {
     flex: 1,
     minWidth: 0,
-  },
-  tutorialStretchTarget: {
-    alignSelf: 'stretch',
-  },
-  tutorialProductPriceTarget: {
-    alignSelf: 'stretch',
-    width: '100%',
   },
   marketTitle: {
     fontSize: 24,

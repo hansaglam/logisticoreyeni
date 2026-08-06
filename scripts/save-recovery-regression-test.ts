@@ -195,6 +195,49 @@ async function main() {
     }
   }
 
+  console.log('\nStale quarantine cleared when primary save is valid');
+  {
+    const raw = baseV3Payload();
+    raw.meta.integrityChecksum = await computeSaveChecksum(raw);
+    const rawJson = JSON.stringify(raw);
+    storage.clear();
+    storage.setItem(SAVE_STORAGE_KEY, rawJson);
+    storage.setItem(
+      SAVE_RECOVERY_QUARANTINE_META_KEY,
+      JSON.stringify({
+        reason: 'checksum-mismatch',
+        detectedAt: Date.now(),
+        originalKey: SAVE_STORAGE_KEY,
+        saveVersion: 3,
+        appVersion: '0.1.0',
+        checksumStatus: 'mismatch',
+        stage: 'checksum',
+        recoveryAttempts: 1,
+        backupWriteSucceeded: true,
+        resolved: false,
+      }),
+    );
+
+    const probe = await probeSaveRecoveryOnColdStart();
+    check(probe.required === false, 'valid primary bypasses stale quarantine');
+  }
+
+  console.log('\nPrimary invalid + valid backup auto-restores');
+  {
+    const { SAVE_BACKUP_MIGRATED_KEY } = await import('../src/storage/saveGame');
+    const raw = baseV3Payload();
+    raw.meta.integrityChecksum = await computeSaveChecksum(raw);
+    const rawJson = JSON.stringify(raw);
+    storage.clear();
+    storage.setItem(SAVE_STORAGE_KEY, '{"broken":');
+    storage.setItem(SAVE_BACKUP_MIGRATED_KEY, rawJson);
+    await closeSaveRecoveryQuarantine();
+
+    const probe = await probeSaveRecoveryOnColdStart();
+    check(probe.required === false, 'backup auto-recovery avoids recovery screen');
+    check(probe.recoveredSource === 'backup-migrated', 'recovered from migrated backup');
+  }
+
   console.log('\nReordered JSON keys do not cause false mismatch');
   {
     const raw = baseV3Payload();

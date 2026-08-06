@@ -9,6 +9,11 @@ import { httpsCallable, type Functions } from 'firebase/functions';
 
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 import { leaderboardConfig } from '../config/leaderboard';
+import {
+  eligibilityReasonToSubmitErrorCode,
+  getLeaderboardSubmitEligibility,
+  isExpectedLeaderboardSubmitSkip,
+} from '../domain/leaderboardSubmitEligibility';
 import { getLeaderboardSeasonKey } from '../utils/leaderboardSeason';
 import { getAccountStatus, isAuthSessionReady, waitForInitialAuthState } from './authService';
 import {
@@ -164,6 +169,21 @@ function createIdempotencyKey(prefix: string): string {
 const SUBMIT_MIN_INTERVAL_MS = 60_000;
 let lastSuccessfulSubmitAt = 0;
 let lastSubmittedScore: number | undefined;
+const skippedSubmitLogAt = new Map<string, number>();
+const SKIPPED_SUBMIT_LOG_COOLDOWN_MS = 60_000;
+
+function logLeaderboardSubmitSkipped(reason: string): void {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) {
+    return;
+  }
+  const now = Date.now();
+  const lastLoggedAt = skippedSubmitLogAt.get(reason) ?? 0;
+  if (now - lastLoggedAt < SKIPPED_SUBMIT_LOG_COOLDOWN_MS) {
+    return;
+  }
+  skippedSubmitLogAt.set(reason, now);
+  console.info('[leaderboard-submit-skipped]', { reason });
+}
 
 function isValidFetchPayload(data: Record<string, unknown> | undefined): boolean {
   return Boolean(data && data.ok === true && typeof data.seasonKey === 'string');
@@ -179,14 +199,17 @@ export async function submitCurrentLeaderboardScore(options?: {
   if (!LEADERBOARD_ENABLED) {
     return { ok: false, errorCode: 'feature-disabled' };
   }
-  await waitForInitialAuthState();
-  if (!isLeaderboardEligible()) {
-    const account = getAccountStatus();
+
+  const eligibility = getLeaderboardSubmitEligibility();
+  if (!eligibility.eligible) {
+    logLeaderboardSubmitSkipped(eligibility.reason);
     return {
       ok: false,
-      errorCode: account?.isAnonymous ? 'anonymous-not-supported' : 'auth-required',
+      errorCode: eligibilityReasonToSubmitErrorCode(eligibility.reason),
     };
   }
+
+  await waitForInitialAuthState();
 
   const now = Date.now();
   if (
@@ -231,15 +254,18 @@ export async function submitLeaderboardScore(options?: {
   if (!LEADERBOARD_ENABLED) {
     return { ok: false, errorCode: 'feature-disabled' };
   }
-  if (!isFirebaseEnabled() || !isAuthSessionReady()) {
-    return { ok: false, errorCode: 'auth-required' };
-  }
-  if (!isLeaderboardEligible()) {
-    const account = getAccountStatus();
+
+  const eligibility = getLeaderboardSubmitEligibility();
+  if (!eligibility.eligible) {
+    logLeaderboardSubmitSkipped(eligibility.reason);
     return {
       ok: false,
-      errorCode: account?.isAnonymous ? 'anonymous-not-supported' : 'auth-required',
+      errorCode: eligibilityReasonToSubmitErrorCode(eligibility.reason),
     };
+  }
+
+  if (!isFirebaseEnabled() || !isAuthSessionReady()) {
+    return { ok: false, errorCode: 'auth-required' };
   }
 
   const fn = callable<

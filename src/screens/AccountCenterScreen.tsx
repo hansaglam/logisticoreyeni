@@ -6,6 +6,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import BackendDiagnosticsGate from '../components/BackendDiagnosticsGate';
 import UsernameSetupModal from '../components/username/UsernameSetupModal';
 import AccountConnectionTab from '../components/accountCenter/AccountConnectionTab';
@@ -79,7 +80,7 @@ export default function AccountCenterScreen({
   const [leaderboardUnavailable, setLeaderboardUnavailable] = useState(false);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<0 | 1>(0);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const { runPrivacyAction } = useAdPrivacyAction();
 
   const accountTutorial = useScreenAppTutorial({
@@ -241,7 +242,7 @@ export default function AccountCenterScreen({
         scrollEventThrottle={16}
         contentContainerStyle={styles.content}
       >
-        <View onLayout={() => setLayoutReady(true)}>
+        <View onLayout={markLayoutReady}>
       <ScreenHeader
         title={ACCOUNT_CENTER_HEADER.title}
         subtitle={ACCOUNT_CENTER_HEADER.subtitle}
@@ -254,7 +255,7 @@ export default function AccountCenterScreen({
       <AccountSegmentedTabs active={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'profile' ? (
-        <AppTutorialTarget tutorialId="account" targetId="profile">
+        <AppTutorialTarget tutorialId="account" targetId="profile" layoutMode="stretch">
           <AccountProfileTab
           isGuest={vm.isGuest}
           displayName={displayName}
@@ -287,7 +288,7 @@ export default function AccountCenterScreen({
       ) : null}
 
       {activeTab === 'account' ? (
-        <AppTutorialTarget tutorialId="account" targetId="cloud-save">
+        <AppTutorialTarget tutorialId="account" targetId="cloud-save" layoutMode="stretch">
           <AccountConnectionTab
           isReady={vm.safeAccountStatus.isReady}
           isGuest={vm.isGuest}
@@ -317,7 +318,7 @@ export default function AccountCenterScreen({
       ) : null}
 
       {activeTab === 'preferences' ? (
-        <AppTutorialTarget tutorialId="account" targetId="preferences">
+        <AppTutorialTarget tutorialId="account" targetId="preferences" layoutMode="stretch">
           <AccountPreferencesTab
           prefs={prefs}
           appVersion={appVersion}

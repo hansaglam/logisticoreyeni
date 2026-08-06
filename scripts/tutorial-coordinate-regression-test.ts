@@ -97,9 +97,12 @@ console.log('\nSource guards');
 
   const targetSource = readFileSync('src/components/tutorial/AppTutorialTarget.tsx', 'utf8');
   assert(targetSource.includes('collapsable={false}'), 'AppTutorialTarget keeps collapsable false');
+  assert(targetSource.includes('getTargetLayoutStyle'), 'AppTutorialTarget uses layout contract');
+  assert(!targetSource.includes("alignSelf: 'flex-start'"), 'AppTutorialTarget has no global flex-start');
 
   const marketTargetSource = readFileSync('src/components/market/MarketTutorialTarget.tsx', 'utf8');
   assert(marketTargetSource.includes('collapsable={false}'), 'MarketTutorialTarget keeps collapsable false');
+  assert(!marketTargetSource.includes("alignSelf: 'flex-start'"), 'MarketTutorialTarget has no global flex-start');
 }
 
 console.log(`\nResult: ${pass} passed, ${fail} failed\n`);

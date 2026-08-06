@@ -14,6 +14,7 @@ import type {
   Truck,
 } from '../types/game';
 import { contractBalance } from '../config/balance';
+import { normalizeCityId } from '../data/networkPositions';
 import { toProductMarket } from './economy';
 import {
   calculateContractPayment,
@@ -144,9 +145,18 @@ function createStarterContractBatch(
   const maxTonnage = clamp(truckCapacity * 0.7, minTonnage, truckCapacity);
   const created: Contract[] = [];
   let sequence = existingLength + 1;
+  const destinations = STARTER_DESTINATIONS.filter(
+    (cityId) => normalizeCityId(cityId) !== normalizeCityId(originCityId),
+  );
+  const fallbackDestinations =
+    destinations.length > 0
+      ? destinations
+      : (['ankara', 'antalya', 'izmir'] as const).filter(
+          (cityId) => normalizeCityId(cityId) !== normalizeCityId(originCityId),
+        );
 
-  for (let index = 0; index < needed && index < STARTER_DESTINATIONS.length; index += 1) {
-    const destinationCityId = STARTER_DESTINATIONS[index];
+  for (let index = 0; index < needed && index < fallbackDestinations.length; index += 1) {
+    const destinationCityId = fallbackDestinations[index]!;
     const productId = STARTER_PRODUCTS[index % STARTER_PRODUCTS.length];
     const amount = Number(
       randomIntBetween(Math.floor(minTonnage), Math.floor(maxTonnage)).toFixed(1),

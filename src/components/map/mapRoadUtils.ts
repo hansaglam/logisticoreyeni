@@ -14,7 +14,9 @@ import { normalizeCityId } from '../../data/networkPositions';
 import { getWorldMapCityPosition } from '../../data/worldMapPositions';
 
 const POINT_EPS = 0.0001;
-export const DEFAULT_ROUTE_HEADING_LOOK_AHEAD_DISTANCE = 0.008;
+/** Piksel uzayında look-ahead — viraj jitter'ını azaltır. */
+export const ROUTE_HEADING_LOOK_AHEAD_PX = 8;
+export const DEFAULT_ROUTE_HEADING_LOOK_AHEAD_DISTANCE = ROUTE_HEADING_LOOK_AHEAD_PX;
 
 function pointDistance(a: MapRoadPoint, b: MapRoadPoint): number {
   const dx = a.x - b.x;
@@ -72,9 +74,10 @@ export interface PointAlongPolylineResult {
 /** Canonical rota örnekleme sonucu — pozisyon + segment teğet heading. */
 export interface RoutePose {
   position: MapRoadPoint;
-  /** Piksel uzayında segment teğet açısı (derece, (-180, 180]). */
+  /** Piksel uzayında hareket yönü (derece, (-180, 180]). */
   headingDeg: number;
   segmentIndex: number;
+  segmentProgress: number;
 }
 
 interface PolylineMetrics {
@@ -175,38 +178,88 @@ export interface RouteHeadingAtProgressParams {
 
 export type RouteSamplingOptions = Omit<RouteHeadingAtProgressParams, 'points' | 'progress'>;
 
-function computeSegmentTangentHeadingDeg(
+function getPolylinePixelMetrics(
   points: MapRoadPoint[],
-  segmentIndex: number,
+  coordinateScaleX: number,
+  coordinateScaleY: number,
+): PolylineMetrics {
+  const segmentLengths: number[] = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const dx = (points[index].x - points[index - 1].x) * coordinateScaleX;
+    const dy = (points[index].y - points[index - 1].y) * coordinateScaleY;
+    segmentLengths.push(Math.hypot(dx, dy));
+  }
+  return {
+    segmentLengths,
+    totalLength: segmentLengths.reduce((sum, length) => sum + length, 0),
+  };
+}
+
+function computePixelSpaceHeadingDeg(
+  fromPoint: MapRoadPoint,
+  toPoint: MapRoadPoint,
   coordinateScaleX: number,
   coordinateScaleY: number,
   fallbackHeadingDeg: number,
 ): number {
-  const fallback = normalizeHeadingDegrees(fallbackHeadingDeg);
+  const dx = (toPoint.x - fromPoint.x) * coordinateScaleX;
+  const dy = (toPoint.y - fromPoint.y) * coordinateScaleY;
+  if (Math.hypot(dx, dy) <= POINT_EPS) {
+    return fallbackHeadingDeg;
+  }
+  const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallbackHeadingDeg;
+}
 
-  for (let index = segmentIndex; index < points.length - 1; index += 1) {
-    const start = points[index];
-    const end = points[index + 1];
-    const dx = (end.x - start.x) * coordinateScaleX;
-    const dy = (end.y - start.y) * coordinateScaleY;
-    if (Math.hypot(dx, dy) > POINT_EPS) {
-      const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-      return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallback;
-    }
+function computeRouteHeadingWithLookAhead(
+  points: MapRoadPoint[],
+  normMetrics: PolylineMetrics,
+  currentDistance: number,
+  coordinateScaleX: number,
+  coordinateScaleY: number,
+  fallbackHeadingDeg: number,
+  lookAheadPx: number,
+): number {
+  const pixelMetrics = getPolylinePixelMetrics(points, coordinateScaleX, coordinateScaleY);
+  const { point: currentPoint } = getPointAtPolylineDistance(
+    points,
+    normMetrics,
+    currentDistance,
+  );
+
+  if (pixelMetrics.totalLength <= POINT_EPS) {
+    return fallbackHeadingDeg;
   }
 
-  for (let index = segmentIndex - 1; index >= 0; index -= 1) {
-    const start = points[index];
-    const end = points[index + 1];
-    const dx = (end.x - start.x) * coordinateScaleX;
-    const dy = (end.y - start.y) * coordinateScaleY;
-    if (Math.hypot(dx, dy) > POINT_EPS) {
-      const headingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-      return Number.isFinite(headingDeg) ? normalizeHeadingDegrees(headingDeg) : fallback;
-    }
+  const lookAheadNorm =
+    normMetrics.totalLength > 0
+      ? (lookAheadPx / pixelMetrics.totalLength) * normMetrics.totalLength
+      : 0;
+  const aheadDistance = Math.min(
+    normMetrics.totalLength,
+    currentDistance + Math.max(lookAheadNorm, POINT_EPS),
+  );
+
+  if (aheadDistance > currentDistance + POINT_EPS) {
+    const aheadPoint = getPointAtPolylineDistance(points, normMetrics, aheadDistance).point;
+    return computePixelSpaceHeadingDeg(
+      currentPoint,
+      aheadPoint,
+      coordinateScaleX,
+      coordinateScaleY,
+      fallbackHeadingDeg,
+    );
   }
 
-  return fallback;
+  const behindDistance = Math.max(0, currentDistance - Math.max(lookAheadNorm, POINT_EPS));
+  const behindPoint = getPointAtPolylineDistance(points, normMetrics, behindDistance).point;
+  return computePixelSpaceHeadingDeg(
+    behindPoint,
+    currentPoint,
+    coordinateScaleX,
+    coordinateScaleY,
+    fallbackHeadingDeg,
+  );
 }
 
 /**
@@ -221,10 +274,10 @@ export function getRoutePoseAtProgress(
   const fallbackHeadingDeg = normalizeHeadingDegrees(options?.fallbackHeadingDeg ?? 0);
 
   if (routePoints.length === 0) {
-    return { position: { x: 0, y: 0 }, headingDeg: fallbackHeadingDeg, segmentIndex: 0 };
+    return { position: { x: 0, y: 0 }, headingDeg: fallbackHeadingDeg, segmentIndex: 0, segmentProgress: 0 };
   }
   if (routePoints.length === 1) {
-    return { position: routePoints[0], headingDeg: fallbackHeadingDeg, segmentIndex: 0 };
+    return { position: routePoints[0], headingDeg: fallbackHeadingDeg, segmentIndex: 0, segmentProgress: 0 };
   }
 
   const t = normalizeMapDeliveryProgress(progress);
@@ -237,21 +290,38 @@ export function getRoutePoseAtProgress(
     Number.isFinite(options?.coordinateScaleY) && Number(options?.coordinateScaleY) > 0
       ? Number(options!.coordinateScaleY)
       : 1;
+  const lookAheadPx =
+    Number.isFinite(options?.lookAheadDistance) && Number(options?.lookAheadDistance) > 0
+      ? Number(options!.lookAheadDistance)
+      : ROUTE_HEADING_LOOK_AHEAD_PX;
 
+  const currentDistance = t * metrics.totalLength;
   const { point, segmentIndex } = getPointAtPolylineDistance(
     routePoints,
     metrics,
-    t * metrics.totalLength,
+    currentDistance,
   );
-  const headingDeg = computeSegmentTangentHeadingDeg(
+  const segmentLength = metrics.segmentLengths[segmentIndex] ?? 0;
+  let segmentProgress = 0;
+  if (segmentLength > POINT_EPS) {
+    let traversed = 0;
+    for (let index = 0; index < segmentIndex; index += 1) {
+      traversed += metrics.segmentLengths[index] ?? 0;
+    }
+    segmentProgress = Math.max(0, Math.min(1, (currentDistance - traversed) / segmentLength));
+  }
+
+  const headingDeg = computeRouteHeadingWithLookAhead(
     routePoints,
-    segmentIndex,
+    metrics,
+    currentDistance,
     coordinateScaleX,
     coordinateScaleY,
     fallbackHeadingDeg,
+    lookAheadPx,
   );
 
-  return { position: point, headingDeg, segmentIndex };
+  return { position: point, headingDeg, segmentIndex, segmentProgress };
 }
 
 function getRouteHeadingWithMetrics(
@@ -297,9 +367,56 @@ export function getRouteHeadingDegrees(params: GetRouteHeadingDegreesParams): nu
     coordinateScaleX: params.coordinateScaleX,
     coordinateScaleY: params.coordinateScaleY,
   });
-  const assetBase = params.assetBaseHeadingDegrees ?? 0;
-  const combined = normalizeHeadingDegrees(tangentDeg + assetBase);
+  const assetForward = params.assetBaseHeadingDegrees ?? 0;
+  const combined = normalizeHeadingDegrees(tangentDeg - assetForward);
   return normalizeHeadingDegrees360(combined);
+}
+
+export interface RouteMarkerPose extends RoutePose {
+  markerHeadingDeg: number;
+  positionPx: { x: number; y: number };
+}
+
+/** Tek kaynak: pozisyon, tangent ve marker rotation aynı directed route üzerinden. */
+export function getRouteMarkerPose(params: {
+  routePoints: MapRoadPoint[];
+  progress: number | undefined | null;
+  mapBounds: MapBounds;
+  assetForwardAngleDeg?: number;
+  fallbackHeadingDeg?: number;
+  previousHeadingDeg?: number;
+  lookAheadDistance?: number;
+}): RouteMarkerPose {
+  const assetForward = params.assetForwardAngleDeg ?? 0;
+  const pose = getRoutePoseAtProgress(params.routePoints, params.progress, {
+    fallbackHeadingDeg: params.previousHeadingDeg ?? params.fallbackHeadingDeg,
+    coordinateScaleX: params.mapBounds.width,
+    coordinateScaleY: params.mapBounds.height,
+    lookAheadDistance: params.lookAheadDistance,
+  });
+  const markerHeadingDeg = getRouteHeadingDegrees({
+    routePoints: params.routePoints,
+    progress: params.progress,
+    assetBaseHeadingDegrees: assetForward,
+    fallbackHeadingDeg: params.fallbackHeadingDeg,
+    previousHeadingDeg: params.previousHeadingDeg,
+    coordinateScaleX: params.mapBounds.width,
+    coordinateScaleY: params.mapBounds.height,
+    lookAheadDistance: params.lookAheadDistance,
+  });
+  return {
+    ...pose,
+    markerHeadingDeg,
+    positionPx: normalizedPointToPixel(pose.position, params.mapBounds),
+  };
+}
+
+/** Origin → destination yönlü route point listesi (graph routing + segment reverse dahil). */
+export function getDirectedRoutePoints(
+  originCityId: string,
+  destinationCityId: string,
+): MapRoadPoint[] | null {
+  return getRoadRoute(originCityId, destinationCityId);
 }
 
 export interface MapHeadingDebugPayload {
@@ -385,7 +502,7 @@ export function logMapHeadingDebug(payload: MapHeadingDebugPayload): void {
   if (!getResolvedMapDebugFlags().heading) {
     return;
   }
-  console.log('[map-heading]', {
+  console.log('[truck-route-pose]', {
     routeId: payload.routeId,
     origin: payload.origin,
     destination: payload.destination,

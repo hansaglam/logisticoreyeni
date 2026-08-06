@@ -2,7 +2,7 @@
   "expo": {
     "name": "LogistiCore",
     "slug": "logisticore",
-    "version": "1.0.13",
+    "version": "1.0.16",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.ethemsincar.logisticore",
-      "versionCode": 14,
+      "versionCode": 17,
       "adaptiveIcon": {
         "foregroundImage": "./assets/branding/adaptive-icon-foreground.png",
         "backgroundColor": "#020712"

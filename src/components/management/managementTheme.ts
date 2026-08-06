@@ -58,8 +58,10 @@ export const MANAGEMENT_TONE_STYLES: Record<ManagementTone, ManagementToneStyle>
   },
 };
 
-export const MANAGEMENT_PANEL_PADDING = 22;
-export const MANAGEMENT_GRID_GAP = 12;
-export const MANAGEMENT_TILE_MIN_HEIGHT = 128;
-export const MANAGEMENT_PANEL_MAX_HEIGHT_RATIO = 0.76;
-export const MANAGEMENT_HEADER_GAP = 20;
+export const MANAGEMENT_PANEL_PADDING = 16;
+export const MANAGEMENT_GRID_GAP = 8;
+export const MANAGEMENT_TILE_MIN_HEIGHT = 98;
+export const MANAGEMENT_PANEL_MAX_HEIGHT_RATIO = 0.72;
+export const MANAGEMENT_HEADER_GAP = 12;
+export const MANAGEMENT_CARD_ICON_SIZE = 40;
+export const MANAGEMENT_CARD_ICON_GLYPH = 22;

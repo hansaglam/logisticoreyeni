@@ -13,9 +13,9 @@ export interface QuickAccessItemDef {
   accessibilityHint: string;
 }
 
-export const QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO = 0.76;
-export const QUICK_ACCESS_TILE_GAP = 12;
-export const QUICK_ACCESS_TILE_HEIGHT = 128;
+export const QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO = 0.72;
+export const QUICK_ACCESS_TILE_GAP = 8;
+export const QUICK_ACCESS_TILE_HEIGHT = 98;
 
 const BASE_QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = [
   {

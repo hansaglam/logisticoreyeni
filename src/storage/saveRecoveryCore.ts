@@ -1,5 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { getSaveBootstrapAuthUid } from './saveAuthContext';
+import {
+  createSaveBootstrapDiagnosticId,
+  describePayloadEnvelope,
+  getSaveBootstrapCandidateSources,
+  logSaveBootstrap,
+  mapDiagnosisToFailureCode,
+  type SaveBootstrapSource,
+  type SaveBootstrapStage,
+  type SaveLoadFailureCode,
+} from './saveBootstrap';
+
 import {
   beginSaveRecoveryRestoreJournal,
   completeSaveRecoveryRestoreJournal,
@@ -44,6 +56,10 @@ export interface SaveRecoveryProbeResult {
   fatal: boolean;
   quarantine: SaveRecoveryQuarantine | null;
   message?: string;
+  failureCode?: SaveLoadFailureCode;
+  diagnosticId?: string;
+  lastStage?: SaveBootstrapStage;
+  recoveredSource?: SaveBootstrapSource;
 }
 
 export interface RawSaveDiagnosis {
@@ -136,14 +152,139 @@ export async function verifyLocalSaveIntegrity(
 
 async function readRawCandidateKeys(): Promise<string[]> {
   const quarantine = await getSaveRecoveryQuarantine();
-  const keys = [
-    quarantine?.rawBackupKey,
-    SAVE_QUARANTINE_RAW_KEY,
-    SAVE_BACKUP_MIGRATED_KEY,
-    SAVE_BACKUP_INVALID_KEY,
-    SAVE_STORAGE_KEY,
-  ].filter((key): key is string => typeof key === 'string' && key.length > 0);
+  const keys = getSaveBootstrapCandidateSources().map((entry) => entry.key);
+  if (quarantine?.rawBackupKey) {
+    keys.unshift(quarantine.rawBackupKey);
+  }
   return [...new Set(keys)];
+}
+
+export interface AutomaticLocalSaveRecoveryResult {
+  recovered: boolean;
+  source?: SaveBootstrapSource;
+  failureCode?: SaveLoadFailureCode;
+  diagnosticId: string;
+}
+
+export async function attemptAutomaticLocalSaveRecovery(): Promise<AutomaticLocalSaveRecoveryResult> {
+  const diagnosticId = createSaveBootstrapDiagnosticId();
+  const authUid = getSaveBootstrapAuthUid();
+  let lastFailure: SaveLoadFailureCode = 'primary-missing';
+
+  for (const candidate of getSaveBootstrapCandidateSources()) {
+    const startedAt = Date.now();
+    let raw: string | null = null;
+    try {
+      raw = await AsyncStorage.getItem(candidate.key);
+    } catch {
+      logSaveBootstrap({
+        stage: candidate.stage,
+        source: candidate.source,
+        success: false,
+        errorCode: 'storage-read-failed',
+        recoverable: true,
+        durationMs: Date.now() - startedAt,
+        authUidPresent: Boolean(authUid),
+      });
+      lastFailure = 'storage-read-failed';
+      continue;
+    }
+
+    if (!raw || raw.length === 0) {
+      if (candidate.source === 'primary') {
+        lastFailure = 'primary-missing';
+      }
+      continue;
+    }
+
+    const diagnosis = await diagnoseRawSaveString(raw);
+    const envelope = describePayloadEnvelope(raw, diagnosis.payload ?? null, diagnosis.checksumStatus);
+
+    if (!diagnosis.ok || !diagnosis.payload) {
+      const errorCode = mapDiagnosisToFailureCode(diagnosis.reason, candidate.source);
+      lastFailure = errorCode;
+      logSaveBootstrap({
+        stage: candidate.stage,
+        source: candidate.source,
+        success: false,
+        errorCode,
+        recoverable: candidate.source !== 'primary',
+        durationMs: Date.now() - startedAt,
+        authUidPresent: Boolean(authUid),
+        ...envelope,
+      });
+      continue;
+    }
+
+    if (!validateOwnerUidForRestore(diagnosis.payload, authUid)) {
+      lastFailure = 'owner-mismatch';
+      logSaveBootstrap({
+        stage: 'validating-primary',
+        source: candidate.source,
+        success: false,
+        errorCode: 'owner-mismatch',
+        recoverable: false,
+        durationMs: Date.now() - startedAt,
+        authUidPresent: Boolean(authUid),
+        ...envelope,
+      });
+      continue;
+    }
+
+    if (candidate.source === 'primary') {
+      logSaveBootstrap({
+        stage: 'ready',
+        source: candidate.source,
+        success: true,
+        durationMs: Date.now() - startedAt,
+        authUidPresent: Boolean(authUid),
+        ...envelope,
+      });
+      await closeSaveRecoveryQuarantine();
+      return { recovered: true, source: candidate.source, diagnosticId };
+    }
+
+    logSaveBootstrap({
+      stage: 'healing',
+      source: candidate.source,
+      success: true,
+      recoverable: true,
+      durationMs: Date.now() - startedAt,
+      authUidPresent: Boolean(authUid),
+      ...envelope,
+    });
+
+    const committed = await commitValidatedPayloadToMainSlot(
+      diagnosis.payload,
+      diagnosis.payload.ownerUid ?? authUid ?? 'anonymous',
+    );
+    if (!committed) {
+      lastFailure = 'commit-failed';
+      logSaveBootstrap({
+        stage: 'committing',
+        source: candidate.source,
+        success: false,
+        errorCode: 'commit-failed',
+        recoverable: true,
+        durationMs: Date.now() - startedAt,
+        authUidPresent: Boolean(authUid),
+        ...envelope,
+      });
+      continue;
+    }
+
+    logSaveBootstrap({
+      stage: 'ready',
+      source: candidate.source,
+      success: true,
+      durationMs: Date.now() - startedAt,
+      authUidPresent: Boolean(authUid),
+      ...envelope,
+    });
+    return { recovered: true, source: candidate.source, diagnosticId };
+  }
+
+  return { recovered: false, failureCode: lastFailure, diagnosticId };
 }
 
 async function readRawFromKey(key: string): Promise<string | null> {
@@ -162,13 +303,24 @@ export async function isCloudSyncBlockedBySaveRecovery(): Promise<boolean> {
 }
 
 export async function probeSaveRecoveryOnColdStart(): Promise<SaveRecoveryProbeResult> {
+  const diagnosticId = createSaveBootstrapDiagnosticId();
+
   const interrupted = await getInterruptedSaveRecoveryRestore();
   if (interrupted) {
+    logSaveBootstrap({
+      stage: 'recovery-required',
+      success: false,
+      errorCode: 'restore-interrupted',
+      recoverable: true,
+    });
     return {
       required: true,
       fatal: await isSaveRecoveryFatal(),
       quarantine: await getSaveRecoveryQuarantine(),
       message: 'Önceki kurtarma işlemi yarım kaldı. Devam etmeden kayıt seç.',
+      failureCode: 'restore-interrupted',
+      diagnosticId,
+      lastStage: 'recovery-required',
     };
   }
 
@@ -178,6 +330,9 @@ export async function probeSaveRecoveryOnColdStart(): Promise<SaveRecoveryProbeR
       fatal: true,
       quarantine: await getSaveRecoveryQuarantine(),
       message: 'Yedek yazılamadı. Ana kayıt korunuyor; kurtarma gerekli.',
+      failureCode: 'commit-failed',
+      diagnosticId,
+      lastStage: 'recovery-required',
     };
   }
 
@@ -186,31 +341,72 @@ export async function probeSaveRecoveryOnColdStart(): Promise<SaveRecoveryProbeR
   if (existing?.userChoseNewGame && existing.resolved !== true) {
     const activeRaw = await AsyncStorage.getItem(SAVE_ACTIVE_SLOT_KEY);
     if (!activeRaw) {
-      return { required: true, fatal: false, quarantine: existing, message: 'Yeni oyun kaydı bulunamadı.' };
+      return {
+        required: true,
+        fatal: false,
+        quarantine: existing,
+        message: 'Yeni oyun kaydı bulunamadı.',
+        failureCode: 'primary-missing',
+        diagnosticId,
+        lastStage: 'recovery-required',
+      };
     }
     const diagnosis = await diagnoseRawSaveString(activeRaw);
     if (!diagnosis.ok) {
-      return { required: true, fatal: false, quarantine: existing, message: 'Yeni oyun kaydı doğrulanamadı.' };
+      return {
+        required: true,
+        fatal: false,
+        quarantine: existing,
+        message: 'Yeni oyun kaydı doğrulanamadı.',
+        failureCode: mapDiagnosisToFailureCode(diagnosis.reason, 'primary'),
+        diagnosticId,
+        lastStage: 'recovery-required',
+      };
     }
-    return { required: false, fatal: false, quarantine: null };
+    await closeSaveRecoveryQuarantine();
+    return { required: false, fatal: false, quarantine: null, diagnosticId, lastStage: 'ready' };
   }
 
-  if (existing && existing.resolved !== true) {
-    return { required: true, fatal: false, quarantine: existing };
+  const autoRecovery = await attemptAutomaticLocalSaveRecovery();
+  if (autoRecovery.recovered) {
+    return {
+      required: false,
+      fatal: false,
+      quarantine: null,
+      diagnosticId: autoRecovery.diagnosticId,
+      recoveredSource: autoRecovery.source,
+      lastStage: 'ready',
+    };
   }
 
   const mainRaw = await AsyncStorage.getItem(SAVE_STORAGE_KEY);
   if (!mainRaw || mainRaw.length === 0) {
-    return { required: false, fatal: false, quarantine: null };
+    await closeSaveRecoveryQuarantine();
+    return {
+      required: false,
+      fatal: false,
+      quarantine: null,
+      diagnosticId,
+      lastStage: 'ready',
+    };
   }
 
   const diagnosis = await diagnoseRawSaveString(mainRaw);
   if (diagnosis.ok) {
-    return { required: false, fatal: false, quarantine: null };
+    if (existing && existing.resolved !== true) {
+      await closeSaveRecoveryQuarantine();
+    }
+    return {
+      required: false,
+      fatal: false,
+      quarantine: null,
+      diagnosticId,
+      lastStage: 'ready',
+    };
   }
 
   let nextQuarantine = existing;
-  if (!nextQuarantine) {
+  if (!nextQuarantine || nextQuarantine.resolved === true) {
     const backupOk = await writeQuarantineRawBackup(mainRaw);
     if (!backupOk) {
       await markSaveRecoveryFatal();
@@ -225,11 +421,31 @@ export async function probeSaveRecoveryOnColdStart(): Promise<SaveRecoveryProbeR
     });
   }
 
+  const failureCode =
+    autoRecovery.failureCode ?? mapDiagnosisToFailureCode(diagnosis.reason, 'primary');
+
+  logSaveBootstrap({
+    stage: 'recovery-required',
+    source: 'primary',
+    success: false,
+    errorCode: failureCode,
+    recoverable: false,
+    saveVersion: diagnosis.saveVersion,
+    checksumValid: diagnosis.checksumStatus === 'valid',
+    checksumPresent:
+      diagnosis.checksumStatus === 'valid' || diagnosis.checksumStatus === 'mismatch',
+    payloadPresent: false,
+    payloadSize: mainRaw.length,
+  });
+
   return {
     required: true,
     fatal: await isSaveRecoveryFatal(),
     quarantine: nextQuarantine,
     message: 'Yerel kayıt bozuk veya desteklenmiyor.',
+    failureCode,
+    diagnosticId,
+    lastStage: 'recovery-required',
   };
 }
 

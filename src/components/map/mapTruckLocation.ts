@@ -4,8 +4,7 @@ import type { Delivery, Truck, TruckTransfer } from '../../types/game';
 import { resolveTruckCityId, isDeliveryProgressComplete } from '../../simulation/delivery';
 import {
   getRoadRoute,
-  getRouteHeadingDegrees,
-  getRoutePoseAtProgress,
+  getRouteMarkerPose,
   normalizedPointToPixel,
   type MapBounds,
 } from './mapRoadUtils';
@@ -54,49 +53,38 @@ export function resolveTruckMapLocation(params: {
 
   if (isActiveRunningDelivery(activeDelivery)) {
     const roadRoute = getRoadRoute(activeDelivery.originCityId, activeDelivery.destinationCityId);
-    if (roadRoute && roadRoute.length >= 2) {
-      const samplingOptions = {
-        coordinateScaleX: mapBounds?.width,
-        coordinateScaleY: mapBounds?.height,
-      };
-      const pose = getRoutePoseAtProgress(roadRoute, activeDelivery.progress, samplingOptions);
-      const displayHeadingDeg = getRouteHeadingDegrees({
+    if (roadRoute && roadRoute.length >= 2 && mapBounds) {
+      const markerPose = getRouteMarkerPose({
         routePoints: roadRoute,
         progress: activeDelivery.progress,
-        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
-        coordinateScaleX: mapBounds?.width,
-        coordinateScaleY: mapBounds?.height,
+        mapBounds,
+        assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
       });
       return {
         kind: 'route',
         cityId: normalizeCityId(activeDelivery.destinationCityId),
-        normalizedPoint: pose.position,
-        pixelPoint: mapBounds ? normalizedPointToPixel(pose.position, mapBounds) : undefined,
-        angleRadians: (displayHeadingDeg * Math.PI) / 180,
+        normalizedPoint: markerPose.position,
+        pixelPoint: markerPose.positionPx,
+        angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
       };
     }
   }
 
   if (isActiveRunningTransfer(activeTransfer)) {
     const roadRoute = getRoadRoute(activeTransfer.fromCityId, activeTransfer.toCityId);
-    if (roadRoute && roadRoute.length >= 2) {
-      const pose = getRoutePoseAtProgress(roadRoute, activeTransfer.progress, {
-        coordinateScaleX: mapBounds?.width,
-        coordinateScaleY: mapBounds?.height,
-      });
-      const displayHeadingDeg = getRouteHeadingDegrees({
+    if (roadRoute && roadRoute.length >= 2 && mapBounds) {
+      const markerPose = getRouteMarkerPose({
         routePoints: roadRoute,
         progress: activeTransfer.progress,
-        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
-        coordinateScaleX: mapBounds?.width,
-        coordinateScaleY: mapBounds?.height,
+        mapBounds,
+        assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
       });
       return {
         kind: 'route',
         cityId: normalizeCityId(activeTransfer.toCityId),
-        normalizedPoint: pose.position,
-        pixelPoint: mapBounds ? normalizedPointToPixel(pose.position, mapBounds) : undefined,
-        angleRadians: (displayHeadingDeg * Math.PI) / 180,
+        normalizedPoint: markerPose.position,
+        pixelPoint: markerPose.positionPx,
+        angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
       };
     }
   }

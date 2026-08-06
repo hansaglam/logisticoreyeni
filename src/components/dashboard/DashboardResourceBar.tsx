@@ -1,6 +1,7 @@
 import React from 'react';
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
+import AppTutorialHelpButton from '../tutorial/AppTutorialHelpButton';
 import { GameIcon } from '../ui';
 import { colors, formatMoney, radius } from '../../theme';
 import {
@@ -15,16 +16,18 @@ interface DashboardResourceBarProps {
   money: number;
   level: number;
   xpProgress: number;
-  isPaused: boolean;
-  onTogglePause: () => void;
+  onHelpPress: () => void;
+  helpDisabled?: boolean;
+  helpAccessibilityLabel: string;
 }
 
 export default function DashboardResourceBar({
   money,
   level,
   xpProgress,
-  isPaused,
-  onTogglePause,
+  onHelpPress,
+  helpDisabled = false,
+  helpAccessibilityLabel,
 }: DashboardResourceBarProps) {
   const xpPercent = Math.round(Math.min(1, Math.max(0, xpProgress)) * 100);
   const moneyColor = getDashboardMoneyColor(money);
@@ -53,19 +56,13 @@ export default function DashboardResourceBar({
         <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
       </View>
 
-      <TouchableOpacity
-        style={[styles.pauseBtn, isPaused ? styles.pauseBtnActive : null]}
-        onPress={onTogglePause}
-        accessibilityRole="button"
-        accessibilityLabel={isPaused ? 'Devam et' : 'Duraklat'}
-        activeOpacity={0.8}
-      >
-        <GameIcon
-          name={isPaused ? 'play' : 'pause'}
-          size={14}
-          color={isPaused ? colors.success : colors.textPrimary}
+      <View style={styles.helpSlot}>
+        <AppTutorialHelpButton
+          onPress={onHelpPress}
+          disabled={helpDisabled}
+          accessibilityLabel={helpAccessibilityLabel}
         />
-      </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -143,19 +140,11 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.amber,
   },
-  pauseBtn: {
+  helpSlot: {
     width: 44,
     height: 44,
-    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface3,
-    borderWidth: 1,
-    borderColor: colors.border,
     flexShrink: 0,
-  },
-  pauseBtnActive: {
-    backgroundColor: colors.successSoft,
-    borderColor: colors.success,
   },
 });

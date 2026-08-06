@@ -9,6 +9,7 @@ import {
   createDisabledScreenTutorialResult,
   isTutorialSessionDisabled,
 } from '../tutorial/app/controller';
+import { warnRenderLoopSuspected } from '../tutorial/app/devInstrumentation';
 import { APP_TUTORIALS_ENABLED } from '../tutorial/app/featureFlags';
 import { normalizeTutorialProgress } from '../tutorial/app/persistence';
 import { selectHasPendingDeliveryIncident } from '../tutorial/app/selectors';
@@ -43,6 +44,10 @@ export function useScreenAppTutorial({
   scrollRef: externalScrollRef,
   scrollYRef: externalScrollYRef,
 }: UseScreenAppTutorialOptions) {
+  warnRenderLoopSuspected(`useScreenAppTutorial:${tutorialId}`, 0, {
+    tutorialId,
+  });
+
   const internalScrollRef = useRef<ScrollView>(null);
   const internalScrollYRef = useRef(0);
   const scrollRef = externalScrollRef ?? internalScrollRef;
@@ -50,17 +55,31 @@ export function useScreenAppTutorial({
 
   const killSwitchOff = !APP_TUTORIALS_ENABLED || isTutorialSessionDisabled(tutorialId);
 
-  const tutorialProgress = useGameStore((state) => normalizeTutorialProgress(state.tutorialProgress));
+  const rawTutorialProgress = useGameStore((state) => state.tutorialProgress);
+  const tutorialProgress = useMemo(
+    () => normalizeTutorialProgress(rawTutorialProgress),
+    [rawTutorialProgress],
+  );
   const completeTutorial = useGameStore((state) => state.completeTutorial);
   const onboardingCompleted = useGameStore((state) => state.onboarding?.completed === true);
   const pendingOfflineProgressSummary = useGameStore(
     (state) => state.pendingOfflineProgressSummary,
   );
   const hasPendingDeliveryIncident = useGameStore(selectHasPendingDeliveryIncident);
-  const marketLegacy = useGameStore((state) => ({
-    marketTutorialCompleted: state.marketTutorialCompleted,
-    marketTutorialVersion: state.marketTutorialVersion,
-  }));
+  const marketTutorialCompleted = useGameStore(
+    (state) => state.marketTutorialCompleted === true,
+  );
+  const marketTutorialVersion = useGameStore((state) => state.marketTutorialVersion ?? 0);
+  const legacyMarket = useMemo(
+    () =>
+      tutorialId === 'market'
+        ? {
+            marketTutorialCompleted,
+            marketTutorialVersion,
+          }
+        : undefined,
+    [marketTutorialCompleted, marketTutorialVersion, tutorialId],
+  );
 
   const steps = useMemo(() => {
     const resolved = getAppTutorialSteps(tutorialId, stepOptions);
@@ -77,13 +96,17 @@ export function useScreenAppTutorial({
 
   const tutorialEnabled = !killSwitchOff && steps.length > 0;
 
+  const onCompletePersistence = useCallback(() => {
+    completeTutorial(tutorialId);
+  }, [completeTutorial, tutorialId]);
+
   const tutorial = useAppTutorial({
     tutorialId,
     steps,
     enabled: tutorialEnabled,
     autoStart,
     tutorialProgress,
-    legacyMarket: tutorialId === 'market' ? marketLegacy : undefined,
+    legacyMarket,
     layoutReady,
     isOnboarding: !onboardingCompleted,
     isSaveRecovery,
@@ -93,8 +116,29 @@ export function useScreenAppTutorial({
     isAnotherTutorialActive,
     scrollRef,
     scrollYRef,
-    onCompletePersistence: () => completeTutorial(tutorialId),
+    onCompletePersistence,
   });
+
+  const {
+    notifyScrollEnd,
+    remeasureActiveTarget,
+    requestStepChange,
+    openManual,
+    onSkip,
+    onComplete,
+    visible: tutorialVisible,
+    steps: tutorialSteps,
+    stepIndex: tutorialStepIndex,
+    transitionState: tutorialTransitionState,
+    isTransitioning: tutorialIsTransitioning,
+    anchorRect: tutorialAnchorRect,
+    layoutAnchorRect: tutorialLayoutAnchorRect,
+    fallbackMode: tutorialFallbackMode,
+    spotlightVisible: tutorialSpotlightVisible,
+    showPreparingLabel: tutorialShowPreparingLabel,
+    placementRef: tutorialPlacementRef,
+    overlayRootRef: tutorialOverlayRootRef,
+  } = tutorial;
 
   const helpDisabled =
     !tutorialEnabled ||
@@ -111,44 +155,75 @@ export function useScreenAppTutorial({
   );
 
   const handleScrollEnd = useCallback(() => {
-    tutorial.notifyScrollEnd();
-    void tutorial.remeasureActiveTarget();
-  }, [tutorial]);
+    notifyScrollEnd();
+    void remeasureActiveTarget();
+  }, [notifyScrollEnd, remeasureActiveTarget]);
+
+  const onRequestStepChange = useCallback(
+    (direction: 'next' | 'previous') => {
+      void requestStepChange(direction);
+    },
+    [requestStepChange],
+  );
 
   if (killSwitchOff) {
     return createDisabledScreenTutorialResult(scrollRef, tutorialId);
   }
 
-  const overlayProps = {
-    tutorialId,
-    visible: tutorial.visible,
-    steps: tutorial.steps,
-    stepIndex: tutorial.stepIndex,
-    transitionState: tutorial.transitionState,
-    isTransitioning: tutorial.isTransitioning,
-    anchorRect: tutorial.anchorRect,
-    layoutAnchorRect: tutorial.layoutAnchorRect,
-    fallbackMode: tutorial.fallbackMode,
-    spotlightVisible: tutorial.spotlightVisible,
-    showPreparingLabel: tutorial.showPreparingLabel,
-    placementRef: tutorial.placementRef,
-    overlayRootRef: tutorial.overlayRootRef,
-    noticeText,
-    onRequestStepChange: (direction: 'next' | 'previous') => {
-      void tutorial.requestStepChange(direction);
-    },
-    onSkip: tutorial.onSkip,
-    onComplete: tutorial.onComplete,
-  };
+  const overlayProps = useMemo(
+    () => ({
+      tutorialId,
+      visible: tutorialVisible,
+      steps: tutorialSteps,
+      stepIndex: tutorialStepIndex,
+      transitionState: tutorialTransitionState,
+      isTransitioning: tutorialIsTransitioning,
+      anchorRect: tutorialAnchorRect,
+      layoutAnchorRect: tutorialLayoutAnchorRect,
+      fallbackMode: tutorialFallbackMode,
+      spotlightVisible: tutorialSpotlightVisible,
+      showPreparingLabel: tutorialShowPreparingLabel,
+      placementRef: tutorialPlacementRef,
+      overlayRootRef: tutorialOverlayRootRef,
+      noticeText,
+      onRequestStepChange,
+      onSkip,
+      onComplete,
+    }),
+    [
+      noticeText,
+      onComplete,
+      onRequestStepChange,
+      onSkip,
+      tutorialAnchorRect,
+      tutorialFallbackMode,
+      tutorialIsTransitioning,
+      tutorialLayoutAnchorRect,
+      tutorialOverlayRootRef,
+      tutorialPlacementRef,
+      tutorialShowPreparingLabel,
+      tutorialSpotlightVisible,
+      tutorialStepIndex,
+      tutorialSteps,
+      tutorialTransitionState,
+      tutorialVisible,
+      tutorialId,
+    ],
+  );
+
+  const helpButtonProps = useMemo(
+    () => ({
+      onPress: openManual,
+      disabled: helpDisabled,
+      accessibilityLabel: TUTORIAL_HELP_LABELS[tutorialId] ?? 'Rehber',
+    }),
+    [helpDisabled, openManual, tutorialId],
+  );
 
   return {
     tutorial,
     overlayProps,
-    helpButtonProps: {
-      onPress: tutorial.openManual,
-      disabled: helpDisabled,
-      accessibilityLabel: TUTORIAL_HELP_LABELS[tutorialId] ?? 'Rehber',
-    },
+    helpButtonProps,
     scrollRef,
     handleScroll,
     handleScrollEnd,

@@ -1,3 +1,5 @@
+import { setSaveBootstrapAuthUid } from '../storage/saveAuthContext';
+
 /**
  * Firebase Anonymous Auth + Google/Apple hesap bağlama.
  *
@@ -301,6 +303,7 @@ function getOrCreateAuthListenerHub(): AuthListenerHub | null {
     hub.lastUser = user ?? null;
     hub.initialized = true;
     authSessionReady = true;
+    setSaveBootstrapAuthUid(user?.uid ?? null);
     setAuthLifecycleState(
       user?.isAnonymous ? 'anonymous' : user ? 'authenticated' : 'idle',
       'firebase-auth-listener',

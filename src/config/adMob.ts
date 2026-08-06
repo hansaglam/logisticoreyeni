@@ -18,6 +18,23 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
 
+import { isStoreProductionProfile } from './buildProfile';
+
+import {
+  ADMOB_APP_IDS,
+  ADMOB_DELIVERY_BOOST_REWARDED_UNIT_IDS,
+  ADMOB_REWARDED_UNIT_IDS,
+  isValidAdMobAppId,
+  isValidAdMobUnitId,
+} from './adMobConstants';
+
+export {
+  ADMOB_APP_IDS,
+  ADMOB_REWARDED_UNIT_IDS,
+  isValidAdMobAppId,
+  isValidAdMobUnitId,
+};
+
 export type AdsMode = 'stub' | 'test' | 'production';
 
 /**
@@ -28,18 +45,6 @@ export type AdsMode = 'stub' | 'test' | 'production';
 export function isRunningInExpoGo(): boolean {
   return Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 }
-
-/** App ID (~) — native config plugin / AndroidManifest / Info.plist */
-export const ADMOB_APP_IDS = {
-  android: 'ca-app-pub-8214453687597896~5560651696',
-  ios: 'ca-app-pub-8214453687597896~4247570027',
-} as const;
-
-/** Rewarded Ad Unit ID (/) — JS request */
-export const ADMOB_REWARDED_UNIT_IDS = {
-  android: 'ca-app-pub-8214453687597896/1840898530',
-  ios: 'ca-app-pub-8214453687597896/4313204541',
-} as const;
 
 declare const __DEV__: boolean | undefined;
 
@@ -64,6 +69,12 @@ export function isAdsEnabled(): boolean {
 }
 
 export function shouldUseTestAdUnitIds(): boolean {
+  if (process.env.LOGISTICORE_BUILD_PROFILE === 'production') {
+    return false;
+  }
+  if (isStoreProductionProfile()) {
+    return false;
+  }
   if (process.env.EXPO_PUBLIC_ADS_USE_TEST_IDS === 'true') return true;
   if (readExtraAdsFlag('useTestIds') === 'true') return true;
   return false;
@@ -102,12 +113,24 @@ export function getProductionRewardedAdUnitId(): string {
   return ADMOB_REWARDED_UNIT_IDS.android;
 }
 
-export function isValidAdMobAppId(value: string | null | undefined): boolean {
-  return typeof value === 'string' && /^ca-app-pub-\d+~\d+$/.test(value);
+function readEnvDeliveryBoostUnitId(platform: 'android' | 'ios'): string | undefined {
+  const key =
+    platform === 'ios'
+      ? 'EXPO_PUBLIC_DELIVERY_BOOST_REWARDED_IOS_ID'
+      : 'EXPO_PUBLIC_DELIVERY_BOOST_REWARDED_ANDROID_ID';
+  const value = process.env[key]?.trim();
+  return value && isValidAdMobUnitId(value) ? value : undefined;
 }
 
-export function isValidAdMobUnitId(value: string | null | undefined): boolean {
-  return typeof value === 'string' && /^ca-app-pub-\d+\/\d+$/.test(value);
+export function getProductionDeliveryBoostRewardedAdUnitId(): string {
+  const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+  const fromEnv = readEnvDeliveryBoostUnitId(platform);
+  if (fromEnv) {
+    return fromEnv;
+  }
+  return platform === 'ios'
+    ? ADMOB_DELIVERY_BOOST_REWARDED_UNIT_IDS.ios
+    : ADMOB_DELIVERY_BOOST_REWARDED_UNIT_IDS.android;
 }
 
 export function shouldShowTestAdLabel(mode: AdsMode = resolveAdsMode()): boolean {

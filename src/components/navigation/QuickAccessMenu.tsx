@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -10,46 +10,57 @@ import {
   View,
 } from 'react-native';
 
-import { createDefaultMissionsState } from '../../config/missions';
 import { VEHICLE_MARKETPLACE_ENABLED } from '../../config/backendRoadmap';
+import { createDefaultMissionsState } from '../../config/missions';
+import {
+  buildQuickAccessItems,
+  QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO,
+  QUICK_ACCESS_TILE_GAP,
+  QUICK_ACCESS_TILE_HEIGHT,
+  type QuickAccessIconTone,
+  type QuickAccessItemDef,
+} from '../../navigation/quickAccessConfig';
 import type { QuickAccessAction } from '../../navigation/quickAccessTypes';
+import {
+  getAccountStatus,
+  subscribeAuthState,
+  type AccountStatus,
+} from '../../services/authService';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
-import type { GameIconName } from '../../theme/icons';
 import { getMissionDisplayStatus } from '../../utils/missionProgress';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import GameIcon from '../ui/GameIcon';
-
-interface QuickAccessItemDef {
-  key: QuickAccessAction;
-  label: string;
-  subtitle?: string;
-  icon: GameIconName;
-}
-
-const QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = (
-  [
-    { key: 'fleet', label: 'Filo', icon: 'truck' },
-    { key: 'shop', label: 'Mağaza', icon: 'inventory' },
-    { key: 'warehouse', label: 'Depolar', icon: 'warehouse' },
-    { key: 'finance', label: 'Finans', icon: 'cash' },
-    ...(VEHICLE_MARKETPLACE_ENABLED
-      ? [{
-          key: 'vehicleMarketplace' as const,
-          label: 'Araç Pazarı',
-          subtitle: 'Oyuncu ilanları',
-          icon: 'truck' as const,
-        }]
-      : []),
-    { key: 'missions', label: 'Görevler', icon: 'contract' },
-  ] as QuickAccessItemDef[]
-);
 
 interface QuickAccessMenuProps {
   visible: boolean;
   bottomOffset: number;
   onClose: () => void;
   onQuickAccess: (action: QuickAccessAction) => void;
+}
+
+function resolveAccountSubtitle(status: AccountStatus): string {
+  if (!status.isReady) {
+    return 'Profil ve ayarlar';
+  }
+  const isGuest = status.isAnonymous || status.provider === 'guest';
+  return isGuest ? 'Misafir hesap' : 'Bağlı hesap';
+}
+
+function useAccountCardSubtitle(): string {
+  const [subtitle, setSubtitle] = useState(() =>
+    resolveAccountSubtitle(getAccountStatus()),
+  );
+
+  React.useEffect(() => {
+    const refresh = () => {
+      setSubtitle(resolveAccountSubtitle(getAccountStatus()));
+    };
+    refresh();
+    return subscribeAuthState(refresh);
+  }, []);
+
+  return subtitle;
 }
 
 function useMissionsReadyBadge(): number {
@@ -75,6 +86,52 @@ function TileBadge({ count }: { count: number }) {
   );
 }
 
+function resolveIconColor(tone: QuickAccessIconTone | undefined): string {
+  return tone === 'amber' ? colors.accentAmber : colors.info;
+}
+
+function resolveIconWrapStyle(tone: QuickAccessIconTone | undefined) {
+  return tone === 'amber' ? styles.tileIconWrapAmber : styles.tileIconWrapInfo;
+}
+
+function QuickAccessTile({
+  item,
+  subtitle,
+  badgeCount,
+  onPress,
+}: {
+  item: QuickAccessItemDef;
+  subtitle?: string;
+  badgeCount?: number;
+  onPress: () => void;
+}) {
+  const iconColor = resolveIconColor(item.iconTone);
+
+  return (
+    <TouchableOpacity
+      style={styles.tile}
+      activeOpacity={0.85}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={item.accessibilityLabel}
+      accessibilityHint={item.accessibilityHint}
+    >
+      <View style={[styles.tileIconWrap, resolveIconWrapStyle(item.iconTone)]}>
+        <GameIcon name={item.icon} size={20} color={iconColor} />
+        {badgeCount ? <TileBadge count={badgeCount} /> : null}
+      </View>
+      <Text style={styles.tileLabel} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>
+        {item.label}
+      </Text>
+      {subtitle ? (
+        <Text style={styles.tileSubtitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}>
+          {subtitle}
+        </Text>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
 export default function QuickAccessMenu({
   visible,
   bottomOffset,
@@ -82,16 +139,37 @@ export default function QuickAccessMenu({
   onQuickAccess,
 }: QuickAccessMenuProps) {
   const missionsReadyCount = useMissionsReadyBadge();
+  const missionsReadyCount = useMissionsReadyBadge();
+  const accountSubtitle = useAccountCardSubtitle();
+  const tapLockRef = useRef(false);
   const insets = useAppSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const maxPanelHeight = Math.min(
-    windowHeight * 0.55,
+    windowHeight * QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO,
     Math.max(220, windowHeight - bottomOffset - insets.top - 16),
   );
 
-  const handleItemPress = (action: QuickAccessAction) => {
-    onQuickAccess(action);
-  };
+  const quickAccessItems = useMemo(
+    () => buildQuickAccessItems(VEHICLE_MARKETPLACE_ENABLED),
+    [],
+  );
+
+  const handleItemPress = useCallback(
+    (action: QuickAccessAction) => {
+      if (tapLockRef.current) {
+        return;
+      }
+      tapLockRef.current = true;
+      onClose();
+      requestAnimationFrame(() => {
+        onQuickAccess(action);
+        setTimeout(() => {
+          tapLockRef.current = false;
+        }, 450);
+      });
+    },
+    [onClose, onQuickAccess],
+  );
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -105,34 +183,27 @@ export default function QuickAccessMenu({
                 style={styles.gridScroll}
                 contentContainerStyle={styles.grid}
                 showsVerticalScrollIndicator={false}
-                bounces={false}
+                bounces
+                keyboardShouldPersistTaps="handled"
               >
-                {QUICK_ACCESS_ITEMS.map((item) => {
+                {quickAccessItems.map((item) => {
                   const badgeCount =
                     item.key === 'missions' && missionsReadyCount > 0
                       ? missionsReadyCount
                       : undefined;
+                  const subtitle =
+                    item.key === 'account'
+                      ? accountSubtitle
+                      : item.subtitle;
 
                   return (
-                    <TouchableOpacity
+                    <QuickAccessTile
                       key={item.key}
-                      style={styles.tile}
-                      activeOpacity={0.85}
+                      item={item}
+                      subtitle={subtitle}
+                      badgeCount={badgeCount}
                       onPress={() => handleItemPress(item.key)}
-                    >
-                      <View style={styles.tileIconWrap}>
-                        <GameIcon name={item.icon} size={20} color={colors.info} />
-                        {badgeCount ? <TileBadge count={badgeCount} /> : null}
-                      </View>
-                      <Text style={styles.tileLabel} numberOfLines={1}>
-                        {item.label}
-                      </Text>
-                      {item.subtitle ? (
-                        <Text style={styles.tileSubtitle} numberOfLines={1}>
-                          {item.subtitle}
-                        </Text>
-                      ) : null}
-                    </TouchableOpacity>
+                    />
                   );
                 })}
               </ScrollView>
@@ -143,8 +214,6 @@ export default function QuickAccessMenu({
     </Modal>
   );
 }
-
-const TILE_GAP = 10;
 
 const styles = StyleSheet.create({
   backdrop: {
@@ -191,42 +260,52 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    columnGap: TILE_GAP,
-    rowGap: TILE_GAP,
-    paddingBottom: 2,
+    columnGap: QUICK_ACCESS_TILE_GAP,
+    rowGap: QUICK_ACCESS_TILE_GAP,
+    paddingBottom: 4,
   },
   tile: {
     width: '48.4%',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 12,
+    gap: 5,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
     borderRadius: 16,
     backgroundColor: colors.cardSoft,
     borderWidth: 1,
     borderColor: colors.border,
-    height: 84,
+    minHeight: QUICK_ACCESS_TILE_HEIGHT,
     justifyContent: 'center',
   },
   tileIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.infoSoft,
     borderWidth: 1,
+  },
+  tileIconWrapInfo: {
+    backgroundColor: colors.infoSoft,
     borderColor: 'rgba(56, 189, 248, 0.25)',
+  },
+  tileIconWrapAmber: {
+    backgroundColor: 'rgba(245, 158, 11, 0.14)',
+    borderColor: 'rgba(245, 158, 11, 0.28)',
   },
   tileLabel: {
     ...typography.caption,
     color: colors.textSecondary,
     fontWeight: '600',
     fontSize: 11,
+    textAlign: 'center',
   },
   tileSubtitle: {
     color: colors.textMuted,
     fontSize: 9,
-    marginTop: -3,
+    marginTop: -2,
+    textAlign: 'center',
+    lineHeight: 12,
   },
   tileBadge: {
     position: 'absolute',
@@ -249,3 +328,5 @@ const styles = StyleSheet.create({
     lineHeight: 11,
   },
 });
+
+export { buildQuickAccessItems };

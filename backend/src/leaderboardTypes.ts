@@ -3,6 +3,7 @@ export type LeaderboardFailureReason =
   | 'anonymous-not-supported'
   | 'username-required'
   | 'save-not-found'
+  | 'server-state-not-initialized'
   | 'invalid-player-state'
   | 'invalid-request'
   | 'rate-limited'

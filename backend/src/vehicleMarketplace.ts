@@ -28,7 +28,13 @@ import type {
   PurchaseVehicleListingInput,
 } from './vehicleMarketplaceTypes';
 import {
-  buildMarketplaceStateFromCloudSave,
+  ensureServerStateInTransaction,
+  mirrorServerStateFromMarketplace,
+  serverStateRef,
+} from './serverState';
+import type { ServerStateDocument } from './serverStateTypes';
+import {
+  buildMarketplaceStateFromServerState,
   validateMarketplaceState,
 } from './vehicleMarketplaceState';
 
@@ -76,6 +82,84 @@ function actionReceiptRef(
 
 function normalizeMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+async function bootstrapMarketplaceStateInTransaction(
+  transaction: Transaction,
+  firestore: Firestore,
+  uid: string,
+  nowMs: number,
+): Promise<
+  | {
+      ok: true;
+      state: MarketplacePlayerState;
+      wasCreated: boolean;
+      serverState: ServerStateDocument;
+    }
+  | { ok: false; reason: MarketplaceFailureReason }
+> {
+  const playerRef = stateRef(firestore, uid);
+  const stateSnapshot = await transaction.get(playerRef);
+  const serverRef = serverStateRef(firestore, uid);
+  const serverSnapshot = await transaction.get(serverRef);
+
+  if (stateSnapshot.exists) {
+    const state = stateSnapshot.data() as MarketplacePlayerState;
+    const stateReason = validateMarketplaceState(uid, state);
+    if (stateReason) return { ok: false, reason: stateReason };
+    if (serverSnapshot.exists) {
+      return {
+        ok: true,
+        state,
+        wasCreated: false,
+        serverState: serverSnapshot.data() as ServerStateDocument,
+      };
+    }
+    const ensured = await ensureServerStateInTransaction(
+      transaction,
+      firestore,
+      uid,
+      nowMs,
+    );
+    if (!ensured.ok) return { ok: false, reason: 'marketplace-state-missing' };
+    return { ok: true, state, wasCreated: false, serverState: ensured.state };
+  }
+
+  const ensured = await ensureServerStateInTransaction(
+    transaction,
+    firestore,
+    uid,
+    nowMs,
+  );
+  if (!ensured.ok) return { ok: false, reason: 'marketplace-state-missing' };
+  const built = buildMarketplaceStateFromServerState(
+    uid,
+    ensured.state,
+    Timestamp.fromMillis(nowMs),
+  );
+  if (!built.ok) return { ok: false, reason: built.reason };
+  return {
+    ok: true,
+    state: built.state,
+    wasCreated: true,
+    serverState: ensured.state,
+  };
+}
+
+function syncServerStateMirror(
+  transaction: Transaction,
+  firestore: Firestore,
+  uid: string,
+  marketplaceState: MarketplacePlayerState,
+  existing: ServerStateDocument | null,
+  now: Timestamp,
+) {
+  const patch = mirrorServerStateFromMarketplace(
+    marketplaceState,
+    existing,
+    now,
+  );
+  transaction.set(serverStateRef(firestore, uid), patch, { merge: true });
 }
 
 function findCatalogTruck(templateId: string) {
@@ -272,32 +356,19 @@ export async function createVehicleListingTransaction(
       return failure(input, 'already-completed');
     }
     const playerRef = stateRef(firestore, identity.uid);
-    const stateSnapshot = await transaction.get(playerRef);
     const userProfileSnap = await transaction.get(
       firestore.doc(`users/${identity.uid}`),
     );
-    let state: MarketplacePlayerState;
-    let stateWasCreated = false;
-    if (stateSnapshot.exists) {
-      state = stateSnapshot.data() as MarketplacePlayerState;
-      const stateReason = validateMarketplaceState(identity.uid, state);
-      if (stateReason) return failure(input, stateReason);
-    } else {
-      const saveSnapshot = await transaction.get(
-        firestore.doc(`users/${identity.uid}/saves/current`),
-      );
-      if (!saveSnapshot.exists) {
-        return failure(input, 'marketplace-state-missing');
-      }
-      const built = buildMarketplaceStateFromCloudSave(
-        identity.uid,
-        saveSnapshot.data() ?? {},
-        Timestamp.fromMillis(nowMs),
-      );
-      if (!built.ok) return failure(input, built.reason);
-      state = built.state;
-      stateWasCreated = true;
-    }
+    const bootstrap = await bootstrapMarketplaceStateInTransaction(
+      transaction,
+      firestore,
+      identity.uid,
+      nowMs,
+    );
+    if (!bootstrap.ok) return failure(input, bootstrap.reason);
+    let state = bootstrap.state;
+    const stateWasCreated = bootstrap.wasCreated;
+    let serverState = bootstrap.serverState;
     const usernameRaw = userProfileSnap.data()?.username;
     const sellerUsername =
       typeof usernameRaw === 'string' ? usernameRaw.trim().slice(0, 20) : '';
@@ -365,6 +436,13 @@ export async function createVehicleListingTransaction(
       stateVersion: state.stateVersion + 1,
       updatedAt: now,
     };
+    const nextMarketplaceState: MarketplacePlayerState = {
+      ...state,
+      ...updatedPlayerState,
+      activeListingIds: stateWasCreated
+        ? [listingId]
+        : [...state.activeListingIds, listingId],
+    };
     if (stateWasCreated) {
       transaction.create(playerRef, {
         ...state,
@@ -373,6 +451,14 @@ export async function createVehicleListingTransaction(
     } else {
       transaction.update(playerRef, updatedPlayerState);
     }
+    syncServerStateMirror(
+      transaction,
+      firestore,
+      identity.uid,
+      nextMarketplaceState,
+      serverState,
+      now,
+    );
     transaction.create(
       firestore.doc(`users/${identity.uid}/marketplaceLedger/${input.transactionId}`),
       {
@@ -403,58 +489,39 @@ export async function ensureVehicleMarketplaceStateTransaction(
 }>> {
   return firestore.runTransaction(async (transaction) => {
     const playerRef = stateRef(firestore, identity.uid);
-    const stateSnapshot = await transaction.get(playerRef);
-    if (stateSnapshot.exists) {
-      const state = stateSnapshot.data() as MarketplacePlayerState;
-      const reason = validateMarketplaceState(identity.uid, state);
-      if (reason) return failure(input, reason);
-      if (
-        input.clientSaveVersion != null &&
-        input.clientSaveVersion !== state.sourceSaveVersion
-      ) {
-        return failure(input, 'save-conflict');
-      }
-      return {
-        ok: true,
-        transactionId: input.transactionId,
-        idempotencyKey: input.idempotencyKey,
-        data: {
-          created: false,
-          marketplaceStateVersion: state.stateVersion,
-          sourceSaveVersion: state.sourceSaveVersion,
-          hasMarketplaceState: true,
-        },
-      };
-    }
-
-    const saveSnapshot = await transaction.get(
-      firestore.doc(`users/${identity.uid}/saves/current`),
-    );
-    if (!saveSnapshot.exists) {
-      return failure(input, 'marketplace-state-missing');
-    }
-    const now = Timestamp.fromMillis(nowMs);
-    const built = buildMarketplaceStateFromCloudSave(
+    const bootstrap = await bootstrapMarketplaceStateInTransaction(
+      transaction,
+      firestore,
       identity.uid,
-      saveSnapshot.data() ?? {},
-      now,
+      nowMs,
     );
-    if (!built.ok) return failure(input, built.reason);
+    if (!bootstrap.ok) return failure(input, bootstrap.reason);
+    const state = bootstrap.state;
     if (
       input.clientSaveVersion != null &&
-      input.clientSaveVersion !== built.state.sourceSaveVersion
+      input.clientSaveVersion !== state.sourceSaveVersion
     ) {
       return failure(input, 'save-conflict');
     }
-    transaction.create(playerRef, built.state);
+    if (bootstrap.wasCreated) {
+      transaction.create(playerRef, state);
+      syncServerStateMirror(
+        transaction,
+        firestore,
+        identity.uid,
+        state,
+        bootstrap.serverState,
+        Timestamp.fromMillis(nowMs),
+      );
+    }
     return {
       ok: true,
       transactionId: input.transactionId,
       idempotencyKey: input.idempotencyKey,
       data: {
-        created: true,
-        marketplaceStateVersion: built.state.stateVersion,
-        sourceSaveVersion: built.state.sourceSaveVersion,
+        created: bootstrap.wasCreated,
+        marketplaceStateVersion: state.stateVersion,
+        sourceSaveVersion: state.sourceSaveVersion,
         hasMarketplaceState: true,
       },
     };
@@ -486,9 +553,10 @@ export async function cancelVehicleListingTransaction(
       `vehicleMarketplaceListings/${input.listingId}`,
     );
     const playerRef = stateRef(firestore, identity.uid);
-    const [listingSnapshot, stateSnapshot] = await Promise.all([
+    const [listingSnapshot, stateSnapshot, serverSnapshot] = await Promise.all([
       transaction.get(listingRef),
       transaction.get(playerRef),
+      transaction.get(serverStateRef(firestore, identity.uid)),
     ]);
     if (!listingSnapshot.exists) return failure(input, 'listing-not-found');
     const listing = listingSnapshot.data() as MarketplaceListingDocument;
@@ -531,6 +599,26 @@ export async function cancelVehicleListingTransaction(
       stateVersion: state.stateVersion + 1,
       updatedAt: now,
     });
+    syncServerStateMirror(
+      transaction,
+      firestore,
+      identity.uid,
+      {
+        ...state,
+        ownedTruckSnapshots: state.ownedTruckSnapshots.map((item) =>
+          item.truckId === vehicle.truckId
+            ? { ...item, status: 'idle', marketplaceListingId: null }
+            : item,
+        ),
+        activeListingIds: state.activeListingIds.filter((id) => id !== listing.id),
+        stateVersion: state.stateVersion + 1,
+        updatedAt: now,
+      },
+      serverSnapshot.exists
+        ? (serverSnapshot.data() as ServerStateDocument)
+        : null,
+      now,
+    );
     saveIdempotent(transaction, firestore, identity.uid, input, result, now);
     return result;
   });
@@ -594,10 +682,13 @@ export async function purchaseVehicleListingTransaction(
     }
     const buyerRef = stateRef(firestore, identity.uid);
     const sellerRef = stateRef(firestore, listing.sellerUid);
-    const [buyerSnapshot, sellerSnapshot] = await Promise.all([
-      transaction.get(buyerRef),
-      transaction.get(sellerRef),
-    ]);
+    const [buyerSnapshot, sellerSnapshot, buyerServerSnap, sellerServerSnap] =
+      await Promise.all([
+        transaction.get(buyerRef),
+        transaction.get(sellerRef),
+        transaction.get(serverStateRef(firestore, identity.uid)),
+        transaction.get(serverStateRef(firestore, listing.sellerUid)),
+      ]);
     if (!buyerSnapshot.exists || !sellerSnapshot.exists) {
       return failure(input, 'save-conflict');
     }
@@ -692,6 +783,42 @@ export async function purchaseVehicleListingTransaction(
       stateVersion: seller.stateVersion + 1,
       updatedAt: now,
     });
+    syncServerStateMirror(
+      transaction,
+      firestore,
+      identity.uid,
+      {
+        ...buyer,
+        canonicalCash: normalizeMoney(buyer.canonicalCash - listing.askingPrice),
+        ownedTruckSnapshots: [...buyer.ownedTruckSnapshots, buyerVehicle],
+        stateVersion: buyer.stateVersion + 1,
+        updatedAt: now,
+      },
+      buyerServerSnap.exists
+        ? (buyerServerSnap.data() as ServerStateDocument)
+        : null,
+      now,
+    );
+    syncServerStateMirror(
+      transaction,
+      firestore,
+      listing.sellerUid,
+      {
+        ...seller,
+        canonicalCash: normalizeMoney(seller.canonicalCash + sellerNet),
+        ownedTruckSnapshots: seller.ownedTruckSnapshots.filter(
+          (item) => item.truckId !== sellerVehicle.truckId,
+        ),
+        activeListingIds: seller.activeListingIds.filter((id) => id !== listing.id),
+        soldTruckTombstones: [...seller.soldTruckTombstones, sellerVehicle.truckId],
+        stateVersion: seller.stateVersion + 1,
+        updatedAt: now,
+      },
+      sellerServerSnap.exists
+        ? (sellerServerSnap.data() as ServerStateDocument)
+        : null,
+      now,
+    );
     transaction.update(listingRef, {
       status: 'sold',
       soldAt: now,

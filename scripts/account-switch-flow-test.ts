@@ -38,11 +38,15 @@ for (const reason of [
 }
 
 const accountSource = readFileSync(
-  resolve(process.cwd(), 'src/components/AccountSection.tsx'),
+  resolve(process.cwd(), 'src/hooks/useAccountCenter.ts'),
   'utf8',
 );
 const authSource = readFileSync(
   resolve(process.cwd(), 'src/services/authService.ts'),
+  'utf8',
+);
+const switchServiceSource = readFileSync(
+  resolve(process.cwd(), 'src/services/accountSwitchService.ts'),
   'utf8',
 );
 const googleSource = readFileSync(
@@ -55,7 +59,7 @@ const firebaseSource = readFileSync(
 );
 
 assert.match(accountSource, /Hesap Değiştir/);
-assert.match(accountSource, /Google Hesabından Çıkış Yap/);
+assert.match(accountSource, /Çıkış Yap/);
 assert.match(accountSource, /Kaydet ve Hesap Değiştir/);
 assert.match(accountSource, /Farklı Hesap Seç/);
 assert.match(accountSource, /handleCancelGoogleLinkConflict/);
@@ -64,6 +68,11 @@ assert.match(accountSource, /forceInteractivePicker:\s*true/);
 assert.match(accountSource, /if \(isSwitchingAccount\) return/);
 assert.match(accountSource, /isVehicleMarketplaceOperationActive/);
 assert.match(accountSource, /activeMarketplaceListingIds: \[\]/);
+assert.match(accountSource, /rollbackAccountSwitch/);
+assert.match(accountSource, /commitAccountSwitch/);
+assert.match(switchServiceSource, /rollbackAccountSwitch/);
+assert.match(switchServiceSource, /commitAccountSwitch/);
+assert.match(switchServiceSource, /assertLocalSaveOwnerMatchesAuth/);
 assert.ok(
   accountSource.indexOf('syncBeforeAccountTransition()') <
     accountSource.indexOf('beginGoogleAccountSwitchSelection()'),
@@ -73,6 +82,8 @@ assert.match(authSource, /clearGoogleSignInSessionStrict/);
 assert.match(authSource, /cancelPendingGoogleLinkConflict/);
 assert.match(authSource, /signOutGoogleAccountToGuest/);
 assert.match(authSource, /forceInteractivePicker/);
+assert.match(authSource, /switchToLinkedProviderAccount/);
+assert.match(authSource, /linkAnonymousAccountWithApple/);
 assert.match(googleSource, /GoogleSignin\.signIn\(\)/);
 assert.match(googleSource, /forceInteractivePicker/);
 assert.match(googleSource, /\[google-account-picker\]/);
@@ -102,6 +113,12 @@ assert.match(authSource, /'opening-account-picker'/);
 assert.match(authSource, /'authenticating-new-account'/);
 assert.match(authSource, /'checking-cloud-save'/);
 
+const cancelBlock = accountSource.slice(
+  accountSource.indexOf('const handleCancelGoogleLinkConflict'),
+  accountSource.indexOf('const handleSelectDifferentGoogleAccount'),
+);
+assert.match(cancelBlock, /cancelPendingGoogleLinkConflict/);
+
 console.log('[account-switch-flow-test] PASS', {
   firebaseSingleton: true,
   noAuthReinitialize: true,
@@ -109,6 +126,9 @@ console.log('[account-switch-flow-test] PASS', {
   interactivePicker: true,
   conflictCancelClearsProvider: true,
   selectDifferentAccount: true,
+  providerNeutralSignOutLabel: true,
+  rollbackAndCommitSwitchService: true,
+  ownerUidIsolationHooks: true,
   noRevokeAccess: true,
   marketplaceIsolation: true,
   structuredErrors: 7,

@@ -13,8 +13,16 @@ import {
   isValidLeaderboardSeasonKey,
 } from './leaderboardSeason';
 import {
+  buildDefaultServerState,
+  buildServerStateFromMarketplaceState,
+  serverStateRef,
+  validateServerState,
+} from './serverState';
+import type { ServerStateDocument } from './serverStateTypes';
+import type { MarketplacePlayerState } from './vehicleMarketplaceTypes';
+import {
   calculateLeaderboardScore,
-  extractCanonicalPlayerState,
+  extractCanonicalPlayerStateFromServerState,
 } from './leaderboardScore';
 import type {
   GetLeaderboardInput,
@@ -119,7 +127,20 @@ export async function submitLeaderboardScoreTransaction(
     const result = await firestore.runTransaction(async (transaction) => {
       transactionAttempts += 1;
       const idemRef = idempotencyRef(firestore, identity.uid, input.idempotencyKey);
-      const idemSnap = await transaction.get(idemRef);
+      const serverRef = serverStateRef(firestore, identity.uid);
+      const userRef = firestore.doc(`users/${identity.uid}`);
+      const entryDocumentRef = entryRef(firestore, seasonKey, identity.uid);
+      const marketplaceRef = firestore.doc(
+        `users/${identity.uid}/marketplaceState/current`,
+      );
+      const [idemSnap, serverSnap, userSnap, existingSnap, marketplaceSnap] =
+        await Promise.all([
+          transaction.get(idemRef),
+          transaction.get(serverRef),
+          transaction.get(userRef),
+          transaction.get(entryDocumentRef),
+          transaction.get(marketplaceRef),
+        ]);
       if (idemSnap.exists) {
         const previous = idemSnap.data()?.result as SubmitLeaderboardScoreResult | undefined;
         if (previous && typeof previous === 'object') {
@@ -127,12 +148,23 @@ export async function submitLeaderboardScoreTransaction(
         }
       }
 
-      const saveSnap = await transaction.get(
-        firestore.doc(`users/${identity.uid}/saves/current`),
-      );
-      const userSnap = await transaction.get(firestore.doc(`users/${identity.uid}`));
-      if (!saveSnap.exists) {
-        return failure(input, 'save-not-found');
+      let serverStateCreated = false;
+      let serverState: ServerStateDocument;
+      if (serverSnap.exists) {
+        serverState = serverSnap.data() as ServerStateDocument;
+      } else if (marketplaceSnap.exists) {
+        serverState = buildServerStateFromMarketplaceState(
+          identity.uid,
+          marketplaceSnap.data() as MarketplacePlayerState,
+          Timestamp.fromMillis(nowMs),
+        );
+        serverStateCreated = true;
+      } else {
+        serverState = buildDefaultServerState(
+          identity.uid,
+          Timestamp.fromMillis(nowMs),
+        );
+        serverStateCreated = true;
       }
 
       const usernameRaw = userSnap.data()?.username;
@@ -142,23 +174,27 @@ export async function submitLeaderboardScoreTransaction(
         return failure(input, 'username-required');
       }
 
-      const extracted = extractCanonicalPlayerState(
-        (saveSnap.data() ?? {}) as Record<string, unknown>,
-      );
-      if (!extracted.ok) {
-        return failure(input, extracted.reason);
+      const stateReason = validateServerState(identity.uid, serverState);
+      if (stateReason) {
+        return failure(input, stateReason === 'server-state-not-initialized'
+          ? 'server-state-not-initialized'
+          : 'invalid-player-state');
       }
 
-      const saveVersion = Math.max(
-        0,
-        Math.floor(Number((saveSnap.data() as { saveVersion?: unknown })?.saveVersion) || 0),
-      );
+      const extracted = extractCanonicalPlayerStateFromServerState(serverState);
+      if (!extracted.ok) {
+        return failure(input, extracted.reason === 'server-state-not-initialized'
+          ? 'server-state-not-initialized'
+          : 'invalid-player-state');
+      }
+
+      const sourceVersion = Math.max(0, Math.floor(serverState.sourceVersion));
       if (
         input.clientSaveVersion != null &&
         Number.isInteger(input.clientSaveVersion) &&
-        input.clientSaveVersion !== saveVersion
+        input.clientSaveVersion !== sourceVersion
       ) {
-        // Client may be slightly ahead/behind; still score from trusted save.
+        // Client save may diverge from server-owned canonical state; score from serverState only.
       }
 
       const breakdown = calculateLeaderboardScore(extracted.player, extracted.gameState);
@@ -166,8 +202,7 @@ export async function submitLeaderboardScoreTransaction(
         return failure(input, 'invalid-player-state');
       }
 
-      const ref = entryRef(firestore, seasonKey, identity.uid);
-      const existingSnap = await transaction.get(ref);
+      const ref = entryDocumentRef;
       const existingScore = existingSnap.exists
         ? Math.max(0, Math.floor(Number(existingSnap.data()?.companyScore) || 0))
         : -1;
@@ -182,12 +217,15 @@ export async function submitLeaderboardScoreTransaction(
         completedContracts: breakdown.completedContracts,
         seasonKey,
         updatedAt: Timestamp.fromMillis(nowMs),
-        sourceSaveVersion: saveVersion,
+        sourceSaveVersion: sourceVersion,
         scoreVersion: LEADERBOARD_SCORE_VERSION,
       };
 
       let updated = false;
       let reason: 'score-not-improved' | undefined;
+      if (serverStateCreated) {
+        transaction.create(serverRef, serverState);
+      }
       if (breakdown.totalScore > existingScore) {
         transaction.set(ref, entryPayload, { merge: true });
         updated = true;
@@ -203,7 +241,7 @@ export async function submitLeaderboardScoreTransaction(
             reputation: breakdown.reputation,
             completedContracts: breakdown.completedContracts,
             updatedAt: Timestamp.fromMillis(nowMs),
-            sourceSaveVersion: saveVersion,
+            sourceSaveVersion: sourceVersion,
             scoreVersion: LEADERBOARD_SCORE_VERSION,
           },
           { merge: true },

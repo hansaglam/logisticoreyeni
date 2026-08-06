@@ -83,9 +83,9 @@ function normalizeMarketStatusKey(status: MarketStatusInput): MarketStatusKey {
 export function getMarketStatusLabel(status: MarketStatusInput): string {
   switch (normalizeMarketStatusKey(status)) {
     case 'critical':
-      return 'Yoğun Talep';
+      return 'Kritik stok';
     case 'shortage':
-      return 'Stok Az';
+      return 'Düşük stok';
     case 'surplus':
       return 'Stok Fazla';
     default:
@@ -97,9 +97,9 @@ export function getMarketStatusLabel(status: MarketStatusInput): string {
 export function getMarketStatusShortLabel(status: MarketStatusInput): string {
   switch (normalizeMarketStatusKey(status)) {
     case 'critical':
-      return 'Talep';
+      return 'Kritik stok';
     case 'shortage':
-      return 'Az';
+      return 'Düşük stok';
     case 'surplus':
       return 'Fazla';
     default:
@@ -110,14 +110,19 @@ export function getMarketStatusShortLabel(status: MarketStatusInput): string {
 export function getMarketStatusDescription(status: MarketStatusInput): string {
   switch (normalizeMarketStatusKey(status)) {
     case 'critical':
-      return 'Bu ürüne talep yüksek. Depoda stok varsa satış için iyi olabilir.';
+      return 'Stok seviyesi kritik düzeyde.';
     case 'shortage':
-      return 'Şehirde stok düşük. Fiyat güçlü seyredebilir; satış için takip edilebilir.';
+      return 'Arz yetersiz. Fiyat güçlü seyredebilir; satış için takip edilebilir.';
     case 'surplus':
       return 'Şehirde stok yüksek. Alım için iyi olabilir; düşük fiyattan stok yapılabilir.';
     default:
       return 'Piyasa sakin. Fiyat hareketleri normal seviyede.';
   }
+}
+
+/** Dünya Durumu özetinde kritik stok sayacı — criticalCount ile kullanılır. */
+export function formatMarketStockRiskCounter(count: number): string {
+  return `${count} stok riski`;
 }
 
 export function getMarketStatusColorVariant(

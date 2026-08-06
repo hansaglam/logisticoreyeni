@@ -367,6 +367,7 @@ export default function ContractAssignmentModal({
     [globalEconomyState, snapshot],
   );
   const currentTime = useGameStore((state) => state.currentTime);
+  const activeDeliveries = useGameStore((state) => state.activeDeliveries);
   const trailers = useGameStore((state) => state.player?.trailers ?? []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
@@ -402,9 +403,16 @@ export default function ContractAssignmentModal({
   const truckOptions = useMemo(
     () =>
       safeTrucks.map((truck) =>
-        evaluateTruckOption(truck, cargoWeight, contract?.originCityId ?? '', trailers),
+        evaluateTruckOption(
+          truck,
+          cargoWeight,
+          contract?.originCityId ?? '',
+          trailers,
+          currentTime,
+          activeDeliveries,
+        ),
       ),
-    [safeTrucks, cargoWeight, contract?.originCityId, trailers],
+    [safeTrucks, cargoWeight, contract?.originCityId, trailers, currentTime, activeDeliveries],
   );
 
   const driverOptions = useMemo(

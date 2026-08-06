@@ -103,6 +103,15 @@ import {
   hasCloudRestoreReceipt,
 } from '../storage/cloudRestoreJournal';
 import { isLocalSaveSafeForAccountTransition } from '../utils/accountTransition';
+import {
+  abortAccountSwitchBeforeAuth,
+  markAccountSwitchAwaitingUserChoice,
+  markAccountSwitchSelectingProvider,
+  markAccountSwitchTargetAuthenticated,
+  prepareAccountSwitch,
+  resetAccountSwitchRuntime,
+  rollbackAccountSwitch,
+} from './accountSwitchService';
 
 type AppleLinkProfile = {
   fullName: string | null;
@@ -1437,6 +1446,10 @@ export async function linkAnonymousAccountWithGoogle(
  * Yalnız Google provider cache + transition state temizlenir.
  */
 export async function cancelPendingGoogleLinkConflict(): Promise<void> {
+  const fromAccountSwitch = getAccountSwitchTransitionState() !== 'idle';
+  if (fromAccountSwitch) {
+    await rollbackAccountSwitch('conflict-cancelled');
+  }
   await clearGoogleSignInSession();
   const user = getFirebaseAuthSafe()?.currentUser ?? null;
   setAuthLifecycleState(
@@ -1444,6 +1457,7 @@ export async function cancelPendingGoogleLinkConflict(): Promise<void> {
     'google-link-conflict-cancelled',
   );
   resetAccountSwitchTransition();
+  resetAccountSwitchRuntime();
   console.info('[google-account-picker]', {
     action: 'conflict-cancelled',
     providerSessionCleared: true,
@@ -1868,11 +1882,32 @@ export async function beginGoogleAccountSwitchSelection(): Promise<GoogleAccount
 
   try {
     setAuthLifecycleState('switching-account', 'google-account-switch');
-    // Provider cache temizliği Firebase Auth kullanıcısını düşürmez. Picker iptal
-    // edilirse mevcut Firebase oturumu aynen korunur.
+    const { useGameStore } = await import('../store/gameStore');
+    const { serializeGameState, loadGameStateDetailed } = await import('../storage/saveGame');
+    const localDetailed = await loadGameStateDetailed();
+    const gameState = useGameStore.getState();
+    const localPayload = localDetailed.payload ?? serializeGameState(gameState, {
+      ownerUid: currentUser.uid,
+    });
+    const localOwnerUid = localPayload.ownerUid ?? currentUser.uid;
+
+    const prepared = await prepareAccountSwitch({
+      provider: 'google',
+      oldUid: currentUser.uid,
+      oldProviderIds: (currentUser.providerData ?? []).map((entry) => entry.providerId),
+      localOwnerUid,
+      localPayload,
+      gameState,
+    });
+    if (!prepared.ok) {
+      return { ok: false, error: 'unknown' };
+    }
+
+    await markAccountSwitchSelectingProvider();
     setAccountSwitchTransitionState('opening-account-picker', 'google-picker');
     const providerCleared = await clearGoogleSignInSessionStrict();
     if (!providerCleared.ok) {
+      await abortAccountSwitchBeforeAuth('google-disconnect-failed');
       setAccountSwitchTransitionState('failed', providerCleared.error);
       return providerCleared;
     }
@@ -1886,6 +1921,7 @@ export async function beginGoogleAccountSwitchSelection(): Promise<GoogleAccount
           : /network/i.test(google.error)
             ? 'network-error'
             : 'unknown';
+      await abortAccountSwitchBeforeAuth(error);
       setAccountSwitchTransitionState('failed', error);
       return { ok: false, error };
     }
@@ -1894,24 +1930,28 @@ export async function beginGoogleAccountSwitchSelection(): Promise<GoogleAccount
     const selected = await signInWithCredential(auth, google.credential);
     authSessionReady = true;
     initPromise = Promise.resolve(selected.user);
+    await markAccountSwitchTargetAuthenticated(selected.user.uid, google.credential);
     setAccountSwitchTransitionState('checking-cloud-save', 'selected-account-authenticated');
     setAuthLifecycleState('checking-cloud-save', 'selected-account-authenticated');
     const cloud = await loadGameFromCloudDetailed(selected.user.uid);
     if (!cloud.ok && cloud.reason !== 'cloud-save-not-found') {
+      const rollback = await rollbackAccountSwitch(cloud.reason);
       setAccountSwitchTransitionState('failed', cloud.reason);
+      if (!rollback.ok) {
+        setAuthLifecycleState('failed', 'account-switch-recovery-required');
+      }
       return {
         ok: false,
         error: cloud.reason === 'network-error' ? 'network-error' : 'unknown',
       };
     }
     if (cloud.ok) {
-      const [{ setCloudRestoreCandidateForConflict }, { useGameStore }] =
-        await Promise.all([
-          import('../storage/cloudSaveSync'),
-          import('../store/gameStore'),
-        ]);
+      const [{ setCloudRestoreCandidateForConflict }] = await Promise.all([
+        import('../storage/cloudSaveSync'),
+      ]);
       setCloudRestoreCandidateForConflict(useGameStore.getState(), cloud.payload);
     }
+    await markAccountSwitchAwaitingUserChoice();
     setAccountSwitchTransitionState(
       cloud.ok ? 'resolving-conflict' : 'completed',
       cloud.ok ? 'cloud-save-found' : 'new-account',
@@ -1928,6 +1968,7 @@ export async function beginGoogleAccountSwitchSelection(): Promise<GoogleAccount
     };
   } catch (error) {
     console.warn('[auth] Google account selection failed', error);
+    await rollbackAccountSwitch('unknown');
     const code = getAuthErrorCode(error);
     const mapped: AccountTransitionError =
       code === 'auth/network-request-failed' ? 'network-error' : 'unknown';

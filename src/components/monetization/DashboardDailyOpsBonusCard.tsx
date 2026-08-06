@@ -17,13 +17,18 @@ import {
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
 import { shouldShowTestAdLabel } from '../../config/adMob';
 import { getDailyOpsBonusCash } from '../../config/monetization';
-import { isAdProviderAvailable } from '../../services/adProvider';
+import { areAdsFeatureEnabled } from '../../services/adProvider';
+import { canRequestAdsAfterConsent } from '../../services/adsConsentService';
 import { canGrantAdReward, resetDailyUsageIfNeeded } from '../../simulation/adRewardGrants';
 import { useGameStore } from '../../store/gameStore';
 import { formatMoney } from '../../theme';
 import { GameIcon } from '../ui';
 import { DASHBOARD_NARROW_WIDTH } from '../dashboard/dashboardTheme';
 import type { AdRewardGrantContext } from '../../types/monetization';
+import {
+  getRewardedPlacementStatusMessage,
+  useRewardedPlacement,
+} from '../../hooks/useRewardedPlacement';
 
 declare const __DEV__: boolean | undefined;
 
@@ -50,9 +55,13 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
     (state) => Math.max(1, state.player?.level ?? state.player?.companyLevel ?? 1),
   );
   const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
+  const placementState = useRewardedPlacement('daily_operations');
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+
+  const consentReady = canRequestAdsAfterConsent();
+  const placementMessage = getRewardedPlacementStatusMessage(placementState);
 
   const fullContext = useMemo(
     (): AdRewardGrantContext => ({
@@ -68,19 +77,28 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
     return canGrantAdReward(normalized, 'daily_ops_bonus', fullContext);
   }, [fullContext, monetization]);
 
-  const isDisabled = loading || (!eligibility.ok && !failed);
+  const isDisabled = loading || ((!eligibility.ok || !consentReady) && !failed);
   const buttonLabel = loading
     ? 'Reklam hazırlanıyor…'
     : failed
       ? 'Tekrar Dene'
-      : !eligibility.ok
-        ? 'Limit doldu'
-        : shouldShowTestAdLabel()
-          ? 'Reklam İzle (Test)'
-          : 'Reklam İzle';
+      : !consentReady
+        ? 'Gizlilik tercihi gerekli'
+        : !eligibility.ok
+          ? 'Limit doldu'
+          : placementState.status === 'loading' || placementState.status === 'idle'
+            ? 'Reklam hazırlanıyor…'
+            : shouldShowTestAdLabel()
+              ? 'Reklam İzle (Test)'
+              : 'Reklam İzle';
 
   const handlePress = async () => {
     if (loading) {
+      return;
+    }
+
+    if (!consentReady) {
+      setErrorText('Reklamları kullanmak için gizlilik tercihini tamamla.');
       return;
     }
 
@@ -151,6 +169,10 @@ function DailyOpsAdCta({ rewardAmount, onSuccess, isNarrow }: DailyOpsAdCtaProps
         <Text style={styles.ctaError} numberOfLines={1}>
           {errorText}
         </Text>
+      ) : placementMessage && !consentReady ? (
+        <Text style={styles.ctaError} numberOfLines={1}>
+          {placementMessage}
+        </Text>
       ) : null}
     </View>
   );
@@ -165,7 +187,7 @@ export default function DashboardDailyOpsBonusCard({
   const isNarrow = width < DASHBOARD_NARROW_WIDTH;
   const useTicketArt = dashboardAssetFlags.useDailySupportTicket;
 
-  if (!onboardingCompleted || !isAdProviderAvailable()) {
+  if (!onboardingCompleted || !areAdsFeatureEnabled()) {
     return null;
   }
 

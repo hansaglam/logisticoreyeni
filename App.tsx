@@ -29,14 +29,21 @@ import { useGameStore } from './src/store/gameStore';
 import {
   addNotificationResponseListener,
   getMarketAlertFocusFromResponse,
+  isFleetRentalNotificationResponse,
   setupNotificationHandler,
 } from './src/services/notifications';
 import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
+import { gatherAdsConsentIfNeeded } from './src/services/adsConsentService';
+import { initializeAdProvider } from './src/services/adProvider';
+import {
+  probeSaveRecoveryOnColdStart,
+  type SaveRecoveryProbeResult,
+} from './src/services/saveRecoveryService';
+import SaveRecoveryScreen from './src/screens/SaveRecoveryScreen';
 import { logProductionBuildConfigOnce } from './src/services/productionBuildAudit';
 import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
-import { initializeAdProvider } from './src/services/adProvider';
 import type { ProductId } from './src/types/game';
 import {
   enableImmersiveGameMode,
@@ -221,9 +228,20 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
       case 'vehicleMarketplace':
         handleTabPress('vehicleMarketplace');
         break;
+      case 'leaderboard':
+        useGameStore.setState({
+          navigationRequest: { tab: 'more' },
+          pendingMoreSubRoute: 'leaderboard',
+        });
+        break;
       case 'settings':
-      case 'account':
         handleTabPress('more');
+        break;
+      case 'account':
+        useGameStore.setState({
+          navigationRequest: { tab: 'more' },
+          pendingMoreSubRoute: 'account',
+        });
         break;
       default:
         break;
@@ -283,13 +301,35 @@ function GameLoadingScreen() {
 
 export default function App() {
   const isGameReady = useGameStore((state) => state.isGameReady);
+  const [bootPhase, setBootPhase] = useState<'loading' | 'recovery' | 'ready'>('loading');
+  const [recoveryProbe, setRecoveryProbe] = useState<SaveRecoveryProbeResult | null>(null);
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
   const appStateRef = useRef(AppState.currentState);
+
+  const startGame = useCallback(async () => {
+    await useGameStore.getState().initializeGame();
+    setBootPhase('ready');
+  }, []);
+
+  const handleRecoveryComplete = useCallback(() => {
+    void (async () => {
+      const probe = await probeSaveRecoveryOnColdStart();
+      if (probe.required && !probe.quarantine?.userChoseNewGame) {
+        setRecoveryProbe(probe);
+        setBootPhase('recovery');
+        return;
+      }
+      await startGame();
+    })();
+  }, [startGame]);
 
   useEffect(() => {
     void enableImmersiveGameMode();
     const unsubscribeImmersive = subscribeImmersiveModeRefresh();
-    void initializeAdProvider();
+    void (async () => {
+      await gatherAdsConsentIfNeeded();
+      await initializeAdProvider();
+    })();
     return () => {
       unsubscribeImmersive();
     };
@@ -309,11 +349,22 @@ export default function App() {
       await initAnonymousAuth();
       if (cancelled) return;
       logProductionBuildConfigOnce();
-      await useGameStore.getState().initializeGame();
+      const probe = await probeSaveRecoveryOnColdStart();
+      if (cancelled) return;
+      if (probe.required && !probe.quarantine?.userChoseNewGame) {
+        setRecoveryProbe(probe);
+        setBootPhase('recovery');
+        return;
+      }
+      await startGame();
     })();
 
     setupNotificationHandler();
     const notificationSub = addNotificationResponseListener((response) => {
+      if (isFleetRentalNotificationResponse(response)) {
+        useGameStore.setState({ navigationRequest: { tab: 'fleet' } });
+        return;
+      }
       const focus = getMarketAlertFocusFromResponse(response);
       if (focus) {
         useGameStore.getState().openMarketFromAlert({
@@ -334,6 +385,7 @@ export default function App() {
       if (!wasActive && isActive) {
         useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
         useGameStore.getState().applyOfflineProgressionIfNeeded('foreground');
+        useGameStore.getState().maybeRefreshMarketSnapshot('foreground');
       }
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {
@@ -349,21 +401,27 @@ export default function App() {
       notificationSub.remove();
       subscription.remove();
     };
-  }, []);
+  }, [startGame]);
 
   useEffect(() => {
-    if (!isGameReady) {
+    if (!isGameReady || bootPhase !== 'ready') {
       return;
     }
 
     void initCloudSaveSync(() => useGameStore.getState());
-  }, [isGameReady]);
+  }, [bootPhase, isGameReady]);
 
   return (
     <GestureHandlerRootView style={styles.root}>
       <AppSafeAreaProvider>
         <AppDialogProvider>
-          {isGameReady ? <AppShell isAppActive={isAppActive} /> : <GameLoadingScreen />}
+          {bootPhase === 'recovery' && recoveryProbe ? (
+            <SaveRecoveryScreen probe={recoveryProbe} onRecoveryComplete={handleRecoveryComplete} />
+          ) : bootPhase === 'ready' && isGameReady ? (
+            <AppShell isAppActive={isAppActive} />
+          ) : (
+            <GameLoadingScreen />
+          )}
         </AppDialogProvider>
       </AppSafeAreaProvider>
     </GestureHandlerRootView>

@@ -9,6 +9,8 @@ import type {
   MarketplacePlayerState,
   MarketplaceVehicleRecord,
 } from './vehicleMarketplaceTypes';
+import { getServerDefaultFleetLimit } from './serverState';
+import type { ServerStateDocument } from './serverStateTypes';
 
 const MARKETPLACE_STATE_VERSION = 1;
 const VALID_TRUCK_STATUSES = new Set([
@@ -191,6 +193,55 @@ export function buildMarketplaceStateFromCloudSave(
       stateVersion: MARKETPLACE_STATE_VERSION,
       migratedAt: now,
       sourceSaveVersion,
+      updatedAt: now,
+    },
+  };
+}
+
+/**
+ * Server-owned canonical state'ten marketplace görünümü üretir.
+ * Cloud save okunmaz.
+ */
+export function buildMarketplaceStateFromServerState(
+  uid: string,
+  serverState: ServerStateDocument,
+  now: Timestamp,
+): MarketplaceStateBuildResult {
+  if (serverState.ownerUid !== uid || !serverState.initialized) {
+    return { ok: false, reason: 'save-conflict' };
+  }
+  const ownedTruckSnapshots: MarketplaceVehicleRecord[] = serverState.ownedTrucks.map(
+    (truck) => ({
+      truckId: truck.truckId,
+      templateId: truck.templateId,
+      ...(truck.customName ? { customName: truck.customName } : {}),
+      currentCityId: truck.currentCityId,
+      condition: truck.condition,
+      totalMileageKm: truck.totalMileageKm,
+      currentFuelL: truck.currentFuelL,
+      fuelTankCapacityL: truck.fuelTankCapacityL,
+      purchasePrice: truck.purchasePrice,
+      ownershipType: 'owned',
+      status: truck.status,
+      assignedDriverId: truck.assignedDriverId ?? null,
+      attachedTrailerId: truck.attachedTrailerId ?? null,
+      activeJobIds: truck.activeJobIds ?? [],
+      marketplaceListingId: truck.marketplaceListingId ?? null,
+      upgrades: truck.upgrades,
+    }),
+  );
+  return {
+    ok: true,
+    state: {
+      ownerUid: uid,
+      canonicalCash: Math.max(0, serverState.cash),
+      fleetLimit: getServerDefaultFleetLimit(),
+      ownedTruckSnapshots,
+      activeListingIds: [],
+      soldTruckTombstones: [],
+      stateVersion: MARKETPLACE_STATE_VERSION,
+      migratedAt: now,
+      sourceSaveVersion: Math.max(1, Math.floor(serverState.sourceVersion)),
       updatedAt: now,
     },
   };

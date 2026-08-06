@@ -1,45 +1,23 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { WorldEvent } from '../../types/game';
-import { getPrimaryWorldEventLabel } from '../../simulation/worldEvents';
 import { colors } from '../../theme';
-import type { GameIconName } from '../../theme/icons';
 import { GameIcon } from '../ui';
-import {
-  getWorldEventAccent,
-  getWorldEventBorderAccent,
-  MARKET_WORLD_EVENT_HEIGHT,
-} from './marketTheme';
-
-const MAX_VISIBLE_EVENTS = 3;
+import { sortWorldEventsByImportance } from '../../utils/worldEventDisplay';
+import MarketWorldEventCard from './MarketWorldEventCard';
 
 interface MarketWorldEventsStripProps {
   events: WorldEvent[];
+  currentTime?: number;
 }
 
-function resolveEventIcon(type: WorldEvent['type']): GameIconName {
-  switch (type) {
-    case 'harvest_surplus':
-      return 'foodApple';
-    case 'fuel_crisis':
-      return 'fuel';
-    case 'port_congestion':
-    case 'road_work':
-      return 'route';
-    case 'cold_chain_demand':
-      return 'cup';
-    case 'city_demand_boom':
-    case 'electronics_boom':
-    case 'industrial_support':
-      return 'market';
-    default:
-      return 'alert';
-  }
-}
+function MarketWorldEventsStrip({ events, currentTime = 0 }: MarketWorldEventsStripProps) {
+  const sortedEvents = useMemo(() => sortWorldEventsByImportance(events), [events]);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [showSecondaryList, setShowSecondaryList] = useState(false);
 
-function MarketWorldEventsStrip({ events }: MarketWorldEventsStripProps) {
-  if (events.length === 0) {
+  if (sortedEvents.length === 0) {
     return (
       <View style={styles.calmRow}>
         <GameIcon name="market" size={13} color={colors.textMuted} />
@@ -50,32 +28,64 @@ function MarketWorldEventsStrip({ events }: MarketWorldEventsStripProps) {
     );
   }
 
-  const visibleEvents = events.slice(0, MAX_VISIBLE_EVENTS);
+  const primaryEvent = sortedEvents[0]!;
+  const secondaryEvents = sortedEvents.slice(1);
+  const isPrimaryExpanded = expandedEventId === primaryEvent.id;
+
+  const togglePrimary = () => {
+    setExpandedEventId((current) => (current === primaryEvent.id ? null : primaryEvent.id));
+  };
+
+  const toggleSecondaryList = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setShowSecondaryList((value) => !value);
+  };
 
   return (
-    <View style={styles.row}>
-      {visibleEvents.map((event) => {
-        const accent = getWorldEventAccent(event.type);
-        const accentStyle = getWorldEventBorderAccent(event.type);
-        return (
-          <View key={event.id} style={[styles.card, accentStyle]}>
-            <View style={styles.cardTop}>
-              <GameIcon name={resolveEventIcon(event.type)} size={18} color={accent} />
-              <Text
-                style={[styles.cardTitle, { color: accent }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.82}
-              >
-                {getPrimaryWorldEventLabel(event)}
-              </Text>
-            </View>
-            <Text style={styles.cardSubtitle} numberOfLines={2}>
-              {event.title}
+    <View style={styles.container}>
+      <MarketWorldEventCard
+        event={primaryEvent}
+        currentTime={currentTime}
+        expanded={isPrimaryExpanded}
+        onToggle={togglePrimary}
+      />
+
+      {secondaryEvents.length > 0 ? (
+        <View style={styles.secondarySection}>
+          <Pressable
+            onPress={toggleSecondaryList}
+            style={styles.secondaryToggle}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showSecondaryList }}
+          >
+            <Text style={styles.secondaryToggleText}>
+              +{secondaryEvents.length} aktif olay
             </Text>
-          </View>
-        );
-      })}
+            <GameIcon
+              name={showSecondaryList ? 'chevronUp' : 'chevronDown'}
+              size={12}
+              color={colors.accentBlue}
+            />
+          </Pressable>
+
+          {showSecondaryList ? (
+            <View style={styles.secondaryList}>
+              {secondaryEvents.map((event) => (
+                <MarketWorldEventCard
+                  key={event.id}
+                  event={event}
+                  currentTime={currentTime}
+                  expanded={expandedEventId === event.id}
+                  onToggle={() => {
+                    setExpandedEventId((current) => (current === event.id ? null : event.id));
+                  }}
+                  compact={expandedEventId !== event.id}
+                />
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -83,38 +93,8 @@ function MarketWorldEventsStrip({ events }: MarketWorldEventsStripProps) {
 export default React.memo(MarketWorldEventsStrip);
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  card: {
-    flex: 1,
-    minWidth: 0,
-    height: MARKET_WORLD_EVENT_HEIGHT,
-    borderRadius: 15,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 8,
-    justifyContent: 'space-between',
-  },
-  cardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    minWidth: 0,
-  },
-  cardTitle: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 10,
-    fontWeight: '700',
-    lineHeight: 12,
-  },
-  cardSubtitle: {
-    fontSize: 9,
-    lineHeight: 11,
-    color: colors.textMuted,
-    marginTop: 4,
+  container: {
+    gap: 7,
   },
   calmRow: {
     flexDirection: 'row',
@@ -127,5 +107,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.textMuted,
     fontWeight: '500',
+  },
+  secondarySection: {
+    gap: 6,
+  },
+  secondaryToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 2,
+  },
+  secondaryToggleText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.accentBlue,
+  },
+  secondaryList: {
+    gap: 6,
   },
 });

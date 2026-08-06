@@ -2,6 +2,7 @@ import React from 'react';
 import { Image, StyleSheet, type ImageStyle, type StyleProp } from 'react-native';
 
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
+import { DASHBOARD_CARD_GRID_OPACITY } from './dashboardTheme';
 
 interface DashboardCardGridOverlayProps {
   style?: StyleProp<ImageStyle>;
@@ -25,7 +26,7 @@ export default function DashboardCardGridOverlay({ style }: DashboardCardGridOve
 const styles = StyleSheet.create({
   gridOverlay: {
     ...StyleSheet.absoluteFillObject,
-    opacity: 0.07,
+    opacity: DASHBOARD_CARD_GRID_OPACITY,
     backgroundColor: 'transparent',
   },
 });

@@ -4,6 +4,11 @@
 
 import { resolveTruckCityId } from '../simulation/delivery';
 import {
+  findActiveDeliveryForTruck,
+  isRentalReturnPending,
+  isTruckEligibleForNewAssignment,
+} from '../simulation/rentalTruckLifecycle';
+import {
   canTruckCarryCargo,
   getTruckEffectiveCapacityTons,
 } from '../simulation/capacity';
@@ -20,7 +25,8 @@ export type TruckIssue =
   | 'wrong_city'
   | 'capacity'
   | 'condition_blocked'
-  | 'condition_warning';
+  | 'condition_warning'
+  | 'lease_expired';
 
 export type DriverIssue = 'eligible' | 'on_route' | 'resting';
 
@@ -43,7 +49,19 @@ export function evaluateTruckOption(
   cargoWeight: number,
   originCityId: string,
   trailers?: import('../types/game').Trailer[],
+  currentTime?: number,
+  activeDeliveries?: import('../types/game').Delivery[],
 ): TruckOption {
+  if (currentTime != null) {
+    const activeDelivery = findActiveDeliveryForTruck(truck.id, activeDeliveries);
+    if (!isTruckEligibleForNewAssignment(truck, currentTime, activeDelivery)) {
+      const label = isRentalReturnPending(truck)
+        ? 'Teslimat sonrası iade'
+        : 'Kiralama süresi doldu';
+      return { truck, issue: 'lease_expired', label, selectable: false };
+    }
+  }
+
   const capacity = getTruckEffectiveCapacityTons(truck, trailers);
   const condition = truck.condition ?? 100;
 
@@ -116,8 +134,12 @@ export function buildTruckOptions(
   cargoWeight: number,
   originCityId: string,
   trailers?: import('../types/game').Trailer[],
+  currentTime?: number,
+  activeDeliveries?: import('../types/game').Delivery[],
 ): TruckOption[] {
-  return trucks.map((truck) => evaluateTruckOption(truck, cargoWeight, originCityId, trailers));
+  return trucks.map((truck) =>
+    evaluateTruckOption(truck, cargoWeight, originCityId, trailers, currentTime, activeDeliveries),
+  );
 }
 
 export function buildDriverOptions(drivers: Driver[]): DriverOption[] {
@@ -177,6 +199,8 @@ export function getTruckBadge(option: TruckOption): {
       return { label: 'KONUM UYGUN DEĞİL', variant: 'warning' };
     case 'maintenance':
       return { label: 'BAKIM', variant: 'danger' };
+    case 'lease_expired':
+      return { label: 'KİRA BİTTİ', variant: 'danger' };
     default:
       return { label: 'MÜSAİT DEĞİL', variant: 'muted' };
   }
@@ -214,7 +238,8 @@ export function summarizeNoTruckMessage(options: TruckOption[], cargoWeight: num
     (option) =>
       option.issue !== 'on_route' &&
       option.issue !== 'maintenance' &&
-      option.issue !== 'wrong_city',
+      option.issue !== 'wrong_city' &&
+      option.issue !== 'lease_expired',
   );
   if (idleAtOrigin.length === 0) {
     return 'Şehirdeki kamyonlar meşgul.';

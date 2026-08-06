@@ -12,6 +12,9 @@ import {
   getLeaderboardSnapshot,
   submitLeaderboardScoreTransaction,
 } from './leaderboard';
+import {
+  migrateLegacyServerStateTransaction,
+} from './serverState';
 import { isValidLeaderboardSeasonKey } from './leaderboardSeason';
 import {
   checkUsernameAvailabilityTransaction,
@@ -60,6 +63,7 @@ const RATE_LIMITS = {
   leaderboardGet: { windowMs: 60 * 1000, maxRequests: 60 },
   setUsername: { windowMs: 60 * 60 * 1000, maxRequests: 10 },
   checkUsername: { windowMs: 60 * 1000, maxRequests: 60 },
+  migrateServerState: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -791,6 +795,38 @@ export const getLeaderboard = onCall(
       ok: result.ok,
       entryCount: result.ok ? result.entries.length : 0,
       durationMs: Date.now() - startedAt,
+    });
+    return result;
+  },
+);
+
+export const migrateLegacyServerState = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const identity = callableIdentity(request);
+    if (!identity) return unauthenticatedResult(request.data ?? {});
+    const record = requestRecord(request.data);
+    if (
+      !hasOnlyKeys(record, ['dryRun']) ||
+      (record.dryRun !== undefined && typeof record.dryRun !== 'boolean')
+    ) {
+      return invalidRequestResult(record);
+    }
+    if (!(await consumeRateLimit(identity.uid, 'migrateServerState'))) {
+      return rateLimitedResult(record);
+    }
+    const dryRun = record.dryRun === true;
+    const result = await migrateLegacyServerStateTransaction(
+      getFirestore(),
+      identity.uid,
+      dryRun,
+    );
+    logger.info('[server-state-migration]', {
+      uidHash: uidHash(identity.uid),
+      dryRun,
+      ok: result.ok,
+      reason: result.ok ? 'success' : result.reason,
+      flags: result.report?.flags ?? [],
     });
     return result;
   },

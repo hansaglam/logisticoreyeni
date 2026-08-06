@@ -18,6 +18,7 @@ import {
   usernameReasonMessage,
   validateUsernameFormat,
 } from '../../domain/usernameValidation';
+import { getFirebaseAuthSafe } from '../../services/firebase';
 import {
   checkUsernameAvailability,
   setUsername,
@@ -60,6 +61,7 @@ export default function UsernameSetupModal({
   const [checking, setChecking] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submitLock = useRef(false);
+  const checkGenerationRef = useRef(0);
 
   useEffect(() => {
     if (!visible) return;
@@ -68,6 +70,7 @@ export default function UsernameSetupModal({
     setStatusOk(false);
     setSubmitting(false);
     submitLock.current = false;
+    checkGenerationRef.current += 1;
   }, [visible, initialUsername, suggestedUsername]);
 
   useEffect(() => {
@@ -91,9 +94,22 @@ export default function UsernameSetupModal({
       return;
     }
     setChecking(true);
+    const generation = checkGenerationRef.current + 1;
+    checkGenerationRef.current = generation;
+    const uidAtStart = getFirebaseAuthSafe()?.currentUser?.uid ?? null;
     debounceRef.current = setTimeout(() => {
       void (async () => {
         const result = await checkUsernameAvailability(local.username);
+        if (generation !== checkGenerationRef.current) {
+          return;
+        }
+        const uidNow = getFirebaseAuthSafe()?.currentUser?.uid ?? null;
+        if (uidAtStart !== uidNow) {
+          setChecking(false);
+          setStatusOk(false);
+          setStatusText(usernameReasonMessage('auth-required'));
+          return;
+        }
         setChecking(false);
         if (!result.ok) {
           setStatusOk(false);
@@ -108,9 +124,10 @@ export default function UsernameSetupModal({
         setStatusOk(true);
         setStatusText('Müsait');
       })();
-    }, 350);
+    }, 450);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      checkGenerationRef.current += 1;
     };
   }, [value, visible, mode, initialUsername]);
 

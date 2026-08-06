@@ -15,6 +15,8 @@ import type {
   Player,
 } from '../types/game';
 
+import { normalizeDeliveryAdBoostFields } from './deliveryAdBoost';
+
 const INCIDENT_PROGRESS_MIN = 0.2;
 const INCIDENT_PROGRESS_MAX = 0.85;
 const MIN_TRAVEL_HOURS_FOR_INCIDENT = 4;
@@ -681,7 +683,7 @@ export function normalizeDelivery(delivery: Delivery): Delivery {
     incident?.status === 'resolved' ||
     Boolean(incident?.resolvedChoiceId);
 
-  return {
+  return normalizeDeliveryAdBoostFields({
     ...delivery,
     progress: clamp(Number(delivery.progress) || 0, 0, 1),
     travelHours: Number.isFinite(delivery.travelHours) ? delivery.travelHours : 0.1,
@@ -710,7 +712,7 @@ export function normalizeDelivery(delivery: Delivery): Delivery {
         : incident
           ? { ...incident, status: incidentResolved ? 'resolved' : incident.status }
           : undefined,
-  };
+  });
 }
 
 export interface ResolveDeliveryIncidentEffects {

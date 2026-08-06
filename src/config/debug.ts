@@ -58,6 +58,10 @@ export const debugConfig = {
    */
   mapTruckLogsEnabled: false,
   /**
+   * [map-heading] — aktif segment heading debug (internal only).
+   */
+  mapHeadingDebugEnabled: false,
+  /**
    * [map-marker-audit] — render edilen dinamik marker kaynağını raporlar.
    */
   mapMarkerAuditEnabled: false,
@@ -114,6 +118,7 @@ export interface ResolvedMapDebugFlags {
   roadGraph: boolean;
   truck: boolean;
   roadWarnings: boolean;
+  heading: boolean;
 }
 
 /** Preset + individual flag birleşimi — kalibrasyon sırasında road spam’i kapatır. */
@@ -130,6 +135,7 @@ export function getResolvedMapDebugFlags(): ResolvedMapDebugFlags {
       roadGraph: false,
       truck: false,
       roadWarnings: false,
+      heading: false,
     };
   }
 
@@ -143,6 +149,7 @@ export function getResolvedMapDebugFlags(): ResolvedMapDebugFlags {
       roadGraph: false,
       truck: false,
       roadWarnings: false,
+      heading: false,
     };
   }
 
@@ -156,6 +163,7 @@ export function getResolvedMapDebugFlags(): ResolvedMapDebugFlags {
       roadGraph: true,
       truck: false,
       roadWarnings: true,
+      heading: false,
     };
   }
 
@@ -169,6 +177,7 @@ export function getResolvedMapDebugFlags(): ResolvedMapDebugFlags {
       roadGraph: false,
       truck: true,
       roadWarnings: false,
+      heading: debugConfig.mapHeadingDebugEnabled,
     };
   }
 
@@ -181,5 +190,6 @@ export function getResolvedMapDebugFlags(): ResolvedMapDebugFlags {
     roadGraph: debugConfig.mapRoadGraphLogsEnabled,
     truck: debugConfig.mapTruckLogsEnabled,
     roadWarnings: debugConfig.mapRoadWarningsEnabled,
+    heading: debugConfig.mapHeadingDebugEnabled,
   };
 }

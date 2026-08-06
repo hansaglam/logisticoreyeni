@@ -14,7 +14,6 @@ import {
 
 export interface ShopResourceBarProps {
   money: number;
-  diamonds: number;
   level: number;
   xpProgress: number;
   isPaused: boolean;
@@ -23,7 +22,6 @@ export interface ShopResourceBarProps {
 
 export default function ShopResourceBar({
   money,
-  diamonds,
   level,
   xpProgress,
   isPaused,
@@ -47,13 +45,6 @@ export default function ShopResourceBar({
       </View>
 
       <View style={styles.divider} />
-
-      <View style={styles.resourceItem}>
-        <GameIcon name="diamond" size={14} color={colors.primaryLight} />
-        <Text style={styles.diamondText} numberOfLines={1}>
-          {diamonds.toLocaleString('en-US')}
-        </Text>
-      </View>
 
       <View style={styles.levelPill}>
         <Text style={styles.levelText}>Lv.{level}</Text>
@@ -108,6 +99,7 @@ const styles = StyleSheet.create({
     gap: 4,
     flexShrink: 1,
     minWidth: 0,
+    maxWidth: '42%',
   },
   divider: {
     width: 1,
@@ -119,12 +111,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 15,
     flexShrink: 1,
-  },
-  diamondText: {
-    fontWeight: '700',
-    color: colors.primaryLight,
-    fontSize: 13,
-    flexShrink: 0,
   },
   levelPill: {
     height: 34,
@@ -145,7 +131,6 @@ const styles = StyleSheet.create({
   xpTrack: {
     flex: 1,
     minWidth: 48,
-    maxWidth: 96,
     height: 10,
     borderRadius: radius.pill,
     backgroundColor: '#0D1A2D',

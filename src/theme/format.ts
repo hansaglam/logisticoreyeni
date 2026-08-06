@@ -140,6 +140,34 @@ export function formatEventRemaining(endsAtMs: number, nowMs: number = Date.now(
   return `${formatRelativeMinutes(remaining)} kaldı`;
 }
 
+/** Piyasa ekranı — düşük vurgulu sync caption */
+export function formatMarketSyncCaption(options?: {
+  lastSyncAtMs?: number | null;
+  syncStatus?: string | null;
+  nowMs?: number;
+}): string | null {
+  const lastSyncAtMs = options?.lastSyncAtMs;
+  if (lastSyncAtMs == null || !Number.isFinite(lastSyncAtMs)) {
+    return null;
+  }
+  const now = options?.nowMs ?? Date.now();
+  const ago = formatRelativeMinutes(Math.max(0, now - lastSyncAtMs));
+  const syncStatus = options?.syncStatus ?? null;
+  if (syncStatus === 'syncing') {
+    return 'Senkronize ediliyor…';
+  }
+  if (syncStatus === 'online') {
+    return `Canlı · ${ago} önce`;
+  }
+  if (syncStatus === 'offline-cache') {
+    return `Son kayıtlı veri · ${ago} önce`;
+  }
+  if (syncStatus === 'error') {
+    return `Bağlantı yok · ${ago} önce`;
+  }
+  return `Son güncelleme: ${ago} önce`;
+}
+
 export function clampPriceChangePercent(changeRatio: number | undefined | null): number | null {
   if (!Number.isFinite(changeRatio)) return null;
   const pct = safeNumber(changeRatio) * 100;

@@ -10,7 +10,8 @@
     "verify:ios-apple-auth": "tsx scripts/verify-ios-apple-auth-config.ts",
     "verify:ios-firebase": "tsx scripts/verify-ios-firebase-runtime-config.ts",
     "verify": "npm run typecheck && npx tsx scripts/check-require-cycles.ts && tsx scripts/apple-auth-audit-test.ts && tsx scripts/apple-auth-release-regression-test.ts && tsx scripts/verify-ios-apple-auth-config.ts && tsx scripts/verify-ios-firebase-runtime-config.ts && tsx scripts/ios-firebase-config-regression-test.ts && tsx scripts/apple-auth-unavailable-regression-test.ts && tsx scripts/management-account-navigation-regression-test.ts && tsx scripts/ios-tabbar-safe-area-regression-test.ts && tsx scripts/ios-layout-regression-test.ts && tsx scripts/ios-map-truck-fuel-display-regression-test.ts && tsx scripts/market-buy-cash-preview-regression-test.ts && tsx scripts/apple-cloud-save-link-regression-test.ts && tsx scripts/market-product-card-layout-regression-test.ts && tsx scripts/offline-operating-cost-disabled-regression-test.ts && tsx scripts/offline-delivery-progress-regression-test.ts && tsx scripts/warehouse-upgrade-regression-test.ts",
-    "validate:production-build": "npx tsx scripts/validate-production-build-config.ts",
+    "validate:store-production": "npx tsx scripts/validate-store-production-config.ts",
+    "validate:production-build": "npm run validate:store-production && npx tsx scripts/validate-production-build-config.ts",
     "production:backend-check": "npx tsx scripts/global-economy-production-health-test.ts && npx tsx scripts/production-backend-health-check.ts",
     "android:bundle:release": "npm run validate:production-build && cd android && gradlew.bat bundleRelease",
     "backend:build": "npm --prefix backend run build",
@@ -39,7 +40,9 @@
     "expo-font": "~14.0.12",
     "expo-navigation-bar": "~5.0.10",
     "expo-notifications": "~0.32.17",
+    "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
+    "expo-tracking-transparency": "~6.0.8",
     "firebase": "10.12.5",
     "react": "19.1.0",
     "react-native": "0.81.5",
@@ -55,6 +58,7 @@
     "@firebase/rules-unit-testing": "^3.0.3",
     "@types/react": "~19.1.0",
     "firebase-tools": "^14.27.0",
+    "sharp": "^0.35.3",
     "tsx": "^4.23.6",
     "typescript": "^5.7.3"
   }

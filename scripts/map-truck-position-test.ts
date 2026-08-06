@@ -152,8 +152,8 @@ assert(
   'only one moving truck marker is enabled per active delivery',
 );
 assert(
-  TRUCK_ICON_BASE_ROTATION_DEG === 0,
-  'truck asset uses one canonical 0° heading offset (faces right)',
+  TRUCK_ICON_BASE_ROTATION_DEG === 180,
+  'truck asset uses canonical 180° heading offset (faces left at 0°)',
 );
 
 console.log('\nSynthetic route headings');

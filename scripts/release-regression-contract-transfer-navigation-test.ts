@@ -51,11 +51,12 @@ assert(
 );
 
 const accountSection = readFileSync('src/components/AccountSection.tsx', 'utf8');
+const accountCenter = readFileSync('src/screens/AccountCenterScreen.tsx', 'utf8');
 const moreScreen = readFileSync('src/screens/MoreScreen.tsx', 'utf8');
 const leaderboardScreen = readFileSync('src/screens/LeaderboardScreen.tsx', 'utf8');
 assert(accountSection.includes('onOpenLeaderboard'), 'Hesap kartında Liderlik Tablosu erişimi korunur');
 assert(moreScreen.includes("setRoute('leaderboard')"), 'Liderlik Tablosu route’u erişilebilir');
 assert(leaderboardScreen.includes('Kullanıcı Adı Oluştur'), 'Kullanıcı adı olmayan bağlı hesap için CTA gösterilir');
-assert(accountSection.includes('Katılmak için hesabını bağla'), 'Misafir kullanıcı için hesap bağlama açıklaması gösterilir');
+assert(accountCenter.includes('İlerlemeni korumak için Google veya Apple hesabını bağla'), 'Misafir kullanıcı için hesap bağlama açıklaması gösterilir');
 
 console.log('\nrelease-regression-contract-transfer-navigation-test: PASSED');

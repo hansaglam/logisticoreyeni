@@ -251,7 +251,6 @@ export function createHeadlessSimState(companyName: string): HeadlessSimState {
       completedContracts: 0,
       failedDeliveries: 0,
       lateDeliveries: 0,
-      diamonds: 0,
       trucks: [structuredClone(STARTER_TRUCK)],
       drivers: [structuredClone(STARTER_DRIVER)],
       warehouses: [
@@ -311,7 +310,6 @@ function claimAllRewards(state: HeadlessSimState): HeadlessSimState {
     if (!claim.ok) continue;
     const cash = def?.reward.cash ?? 0;
     const xp = def?.reward.xp ?? 0;
-    const diamonds = def?.reward.diamonds ?? 0;
     const rep = def?.reward.reputation ?? 0;
     next = {
       ...next,
@@ -320,7 +318,6 @@ function claimAllRewards(state: HeadlessSimState): HeadlessSimState {
         ...next.player,
         money: next.player.money + cash,
         xp: (next.player.xp ?? 0) + xp,
-        diamonds: (next.player.diamonds ?? 0) + diamonds,
         reputation: Math.min(100, (next.player.reputation ?? 0) + rep),
       },
     };
@@ -342,14 +339,12 @@ function claimAllRewards(state: HeadlessSimState): HeadlessSimState {
     const claim = claimWeeklyObjectiveRewardState(next.retention, id, seasonKey, next.currentTime);
     if (!claim.ok) continue;
     const cash = def?.reward.cash ?? 0;
-    const diamonds = def?.reward.diamonds ?? 0;
     next = {
       ...next,
       retention: claim.retention,
       player: {
         ...next.player,
         money: next.player.money + cash,
-        diamonds: (next.player.diamonds ?? 0) + diamonds,
       },
     };
     if (cash > 0) {

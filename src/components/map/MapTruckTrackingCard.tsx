@@ -8,8 +8,10 @@ import { getCityName } from '../../utils/entityLookup';
 import { formatFuelPercentLabel } from '../../utils/truckFuel';
 import { getTruckTrackingMetrics } from '../../utils/truckTrackingMetrics';
 import { getFuelWarningForJob } from '../../simulation/fuelWarnings';
+import { areAdsFeatureEnabled } from '../../services/adProvider';
 import { colors } from '../../theme';
 import { GameIcon, StatusBadge, type StatusBadgeVariant } from '../ui';
+import DeliveryBoostPanel from '../monetization/DeliveryBoostPanel';
 import {
   MAP_BORDER,
   MAP_DELIVERY_PROGRESS_FILL,
@@ -167,6 +169,8 @@ function MapTruckTrackingCard({
   );
   const fuelJob = activeDelivery ?? transfer;
   const fuelWarning = getFuelWarningForJob(fuelJob, truck);
+  const showDeliveryBoost =
+    isActiveDelivery && activeDelivery != null && areAdsFeatureEnabled();
 
   const kmLabel = metrics.isMoving
     ? `${metrics.remainingDistanceKm} km`
@@ -285,6 +289,10 @@ function MapTruckTrackingCard({
           <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
         </View>
       ) : null}
+
+      {showDeliveryBoost && activeDelivery ? (
+        <DeliveryBoostPanel delivery={activeDelivery} truck={truck} compact />
+      ) : null}
     </CardWrapper>
   );
 }
@@ -328,7 +336,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   cardDelivery: {
-    minHeight: MAP_TRUCK_CARD_HEIGHT_DELIVERY,
+    minHeight: MAP_TRUCK_CARD_HEIGHT_DELIVERY + 52,
     paddingBottom: 8,
   },
   cardRow: {

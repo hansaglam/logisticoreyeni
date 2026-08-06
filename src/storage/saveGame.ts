@@ -7,7 +7,24 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import {
+  getSaveRecoveryQuarantine,
+  isSaveRecoveryFatal,
+  markSaveRecoveryFatal,
+  recordSaveRecoveryQuarantine,
+  SAVE_ACTIVE_SLOT_KEY,
+  writeQuarantineRawBackup,
+  type SaveRecoveryChecksumStatus,
+  type SaveRecoveryReason,
+  type SaveRecoveryStage,
+} from './saveRecoveryQuarantine';
+import {
+  computeSaveChecksum,
+  CURRENT_CHECKSUM_VERSION,
+  verifyRawSaveChecksum,
+} from '../utils/saveIntegrity';
 import { reputationBalance, contractGenerationBalance } from '../config/balance';
+import { APP_VERSION } from '../config/appVersion';
 import { CITIES } from '../data/cities';
 import {
   mergeCanonicalCities,
@@ -21,7 +38,7 @@ import { normalizeGlobalEconomy } from '../simulation/economy';
 import { getEconomyNow } from '../simulation/economyClock';
 import { materializeSnapshotCities } from '../simulation/globalMarketSnapshot';
 import { normalizeTruckCity } from '../simulation/delivery';
-import { normalizeDelivery } from '../simulation/deliveryIncidents';
+import { normalizeDelivery, normalizeDeliveryIncident } from '../simulation/deliveryIncidents';
 import { normalizePlayerTrailers } from '../simulation/trailerOps';
 import { normalizeContract } from '../simulation/contractTypes';
 import { normalizeTruckUpgrades } from '../simulation/truckUpgrades';
@@ -39,6 +56,7 @@ import {
   normalizeOnboardingState,
 } from '../onboarding/onboardingProgress';
 import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
+import { normalizeMarketTutorialState } from '../tutorial/marketTutorialState';
 import { normalizeCitiesPriceHistory, seedProductPriceHistory } from '../utils/productPriceHistory';
 import { normalizeMarketAlerts } from '../utils/marketAlerts';
 import type { MonetizationState } from '../types/monetization';
@@ -78,9 +96,7 @@ import type {
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
 export const SAVE_BACKUP_INVALID_KEY = 'logisticore_save_backup_invalid';
 export const SAVE_BACKUP_MIGRATED_KEY = 'logisticore_save_backup_migrated';
-export const SAVE_GAME_VERSION = 3;
-
-const APP_VERSION = '1.0.0';
+export const SAVE_GAME_VERSION = 4;
 
 export interface SaveGameMeta {
   savedAt: number;
@@ -94,8 +110,6 @@ export interface SaveGameMeta {
   xp: number;
   /** Kariyer boyu toplam XP */
   totalXp: number;
-  /** Premium elmas bakiyesi */
-  diamonds?: number;
   /** Kayıt anındaki şirket puanı (runtime hesaplanabilir) */
   companyScore?: number;
   appVersion: string;
@@ -104,10 +118,16 @@ export interface SaveGameMeta {
   migratedFromVersion?: number;
   /** Migration zamanı (ms) */
   migratedAt?: number;
+  /** Yerel kayıt bütünlük özeti — restore doğrulaması için */
+  integrityChecksum?: string;
+  /** Checksum algoritma sürümü — migration öncesi ham payload ile doğrulanır */
+  checksumVersion?: number;
 }
 
 export interface SaveGamePayload {
   version: number;
+  /** Local save owner — must match Firebase Auth UID before cloud sync. */
+  ownerUid?: string;
   meta: SaveGameMeta;
   currentTime: number;
   player: Player;
@@ -139,6 +159,8 @@ export interface SaveGamePayload {
   retention?: RetentionState;
   onboarding?: OnboardingState;
   spotlightTutorial?: SpotlightTutorialPersistence;
+  marketTutorialCompleted?: boolean;
+  marketTutorialVersion?: number;
   marketAlerts?: MarketPriceAlert[];
   worldEvents?: WorldEvent[];
   worldEventsVersion?: number;
@@ -520,7 +542,6 @@ export function createDefaultSaveFallbacks(
     completedContracts: safeNumber(playerRecord.completedContracts, 0),
     failedDeliveries: safeNumber(playerRecord.failedDeliveries, 0),
     lateDeliveries: safeNumber(playerRecord.lateDeliveries, 0),
-    diamonds: safeNumber(playerRecord.diamonds, 0),
     trucks: isArray(playerRecord.trucks) ? (playerRecord.trucks as Player['trucks']) : [],
     trailers: isArray(playerRecord.trailers) ? (playerRecord.trailers as Player['trailers']) : [],
     drivers: isArray(playerRecord.drivers) ? (playerRecord.drivers as Player['drivers']) : [],
@@ -617,6 +638,13 @@ export function createDefaultSaveFallbacks(
         ? (payload.spotlightTutorial as Partial<SpotlightTutorialPersistence>)
         : undefined,
     ),
+    ...normalizeMarketTutorialState({
+      marketTutorialCompleted: payload.marketTutorialCompleted === true,
+      marketTutorialVersion:
+        typeof payload.marketTutorialVersion === 'number'
+          ? payload.marketTutorialVersion
+          : undefined,
+    }),
     marketAlerts: normalizeMarketAlerts(
       isArray(payload.marketAlerts) ? (payload.marketAlerts as MarketPriceAlert[]) : undefined,
     ),
@@ -642,7 +670,6 @@ export function createDefaultSaveFallbacks(
       level: safeNumber(metaRecord.level, player.level ?? 1),
       xp: safeNumber(metaRecord.xp, player.xp ?? 0),
       totalXp: safeNumber(metaRecord.totalXp, player.totalXp ?? 0),
-      diamonds: safeNumber(metaRecord.diamonds, player.diamonds ?? 0),
       appVersion:
         typeof metaRecord.appVersion === 'string' ? metaRecord.appVersion : APP_VERSION,
       saveVersion:
@@ -657,6 +684,10 @@ export function createDefaultSaveFallbacks(
           : undefined,
       migratedAt:
         typeof metaRecord.migratedAt === 'number' ? metaRecord.migratedAt : undefined,
+      integrityChecksum:
+        typeof metaRecord.integrityChecksum === 'string'
+          ? metaRecord.integrityChecksum
+          : undefined,
     },
   };
 }
@@ -690,7 +721,6 @@ export function normalizeSavePayload(
       level: player.level ?? 1,
       xp: player.xp ?? 0,
       totalXp: player.totalXp ?? 0,
-      diamonds: player.diamonds ?? 0,
       companyScore,
     },
     currentTime,
@@ -747,6 +777,13 @@ export function normalizeSavePayload(
     missions: withFallbacks.missions as MissionsState,
     onboarding: withFallbacks.onboarding as OnboardingState,
     spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
+    ...normalizeMarketTutorialState({
+      marketTutorialCompleted: withFallbacks.marketTutorialCompleted === true,
+      marketTutorialVersion:
+        typeof withFallbacks.marketTutorialVersion === 'number'
+          ? withFallbacks.marketTutorialVersion
+          : undefined,
+    }),
     marketAlerts: normalizeMarketAlerts(withFallbacks.marketAlerts as MarketPriceAlert[] | undefined),
     ...normalizeWorldEventsState(
       withFallbacks.worldEvents,
@@ -946,21 +983,82 @@ export function migrateSavePayload(rawPayload: unknown): SaveGamePayload | null 
   return normalized;
 }
 
-async function backupCorruptedSave(rawString: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(SAVE_BACKUP_INVALID_KEY, rawString);
-    console.warn('[saveGame] Corrupted save backed up to invalid key.');
-  } catch (error) {
-    console.warn('[saveGame] backupCorruptedSave failed:', error);
-  }
+export async function computeLocalSaveIntegrityChecksum(
+  payload: SaveGamePayload,
+): Promise<string> {
+  return computeSaveChecksum(payload, CURRENT_CHECKSUM_VERSION);
 }
 
-async function backupInvalidSave(rawString: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(SAVE_BACKUP_INVALID_KEY, rawString);
-    console.warn('[saveGame] Invalid save backed up before clearing main slot.');
-  } catch (error) {
-    console.warn('[saveGame] backupInvalidSave failed:', error);
+export async function sealSavePayloadIntegrity(payload: SaveGamePayload): Promise<SaveGamePayload> {
+  payload.meta.checksumVersion = CURRENT_CHECKSUM_VERSION;
+  payload.meta.integrityChecksum = await computeLocalSaveIntegrityChecksum(payload);
+  return payload;
+}
+
+const SAVE_SLOT_STAGING_SUFFIX = '_staging_v1';
+
+/** Staging → read-back verify → backup previous → atomic promote. */
+export async function atomicWriteSaveJson(storageKey: string, json: string): Promise<void> {
+  const stagingKey = `${storageKey}${SAVE_SLOT_STAGING_SUFFIX}`;
+  await AsyncStorage.setItem(stagingKey, json);
+  const readBack = await AsyncStorage.getItem(stagingKey);
+  if (readBack !== json) {
+    await AsyncStorage.removeItem(stagingKey);
+    throw new Error('save-staging-readback-failed');
+  }
+  const previous = await AsyncStorage.getItem(storageKey);
+  if (previous) {
+    try {
+      await AsyncStorage.setItem(SAVE_BACKUP_MIGRATED_KEY, previous);
+    } catch {
+      // Non-fatal — proceed with main write.
+    }
+  }
+  await AsyncStorage.setItem(storageKey, json);
+  await AsyncStorage.removeItem(stagingKey);
+}
+
+function extractSaveVersionFromRaw(parsed: unknown): number | null {
+  if (!isRecord(parsed)) return null;
+  if (typeof parsed.version === 'number') return parsed.version;
+  if (isRecord(parsed.meta) && typeof parsed.meta.saveVersion === 'number') {
+    return parsed.meta.saveVersion;
+  }
+  return null;
+}
+
+async function handleCorruptMainSave(input: {
+  rawString: string;
+  reason: SaveRecoveryReason;
+  stage: SaveRecoveryStage;
+  saveVersion: number | null;
+  checksumStatus: SaveRecoveryChecksumStatus;
+}): Promise<void> {
+  const existing = await getSaveRecoveryQuarantine();
+  if (existing && existing.resolved !== true) {
+    return;
+  }
+
+  const backupOk = await writeQuarantineRawBackup(input.rawString);
+  if (!backupOk) {
+    await markSaveRecoveryFatal();
+  }
+
+  await recordSaveRecoveryQuarantine({
+    reason: input.reason,
+    originalKey: SAVE_STORAGE_KEY,
+    saveVersion: input.saveVersion,
+    checksumStatus: input.checksumStatus,
+    stage: input.stage,
+    backupWriteSucceeded: backupOk,
+  }).catch((error) => {
+    console.warn('[saveGame] recordSaveRecoveryQuarantine failed:', error);
+  });
+
+  if (!backupOk) {
+    console.warn('[saveGame] Corrupt save quarantine backup failed — main slot preserved.');
+  } else {
+    console.warn('[saveGame] Corrupt save quarantined — main slot preserved.');
   }
 }
 
@@ -990,8 +1088,11 @@ export async function clearLocalSave(): Promise<void> {
 export async function clearAllDebugSaves(options?: { includeBackups?: boolean }): Promise<void> {
   try {
     await clearMainSaveSlot();
+    await AsyncStorage.removeItem(SAVE_ACTIVE_SLOT_KEY);
     if (options?.includeBackups !== false) {
+      const { closeSaveRecoveryQuarantine } = await import('./saveRecoveryQuarantine');
       await AsyncStorage.multiRemove([SAVE_BACKUP_INVALID_KEY, SAVE_BACKUP_MIGRATED_KEY]);
+      await closeSaveRecoveryQuarantine();
     }
   } catch (error) {
     console.warn('[saveGame] clearAllDebugSaves failed:', error);
@@ -1015,6 +1116,14 @@ export async function getSaveBackupStatus(): Promise<SaveBackupStatus> {
   }
 }
 
+async function resolveGameplaySaveStorageKey(): Promise<string> {
+  const quarantine = await getSaveRecoveryQuarantine();
+  if (quarantine?.userChoseNewGame && quarantine.resolved !== true) {
+    return SAVE_ACTIVE_SLOT_KEY;
+  }
+  return SAVE_STORAGE_KEY;
+}
+
 async function parseAndMigrateRawSave(rawString: string): Promise<{
   payload: SaveGamePayload | null;
   error: string | null;
@@ -1025,51 +1134,123 @@ async function parseAndMigrateRawSave(rawString: string): Promise<{
   try {
     parsed = JSON.parse(rawString);
   } catch (error) {
-    const message = '[saveGame] Save JSON parse failed. Backing up corrupted save.';
+    const message = '[saveGame] Save JSON parse failed. Quarantining corrupted save.';
     console.warn(message, error);
-    await backupCorruptedSave(rawString);
-    await clearMainSaveSlot();
+    await handleCorruptMainSave({
+      rawString,
+      reason: 'json-parse-failed',
+      stage: 'parse',
+      saveVersion: null,
+      checksumStatus: 'not-checked',
+    });
     return {
       payload: null,
-      error: 'Kayıt dosyası bozuk — yedeklendi, yeni oyun başlatılacak.',
+      error: 'Kayıt dosyası bozuk — kurtarma gerekli.',
+      migratedFromVersion: null,
+      shouldPersistMigrated: false,
+    };
+  }
+
+  const saveVersion = extractSaveVersionFromRaw(parsed);
+  if (saveVersion != null && saveVersion > SAVE_GAME_VERSION) {
+    await handleCorruptMainSave({
+      rawString,
+      reason: 'unsupported-save-version',
+      stage: 'migrate',
+      saveVersion,
+      checksumStatus: 'not-checked',
+    });
+    return {
+      payload: null,
+      error: 'Kayıt sürümü desteklenmiyor — kurtarma gerekli.',
       migratedFromVersion: null,
       shouldPersistMigrated: false,
     };
   }
 
   const sourceVersion = isRecord(parsed) && typeof parsed.version === 'number' ? parsed.version : 0;
+  const rawChecksumStatus = await verifyRawSaveChecksum(parsed);
+
   const migrated = migrateSavePayload(parsed);
 
   if (!migrated) {
-    const message =
-      '[saveGame] Migration failed. Backing up invalid save and starting new game.';
+    const message = '[saveGame] Migration failed. Quarantining invalid save.';
     console.warn(message);
-    await backupInvalidSave(rawString);
-    await clearMainSaveSlot();
+    await handleCorruptMainSave({
+      rawString,
+      reason: 'migration-failed',
+      stage: 'migrate',
+      saveVersion,
+      checksumStatus: 'not-checked',
+    });
     return {
       payload: null,
-      error: 'Kayıt yüklenemedi — yedeklendi, yeni oyun başlatılacak.',
+      error: 'Kayıt yüklenemedi — kurtarma gerekli.',
       migratedFromVersion: null,
       shouldPersistMigrated: false,
     };
   }
 
+  if (rawChecksumStatus === 'mismatch') {
+    await handleCorruptMainSave({
+      rawString,
+      reason: 'checksum-mismatch',
+      stage: 'checksum',
+      saveVersion: migrated.version,
+      checksumStatus: rawChecksumStatus,
+    });
+    return {
+      payload: null,
+      error: 'Kayıt bütünlük kontrolünden geçemedi — kurtarma gerekli.',
+      migratedFromVersion: null,
+      shouldPersistMigrated: false,
+    };
+  }
+
+  const previousChecksum = migrated.meta.integrityChecksum;
+  await sealSavePayloadIntegrity(migrated);
+  const checksumRecomputed =
+    rawChecksumStatus === 'missing' || previousChecksum !== migrated.meta.integrityChecksum;
+
   const migratedFromVersion =
     migrated.meta.migratedFromVersion ?? (sourceVersion < SAVE_GAME_VERSION ? sourceVersion : null);
+
+  let ownerUidMigrated = false;
+  if (!migrated.ownerUid) {
+    try {
+      const { getCurrentUserId } = await import('../services/authService');
+      const authUid = getCurrentUserId();
+      if (authUid) {
+        migrated.ownerUid = authUid;
+        ownerUidMigrated = true;
+      }
+    } catch {
+      // Auth stack unavailable in headless tests — ownerUid migration skipped.
+    }
+  }
 
   return {
     payload: migrated,
     error: null,
     migratedFromVersion,
-    shouldPersistMigrated: sourceVersion < SAVE_GAME_VERSION,
+    shouldPersistMigrated:
+      sourceVersion < SAVE_GAME_VERSION || ownerUidMigrated || checksumRecomputed,
   };
 }
 
 export const localSaveProvider: SaveProvider = {
   async save(payload) {
     try {
+      if (await isSaveRecoveryFatal()) {
+        throw new Error('save-blocked-recovery-fatal');
+      }
+      const quarantine = await getSaveRecoveryQuarantine();
+      if (quarantine && quarantine.resolved !== true && !quarantine.userChoseNewGame) {
+        throw new Error('save-blocked-recovery-required');
+      }
+      const storageKey = await resolveGameplaySaveStorageKey();
       const json = JSON.stringify(payload);
-      await AsyncStorage.setItem(SAVE_STORAGE_KEY, json);
+      await atomicWriteSaveJson(storageKey, json);
     } catch (error) {
       console.warn('[saveGame] localSaveProvider.save failed:', error);
       throw error;
@@ -1127,6 +1308,14 @@ export function stripLegacyBloatedSaveFields(
   const stripped = { ...payload };
   for (const key of LEGACY_BLOATED_SAVE_KEYS) {
     delete stripped[key];
+  }
+  if (isRecord(stripped.player)) {
+    delete stripped.player.diamonds;
+    delete stripped.player.gems;
+  }
+  if (isRecord(stripped.meta)) {
+    delete stripped.meta.diamonds;
+    delete stripped.meta.gems;
   }
   return stripped;
 }
@@ -1259,7 +1448,10 @@ export function pruneContractsForSave(
   return [...retained, ...cappedAvailable];
 }
 
-export function serializeGameState(state: StoreGameState): SaveGamePayload {
+export function serializeGameState(
+  state: StoreGameState,
+  options?: { ownerUid?: string | null },
+): SaveGamePayload {
   const savedAtMs = getEconomyNow();
   const homeCityId = state.player.homeCityId ?? 'izmir';
   const player: Player = normalizeLoadedPlayer({
@@ -1277,6 +1469,7 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
 
   return {
     version: SAVE_GAME_VERSION,
+    ownerUid: options?.ownerUid ?? undefined,
     meta: {
       savedAt: savedAtMs,
       currentTime: state.currentTime,
@@ -1286,7 +1479,6 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
       level: player.level,
       xp: player.xp,
       totalXp: player.totalXp,
-      diamonds: player.diamonds ?? 0,
       companyScore,
       appVersion: APP_VERSION,
       saveVersion: SAVE_GAME_VERSION,
@@ -1329,6 +1521,12 @@ export function serializeGameState(state: StoreGameState): SaveGamePayload {
     retention: structuredClone(state.retention),
     onboarding: structuredClone(state.onboarding),
     spotlightTutorial: structuredClone(state.spotlightTutorial),
+    marketTutorialCompleted: state.marketTutorialCompleted === true,
+    marketTutorialVersion:
+      typeof state.marketTutorialVersion === 'number' &&
+      Number.isFinite(state.marketTutorialVersion)
+        ? Math.max(0, Math.floor(state.marketTutorialVersion))
+        : 0,
     marketAlerts: structuredClone(state.marketAlerts ?? []),
     worldEvents: structuredClone(state.worldEvents ?? []),
     worldEventsVersion: state.worldEventsVersion ?? 1,
@@ -1469,6 +1667,10 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
           tutorialCompleted: payload.tutorial?.isCompleted === true,
         }),
     spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
+    ...normalizeMarketTutorialState({
+      marketTutorialCompleted: payload.marketTutorialCompleted === true,
+      marketTutorialVersion: payload.marketTutorialVersion,
+    }),
     marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
     ...normalizeWorldEventsState(
       payload.worldEvents,
@@ -1585,7 +1787,25 @@ export interface SaveLoadDetailedResult {
 
 export async function loadGameStateDetailed(): Promise<SaveLoadDetailedResult> {
   try {
-    const json = await AsyncStorage.getItem(SAVE_STORAGE_KEY);
+    if (await isSaveRecoveryFatal()) {
+      return {
+        payload: null,
+        error: 'Kayıt kurtarma gerekli — yedek yazılamadı, ana kayıt korunuyor.',
+        migratedFromVersion: null,
+      };
+    }
+
+    const quarantine = await getSaveRecoveryQuarantine();
+    if (quarantine && quarantine.resolved !== true && !quarantine.userChoseNewGame) {
+      return {
+        payload: null,
+        error: 'Kayıt kurtarma gerekli.',
+        migratedFromVersion: null,
+      };
+    }
+
+    const storageKey = await resolveGameplaySaveStorageKey();
+    const json = await AsyncStorage.getItem(storageKey);
     if (!json) {
       return { payload: null, error: null, migratedFromVersion: null };
     }
@@ -1650,9 +1870,30 @@ export async function loadGameStateWithMeta(): Promise<SaveLoadResult> {
   };
 }
 
-export async function saveGameState(state: StoreGameState): Promise<boolean> {
+export async function saveGameState(
+  state: StoreGameState,
+  options?: { ownerUid?: string | null },
+): Promise<boolean> {
   try {
-    const payload = serializeGameState(state);
+    const { getSaveRecoveryQuarantine, isSaveRecoveryFatal } = await import('./saveRecoveryQuarantine');
+    if (await isSaveRecoveryFatal()) {
+      return false;
+    }
+    const quarantine = await getSaveRecoveryQuarantine();
+    if (quarantine && quarantine.resolved !== true && !quarantine.userChoseNewGame) {
+      return false;
+    }
+
+    let ownerUid = options?.ownerUid;
+    if (ownerUid === undefined) {
+      const { getCurrentUserId } = await import('../services/authService');
+      ownerUid = getCurrentUserId();
+    }
+    const payload = serializeGameState(state, { ownerUid });
+    if (ownerUid) {
+      payload.ownerUid = ownerUid;
+    }
+    await sealSavePayloadIntegrity(payload);
     await activeSaveProvider.save(payload);
     return true;
   } catch (error) {
@@ -1670,17 +1911,37 @@ export async function clearSavedGame(): Promise<void> {
   }
 }
 
+/** Ana slotta ham veri var mı (bozuk dahil)? */
+export async function hasMainSaveSlot(): Promise<boolean> {
+  try {
+    const json = await AsyncStorage.getItem(SAVE_STORAGE_KEY);
+    return json != null && json.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Geçerli veya migrate edilebilir kayıt var mı? */
 export async function hasValidSavedGame(): Promise<boolean> {
   try {
-    const json = await AsyncStorage.getItem(SAVE_STORAGE_KEY);
+    const quarantine = await getSaveRecoveryQuarantine();
+    const storageKey =
+      quarantine?.userChoseNewGame && quarantine.resolved !== true
+        ? SAVE_ACTIVE_SLOT_KEY
+        : SAVE_STORAGE_KEY;
+    const json = await AsyncStorage.getItem(storageKey);
     if (!json || json.length === 0) {
       return false;
     }
 
     try {
       const parsed: unknown = JSON.parse(json);
-      return migrateSavePayload(parsed) !== null;
+      const rawChecksumStatus = await verifyRawSaveChecksum(parsed);
+      if (rawChecksumStatus === 'mismatch') {
+        return false;
+      }
+      const migrated = migrateSavePayload(parsed);
+      return migrated != null;
     } catch {
       return false;
     }
@@ -1691,5 +1952,13 @@ export async function hasValidSavedGame(): Promise<boolean> {
 }
 
 export async function hasSavedGame(): Promise<boolean> {
-  return hasValidSavedGame();
+  if (await hasMainSaveSlot()) {
+    return true;
+  }
+  const quarantine = await getSaveRecoveryQuarantine();
+  if (quarantine?.userChoseNewGame) {
+    const active = await AsyncStorage.getItem(SAVE_ACTIVE_SLOT_KEY);
+    return active != null && active.length > 0;
+  }
+  return false;
 }

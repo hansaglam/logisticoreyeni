@@ -9,7 +9,7 @@ const firebase = read('src/services/firebase.ts');
 const auth = read('src/services/authService.ts');
 const google = read('src/services/googleAuthService.ts');
 const apple = read('src/services/appleAuthService.ts');
-const account = read('src/components/AccountSection.tsx');
+const account = read('src/hooks/useAccountCenter.ts');
 
 assert.equal((firebase.match(/initializeApp\(/g) ?? []).length, 1);
 assert.equal((firebase.match(/initializeAuth\(app/g) ?? []).length, 1);

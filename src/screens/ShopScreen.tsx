@@ -117,8 +117,6 @@ export default function ShopScreen() {
   const drivers = useMemo(() => player?.drivers ?? [], [player?.drivers]);
   const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const playerMoney = player?.money ?? 0;
-  const playerDiamonds = Math.max(0, player?.diamonds ?? 0);
-
   const levelProgress = useMemo(
     () => (player ? getLevelProgress(player) : { level: 1, progressRatio: 0 }),
     [player],
@@ -327,7 +325,6 @@ export default function ShopScreen() {
           {player ? (
             <ShopResourceBar
               money={playerMoney}
-              diamonds={playerDiamonds}
               level={levelProgress.level}
               xpProgress={levelProgress.progressRatio}
               isPaused={isPaused}

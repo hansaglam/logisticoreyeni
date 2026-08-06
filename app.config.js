@@ -1,17 +1,17 @@
 /**
- * Expo app config — .env içindeki EXPO_PUBLIC_* değerlerini
- * Constants.expoConfig.extra üzerinden runtime'a taşır.
+ * Expo app config — build profile env + EXPO_PUBLIC_* runtime extra.
  *
+ * Profile selection (explicit, no fragile overwrite chain):
+ *   LOGISTICORE_BUILD_PROFILE=internal|production
+ *   Reads `.env` (shared secrets) then `.env.internal` or `.env.production` overrides.
  * EXPO_PUBLIC_* varsa onu kullanır; yoksa src/config/firebase.public.json
  * (client-side public Firebase web/iOS config) Xcode archive için fallback'tir.
  *
- * TODO (native Google Sign-In / Apple):
- * - iOS: reversed client id URL scheme (GoogleService / OAuth iOS client)
- * - Android: SHA-1 / SHA-256 fingerprint (Firebase Console)
- * - google-services.json / GoogleService-Info.plist
- * - Expo Go'da native Google Sign-In çalışmayabilir → development build
+ * Store release: LOGISTICORE_BUILD_PROFILE=production npm run validate:store-production
  */
 
+const fs = require('fs');
+const path = require('path');
 const appJson = require('./app.json');
 const publicFirebase = require('./src/config/firebase.public.json');
 
@@ -24,6 +24,33 @@ function readFirebaseExtraValue(envKey, publicKey) {
   const fromPublic = publicFirebase?.[publicKey];
   return typeof fromPublic === 'string' ? fromPublic : '';
 }
+
+function parseEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  const out = {};
+  for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    out[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+function applyEnvVars(vars, { override = false } = {}) {
+  for (const [key, value] of Object.entries(vars)) {
+    if (override || process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+const root = __dirname;
+applyEnvVars(parseEnvFile(path.join(root, '.env')));
+const buildProfile = process.env.LOGISTICORE_BUILD_PROFILE?.trim().toLowerCase() || 'internal';
+applyEnvVars(parseEnvFile(path.join(root, `.env.${buildProfile}`)), { override: true });
+process.env.LOGISTICORE_BUILD_PROFILE = buildProfile;
 
 module.exports = () => {
   const expo = appJson.expo ?? {};
@@ -41,13 +68,25 @@ module.exports = () => {
       ...(expo.android ?? {}),
       package: 'com.ethemsincar.logisticore',
       googleServicesFile: './google-services.json',
+      blockedPermissions: [
+        'android.permission.SYSTEM_ALERT_WINDOW',
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
+        'android.permission.MANAGE_EXTERNAL_STORAGE',
+      ],
     },
     ios: {
       ...(expo.ios ?? {}),
       bundleIdentifier: 'com.ethemsincar.logisticore',
       googleServicesFile: './GoogleService-Info.plist',
-      // Apple Sign-In entitlement (expo-apple-authentication)
       usesAppleSignIn: true,
+      supportsTablet: false,
+      infoPlist: {
+        ...(expo.ios?.infoPlist ?? {}),
+        NSAppTransportSecurity: {
+          NSAllowsArbitraryLoads: false,
+        },
+      },
     },
     plugins: [
       ...existingPlugins,
@@ -74,7 +113,6 @@ module.exports = () => {
         },
       ],
       // AdMob — Expo Go desteklemez; development build / EAS gerekir.
-      // TODO(production-iOS): ATT + UMP consent akışı release öncesi eklenmeli.
       [
         'react-native-google-mobile-ads',
         {
@@ -84,9 +122,17 @@ module.exports = () => {
             'Bu tanımlayıcı size daha uygun reklamlar sunmak için kullanılır.',
         },
       ],
+      [
+        'expo-tracking-transparency',
+        {
+          userTrackingPermission:
+            'LogistiCore, size daha alakalı reklamlar sunabilmek için cihaz tanımlayıcısını kullanmak isteyebilir. Reddederseniz kişiselleştirilmemiş reklamlar gösterilir; oyun normal devam eder.',
+        },
+      ],
     ],
     extra: {
       ...(expo.extra ?? {}),
+      buildProfile,
       firebase: {
         apiKey: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_API_KEY', 'apiKey'),
         authDomain: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN', 'authDomain'),

@@ -48,7 +48,6 @@ function formatMissionReward(missionId: string): string {
   const parts: string[] = [];
   if (mission.reward.money) parts.push(`+${formatMoney(mission.reward.money)}`);
   if (mission.reward.xp) parts.push(`+${mission.reward.xp} XP`);
-  if (mission.reward.diamonds) parts.push(`+${mission.reward.diamonds} Elmas`);
   if (mission.reward.reputation) parts.push(`+${mission.reward.reputation} İtibar`);
   return parts.join(' · ');
 }
@@ -57,7 +56,6 @@ function formatRetentionReward(reward: RetentionReward): string {
   const parts: string[] = [];
   if (reward.cash) parts.push(`+${formatMoney(reward.cash)}`);
   if (reward.xp) parts.push(`+${reward.xp} XP`);
-  if (reward.diamonds) parts.push(`+${reward.diamonds} Elmas`);
   if (reward.reputation) parts.push(`+${reward.reputation} İtibar`);
   if (reward.badgeId) parts.push('Rozet');
   return parts.join(' · ');

@@ -52,13 +52,23 @@ import {
 } from './mapSegmentCalibration';
 import {
   getRoadRoute,
+  getRouteHeadingDegrees,
   getTruckPositionAlongRoadRoute,
+  logMapHeadingDebug,
+  buildMapHeadingDebugPayload,
   normalizeMapDeliveryProgress,
   normalizedPointToPixel,
   polylineToSvgPath,
   splitPolylineAtProgress,
   type MapBounds as RoadMapBounds,
 } from './mapRoadUtils';
+import {
+  buildDeliveryTruckMarkerKey,
+  buildRoutePathMarkerKey,
+  buildTransferRouteMarkerKey,
+  buildTransferTruckMarkerKey,
+  buildVisibleMapMarkers,
+} from './mapMarkerState';
 import {
   ACTIVE_DELIVERY_ROUTE_LINE_ENABLED,
   shouldRenderActiveDeliveryMarker,
@@ -77,6 +87,7 @@ import {
   MAP_VIEWPORT_BACKGROUND,
   MAP_VIEWPORT_HEIGHT,
   MAP_VIEWPORT_HEIGHT_COMPACT,
+  TRUCK_ICON_BASE_ROTATION_DEG,
 } from './mapTheme';
 
 const MAP_IMAGE = getTurkeyLogisticsNetworkMap();
@@ -112,6 +123,7 @@ interface MapBounds {
 
 interface DeliveryRouteRenderItem {
   delivery: Delivery;
+  routeVersion: string;
   hasRoute: boolean;
   completedPath: string;
   remainingPath: string;
@@ -124,6 +136,7 @@ interface DeliveryRouteRenderItem {
 
 interface TransferRouteRenderItem {
   transfer: TruckTransfer;
+  routeVersion: string;
   hasRoute: boolean;
   routePath: string;
   truckPixel: { x: number; y: number };
@@ -174,7 +187,7 @@ function WorldMapCanvasInner(
   ref: React.ForwardedRef<WorldMapCanvasHandle>,
 ) {
   const mapRef = useRef<InteractiveTurkeyMapHandle>(null);
-  const lastValidHeadingByRouteId = useRef(new Map<string, number>());
+  const lastValidHeadingByRouteKey = useRef(new Map<string, number>());
   const [detailLevel, setDetailLevel] = useState<MapDetailLevel>('low');
   useImperativeHandle(ref, () => ({
     resetToOperational: () => mapRef.current?.resetToOperational(),
@@ -264,13 +277,26 @@ function WorldMapCanvasInner(
 
   const mapBounds = contentSize;
 
-  const runningDeliveries = useMemo(
+  const visibleMarkers = useMemo(
     () =>
-      activeDeliveries.filter(
-        (d) => d.status === 'preparing' || d.status === 'on_route' || d.status === 'paused',
-      ),
-    [activeDeliveries],
+      buildVisibleMapMarkers({
+        activeDeliveries,
+        activeTransfers,
+      }),
+    [activeDeliveries, activeTransfers],
   );
+
+  const runningDeliveries = useMemo(
+    () => visibleMarkers.deliveries.map((item) => item.delivery),
+    [visibleMarkers.deliveries],
+  );
+
+  const runningTransfers = useMemo(
+    () => visibleMarkers.transfers.map((item) => item.transfer),
+    [visibleMarkers.transfers],
+  );
+
+  const overlayRenderVersion = visibleMarkers.overlayRenderVersion;
 
   const runningDeliveryProgressKey = useMemo(
     () =>
@@ -281,13 +307,6 @@ function WorldMapCanvasInner(
         )
         .join('|'),
     [runningDeliveries],
-  );
-  const runningTransfers = useMemo(
-    () =>
-      (activeTransfers ?? []).filter(
-        (t) => t.status === 'active' || t.status === 'paused',
-      ),
-    [activeTransfers],
   );
 
   const layerVisible = useCallback(
@@ -336,14 +355,13 @@ function WorldMapCanvasInner(
 
   /** Tümü / Kamyonlar / Depolar — aktif teslimat overlay’leri her filtrede görünür. */
   const deliveryRouteRenderData = useMemo((): DeliveryRouteRenderItem[] => {
-    if (runningDeliveries.length === 0 || mapBounds.width === 0) return [];
+    if (visibleMarkers.deliveries.length === 0 || mapBounds.width === 0) return [];
     if (!layerVisible('route')) return [];
 
     const roadBounds: RoadMapBounds = mapBounds;
-
     const items: DeliveryRouteRenderItem[] = [];
 
-    for (const delivery of runningDeliveries) {
+    for (const { delivery, routeVersion } of visibleMarkers.deliveries) {
       const opacity = resolveRouteOpacity(delivery.id === selectedDeliveryId);
       if (opacity <= 0) continue;
 
@@ -352,6 +370,7 @@ function WorldMapCanvasInner(
         logMissingRoadRoute(delivery.originCityId, delivery.destinationCityId);
         items.push({
           delivery,
+          routeVersion,
           hasRoute: false,
           completedPath: '',
           remainingPath: '',
@@ -365,19 +384,40 @@ function WorldMapCanvasInner(
       }
 
       const normalizedProgress = normalizeMapDeliveryProgress(delivery.progress);
-      const { completedPoints, remainingPoints } = splitPolylineAtProgress(
-        roadPoints,
-        normalizedProgress,
-      );
+      const headingCacheKey = `${delivery.id}:${routeVersion}`;
+      const previousHeading = lastValidHeadingByRouteKey.current.get(headingCacheKey);
       const truckSample = getTruckPositionAlongRoadRoute(roadPoints, delivery.progress, {
-        fallbackHeadingDeg: lastValidHeadingByRouteId.current.get(delivery.id),
+        fallbackHeadingDeg: previousHeading,
         coordinateScaleX: roadBounds.width,
         coordinateScaleY: roadBounds.height,
       });
-      if (Number.isFinite(truckSample.headingDeg)) {
-        lastValidHeadingByRouteId.current.set(delivery.id, truckSample.headingDeg);
+      const displayHeadingDeg = getRouteHeadingDegrees({
+        routePoints: roadPoints,
+        progress: delivery.progress,
+        assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+        fallbackHeadingDeg: previousHeading,
+        previousHeadingDeg: previousHeading,
+        coordinateScaleX: roadBounds.width,
+        coordinateScaleY: roadBounds.height,
+      });
+      if (Number.isFinite(displayHeadingDeg)) {
+        lastValidHeadingByRouteKey.current.set(headingCacheKey, displayHeadingDeg);
+      }
+      const headingDebug = buildMapHeadingDebugPayload({
+        routePoints: roadPoints,
+        progress: delivery.progress,
+        assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+        coordinateScaleX: roadBounds.width,
+        coordinateScaleY: roadBounds.height,
+        routeId: delivery.id,
+        origin: delivery.originCityId,
+        destination: delivery.destinationCityId,
+      });
+      if (headingDebug) {
+        logMapHeadingDebug(headingDebug);
       }
       const truckPixel = normalizedPointToPixel(truckSample.point, roadBounds);
+      const truckAngleRadians = (displayHeadingDeg * Math.PI) / 180;
 
       logTruckPositionDebug({
         originCityId: delivery.originCityId,
@@ -389,14 +429,20 @@ function WorldMapCanvasInner(
         calculatedTruckPoint: truckSample.point,
       });
 
+      const { completedPoints, remainingPoints } = splitPolylineAtProgress(
+        roadPoints,
+        normalizedProgress,
+      );
+
       items.push({
         delivery,
+        routeVersion,
         hasRoute: true,
         completedPath: polylineToSvgPath(completedPoints, roadBounds),
         remainingPath: polylineToSvgPath(remainingPoints, roadBounds),
         completedGlowPath: polylineToSvgPath(completedPoints, roadBounds),
         truckPixel,
-        truckAngle: truckSample.angleRadians,
+        truckAngle: truckAngleRadians,
         normalizedProgress,
         opacity,
       });
@@ -404,7 +450,7 @@ function WorldMapCanvasInner(
 
     return items;
   }, [
-    runningDeliveries,
+    visibleMarkers.deliveries,
     runningDeliveryProgressKey,
     mapBounds,
     layerVisible,
@@ -428,16 +474,19 @@ function WorldMapCanvasInner(
   }, [deliveryRouteRenderData]);
 
   useEffect(() => {
-    const activeIds = new Set([
-      ...runningDeliveries.map((delivery) => delivery.id),
-      ...runningTransfers.map((transfer) => transfer.id),
-    ]);
-    for (const routeId of lastValidHeadingByRouteId.current.keys()) {
-      if (!activeIds.has(routeId)) {
-        lastValidHeadingByRouteId.current.delete(routeId);
+    const activeKeys = new Set<string>();
+    for (const { delivery, routeVersion } of visibleMarkers.deliveries) {
+      activeKeys.add(`${delivery.id}:${routeVersion}`);
+    }
+    for (const { transfer, routeVersion } of visibleMarkers.transfers) {
+      activeKeys.add(`${transfer.id}:${routeVersion}`);
+    }
+    for (const cacheKey of lastValidHeadingByRouteKey.current.keys()) {
+      if (!activeKeys.has(cacheKey)) {
+        lastValidHeadingByRouteKey.current.delete(cacheKey);
       }
     }
-  }, [runningDeliveries, runningTransfers]);
+  }, [overlayRenderVersion, visibleMarkers]);
 
   const runningTransferProgressKey = useMemo(
     () =>
@@ -451,13 +500,13 @@ function WorldMapCanvasInner(
   );
 
   const transferRouteRenderData = useMemo((): TransferRouteRenderItem[] => {
-    if (runningTransfers.length === 0 || mapBounds.width === 0) return [];
+    if (visibleMarkers.transfers.length === 0 || mapBounds.width === 0) return [];
     if (!layerVisible('route') && !layerVisible('truck')) return [];
 
     const roadBounds: RoadMapBounds = mapBounds;
     const items: TransferRouteRenderItem[] = [];
 
-    for (const transfer of runningTransfers) {
+    for (const { transfer, routeVersion } of visibleMarkers.transfers) {
       const opacity = resolveRouteOpacity(false);
       if (opacity <= 0) continue;
 
@@ -465,6 +514,7 @@ function WorldMapCanvasInner(
       if (!roadPoints || roadPoints.length < 2) {
         items.push({
           transfer,
+          routeVersion,
           hasRoute: false,
           routePath: '',
           truckPixel: { x: 0, y: 0 },
@@ -476,21 +526,33 @@ function WorldMapCanvasInner(
       }
 
       const normalizedProgress = normalizeMapDeliveryProgress(transfer.progress);
+      const headingCacheKey = `${transfer.id}:${routeVersion}`;
+      const previousHeading = lastValidHeadingByRouteKey.current.get(headingCacheKey);
       const truckSample = getTruckPositionAlongRoadRoute(roadPoints, transfer.progress, {
-        fallbackHeadingDeg: lastValidHeadingByRouteId.current.get(transfer.id),
+        fallbackHeadingDeg: previousHeading,
         coordinateScaleX: roadBounds.width,
         coordinateScaleY: roadBounds.height,
       });
-      if (Number.isFinite(truckSample.headingDeg)) {
-        lastValidHeadingByRouteId.current.set(transfer.id, truckSample.headingDeg);
+      const displayHeadingDeg = getRouteHeadingDegrees({
+        routePoints: roadPoints,
+        progress: transfer.progress,
+        assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+        fallbackHeadingDeg: previousHeading,
+        previousHeadingDeg: previousHeading,
+        coordinateScaleX: roadBounds.width,
+        coordinateScaleY: roadBounds.height,
+      });
+      if (Number.isFinite(displayHeadingDeg)) {
+        lastValidHeadingByRouteKey.current.set(headingCacheKey, displayHeadingDeg);
       }
 
       items.push({
         transfer,
+        routeVersion,
         hasRoute: true,
         routePath: polylineToSvgPath(roadPoints, roadBounds),
         truckPixel: normalizedPointToPixel(truckSample.point, roadBounds),
-        truckAngle: truckSample.angleRadians,
+        truckAngle: (displayHeadingDeg * Math.PI) / 180,
         normalizedProgress,
         opacity,
       });
@@ -498,7 +560,7 @@ function WorldMapCanvasInner(
 
     return items;
   }, [
-    runningTransfers,
+    visibleMarkers.transfers,
     runningTransferProgressKey,
     mapBounds,
     layerVisible,
@@ -549,21 +611,28 @@ function WorldMapCanvasInner(
         {ACTIVE_DELIVERY_ROUTE_LINE_ENABLED &&
         mapBounds.width > 0 &&
         deliveryRouteRenderData.length > 0 ? (
-          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
+          <Svg
+            key={overlayRenderVersion}
+            width={mapBounds.width}
+            height={mapBounds.height}
+            style={StyleSheet.absoluteFill}
+          >
             {deliveryRouteRenderData.map(
               ({
                 delivery,
+                routeVersion,
                 hasRoute,
                 completedPath,
                 remainingPath,
                 completedGlowPath,
                 opacity,
               }) => (
-                <React.Fragment key={delivery.id}>
+                <React.Fragment key={buildRoutePathMarkerKey(delivery.id, routeVersion, 'group')}>
                   {hasRoute ? (
                     <>
                       {remainingPath ? (
                         <Path
+                          key={buildRoutePathMarkerKey(delivery.id, routeVersion, 'remaining')}
                           d={remainingPath}
                           stroke={MAP_ROUTE_REMAINING}
                           strokeWidth={MAP_ROUTE_REMAINING_WIDTH}
@@ -575,6 +644,7 @@ function WorldMapCanvasInner(
                       ) : null}
                       {completedGlowPath ? (
                         <Path
+                          key={buildRoutePathMarkerKey(delivery.id, routeVersion, 'glow')}
                           d={completedGlowPath}
                           stroke={MAP_ROUTE_COMPLETED_GLOW}
                           strokeWidth={MAP_ROUTE_COMPLETED_GLOW_WIDTH}
@@ -586,6 +656,7 @@ function WorldMapCanvasInner(
                       ) : null}
                       {completedPath ? (
                         <Path
+                          key={buildRoutePathMarkerKey(delivery.id, routeVersion, 'completed')}
                           d={completedPath}
                           stroke={MAP_ROUTE_COMPLETED}
                           strokeWidth={MAP_ROUTE_COMPLETED_WIDTH}
@@ -638,11 +709,16 @@ function WorldMapCanvasInner(
         {mapBounds.width > 0 &&
         layerVisible('route') &&
         transferRouteRenderData.some((item) => item.hasRoute) ? (
-          <Svg width={mapBounds.width} height={mapBounds.height} style={StyleSheet.absoluteFill}>
-            {transferRouteRenderData.map(({ transfer, hasRoute, routePath, opacity }) =>
+          <Svg
+            key={`${overlayRenderVersion}-transfer`}
+            width={mapBounds.width}
+            height={mapBounds.height}
+            style={StyleSheet.absoluteFill}
+          >
+            {transferRouteRenderData.map(({ transfer, routeVersion, hasRoute, routePath, opacity }) =>
               hasRoute && routePath ? (
                 <Path
-                  key={transfer.id}
+                  key={buildTransferRouteMarkerKey(transfer.id, routeVersion)}
                   d={routePath}
                   stroke={MAP_TRANSFER_ROUTE}
                   strokeWidth={2}
@@ -659,12 +735,24 @@ function WorldMapCanvasInner(
         mapBounds.width > 0 &&
         layerVisible('truck') &&
         deliveryRouteRenderData.length > 0 ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <View
+            key={`trucks-${overlayRenderVersion}`}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="box-none"
+          >
             {deliveryRouteRenderData.map(
-              ({ delivery, hasRoute, truckPixel, truckAngle, normalizedProgress, opacity }) =>
+              ({
+                delivery,
+                routeVersion,
+                hasRoute,
+                truckPixel,
+                truckAngle,
+                normalizedProgress,
+                opacity,
+              }) =>
                 hasRoute ? (
                   <AnimatedDeliveryTruckMarker
-                    key={`delivery-truck-${delivery.id}`}
+                    key={buildDeliveryTruckMarkerKey(delivery.id, routeVersion)}
                     pixelX={truckPixel.x}
                     pixelY={truckPixel.y}
                     angleRadians={truckAngle}
@@ -678,12 +766,24 @@ function WorldMapCanvasInner(
         ) : null}
 
         {mapBounds.width > 0 && layerVisible('truck') && transferRouteRenderData.length > 0 ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <View
+            key={`transfer-trucks-${overlayRenderVersion}`}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          >
             {transferRouteRenderData.map(
-              ({ transfer, hasRoute, truckPixel, truckAngle, normalizedProgress, opacity }) =>
+              ({
+                transfer,
+                routeVersion,
+                hasRoute,
+                truckPixel,
+                truckAngle,
+                normalizedProgress,
+                opacity,
+              }) =>
                 hasRoute ? (
                   <AnimatedDeliveryTruckMarker
-                    key={`transfer-truck-${transfer.id}`}
+                    key={buildTransferTruckMarkerKey(transfer.id, routeVersion)}
                     pixelX={truckPixel.x}
                     pixelY={truckPixel.y}
                     angleRadians={truckAngle}

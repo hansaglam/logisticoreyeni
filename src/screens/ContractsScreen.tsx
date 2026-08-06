@@ -18,14 +18,9 @@ import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import ContractQuickActionSheet from '../components/contracts/ContractQuickActionSheet';
 import DeliveryIncidentCard from '../components/delivery/DeliveryIncidentCard';
+import DeliveryBoostPanel from '../components/monetization/DeliveryBoostPanel';
 import AdRewardButton from '../components/monetization/AdRewardButton';
 import { contractGenerationBalance } from '../config/balance';
-import {
-  canGrantAdReward,
-  isDeliveryBoosted,
-  resetDailyUsageIfNeeded,
-} from '../simulation/adRewardGrants';
-import { isAdProviderAvailable } from '../services/adProvider';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import {
@@ -635,39 +630,16 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
   onBoostSuccess,
 }: ActiveDeliveryCardProps) {
   const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
-  const monetization = useGameStore((state) => state.monetization);
-  const playerLevel = useGameStore(
-    (state) => Math.max(1, state.player?.level ?? state.player?.companyLevel ?? 1),
-  );
-  const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
   const deadlineHoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
   const etaHoursLeft = Math.max(0, delivery.estimatedArrivalTime - currentTime);
   const isLateRisk = delivery.estimatedArrivalTime > delivery.deadlineTime;
-  const alreadyBoosted = isDeliveryBoosted(monetization, delivery.id);
-  const boostContext = useMemo(
-    () => ({ selectedDeliveryId: delivery.id }),
-    [delivery.id],
-  );
-  const boostEligibility = useMemo(
-    () =>
-      canGrantAdReward(resetDailyUsageIfNeeded(monetization), 'delivery_boost', {
-        currentGameTime: currentTime,
-        playerLevel,
-        hasCompletedOnboarding,
-        ...boostContext,
-      }),
-    [boostContext, currentTime, hasCompletedOnboarding, monetization, playerLevel],
-  );
-  const canShowBoost =
-    isAdProviderAvailable() &&
+  const truck = (trucks ?? []).find((item) => item.id === delivery.truckId);
+  const driver = (drivers ?? []).find((item) => item.id === delivery.driverId);
+  const showBoost =
     (delivery.status === 'on_route' ||
       delivery.status === 'preparing' ||
       delivery.status === 'paused') &&
-    delivery.progress < 1 &&
-    !alreadyBoosted &&
-    boostEligibility.ok;
-  const truck = (trucks ?? []).find((item) => item.id === delivery.truckId);
-  const driver = (drivers ?? []).find((item) => item.id === delivery.driverId);
+    delivery.progress < 1;
 
   return (
     <View style={styles.listCard}>
@@ -710,17 +682,8 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
       {delivery.incident || delivery.incidentResolved ? (
         <DeliveryIncidentCard delivery={delivery} />
       ) : null}
-      {canShowBoost ? (
-        <View style={styles.deliveryBoostRow} collapsable={false}>
-          <AdRewardButton
-            slotId="delivery_boost"
-            label="Reklam izle, teslimatı hızlandır"
-            description="İlerleme +18% · aynı teslimat bir kez"
-            context={boostContext}
-            onSuccess={onBoostSuccess}
-            variant="secondary"
-          />
-        </View>
+      {showBoost ? (
+        <DeliveryBoostPanel delivery={delivery} truck={truck} onSuccess={onBoostSuccess} />
       ) : null}
     </View>
   );

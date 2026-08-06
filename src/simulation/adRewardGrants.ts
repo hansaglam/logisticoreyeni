@@ -227,6 +227,10 @@ export function normalizeMonetizationState(
       currentGameTime,
     ),
     boostedDeliveryIds,
+    lastDeliveryBoostAdAt:
+      typeof raw.lastDeliveryBoostAdAt === 'number' && Number.isFinite(raw.lastDeliveryBoostAdAt)
+        ? raw.lastDeliveryBoostAdAt
+        : undefined,
     recentGrants: normalizeRecentGrants(raw.recentGrants),
   };
 
@@ -356,9 +360,6 @@ export function canGrantAdReward(
       const deliveryId = context.selectedDeliveryId?.trim();
       if (!deliveryId) {
         return { ok: false, reason: 'Aktif teslimat seçilmedi.' };
-      }
-      if ((normalized.boostedDeliveryIds ?? []).includes(deliveryId)) {
-        return { ok: false, reason: 'Bu teslimat zaten hızlandırıldı.' };
       }
       break;
     }
@@ -494,11 +495,10 @@ export function applyAdRewardGrant(
     }
     case 'delivery_boost': {
       const deliveryId = context.selectedDeliveryId!.trim();
-      const progressBoost = slotConfig.progressBoost ?? 0.18;
-      effects.push({ type: 'delivery_boost', deliveryId, progressBoost });
+      effects.push({ type: 'delivery_boost', deliveryId, appliedReductionMs: 0 });
       monetization = {
         ...incrementSlotUsage(monetization, slotId, context, `Teslimat hızlandırma · ${deliveryId}`),
-        boostedDeliveryIds: [...(monetization.boostedDeliveryIds ?? []), deliveryId],
+        lastDeliveryBoostAdAt: Date.now(),
       };
       break;
     }

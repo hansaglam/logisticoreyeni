@@ -8,6 +8,11 @@ import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { Timestamp, getFirestore } from 'firebase-admin/firestore';
 
 import {
+  SERVER_DEFAULT_CASH,
+  buildDefaultServerState,
+  buildServerStateFromMarketplaceState,
+} from '../src/serverState';
+import {
   calculateMarketplaceRecommendedPrice,
   cancelVehicleListingTransaction,
   createVehicleListingTransaction,
@@ -85,6 +90,12 @@ async function seedState(
     { merge: true },
   );
   await adminFirestore.doc(`users/${uid}/marketplaceState/current`).set(state);
+  const serverState = buildServerStateFromMarketplaceState(
+    uid,
+    state,
+    Timestamp.fromMillis(NOW_MS),
+  );
+  await adminFirestore.doc(`users/${uid}/serverState/current`).set(serverState);
   return state;
 }
 
@@ -197,7 +208,7 @@ test('valid listing locks vehicle, charges listing fee once and duplicate is ide
   assert.equal(duplicateTransaction.reason, 'already-completed');
 });
 
-test('new user marketplace state is initialized once from trusted cloud save', async () => {
+test('new user marketplace state bootstraps from server defaults not cloud save', async () => {
   const uid = 'new-user';
   await adminFirestore.doc(`users/${uid}`).set({
     uid,
@@ -215,28 +226,8 @@ test('new user marketplace state is initialized once from trusted cloud save', a
           {
             id: 'new-truck-1',
             catalogId: 'truck-ford-cargo',
-            name: 'Yeni Kamyon',
-            currentCityId: 'izmir',
-            condition: 92,
-            totalMileageKm: 2_500,
-            currentFuelL: 120,
-            fuelTankCapacityL: 300,
             purchasePrice: 52_000,
             ownershipType: 'owned',
-            status: 'idle',
-            upgrades: {
-              engine: 0,
-              fuelEfficiency: 0,
-              cargo: 0,
-              durability: 0,
-            },
-          },
-          {
-            id: 'new-truck-2',
-            catalogId: 'truck-ford-cargo',
-            currentCityId: 'izmir',
-            condition: 100,
-            purchasePrice: 52_000,
             status: 'idle',
           },
         ],
@@ -248,64 +239,55 @@ test('new user marketplace state is initialized once from trusted cloud save', a
       activeWarehouseStockTransfers: [],
     },
   });
-  const recommended = calculateMarketplaceRecommendedPrice(
-    vehicle('new-truck-1'),
-  );
-  const first = await createVehicleListingTransaction(
+  const ensured = await ensureVehicleMarketplaceStateTransaction(
     adminFirestore,
     { uid },
     {
-      transactionId: 'create-new-user',
-      idempotencyKey: 'create-new-user',
-      truckId: 'new-truck-1',
-      askingPrice: recommended,
-      clientSaveVersion: 3,
+      transactionId: 'ensure-new-user',
+      idempotencyKey: 'ensure-new-user',
+      clientSaveVersion: 1,
     },
     NOW_MS,
   );
-  const input = {
-    transactionId: 'ensure-new-user',
-    idempotencyKey: 'ensure-new-user',
-    clientSaveVersion: 3,
-  };
-  const second = await ensureVehicleMarketplaceStateTransaction(
-    adminFirestore,
-    { uid },
-    input,
-    NOW_MS + 1,
-  );
-  assert.equal(first.ok, true);
-  assert.equal(second.ok, true);
-  assert.equal(second.data?.created, false);
+  assert.equal(ensured.ok, true);
+  assert.equal(ensured.data?.created, true);
   const state = (
     await adminFirestore.doc(`users/${uid}/marketplaceState/current`).get()
   ).data() as MarketplacePlayerState;
   assert.equal(state.ownerUid, uid);
-  assert.equal(state.canonicalCash, 75_000 - 150);
-  assert.equal(state.ownedTruckSnapshots.length, 2);
-  assert.equal(state.ownedTruckSnapshots[0]?.status, 'marketplace_locked');
+  assert.equal(state.canonicalCash, SERVER_DEFAULT_CASH);
+  assert.equal(state.ownedTruckSnapshots.length, 1);
+  assert.equal(state.ownedTruckSnapshots[0]?.templateId, 'truck-starter-1');
+  const serverState = (
+    await adminFirestore.doc(`users/${uid}/serverState/current`).get()
+  ).data();
+  assert.equal(Number(serverState?.cash), SERVER_DEFAULT_CASH);
 });
 
-test('missing trusted save is explicit and create no longer reports truck-not-found', async () => {
-  const input = {
-    transactionId: 'ensure-no-save',
-    idempotencyKey: 'ensure-no-save',
-    clientSaveVersion: 3,
-  };
+test('missing cloud save still bootstraps safe server-owned marketplace state', async () => {
+  const uid = 'no-save';
+  await adminFirestore.doc(`users/${uid}`).set({
+    uid,
+    username: 'no_save_user',
+    usernameNormalized: 'no_save_user',
+    usernameSetupCompleted: true,
+  });
   const ensured = await ensureVehicleMarketplaceStateTransaction(
     adminFirestore,
-    { uid: 'no-save' },
-    input,
+    { uid },
+    {
+      transactionId: 'ensure-no-save',
+      idempotencyKey: 'ensure-no-save',
+      clientSaveVersion: 1,
+    },
     NOW_MS,
   );
-  assert.equal(ensured.reason, 'marketplace-state-missing');
-  const create = await createVehicleListingTransaction(
-    adminFirestore,
-    { uid: 'no-save' },
-    createInput('missing-truck', 10_000, 'missing-state'),
-    NOW_MS,
-  );
-  assert.equal(create.reason, 'marketplace-state-missing');
+  assert.equal(ensured.ok, true);
+  assert.equal(ensured.data?.created, true);
+  const state = (
+    await adminFirestore.doc(`users/${uid}/marketplaceState/current`).get()
+  ).data() as MarketplacePlayerState;
+  assert.equal(state.canonicalCash, SERVER_DEFAULT_CASH);
 });
 
 test('listing rejects busy, attached, leased, duplicate, unsupported and protected trucks', async () => {

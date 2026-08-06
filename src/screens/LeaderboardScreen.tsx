@@ -33,6 +33,7 @@ import {
   type LeaderboardRankedEntry,
 } from '../services/leaderboardService';
 import { fetchUsernameProfile } from '../services/usernameService';
+import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
 import { leaderboardConfig } from '../config/leaderboard';
 import { getWeeklySeasonLabel } from '../utils/leaderboardSeason';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -66,8 +67,24 @@ function resolveLeaderboardErrorMessage(
       return 'Çok fazla istek gönderildi. Biraz sonra tekrar dene.';
     case 'season-closed':
       return 'Bu sezon kapanmış. Güncel haftalık tabloyu yenile.';
+    case 'username-required':
+      return 'Liderlik tablosuna katılmak için önce kullanıcı adını oluşturmalısın.';
+    case 'server-state-missing':
+    case 'backend-not-ready':
+      return 'Liderlik servisi henüz hazır değil. Kısa süre sonra tekrar dene.';
+    case 'function-not-found':
+    case 'function-unavailable':
+      return 'Liderlik servisine şu anda ulaşılamıyor.';
+    case 'network-error':
+      return 'Bağlantı kurulamadı. İnternet bağlantını kontrol et.';
+    case 'timeout':
+      return 'İstek zaman aşımına uğradı. Lütfen tekrar dene.';
+    case 'permission-denied':
+      return 'Bu işlem için yetkin yok.';
+    case 'app-check-failed':
+      return 'Uygulama doğrulaması başarısız. Uygulamayı güncelle ve tekrar dene.';
     case 'service-unavailable':
-      return 'Liderlik servisi geçici olarak kullanılamıyor.';
+      return 'Liderlik servisine şu anda ulaşılamıyor.';
     default:
       return LEADERBOARD_LOAD_ERROR_MESSAGE;
   }
@@ -309,15 +326,27 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
       return;
     }
     let cancelled = false;
-    void fetchUsernameProfile().then((result) => {
-      if (!cancelled) {
-        setUsernameReady(result.ok && result.profile.usernameSetupCompleted);
-      }
-    });
+    const loadProfile = () => {
+      void fetchUsernameProfile().then((result) => {
+        if (!cancelled) {
+          setUsernameReady(result.ok && result.profile.usernameSetupCompleted);
+        }
+      });
+    };
+    loadProfile();
+    const unsubProfile = subscribeUsernameProfileChanged(loadProfile);
     return () => {
       cancelled = true;
+      unsubProfile();
     };
   }, [eligible, account.uid]);
+
+  useEffect(() => {
+    const unsub = subscribeUsernameProfileChanged(() => {
+      void loadLeaderboard(true);
+    });
+    return unsub;
+  }, [loadLeaderboard]);
 
   useEffect(() => {
     void loadLeaderboard();

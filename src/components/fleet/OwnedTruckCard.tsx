@@ -19,6 +19,7 @@ import { calculateTruckRepairCost, resolveTruckCityId } from '../../simulation/d
 import { getTruckEffectiveCapacityTons } from '../../simulation/capacity';
 import { getAttachedTrailerForTruck } from '../../simulation/trailerAttachment';
 import { isActiveLeasedTruck, getTruckWeeklyLeaseCost } from '../../simulation/dailyOperatingCosts';
+import { isRentalReturnPending } from '../../simulation/rentalTruckLifecycle';
 import { MAX_UPGRADE_LEVEL } from '../../simulation/truckUpgrades';
 import {
   calculateDiscountedRepairCost,
@@ -78,6 +79,9 @@ function getConditionColor(condition: number): string {
 }
 
 function getTruckStatusPresentation(truck: Truck): { label: string; variant: StatusBadgeVariant } {
+  if (isRentalReturnPending(truck)) {
+    return { label: 'TESLİMAT SONRASI İADE', variant: 'amber' };
+  }
   switch (truck.status) {
     case 'on_route':
       return { label: 'TESLİMATTA', variant: 'blue' };

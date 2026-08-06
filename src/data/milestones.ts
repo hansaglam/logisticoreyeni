@@ -258,7 +258,7 @@ export const MILESTONE_DEFINITIONS: MilestoneDefinition[] = [
     description: '1.000.000 şirket puanına ulaş.',
     category: 'economy',
     target: 1_000_000,
-    reward: { cash: 15000, xp: 400, diamonds: 5, badgeId: 'empire' },
+    reward: { cash: 15000, xp: 400, badgeId: 'empire' },
     metric: { type: 'company_score' },
   },
   // Şehir
@@ -341,7 +341,7 @@ export const MILESTONE_DEFINITIONS: MilestoneDefinition[] = [
     description: '$500.000 nakde ulaş.',
     category: 'economy',
     target: 500_000,
-    reward: { cash: 10000, xp: 300, diamonds: 3 },
+    reward: { cash: 10000, xp: 300 },
     metric: { type: 'cash' },
   },
   {
@@ -359,7 +359,7 @@ export const MILESTONE_DEFINITIONS: MilestoneDefinition[] = [
     description: '100 itibara ulaş.',
     category: 'reputation',
     target: 100,
-    reward: { cash: 10000, xp: 300, diamonds: 5, badgeId: 'legend_reputation' },
+    reward: { cash: 10000, xp: 300, badgeId: 'legend_reputation' },
     metric: { type: 'reputation' },
   },
   // Phase 3 — özel sözleşme tipleri

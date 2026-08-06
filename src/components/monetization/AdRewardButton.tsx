@@ -6,11 +6,17 @@ import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { shouldShowTestAdLabel } from '../../config/adMob';
-import { isAdProviderAvailable } from '../../services/adProvider';
+import { slotIdToPlacement } from '../../config/rewardedPlacements';
+import { areAdsFeatureEnabled } from '../../services/adProvider';
+import { canRequestAdsAfterConsent } from '../../services/adsConsentService';
 import { canGrantAdReward, resetDailyUsageIfNeeded } from '../../simulation/adRewardGrants';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
 import type { AdRewardGrantContext, AdRewardSlotId } from '../../types/monetization';
+import {
+  getRewardedPlacementStatusMessage,
+  useRewardedPlacement,
+} from '../../hooks/useRewardedPlacement';
 import { ActionButton } from '../ui';
 
 declare const __DEV__: boolean | undefined;
@@ -45,7 +51,11 @@ export default function AdRewardButton({
   const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
-  const providerAvailable = isAdProviderAvailable();
+  const trackedPlacement = slotIdToPlacement(slotId);
+  const placementState = useRewardedPlacement(trackedPlacement ?? 'daily_operations');
+  const placementMessage = trackedPlacement
+    ? getRewardedPlacementStatusMessage(placementState)
+    : null;
 
   const fullContext = useMemo(
     (): AdRewardGrantContext => ({
@@ -62,19 +72,34 @@ export default function AdRewardButton({
     return canGrantAdReward(normalized, slotId, fullContext);
   }, [fullContext, monetization, slotId]);
 
-  if (!providerAvailable) {
+  if (!areAdsFeatureEnabled()) {
     return null;
   }
+
+  const consentReady = canRequestAdsAfterConsent();
+  const adRuntimeBlocked =
+    trackedPlacement != null &&
+    placementState.status !== 'ready' &&
+    placementState.status !== 'showing';
 
   const baseLabel = shouldShowTestAdLabel() ? `${label} (Test reklam)` : label;
   const buttonLabel = loading
     ? 'Reklam hazırlanıyor…'
     : failed
       ? 'Tekrar Dene'
-      : baseLabel;
+      : !consentReady
+        ? 'Gizlilik tercihi gerekli'
+        : adRuntimeBlocked && eligibility.ok
+          ? placementMessage ?? 'Reklam hazırlanıyor…'
+          : baseLabel;
 
   const handlePress = async () => {
     if (loading) {
+      return;
+    }
+
+    if (!consentReady) {
+      setErrorText('Reklamları kullanmak için gizlilik tercihini tamamla.');
       return;
     }
 
@@ -141,16 +166,26 @@ export default function AdRewardButton({
       <ActionButton
         label={buttonLabel}
         onPress={handlePress}
-        disabled={loading || (!eligibility.ok && !failed)}
+        disabled={loading || (!eligibility.ok && !failed && !consentReady)}
         variant={variant}
         compact={compact}
         icon={loading ? undefined : 'play'}
         iconSize={13}
         style={styles.button}
       />
+      {!consentReady ? (
+        <Text style={styles.disabledReason} numberOfLines={2}>
+          Reklamları kullanmak için gizlilik tercihini tamamla.
+        </Text>
+      ) : null}
       {!eligibility.ok && eligibility.reason && !failed ? (
         <Text style={styles.disabledReason} numberOfLines={2}>
           {eligibility.reason}
+        </Text>
+      ) : null}
+      {placementMessage && eligibility.ok && adRuntimeBlocked && !failed ? (
+        <Text style={styles.disabledReason} numberOfLines={2}>
+          {placementMessage}
         </Text>
       ) : null}
       {errorText ? (

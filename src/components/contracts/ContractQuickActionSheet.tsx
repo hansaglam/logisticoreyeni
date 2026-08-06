@@ -202,6 +202,7 @@ export default function ContractQuickActionSheet({
     [globalEconomyState, snapshot],
   );
   const currentTime = useGameStore((state) => state.currentTime);
+  const activeDeliveries = useGameStore((state) => state.activeDeliveries);
   const trailers = useGameStore((state) => state.player?.trailers ?? []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
@@ -217,8 +218,16 @@ export default function ContractQuickActionSheet({
   const isExpired = contract ? currentTime >= (contract.expiresAt ?? 0) : false;
 
   const truckOptions = useMemo(
-    () => buildTruckOptions(trucks, cargoWeight, contract?.originCityId ?? '', trailers),
-    [trucks, cargoWeight, contract?.originCityId, trailers],
+    () =>
+      buildTruckOptions(
+        trucks,
+        cargoWeight,
+        contract?.originCityId ?? '',
+        trailers,
+        currentTime,
+        activeDeliveries,
+      ),
+    [trucks, cargoWeight, contract?.originCityId, trailers, currentTime, activeDeliveries],
   );
 
   const driverOptions = useMemo(() => buildDriverOptions(drivers), [drivers]);
@@ -290,6 +299,14 @@ export default function ContractQuickActionSheet({
     setFuelRequirementVisible(false);
     setRefuelVisible(false);
   }, [visible, contract?.id, truckOptions.length, driverOptions.length]);
+
+  useEffect(() => {
+    if (!selectedTruckId) return;
+    const selected = truckOptions.find((option) => option.truck.id === selectedTruckId);
+    if (selected && !selected.selectable && selected.issue === 'lease_expired') {
+      setSelectedTruckId(null);
+    }
+  }, [selectedTruckId, truckOptions]);
 
   if (!visible || !contract || !preview) {
     return null;

@@ -167,6 +167,36 @@ export interface RouteHeadingAtProgressParams {
 
 export type RouteSamplingOptions = Omit<RouteHeadingAtProgressParams, 'points' | 'progress'>;
 
+function resolveRouteHeadingVector(
+  points: MapRoadPoint[],
+  current: MapRoadPoint,
+  segmentIndex: number,
+  coordinateScaleX: number,
+  coordinateScaleY: number,
+): { dx: number; dy: number } | null {
+  for (let index = segmentIndex + 1; index < points.length; index += 1) {
+    const candidate = points[index];
+    if (!pointsEqual(candidate, current) && pointDistance(candidate, current) > POINT_EPS) {
+      return {
+        dx: (candidate.x - current.x) * coordinateScaleX,
+        dy: (candidate.y - current.y) * coordinateScaleY,
+      };
+    }
+  }
+
+  for (let index = segmentIndex; index >= 0; index -= 1) {
+    const candidate = points[index];
+    if (!pointsEqual(candidate, current) && pointDistance(candidate, current) > POINT_EPS) {
+      return {
+        dx: (current.x - candidate.x) * coordinateScaleX,
+        dy: (current.y - candidate.y) * coordinateScaleY,
+      };
+    }
+  }
+
+  return null;
+}
+
 function getRouteHeadingWithMetrics(
   params: RouteHeadingAtProgressParams,
   metrics: PolylineMetrics,
@@ -178,15 +208,6 @@ function getRouteHeadingWithMetrics(
 
   const progress = normalizeMapDeliveryProgress(params.progress);
   const centerDistance = progress * metrics.totalLength;
-  const requestedLookAhead = Number(params.lookAheadDistance);
-  const lookAheadDistance =
-    Number.isFinite(requestedLookAhead) && requestedLookAhead > POINT_EPS
-      ? requestedLookAhead
-      : DEFAULT_ROUTE_HEADING_LOOK_AHEAD_DISTANCE;
-  const beforeDistance = Math.max(0, centerDistance - lookAheadDistance);
-  const afterDistance = Math.min(metrics.totalLength, centerDistance + lookAheadDistance);
-  const previous = getPointAtPolylineDistance(params.points, metrics, beforeDistance).point;
-  const next = getPointAtPolylineDistance(params.points, metrics, afterDistance).point;
   const coordinateScaleX =
     Number.isFinite(params.coordinateScaleX) && Number(params.coordinateScaleX) > 0
       ? Number(params.coordinateScaleX)
@@ -195,9 +216,25 @@ function getRouteHeadingWithMetrics(
     Number.isFinite(params.coordinateScaleY) && Number(params.coordinateScaleY) > 0
       ? Number(params.coordinateScaleY)
       : 1;
-  const dx = (next.x - previous.x) * coordinateScaleX;
-  const dy = (next.y - previous.y) * coordinateScaleY;
 
+  const { point: current, segmentIndex } = getPointAtPolylineDistance(
+    params.points,
+    metrics,
+    centerDistance,
+  );
+  const vector = resolveRouteHeadingVector(
+    params.points,
+    current,
+    segmentIndex,
+    coordinateScaleX,
+    coordinateScaleY,
+  );
+
+  if (!vector) {
+    return fallbackHeadingDeg;
+  }
+
+  const { dx, dy } = vector;
   if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) <= POINT_EPS) {
     return fallbackHeadingDeg;
   }
@@ -209,6 +246,134 @@ function getRouteHeadingWithMetrics(
 
 export function getRouteHeadingAtProgress(params: RouteHeadingAtProgressParams): number {
   return getRouteHeadingWithMetrics(params, getPolylineMetrics(params.points));
+}
+
+export interface GetRouteHeadingDegreesParams {
+  routePoints: MapRoadPoint[];
+  progress: number | undefined | null;
+  assetBaseHeadingDegrees?: number;
+  lookAheadDistance?: number;
+  fallbackHeadingDeg?: number;
+  previousHeadingDeg?: number;
+  coordinateScaleX?: number;
+  coordinateScaleY?: number;
+}
+
+/**
+ * Rota tangent heading + asset base offset.
+ * Derece [0, 360) normalize; geçersiz tangent'te previous/fallback korunur.
+ */
+export function getRouteHeadingDegrees(params: GetRouteHeadingDegreesParams): number {
+  const fallback = normalizeHeadingDegrees(
+    params.previousHeadingDeg ?? params.fallbackHeadingDeg ?? 0,
+  );
+  const tangentDeg = getRouteHeadingAtProgress({
+    points: params.routePoints,
+    progress: params.progress,
+    lookAheadDistance: params.lookAheadDistance,
+    fallbackHeadingDeg: fallback,
+    coordinateScaleX: params.coordinateScaleX,
+    coordinateScaleY: params.coordinateScaleY,
+  });
+  const assetBase = params.assetBaseHeadingDegrees ?? 0;
+  const combined = normalizeHeadingDegrees(tangentDeg + assetBase);
+  return normalizeHeadingDegrees360(combined);
+}
+
+export interface MapHeadingDebugPayload {
+  routeId?: string;
+  origin?: string;
+  destination?: string;
+  progress: number;
+  currentPoint: MapRoadPoint;
+  nextPoint?: MapRoadPoint;
+  rawHeadingDeg: number;
+  assetBaseHeadingDeg: number;
+  finalHeadingDeg: number;
+}
+
+export function buildMapHeadingDebugPayload(params: {
+  routePoints: MapRoadPoint[];
+  progress: number | undefined | null;
+  assetBaseHeadingDegrees?: number;
+  coordinateScaleX?: number;
+  coordinateScaleY?: number;
+  routeId?: string;
+  origin?: string;
+  destination?: string;
+}): MapHeadingDebugPayload | null {
+  if (params.routePoints.length < 2) {
+    return null;
+  }
+  const progress = normalizeMapDeliveryProgress(params.progress);
+  const metrics = getPolylineMetrics(params.routePoints);
+  const centerDistance = progress * metrics.totalLength;
+  const coordinateScaleX =
+    Number.isFinite(params.coordinateScaleX) && Number(params.coordinateScaleX) > 0
+      ? Number(params.coordinateScaleX)
+      : 1;
+  const coordinateScaleY =
+    Number.isFinite(params.coordinateScaleY) && Number(params.coordinateScaleY) > 0
+      ? Number(params.coordinateScaleY)
+      : 1;
+  const { point: current, segmentIndex } = getPointAtPolylineDistance(
+    params.routePoints,
+    metrics,
+    centerDistance,
+  );
+  let nextPoint: MapRoadPoint | undefined;
+  for (let index = segmentIndex + 1; index < params.routePoints.length; index += 1) {
+    const candidate = params.routePoints[index];
+    if (!pointsEqual(candidate, current) && pointDistance(candidate, current) > POINT_EPS) {
+      nextPoint = candidate;
+      break;
+    }
+  }
+  const rawHeadingDeg = getRouteHeadingAtProgress({
+    points: params.routePoints,
+    progress,
+    coordinateScaleX,
+    coordinateScaleY,
+  });
+  const assetBaseHeadingDeg = params.assetBaseHeadingDegrees ?? 0;
+  const finalHeadingDeg = getRouteHeadingDegrees({
+    routePoints: params.routePoints,
+    progress,
+    assetBaseHeadingDegrees: assetBaseHeadingDeg,
+    coordinateScaleX,
+    coordinateScaleY,
+  });
+  return {
+    routeId: params.routeId,
+    origin: params.origin,
+    destination: params.destination,
+    progress,
+    currentPoint: current,
+    nextPoint,
+    rawHeadingDeg,
+    assetBaseHeadingDeg,
+    finalHeadingDeg,
+  };
+}
+
+export function logMapHeadingDebug(payload: MapHeadingDebugPayload): void {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) {
+    return;
+  }
+  if (!getResolvedMapDebugFlags().heading) {
+    return;
+  }
+  console.log('[map-heading]', {
+    routeId: payload.routeId,
+    origin: payload.origin,
+    destination: payload.destination,
+    progress: payload.progress,
+    currentPoint: payload.currentPoint,
+    nextPoint: payload.nextPoint,
+    rawHeading: payload.rawHeadingDeg,
+    assetBaseHeading: payload.assetBaseHeadingDeg,
+    finalHeading: payload.finalHeadingDeg,
+  });
 }
 
 export function getPointAlongPolyline(
@@ -239,10 +404,11 @@ export function getPointAlongPolyline(
     },
     metrics,
   );
+  const normalizedHeading = normalizeHeadingDegrees(headingDeg);
   return {
     ...position,
-    angleRadians: (headingDeg * Math.PI) / 180,
-    headingDeg,
+    angleRadians: (normalizedHeading * Math.PI) / 180,
+    headingDeg: normalizedHeading,
   };
 }
 

@@ -39,8 +39,8 @@ console.log('\n=== Truck Route Heading Test ===\n');
 
 console.log('Asset base rotation');
 assert(
-  TRUCK_ICON_BASE_ROTATION_DEG === 0,
-  'truck-outline faces right → TRUCK_ICON_BASE_ROTATION_DEG is 0°',
+  TRUCK_ICON_BASE_ROTATION_DEG === 180,
+  'truck-outline 0° faces left → TRUCK_ICON_BASE_ROTATION_DEG is 180°',
 );
 assert(
   TRUCK_ASSET_HEADING_OFFSET_DEG === TRUCK_ICON_BASE_ROTATION_DEG,
@@ -63,8 +63,8 @@ assert(angularDistance(westH, 180) < 0.001, 'west = 180°');
 assert(angularDistance(eastH, westH) > 179.9, 'west = east + ~180°');
 assert(angularDistance(southH, 90) < 0.001, 'south = 90° (Y-down screen)');
 assert(angularDistance(northH, -90) < 0.001, 'north = -90° (Y-down screen)');
-assert(angularDistance(displayRotation(eastH), 0) < 0.001, 'east display rotation ≈ 0°');
-assert(angularDistance(displayRotation(westH), 180) < 0.001, 'west display rotation ≈ 180°');
+assert(angularDistance(displayRotation(eastH), 180) < 0.001, 'east display rotation ≈ 180°');
+assert(angularDistance(displayRotation(westH), 0) < 0.001, 'west display rotation ≈ 0°');
 
 console.log('\nEndpoint / duplicate safety');
 assert(
@@ -103,14 +103,15 @@ assert(shortestHeadingDeltaDegrees(10, 350) === -20, 'shortest-angle prefers -20
 assert(shortestHeadingDeltaDegrees(350, 10) === 20, 'shortest-angle prefers +20 over -340');
 assert(Math.abs(shortestHeadingDeltaDegrees(0, 180)) === 180, 'shortest-angle 180° is exact');
 
-console.log('\nCurved tangent');
+console.log('\nCurved route — current → next segment');
 const curve = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }];
 const curveMid = getRouteHeadingAtProgress({
   points: curve,
   progress: 0.5,
-  lookAheadDistance: 0.1,
 });
-assert(angularDistance(curveMid, 45) < 0.001, 'curve midpoint tangent ≈ 45°');
+assert(angularDistance(curveMid, 90) < 0.001, 'L-route corner uses next segment (south ≈ 90°)');
+const curveEarly = getRouteHeadingAtProgress({ points: curve, progress: 0.25 });
+assert(angularDistance(curveEarly, 0) < 0.001, 'L-route first leg faces east ≈ 0°');
 
 console.log('\nCatalog routes: Bursa ↔ Ankara');
 const bursaAnkara = getRoadRoute('bursa', 'ankara');

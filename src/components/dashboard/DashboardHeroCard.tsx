@@ -17,11 +17,11 @@ import {
   formatMoney,
   formatUnitPrice,
 } from '../../theme';
-import DashboardCardGridOverlay from './DashboardCardGridOverlay';
 import {
   DASHBOARD_HERO_BORDER,
   DASHBOARD_HERO_PADDING,
   DASHBOARD_HERO_RADIUS,
+  DASHBOARD_HERO_PORT_OPACITY,
   dashboardHeroElevation,
   getDashboardMoneyColor,
 } from './dashboardTheme';
@@ -114,7 +114,6 @@ export default function DashboardHeroCard({
 
   return (
     <View style={[styles.card, dashboardHeroElevation]}>
-      <View style={styles.leftPanel} pointerEvents="none" />
       {dashboardAssetFlags.usePortBackground ? (
         <>
           <Image
@@ -122,13 +121,10 @@ export default function DashboardHeroCard({
             style={styles.portAccent}
             resizeMode="cover"
           />
-          <View style={styles.portBlend} pointerEvents="none" />
-          <View style={styles.portTint} pointerEvents="none" />
+          <View style={styles.portMute} pointerEvents="none" />
+          <View style={styles.portEdgeFade} pointerEvents="none" />
         </>
       ) : null}
-      <View style={styles.gridClip} pointerEvents="none">
-        <DashboardCardGridOverlay style={{ opacity: 0.028 }} />
-      </View>
 
       <View style={styles.content}>
         <View style={styles.topRow}>
@@ -224,56 +220,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     overflow: 'hidden',
   },
-  leftPanel: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: '62%',
-    backgroundColor: colors.surface,
-    zIndex: 1,
-  },
   portAccent: {
     position: 'absolute',
     top: 0,
     right: 0,
-    width: '39%',
+    width: '34%',
     height: '100%',
-    opacity: 0.125,
+    opacity: DASHBOARD_HERO_PORT_OPACITY,
     backgroundColor: 'transparent',
   },
-  portBlend: {
+  portMute: {
     position: 'absolute',
     top: 0,
-    left: '54%',
-    width: '12%',
+    right: 0,
+    width: '36%',
     height: '100%',
+    backgroundColor: 'rgba(4, 10, 20, 0.48)',
+  },
+  portEdgeFade: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: '50%',
+    width: '16%',
     backgroundColor: colors.surface,
-    opacity: 0.5,
-    zIndex: 1,
-  },
-  portTint: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: '40%',
-    height: '100%',
-    backgroundColor: 'rgba(4, 10, 20, 0.10)',
-    zIndex: 1,
-  },
-  gridClip: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '36%',
-    overflow: 'hidden',
-    zIndex: 2,
+    opacity: 0.94,
   },
   content: {
     padding: DASHBOARD_HERO_PADDING,
     gap: 8,
-    zIndex: 3,
   },
   topRow: {
     flexDirection: 'row',

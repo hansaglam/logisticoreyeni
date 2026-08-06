@@ -62,7 +62,6 @@ export const gameIcons = {
   more: 'dots-grid',
   pause: 'pause',
   play: 'play',
-  diamond: 'diamond-stone',
 } as const;
 
 export type GameIconName = keyof typeof gameIcons;

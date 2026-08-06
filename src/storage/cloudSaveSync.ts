@@ -9,6 +9,11 @@ import { AppState, type AppStateStatus } from 'react-native';
 
 import { getAccountStatus, getCurrentUserId, initAnonymousAuth } from '../services/authService';
 import {
+  assertLocalSaveOwnerMatchesAuth,
+  isCloudSyncBlockedByAccountSwitch,
+  resolveInterruptedAccountSwitchOnStartup,
+} from '../services/accountSwitchService';
+import {
   getCloudSaveDocumentPath,
   getCloudSaveMeta,
   saveGameToCloud,
@@ -374,6 +379,7 @@ export async function syncLocalSaveToCloud(
     diagnosticId?: string;
     previousUid?: string | null;
     localOwnerUid?: string | null;
+    ownerUid?: string;
   },
 ): Promise<boolean> {
   if (syncInFlight) {
@@ -397,6 +403,23 @@ export async function syncLocalSaveToCloud(
       if (__DEV__) {
         console.log('[cloud-save] sync skipped — account deletion in progress');
       }
+      return false;
+    }
+
+    if (await isCloudSyncBlockedByAccountSwitch()) {
+      if (__DEV__) {
+        console.warn('[cloud-save] sync blocked — account switch in progress or recovery');
+      }
+      setCloudSaveStatus('pending');
+      return false;
+    }
+
+    const { isCloudSyncBlockedBySaveRecovery } = await import('../services/saveRecoveryService');
+    if (await isCloudSyncBlockedBySaveRecovery()) {
+      if (__DEV__) {
+        console.warn('[cloud-save] sync blocked — save recovery required');
+      }
+      setCloudSaveStatus('pending');
       return false;
     }
 
@@ -468,7 +491,35 @@ export async function syncLocalSaveToCloud(
       return false;
     }
 
-    const payload = serializeGameState(options.state);
+    const payload = serializeGameState(options.state, {
+      ownerUid: options.ownerUid ?? options.localOwnerUid ?? ownership.resolvedOwnerUid,
+    });
+    if (options.ownerUid) {
+      payload.ownerUid = options.ownerUid;
+    }
+
+    const ownerGuard = assertLocalSaveOwnerMatchesAuth(payload.ownerUid, uid);
+    if (!ownerGuard.ok) {
+      console.warn('[cloud-save] sync blocked — owner invariant', {
+        reason: ownerGuard.reason,
+        localOwnerUid: payload.ownerUid,
+        authUid: uid,
+      });
+      setCloudSaveStatus('failed', ownerGuard.reason, ownerGuard.reason);
+      logAfterLink({
+        stage: 'write-failed',
+        trigger: reason,
+        authUidPresent: true,
+        authUserAnonymous: account.isAnonymous,
+        localOwnerUidPresent: Boolean(payload.ownerUid),
+        ownerMatchesAuth: false,
+        documentPath: getCloudSaveDocumentPath(uid),
+        firebaseErrorCode: ownerGuard.reason,
+        diagnosticId,
+      });
+      return false;
+    }
+
     const envelopeBytes = estimateCloudSaveDocumentBytes(payload);
     const documentPath = getCloudSaveDocumentPath(uid);
 
@@ -661,6 +712,20 @@ export async function initCloudSaveSync(getState: () => StoreGameState): Promise
         console.warn('[cloud-save] interrupted restore recovered', {
           sameOwner: interruptedRestore.ownerUid === user.uid,
         });
+      }
+    }
+
+    const interruptedSwitch = await resolveInterruptedAccountSwitchOnStartup();
+    if (interruptedSwitch === 'recovery-required') {
+      setCloudSaveStatus('failed', 'account-switch-recovery-required', 'account-switch-recovery-required');
+      if (__DEV__) {
+        console.warn('[cloud-save] account switch recovery required — sync blocked');
+      }
+      return;
+    }
+    if (interruptedSwitch === 'rolled-back') {
+      if (__DEV__) {
+        console.warn('[cloud-save] interrupted account switch rolled back');
       }
     }
 

@@ -54,6 +54,7 @@ import MoreScreen from './src/screens/MoreScreen';
 import VehicleMarketplaceScreen from './src/screens/VehicleMarketplaceScreen';
 import OfflineProgressSummaryModal from './src/components/offline/OfflineProgressSummaryModal';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
+import { selectHasPendingDeliveryIncident } from './src/tutorial/app/selectors';
 import DeliveryIncidentModal from './src/components/delivery/DeliveryIncidentModal';
 import { UI } from './src/theme/ui';
 
@@ -141,17 +142,20 @@ function ActiveScreenFrame({
 function AppShell({ isAppActive }: { isAppActive: boolean }) {
   useGameLoop(isAppActive);
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const [screenRetryKeys, setScreenRetryKeys] = useState<Partial<Record<TabKey, number>>>({});
   const transitionRef = useRef<{ from: TabKey; to: TabKey; startedAt: number } | null>(null);
   const isGameReady = useGameStore((state) => state.isGameReady);
   const navigationRequest = useGameStore((state) => state.navigationRequest);
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
   const pendingOfflineProgressSummary = useGameStore((state) => state.pendingOfflineProgressSummary);
   const dismissOfflineProgressSummary = useGameStore((state) => state.dismissOfflineProgressSummary);
-  const pendingIncidentDeliveryId = useGameStore((state) =>
-    state.activeDeliveries.find(
-      (delivery) =>
-        delivery.incident?.status === 'pending' && delivery.incidentResolved !== true,
-    )?.id,
+  const pendingIncidentDeliveryId = useGameStore(
+    (state) => selectHasPendingDeliveryIncident(state)
+      ? state.activeDeliveries?.find(
+          (delivery) =>
+            delivery.incident?.status === 'pending' && delivery.incidentResolved !== true,
+        )?.id
+      : undefined,
   );
 
   useSpotlightTutorialTriggers({ activeTab, isGameReady });
@@ -225,6 +229,13 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
     }
   };
 
+  const handleScreenRetry = useCallback((tab: TabKey) => {
+    setScreenRetryKeys((current) => ({
+      ...current,
+      [tab]: (current[tab] ?? 0) + 1,
+    }));
+  }, []);
+
   useEffect(() => {
     if (!navigationRequest) return;
     handleTabPress(navigationRequest.tab);
@@ -242,7 +253,11 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
     >
       <StatusBar hidden />
       <ActiveScreenFrame tab={activeTab} transition={transitionRef}>
-        <ScreenErrorBoundary key={activeTab} screenName={activeTab}>
+        <ScreenErrorBoundary
+          key={`${activeTab}-${screenRetryKeys[activeTab] ?? 0}`}
+          screenName={activeTab}
+          onRetry={() => handleScreenRetry(activeTab)}
+        >
           {renderActiveScreen(activeTab, handleTabPress, handleOpenWarehouse)}
         </ScreenErrorBoundary>
       </ActiveScreenFrame>

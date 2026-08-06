@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ScrollView, View } from 'react-native';
 import {
   Dimensions,
   InteractionManager,
-  type ScrollView,
+  type ScrollView as ScrollViewType,
 } from 'react-native';
 
 import { hasGlobalTutorialBlockers } from '../tutorial/app/blockers';
@@ -13,13 +14,15 @@ import {
 } from '../tutorial/app/layout';
 import { logAppTutorialDev } from '../tutorial/app/logger';
 import {
+  measureScrollViewportInWindow,
+  measureTutorialTargetInOverlaySpace,
+  measureTutorialTargetWindowRect,
+} from '../tutorial/app/measureTarget';
+import {
   getTutorialProgressEntry,
   shouldAutoStartTutorial,
 } from '../tutorial/app/persistence';
-import {
-  measureAppTutorialTarget,
-  scrollAppTutorialTargetIntoView,
-} from '../tutorial/app/targetRegistry';
+import { scrollAppTutorialTargetIntoView } from '../tutorial/app/targetRegistry';
 import type {
   AppTutorialId,
   AppTutorialLogAction,
@@ -29,18 +32,67 @@ import type {
   TutorialPlacement,
 } from '../tutorial/app/types';
 import { APP_TUTORIAL_VERSIONS } from '../tutorial/app/versions';
-import {
-  expandTutorialRect,
-  isValidTutorialRect,
-  type TutorialLayoutRect,
-} from '../tutorial/types';
+import { isValidTutorialRect, type TutorialLayoutRect } from '../tutorial/types';
 
 const SCROLL_SETTLE_MAX_MS = 420;
 const TRANSITION_LABEL_DELAY_MS = 150;
+const SCROLL_VIEWPORT_MARGIN_TOP = 80;
+const SCROLL_VIEWPORT_MARGIN_BOTTOM = 24;
+
+async function measureTargetRect(
+  tutorialId: AppTutorialId,
+  step: AppTutorialStep | undefined,
+  overlayRootRef: React.RefObject<View | null>,
+  sequence: number,
+  transitionSequenceRef: React.MutableRefObject<number>,
+): Promise<{
+  overlayRect: TutorialLayoutRect;
+  windowRect: TutorialLayoutRect;
+} | null> {
+  if (!step?.targetId) {
+    return null;
+  }
+  try {
+    return await measureTutorialTargetInOverlaySpace({
+      tutorialId,
+      targetId: step.targetId,
+      overlayRootRef,
+      spotlightPadding: step.spotlightPadding,
+      sequence,
+      transitionSequenceRef,
+      debug: { stepId: step.id },
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function measureWindowTargetRect(
+  tutorialId: AppTutorialId,
+  step: AppTutorialStep | undefined,
+  sequence: number,
+  transitionSequenceRef: React.MutableRefObject<number>,
+): Promise<TutorialLayoutRect | null> {
+  if (!step?.targetId) {
+    return null;
+  }
+  try {
+    return await measureTutorialTargetWindowRect({
+      tutorialId,
+      targetId: step.targetId,
+      spotlightPadding: step.spotlightPadding,
+      sequence,
+      transitionSequenceRef,
+    });
+  } catch {
+    return null;
+  }
+}
 
 export interface UseAppTutorialOptions {
   tutorialId: AppTutorialId;
   steps: AppTutorialStep[];
+  enabled?: boolean;
   autoStart?: boolean;
   tutorialProgress?: TutorialProgressState;
   legacyMarket?: {
@@ -54,28 +106,15 @@ export interface UseAppTutorialOptions {
   hasPendingOfflineSummary?: boolean;
   hasPendingDeliveryIncident?: boolean;
   isAnotherTutorialActive?: boolean;
-  scrollRef?: React.RefObject<ScrollView | null>;
+  scrollRef?: React.RefObject<ScrollViewType | null>;
   scrollYRef?: React.MutableRefObject<number>;
   onCompletePersistence: () => void;
-}
-
-async function measureTargetRect(
-  tutorialId: AppTutorialId,
-  targetId: string | undefined,
-): Promise<TutorialLayoutRect | null> {
-  if (!targetId) {
-    return null;
-  }
-  const rect = await measureAppTutorialTarget(tutorialId, targetId);
-  if (!isValidTutorialRect(rect)) {
-    return null;
-  }
-  return normalizeTutorialRect(expandTutorialRect(rect, 6));
 }
 
 export function useAppTutorial({
   tutorialId,
   steps,
+  enabled = true,
   autoStart = true,
   tutorialProgress,
   legacyMarket,
@@ -90,6 +129,10 @@ export function useAppTutorial({
   scrollYRef,
   onCompletePersistence,
 }: UseAppTutorialOptions) {
+  const safeSteps = steps ?? [];
+  const hasSteps = safeSteps.length > 0;
+  const isEnabled = enabled && hasSteps;
+
   const [visible, setVisible] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [manualReplay, setManualReplay] = useState(false);
@@ -107,8 +150,11 @@ export function useAppTutorial({
   const placementRef = useRef<TutorialPlacement | null>(null);
   const scrollSettleResolversRef = useRef<Array<() => void>>([]);
   const preparingLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayRootRef = useRef<View | null>(null);
 
-  const tutorialVersion = APP_TUTORIAL_VERSIONS[tutorialId];
+  const tutorialVersion = APP_TUTORIAL_VERSIONS[tutorialId] ?? 0;
+  const clampedStepIndex =
+    safeSteps.length === 0 ? 0 : Math.min(Math.max(0, stepIndex), safeSteps.length - 1);
 
   const log = useCallback(
     (action: AppTutorialLogAction, stepId?: string) => {
@@ -143,11 +189,20 @@ export function useAppTutorial({
   );
 
   const canAutoStart = useMemo(() => {
+    if (!isEnabled) return false;
     if (!autoStart) return false;
     if (hasBlockers) return false;
     if (!layoutReady) return false;
     return shouldAutoStartTutorial(tutorialId, tutorialProgress, legacyMarket);
-  }, [autoStart, hasBlockers, layoutReady, legacyMarket, tutorialId, tutorialProgress]);
+  }, [
+    autoStart,
+    hasBlockers,
+    isEnabled,
+    layoutReady,
+    legacyMarket,
+    tutorialId,
+    tutorialProgress,
+  ]);
 
   const clearPreparingLabelTimer = useCallback(() => {
     if (preparingLabelTimerRef.current) {
@@ -159,6 +214,8 @@ export function useAppTutorial({
 
   const beginTransitionUi = useCallback(() => {
     setSpotlightVisible(false);
+    setAnchorRect(null);
+    setLayoutAnchorRect(null);
     clearPreparingLabelTimer();
     preparingLabelTimerRef.current = setTimeout(() => {
       setShowPreparingLabel(true);
@@ -199,14 +256,26 @@ export function useAppTutorial({
       if (!scrollRef || !scrollYRef) {
         return false;
       }
-      const screenHeight = Dimensions.get('window').height;
-      const visibleTop = scrollYRef.current;
-      const visibleBottom = visibleTop + screenHeight * 0.72;
-      const targetBottom = rect.y + rect.height;
-      if (rect.y >= visibleTop + 80 && targetBottom <= visibleBottom) {
+      const scrollViewport = await measureScrollViewportInWindow(scrollRef);
+      if (!scrollViewport) {
         return false;
       }
-      const nextY = Math.max(0, rect.y - screenHeight * 0.22);
+
+      const viewportTop = scrollViewport.y;
+      const viewportBottom = scrollViewport.y + scrollViewport.height;
+      const targetTop = rect.y;
+      const targetBottom = rect.y + rect.height;
+
+      if (
+        targetTop >= viewportTop + SCROLL_VIEWPORT_MARGIN_TOP &&
+        targetBottom <= viewportBottom - SCROLL_VIEWPORT_MARGIN_BOTTOM
+      ) {
+        return false;
+      }
+
+      const desiredTop = viewportTop + Dimensions.get('window').height * 0.22;
+      const delta = targetTop - desiredTop;
+      const nextY = Math.max(0, scrollYRef.current + delta);
       scrollRef.current?.scrollTo({ y: nextY, animated: true });
       await waitForScrollSettle();
       return true;
@@ -214,69 +283,119 @@ export function useAppTutorial({
     [scrollRef, scrollYRef, waitForScrollSettle],
   );
 
-  const commitAnchorRect = useCallback((rect: TutorialLayoutRect | null) => {
-    if (!rect) {
-      setAnchorRect(null);
-      return;
-    }
-    const normalized = normalizeTutorialRect(rect);
-    setLayoutAnchorRect(normalized);
-    setAnchorRect((prev) => {
-      if (!isMeaningfullyDifferentRect(prev, normalized)) {
-        return prev ?? normalized;
+  const commitAnchorRect = useCallback(
+    (overlayRect: TutorialLayoutRect | null, windowRect: TutorialLayoutRect | null) => {
+      if (!overlayRect || !windowRect) {
+        setAnchorRect(null);
+        setLayoutAnchorRect(null);
+        return;
       }
-      return normalized;
-    });
-  }, []);
+      const normalizedOverlay = normalizeTutorialRect(overlayRect);
+      const normalizedWindow = normalizeTutorialRect(windowRect);
+      setLayoutAnchorRect(normalizedWindow);
+      setAnchorRect((prev) => {
+        if (!isMeaningfullyDifferentRect(prev, normalizedOverlay)) {
+          return prev ?? normalizedOverlay;
+        }
+        return normalizedOverlay;
+      });
+    },
+    [],
+  );
+
+  const closeTutorial = useCallback(() => {
+    transitionSequenceRef.current += 1;
+    transitionLockRef.current = false;
+    setVisible(false);
+    setStepIndex(0);
+    setTransitionState('idle');
+    setSpotlightVisible(false);
+    setAnchorRect(null);
+    setLayoutAnchorRect(null);
+    setFallbackMode(false);
+    clearPreparingLabelTimer();
+  }, [clearPreparingLabelTimer]);
 
   const prepareStepIndex = useCallback(
     async (index: number, transitionId: number) => {
-      const step = steps[index];
+      const step = safeSteps[index];
       if (!step) {
+        closeTutorial();
         return;
       }
 
       setTransitionState('scrolling');
       beginTransitionUi();
 
-      if (step.targetId) {
-        await scrollAppTutorialTargetIntoView(tutorialId, step.targetId);
-        if (transitionId !== transitionSequenceRef.current) {
-          return;
-        }
-
-        let rect = await measureTargetRect(tutorialId, step.targetId);
-        if (transitionId !== transitionSequenceRef.current) {
-          return;
-        }
-
-        if (rect) {
-          const scrolled = await scrollRectIntoView(rect);
+      try {
+        if (step.targetId) {
+          await scrollAppTutorialTargetIntoView(tutorialId, step.targetId);
           if (transitionId !== transitionSequenceRef.current) {
             return;
           }
-          if (scrolled) {
-            setTransitionState('measuring');
-            rect = await measureTargetRect(tutorialId, step.targetId);
+
+          let windowRect = await measureWindowTargetRect(
+            tutorialId,
+            step,
+            transitionId,
+            transitionSequenceRef,
+          );
+          if (transitionId !== transitionSequenceRef.current) {
+            return;
+          }
+
+          if (windowRect) {
+            const scrolled = await scrollRectIntoView(windowRect);
             if (transitionId !== transitionSequenceRef.current) {
               return;
             }
+            if (scrolled) {
+              setTransitionState('measuring');
+              windowRect = await measureWindowTargetRect(
+                tutorialId,
+                step,
+                transitionId,
+                transitionSequenceRef,
+              );
+              if (transitionId !== transitionSequenceRef.current) {
+                return;
+              }
+            }
           }
-        }
 
-        if (!isValidTutorialRect(rect)) {
+          const measured = await measureTargetRect(
+            tutorialId,
+            step,
+            overlayRootRef,
+            transitionId,
+            transitionSequenceRef,
+          );
+          if (transitionId !== transitionSequenceRef.current) {
+            return;
+          }
+
+          const rect = measured?.overlayRect ?? null;
+
+          if (!isValidTutorialRect(rect)) {
+            setFallbackMode(true);
+            placementRef.current = 'center';
+            setAnchorRect(null);
+            setLayoutAnchorRect(null);
+            log('target-missing', step.id);
+          } else if (measured) {
+            setFallbackMode(false);
+            commitAnchorRect(measured.overlayRect, measured.windowRect);
+          }
+        } else {
           setFallbackMode(true);
           placementRef.current = 'center';
           setAnchorRect(null);
-          log('target-missing', step.id);
-        } else {
-          setFallbackMode(false);
-          commitAnchorRect(rect);
         }
-      } else {
+      } catch {
         setFallbackMode(true);
         placementRef.current = 'center';
         setAnchorRect(null);
+        log('target-missing', step.id);
       }
 
       if (transitionId !== transitionSequenceRef.current) {
@@ -290,18 +409,19 @@ export function useAppTutorial({
     },
     [
       beginTransitionUi,
+      closeTutorial,
       commitAnchorRect,
       endTransitionUi,
       log,
+      safeSteps,
       scrollRectIntoView,
-      steps,
       tutorialId,
     ],
   );
 
   const requestStepChange = useCallback(
     async (direction: 'next' | 'previous') => {
-      if (transitionLockRef.current) {
+      if (!isEnabled || transitionLockRef.current) {
         return;
       }
       transitionLockRef.current = true;
@@ -311,9 +431,9 @@ export function useAppTutorial({
         }
         const nextIndex =
           direction === 'next'
-            ? Math.min(stepIndex + 1, steps.length - 1)
-            : Math.max(0, stepIndex - 1);
-        if (nextIndex === stepIndex) {
+            ? Math.min(clampedStepIndex + 1, safeSteps.length - 1)
+            : Math.max(0, clampedStepIndex - 1);
+        if (nextIndex === clampedStepIndex) {
           return;
         }
 
@@ -323,29 +443,46 @@ export function useAppTutorial({
         transitionLockRef.current = false;
       }
     },
-    [prepareStepIndex, stepIndex, steps.length, transitionState],
+    [clampedStepIndex, isEnabled, prepareStepIndex, safeSteps.length, transitionState],
   );
 
   const remeasureActiveTarget = useCallback(async () => {
-    if (!visible || transitionState !== 'idle' || transitionLockRef.current) {
+    if (!isEnabled || !visible || transitionState !== 'idle' || transitionLockRef.current) {
       return;
     }
-    const step = steps[stepIndex];
+    const step = safeSteps[clampedStepIndex];
     if (!step?.targetId) {
       return;
     }
     const transitionId = transitionSequenceRef.current;
-    const rect = await measureTargetRect(tutorialId, step.targetId);
+    const measured = await measureTargetRect(
+      tutorialId,
+      step,
+      overlayRootRef,
+      transitionId,
+      transitionSequenceRef,
+    );
     if (transitionId !== transitionSequenceRef.current) {
       return;
     }
-    if (isValidTutorialRect(rect)) {
-      commitAnchorRect(rect);
+    if (measured && isValidTutorialRect(measured.overlayRect)) {
+      commitAnchorRect(measured.overlayRect, measured.windowRect);
     }
-  }, [commitAnchorRect, stepIndex, steps, transitionState, tutorialId, visible]);
+  }, [
+    clampedStepIndex,
+    commitAnchorRect,
+    isEnabled,
+    safeSteps,
+    transitionState,
+    tutorialId,
+    visible,
+  ]);
 
   const startTutorial = useCallback(
     (mode: 'auto-open' | 'manual-open') => {
+      if (!isEnabled) {
+        return;
+      }
       transitionSequenceRef.current += 1;
       transitionLockRef.current = false;
       placementRef.current = null;
@@ -357,7 +494,7 @@ export function useAppTutorial({
       setVisible(true);
       log(mode === 'manual-open' ? 'replayed' : 'auto-open');
     },
-    [log],
+    [isEnabled, log],
   );
 
   useEffect(() => {
@@ -409,6 +546,12 @@ export function useAppTutorial({
     [clearPreparingLabelTimer],
   );
 
+  useEffect(() => {
+    if (!isEnabled && visible) {
+      closeTutorial();
+    }
+  }, [closeTutorial, isEnabled, visible]);
+
   const finishTutorial = useCallback(
     (action: 'completed' | 'step-skipped' | 'dismissed') => {
       transitionSequenceRef.current += 1;
@@ -420,19 +563,28 @@ export function useAppTutorial({
       setAnchorRect(null);
       setLayoutAnchorRect(null);
       if (!manualReplay) {
-        onCompletePersistence();
+        try {
+          onCompletePersistence();
+        } catch (error) {
+          if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            console.warn('[tutorial] persistence-failed', {
+              tutorialId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
-      log(action, steps[stepIndex]?.id);
+      log(action, safeSteps[clampedStepIndex]?.id);
     },
-    [log, manualReplay, onCompletePersistence, stepIndex, steps],
+    [clampedStepIndex, log, manualReplay, onCompletePersistence, safeSteps, tutorialId],
   );
 
   const openManual = useCallback(() => {
-    if (hasBlockers || transitionLockRef.current) {
+    if (!isEnabled || hasBlockers || transitionLockRef.current) {
       return;
     }
     startTutorial('manual-open');
-  }, [hasBlockers, startTutorial]);
+  }, [hasBlockers, isEnabled, startTutorial]);
 
   const isTransitioning = transitionState !== 'idle' || transitionLockRef.current;
   const progressEntry = getTutorialProgressEntry(
@@ -442,10 +594,11 @@ export function useAppTutorial({
   );
 
   return {
-    visible,
-    stepIndex,
-    steps,
-    isActive: visible,
+    visible: isEnabled && visible,
+    stepIndex: clampedStepIndex,
+    steps: safeSteps,
+    isActive: isEnabled && visible,
+    isEnabled,
     canAutoStart,
     transitionState,
     isTransitioning,
@@ -455,6 +608,7 @@ export function useAppTutorial({
     spotlightVisible,
     showPreparingLabel,
     placementRef,
+    overlayRootRef,
     progressEntry,
     openManual,
     requestStepChange,

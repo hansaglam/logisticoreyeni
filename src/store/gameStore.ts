@@ -2214,7 +2214,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   completeTutorial: (tutorialId: AppTutorialId) => {
     const state = get();
-    const nextProgress = applyTutorialCompletion(state.tutorialProgress, tutorialId);
+    const nextProgress = applyTutorialCompletion(
+      normalizeTutorialProgress(state.tutorialProgress),
+      tutorialId,
+    );
     if (tutorialId === 'market') {
       set({
         ...createCompletedMarketTutorialState(),

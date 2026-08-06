@@ -1,13 +1,13 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
+import type { FlatList } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { QuickAccessAction } from '../../navigation/quickAccessTypes';
@@ -19,6 +19,8 @@ import {
   MANAGEMENT_PANEL_MAX_HEIGHT_RATIO,
   MANAGEMENT_PANEL_PADDING,
 } from './managementTheme';
+import { estimateManagementPanelContentHeight } from './managementLayout';
+import type { ManagementItem } from './managementTypes';
 import { useManagementItems } from './useManagementPanelData';
 
 export interface ManagementPanelProps {
@@ -35,19 +37,29 @@ export default function ManagementPanel({
   onQuickAccess,
 }: ManagementPanelProps) {
   const items = useManagementItems();
-  const scrollRef = useRef<ScrollView>(null);
+  const listRef = useRef<FlatList<ManagementItem>>(null);
   const tapLockRef = useRef(false);
-  const [panelWidth, setPanelWidth] = useState(0);
-  const { height: windowHeight } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
-  const maxPanelHeight =
-    windowHeight * MANAGEMENT_PANEL_MAX_HEIGHT_RATIO - Math.max(insets.top, 0) * 0.15;
+  const panelContentWidth =
+    windowWidth - spacing.lg * 2 - MANAGEMENT_PANEL_PADDING * 2;
   const scrollBottomPadding = Math.max(bottomOffset, spacing.md) + spacing.sm;
+
+  const maxPanelHeightCap =
+    windowHeight * MANAGEMENT_PANEL_MAX_HEIGHT_RATIO - Math.max(insets.top, 0) * 0.15;
+
+  const naturalPanelHeight = useMemo(
+    () => estimateManagementPanelContentHeight(items.length) + scrollBottomPadding,
+    [items.length, scrollBottomPadding],
+  );
+
+  const panelHeight = Math.min(naturalPanelHeight, maxPanelHeightCap);
+  const needsScroll = naturalPanelHeight > maxPanelHeightCap;
 
   useEffect(() => {
     if (visible) {
-      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
       tapLockRef.current = false;
     }
   }, [visible]);
@@ -69,6 +81,18 @@ export default function ManagementPanel({
     [onClose, onQuickAccess],
   );
 
+  const listHeader = (
+    <View style={styles.header}>
+      <View style={styles.headerIconWrap}>
+        <GameIcon name="quickAccess" size={18} color={colors.info} />
+      </View>
+      <View style={styles.headerCopy}>
+        <Text style={styles.title}>Yönetim</Text>
+        <Text style={styles.subtitle}>Şirketini, filonu ve operasyonlarını yönet</Text>
+      </View>
+    </View>
+  );
+
   return (
     <Modal
       visible={visible}
@@ -82,45 +106,20 @@ export default function ManagementPanel({
           style={[styles.panelAnchor, { bottom: bottomOffset }]}
           pointerEvents="box-none"
         >
-          <Pressable onPress={(event) => event.stopPropagation()}>
+          <Pressable style={styles.panelPressable} onPress={(event) => event.stopPropagation()}>
             <View
-              style={[styles.panel, { maxHeight: maxPanelHeight }]}
-              onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}
+              style={[styles.panel, { height: panelHeight, maxHeight: maxPanelHeightCap }]}
               accessibilityViewIsModal
             >
-              <View style={styles.header}>
-                <View style={styles.headerIconWrap}>
-                  <GameIcon name="quickAccess" size={18} color={colors.info} />
-                </View>
-                <View style={styles.headerCopy}>
-                  <Text style={styles.title}>Yönetim</Text>
-                  <Text style={styles.subtitle}>
-                    Şirketini, filonu ve operasyonlarını yönet
-                  </Text>
-                </View>
-              </View>
-
-              <ScrollView
-                ref={scrollRef}
-                style={styles.scroll}
-                contentContainerStyle={[
-                  styles.scrollContent,
-                  { paddingBottom: scrollBottomPadding },
-                ]}
-                showsVerticalScrollIndicator
-                indicatorStyle="white"
-                bounces
-                keyboardShouldPersistTaps="handled"
-                nestedScrollEnabled
-              >
-                {panelWidth > 0 ? (
-                  <ManagementGrid
-                    items={items}
-                    containerWidth={panelWidth - MANAGEMENT_PANEL_PADDING * 2}
-                    onItemPress={handleItemPress}
-                  />
-                ) : null}
-              </ScrollView>
+              <ManagementGrid
+                listRef={listRef}
+                items={items}
+                contentWidth={panelContentWidth}
+                onItemPress={handleItemPress}
+                listHeaderComponent={listHeader}
+                contentBottomPadding={scrollBottomPadding}
+                scrollEnabled={needsScroll}
+              />
             </View>
           </Pressable>
         </View>
@@ -138,15 +137,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: spacing.lg,
     right: spacing.lg,
+    alignItems: 'stretch',
+  },
+  panelPressable: {
+    width: '100%',
+    alignSelf: 'stretch',
   },
   panel: {
+    width: '100%',
     backgroundColor: colors.surface2,
     borderRadius: 30,
     borderWidth: 1,
     borderColor: 'rgba(56, 129, 200, 0.28)',
     paddingHorizontal: MANAGEMENT_PANEL_PADDING,
     paddingTop: MANAGEMENT_PANEL_PADDING,
-    paddingBottom: MANAGEMENT_PANEL_PADDING - 4,
+    overflow: 'hidden',
     shadowColor: '#0EA5E9',
     shadowOpacity: 0.08,
     shadowRadius: 14,
@@ -187,11 +192,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '500',
-  },
-  scroll: {
-    flexGrow: 0,
-  },
-  scrollContent: {
-    flexGrow: 1,
   },
 });

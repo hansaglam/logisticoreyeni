@@ -7,15 +7,20 @@ import {
   scrollAppTutorialTargetIntoView,
 } from '../../tutorial/app/targetRegistry';
 
-export type MarketTutorialTargetId =
+export type MarketTutorialStaticTargetId =
   | 'city-chips'
-  | 'stock-badge'
-  | 'price-trend'
-  | 'buy-button'
-  | 'warehouse-transfer'
   | 'profit-summary'
   | 'refresh-button'
   | 'products-section';
+
+export type MarketTutorialProductTargetKind = 'price' | 'chart' | 'buy' | 'transfer';
+
+export type MarketTutorialProductTargetId =
+  `market-product-${MarketTutorialProductTargetKind}:${string}`;
+
+export type MarketTutorialTargetId =
+  | MarketTutorialStaticTargetId
+  | MarketTutorialProductTargetId;
 
 const MARKET_TUTORIAL_ID = 'market' as const;
 
@@ -23,6 +28,13 @@ type MarketTutorialTargetEntry = {
   measure: () => Promise<TutorialLayoutRect | null>;
   scrollIntoView?: () => Promise<void>;
 };
+
+export function buildMarketProductTargetId(
+  kind: MarketTutorialProductTargetKind,
+  productId: string,
+): MarketTutorialProductTargetId {
+  return `market-product-${kind}:${productId}`;
+}
 
 export function registerMarketTutorialTarget(
   id: MarketTutorialTargetId,

@@ -11,6 +11,7 @@ import {
   MARKET_TUTORIAL_FULL_STEPS,
   MARKET_TUTORIAL_SHORT_STEPS,
   getMarketTutorialSteps,
+  resolveMarketTutorialStepTargetId,
 } from '../src/components/market/marketTutorialSteps';
 import {
   computeTooltipLayout,
@@ -117,6 +118,14 @@ console.log('\nMarket state routing');
     'unavailable market detected',
   );
   assert(getMarketTutorialSteps('unavailable').length === 3, 'unavailable uses short flow');
+  assert(
+    resolveMarketTutorialStepTargetId('buy', 'fruit') === 'market-product-buy:fruit',
+    'buy step resolves product-scoped target',
+  );
+  assert(
+    getMarketTutorialSteps('live', 'fruit')[3].targetId === 'market-product-buy:fruit',
+    'full flow buy step uses snapshot product target',
+  );
 }
 
 console.log('\nTransition state machine');
@@ -131,7 +140,8 @@ console.log('\nTransition state machine');
   assert(hook.includes('transitionSequenceRef'), 'async sequence token');
   assert(hook.includes('transitionId !== transitionSequenceRef.current'), 'stale async ignored');
   assert(hook.includes('setStepIndex(index)'), 'step committed after prepare');
-  assert(hook.includes('notifyScrollEnd'), 'scroll settle notifier');
+  assert(hook.includes('measureTutorialTargetInOverlaySpace'), 'overlay-space measurement');
+  assert(hook.includes('overlayRootRef'), 'overlay root ref wired');
   assert(hook.includes('waitForScrollSettle'), 'scroll completion waiter');
   assert(!hook.includes('setInterval'), 'no periodic timer in hook');
   assert(!overlay.includes('setInterval'), '600ms interval removed from overlay');
@@ -140,6 +150,7 @@ console.log('\nTransition state machine');
   assert(overlay.includes('Hazırlanıyor'), 'preparing label on slow transitions');
   assert(overlay.includes('spotlightVisible'), 'spotlight hidden during transition');
   assert(overlay.includes('pressLockRef'), 'onPress re-entry guard');
+  assert(screen.includes('buildMarketProductTargetId'), 'product-scoped market targets');
   assert(screen.includes('onMomentumScrollEnd'), 'iOS scroll end wired');
   assert(screen.includes('onScrollEndDrag'), 'Android scroll end wired');
 }

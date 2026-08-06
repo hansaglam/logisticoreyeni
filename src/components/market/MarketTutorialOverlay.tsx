@@ -49,6 +49,7 @@ interface MarketTutorialOverlayProps {
   spotlightVisible: boolean;
   showPreparingLabel: boolean;
   placementRef: React.MutableRefObject<TooltipPlacement | null>;
+  overlayRootRef?: React.RefObject<View | null>;
   onRequestStepChange: (direction: 'next' | 'previous') => void;
   onSkip: () => void;
   onComplete: () => void;
@@ -87,6 +88,7 @@ export default function MarketTutorialOverlay({
   spotlightVisible,
   showPreparingLabel,
   placementRef,
+  overlayRootRef,
   onRequestStepChange,
   onSkip,
   onComplete,
@@ -188,7 +190,7 @@ export default function MarketTutorialOverlay({
       onRequestClose={controlsDisabled ? undefined : onSkip}
       accessibilityViewIsModal
     >
-      <View style={styles.overlayRoot} pointerEvents="box-none">
+      <View ref={overlayRootRef} style={styles.overlayRoot} pointerEvents="box-none" collapsable={false}>
         <SpotlightMask width={screen.width} height={screen.height} holeRect={holeRect} />
 
         {holeRect ? (

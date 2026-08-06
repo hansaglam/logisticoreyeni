@@ -203,12 +203,12 @@ export default function FleetScreen() {
   const { width: screenWidth } = useWindowDimensions();
   const driverHireLayout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
   const { scrollBottomPadding: fleetScrollBottomPadding } = useTabBarLayout();
-  const trucks = useGameStore((state) => state.player.trucks ?? []);
+  const trucks = useGameStore((state) => state.player?.trucks ?? []);
   const currentTime = useGameStore((state) => state.currentTime);
-  const trailers = useGameStore((state) => state.player.trailers ?? []);
-  const drivers = useGameStore((state) => state.player.drivers ?? []);
-  const playerMoney = useGameStore((state) => state.player.money ?? 0);
-  const homeCityId = useGameStore((state) => state.player.homeCityId);
+  const trailers = useGameStore((state) => state.player?.trailers ?? []);
+  const drivers = useGameStore((state) => state.player?.drivers ?? []);
+  const playerMoney = useGameStore((state) => state.player?.money ?? 0);
+  const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const visibleTrucks = useMemo(
     () => getVisibleFleetTrucks(trucks, currentTime, activeDeliveries),

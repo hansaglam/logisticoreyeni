@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import AppTutorialErrorBoundary from './AppTutorialErrorBoundary';
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import { SpotlightMask } from '../tutorial/SpotlightMask';
 import { ActionButton } from '../ui';
@@ -36,6 +37,7 @@ interface AppTutorialOverlayProps {
   spotlightVisible: boolean;
   showPreparingLabel: boolean;
   placementRef: React.MutableRefObject<TutorialPlacement | null>;
+  overlayRootRef?: React.RefObject<View | null>;
   noticeText?: string | null;
   onRequestStepChange: (direction: 'next' | 'previous') => void;
   onSkip: () => void;
@@ -54,7 +56,19 @@ function clampHoleRect(
   return { x, y, width, height };
 }
 
-export default function AppTutorialOverlay({
+export default function AppTutorialOverlay(props: AppTutorialOverlayProps) {
+  if (!props.visible) {
+    return null;
+  }
+
+  return (
+    <AppTutorialErrorBoundary tutorialId={props.tutorialId} fallback={null}>
+      <AppTutorialOverlayContent {...props} />
+    </AppTutorialErrorBoundary>
+  );
+}
+
+function AppTutorialOverlayContent({
   visible,
   steps,
   stepIndex,
@@ -66,6 +80,7 @@ export default function AppTutorialOverlay({
   spotlightVisible,
   showPreparingLabel,
   placementRef,
+  overlayRootRef,
   noticeText,
   onRequestStepChange,
   onSkip,
@@ -78,9 +93,13 @@ export default function AppTutorialOverlay({
   const [tooltipHeight, setTooltipHeight] = useState(180);
   const pressLockRef = useRef(false);
 
-  const step = steps[stepIndex];
-  const isLastStep = stepIndex >= steps.length - 1;
-  const stepLabel = `${stepIndex + 1} / ${steps.length}`;
+  const safeSteps = steps ?? [];
+  const safeStepIndex =
+    safeSteps.length === 0 ? 0 : Math.min(Math.max(0, stepIndex), safeSteps.length - 1);
+  const step = safeSteps[safeStepIndex] ?? null;
+  const isLastStep = safeSteps.length > 0 && safeStepIndex >= safeSteps.length - 1;
+  const stepLabel =
+    safeSteps.length > 0 ? `${safeStepIndex + 1} / ${safeSteps.length}` : '0 / 0';
   const controlsDisabled = isTransitioning || transitionState !== 'idle';
 
   useEffect(() => {
@@ -161,7 +180,7 @@ export default function AppTutorialOverlay({
       onRequestClose={controlsDisabled ? undefined : onSkip}
       accessibilityViewIsModal
     >
-      <View style={styles.overlayRoot} pointerEvents="box-none">
+      <View ref={overlayRootRef} style={styles.overlayRoot} pointerEvents="box-none" collapsable={false}>
         <SpotlightMask width={screen.width} height={screen.height} holeRect={holeRect} />
 
         {holeRect ? (
@@ -254,7 +273,7 @@ export default function AppTutorialOverlay({
               </Text>
             </Pressable>
             <View style={styles.navButtons}>
-              {stepIndex > 0 ? (
+              {safeStepIndex > 0 ? (
                 <Pressable
                   onPress={() => handleDirectionPress('previous')}
                   style={[styles.secondaryBtn, controlsDisabled && styles.disabledBtn]}

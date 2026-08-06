@@ -7,7 +7,7 @@
   "scripts": {
     "start": "expo start",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npx tsx scripts/check-require-cycles.ts && npx tsx scripts/vehicle-marketplace-ui-test.ts && npx tsx scripts/vehicle-marketplace-regression-test.ts && npx tsx scripts/leaderboard-regression-test.ts && npx tsx scripts/ad-privacy-regression-test.ts && npx tsx scripts/reputation-regression-test.ts && npx tsx scripts/market-tutorial-regression-test.ts && npx tsx scripts/app-tutorial-regression-test.ts",
+    "verify": "npm run typecheck && npx tsx scripts/check-require-cycles.ts && npx tsx scripts/vehicle-marketplace-ui-test.ts && npx tsx scripts/vehicle-marketplace-regression-test.ts && npx tsx scripts/leaderboard-regression-test.ts && npx tsx scripts/ad-privacy-regression-test.ts && npx tsx scripts/reputation-regression-test.ts && npx tsx scripts/market-tutorial-regression-test.ts && npx tsx scripts/app-tutorial-regression-test.ts && npx tsx scripts/tutorial-coordinate-regression-test.ts && npx tsx scripts/app-tutorial-safety-regression-test.ts",
     "validate:store-production": "npx tsx scripts/validate-store-production-config.ts",
     "validate:production-build": "npm run validate:store-production && npx tsx scripts/validate-production-build-config.ts",
     "production:backend-check": "npx tsx scripts/global-economy-production-health-test.ts && npx tsx scripts/production-backend-health-check.ts",

@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ScrollView } from 'react-native';
 
 import { getMarketTutorialSteps } from '../components/market/marketTutorialSteps';
 import { useAppTutorial } from './useAppTutorial';
+import type { ProductId } from '../types/game';
 import type { MarketTutorialMarketState, MarketTutorialPersistence } from '../tutorial/marketTutorialState';
 
 export interface UseMarketTutorialOptions {
@@ -13,15 +14,20 @@ export interface UseMarketTutorialOptions {
   blockingModals: boolean;
   hasPendingOfflineSummary: boolean;
   hasPendingDeliveryIncident: boolean;
+  anchorProductId?: ProductId | null;
   scrollRef: React.RefObject<ScrollView | null>;
   scrollYRef: React.MutableRefObject<number>;
   onCompletePersistence: () => void;
 }
 
 export function useMarketTutorial(options: UseMarketTutorialOptions) {
+  const [snapshotProductId, setSnapshotProductId] = useState<ProductId | null>(null);
+  const anchorProductIdRef = useRef<ProductId | null | undefined>(options.anchorProductId ?? null);
+  anchorProductIdRef.current = options.anchorProductId ?? null;
+
   const steps = useMemo(
-    () => getMarketTutorialSteps(options.marketState),
-    [options.marketState],
+    () => getMarketTutorialSteps(options.marketState, snapshotProductId),
+    [options.marketState, snapshotProductId],
   );
 
   const tutorial = useAppTutorial({
@@ -37,6 +43,18 @@ export function useMarketTutorial(options: UseMarketTutorialOptions) {
     scrollYRef: options.scrollYRef,
     onCompletePersistence: options.onCompletePersistence,
   });
+
+  useEffect(() => {
+    if (tutorial.visible) {
+      if (!snapshotProductId && anchorProductIdRef.current) {
+        setSnapshotProductId(anchorProductIdRef.current);
+      }
+      return;
+    }
+    if (snapshotProductId) {
+      setSnapshotProductId(null);
+    }
+  }, [snapshotProductId, tutorial.visible]);
 
   return tutorial;
 }

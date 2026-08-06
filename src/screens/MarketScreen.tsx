@@ -23,6 +23,7 @@ import MarketMetricStrip from '../components/market/MarketMetricStrip';
 import MarketTutorialHelpButton from '../components/market/MarketTutorialHelpButton';
 import MarketTutorialOverlay from '../components/market/MarketTutorialOverlay';
 import { MarketTutorialTarget } from '../components/market/MarketTutorialTarget';
+import { buildMarketProductTargetId } from '../components/market/marketTutorialTargetRegistry';
 import ProductMarketDetailModal from '../components/market/ProductMarketDetailModal';
 import MarketSparkline from '../components/market/MarketSparkline';
 import {
@@ -62,6 +63,7 @@ import {
   resolveMarketTutorialMarketState,
   useMarketTutorial,
 } from '../hooks/useMarketTutorial';
+import { selectHasPendingDeliveryIncident } from '../tutorial/app/selectors';
 import { countMarketContractMatches } from '../utils/marketContractMatch';
 import {
   gameDayFromTime,
@@ -557,6 +559,11 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
       ? `Stok: ${depotQuantity.toFixed(0)} t`
       : 'Depoda yok';
 
+  const priceTargetId = buildMarketProductTargetId('price', market.productId);
+  const chartTargetId = buildMarketProductTargetId('chart', market.productId);
+  const buyTargetId = buildMarketProductTargetId('buy', market.productId);
+  const transferTargetId = buildMarketProductTargetId('transfer', market.productId);
+
   const cardBody = (
     <View style={[styles.productCardInner, { height: cardHeight }]}>
       <View style={[styles.productLeftCol, { width: leftColWidth }]}>
@@ -568,25 +575,39 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
             {getProductName(market.productId)}
           </Text>
         </View>
-        <Text style={styles.productPrice} numberOfLines={1}>
-          {formatMoney(shownPrice)}
-          <Text style={styles.productPriceUnit}> / ton</Text>
-        </Text>
-        <Text
-          style={[styles.priceChangeText, { color: priceChangeDisplay.color }]}
-          numberOfLines={1}
-        >
-          {priceChangeDisplay.label}
-        </Text>
-        <View style={styles.productBadgeRow}>
-          {showTutorialTargets ? (
-            <MarketTutorialTarget id="stock-badge">
+        {showTutorialTargets ? (
+          <MarketTutorialTarget id={priceTargetId} style={styles.tutorialProductPriceTarget}>
+            <Text style={styles.productPrice} numberOfLines={1}>
+              {formatMoney(shownPrice)}
+              <Text style={styles.productPriceUnit}> / ton</Text>
+            </Text>
+            <Text
+              style={[styles.priceChangeText, { color: priceChangeDisplay.color }]}
+              numberOfLines={1}
+            >
+              {priceChangeDisplay.label}
+            </Text>
+            <View style={styles.productBadgeRow}>
               <StatusBadge label={getMarketStatusLabel(status)} variant={statusVariant} size="sm" />
-            </MarketTutorialTarget>
-          ) : (
-            <StatusBadge label={getMarketStatusLabel(status)} variant={statusVariant} size="sm" />
-          )}
-        </View>
+            </View>
+          </MarketTutorialTarget>
+        ) : (
+          <>
+            <Text style={styles.productPrice} numberOfLines={1}>
+              {formatMoney(shownPrice)}
+              <Text style={styles.productPriceUnit}> / ton</Text>
+            </Text>
+            <Text
+              style={[styles.priceChangeText, { color: priceChangeDisplay.color }]}
+              numberOfLines={1}
+            >
+              {priceChangeDisplay.label}
+            </Text>
+            <View style={styles.productBadgeRow}>
+              <StatusBadge label={getMarketStatusLabel(status)} variant={statusVariant} size="sm" />
+            </View>
+          </>
+        )}
         {eventLabel ? (
           <Text style={styles.eventLabel} numberOfLines={1}>
             {eventLabel}
@@ -596,18 +617,18 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
 
       {showTutorialTargets ? (
         <View style={[styles.productChartCol, { minWidth: chartMinWidth }]}>
-          <MarketTutorialTarget id="price-trend">
+          <MarketTutorialTarget id={chartTargetId}>
             <MarketSparkline
               productId={market.productId}
               priceHistory={market.priceHistory}
               currentPrice={market.currentPrice}
               changePercent={trend.changePercent}
             />
-            <Text style={styles.productHint} numberOfLines={2}>
-              {hint}
-            </Text>
           </MarketTutorialTarget>
-          <MarketTutorialTarget id="warehouse-transfer">
+          <Text style={styles.productHint} numberOfLines={2}>
+            {hint}
+          </Text>
+          <MarketTutorialTarget id={transferTargetId}>
             <Text style={styles.stockMeta} numberOfLines={1}>
               {stockMeta}
               {profitDisplay ? (
@@ -638,7 +659,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
 
       <View style={[styles.productActionsCol, { width: actionColWidth }]}>
         {showTutorialTargets ? (
-          <MarketTutorialTarget id="buy-button">
+          <MarketTutorialTarget id={buyTargetId}>
             <Pressable
               style={[styles.productBuyBtn, buyButtonDisabled && styles.productBtnDisabled]}
               onPress={() => onBuyPress(market.productId)}
@@ -908,12 +929,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const pendingOfflineProgressSummary = useGameStore(
     (state) => state.pendingOfflineProgressSummary,
   );
-  const hasPendingDeliveryIncident = useGameStore((state) =>
-    state.activeDeliveries.some(
-      (delivery) =>
-        delivery.incident?.status === 'pending' && delivery.incidentResolved !== true,
-    ),
-  );
+  const hasPendingDeliveryIncident = useGameStore(selectHasPendingDeliveryIncident);
 
   const tutorialMarketState = useMemo(
     () =>
@@ -924,6 +940,22 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       }),
     [cities.length, products.length, globalSnapshot, fetchUiStatus],
   );
+
+  const tutorialAnchorProductId = useMemo(() => {
+    if (activeTab !== 'products' || !selectedCityId) {
+      return null;
+    }
+    const city = cities.find((item) => item.id === selectedCityId);
+    if (!city) {
+      return null;
+    }
+    for (const product of products) {
+      if (getProductMarket(city, product.id)) {
+        return product.id;
+      }
+    }
+    return null;
+  }, [activeTab, cities, products, selectedCityId]);
 
   const marketTutorial = useMarketTutorial({
     persistence: {
@@ -936,6 +968,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     blockingModals: tradeModalVisible || alertModalVisible || detailModalVisible,
     hasPendingOfflineSummary: pendingOfflineProgressSummary != null,
     hasPendingDeliveryIncident,
+    anchorProductId: tutorialAnchorProductId,
     scrollRef,
     scrollYRef,
     onCompletePersistence: completeMarketTutorial,
@@ -973,6 +1006,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       spotlightVisible: marketTutorial.spotlightVisible,
       showPreparingLabel: marketTutorial.showPreparingLabel,
       placementRef: marketTutorial.placementRef,
+      overlayRootRef: marketTutorial.overlayRootRef,
       onRequestStepChange: (direction: 'next' | 'previous') => {
         void marketTutorial.requestStepChange(direction);
       },
@@ -1841,7 +1875,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         {activeTab === 'products' ? (
           <View style={styles.tabContent}>
             <View style={styles.cityScrollerRow}>
-              <MarketTutorialTarget id="city-chips" style={styles.cityScrollerWrap}>
+              <MarketTutorialTarget id="city-chips" style={[styles.cityScrollerWrap, styles.tutorialStretchTarget]}>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -2125,6 +2159,13 @@ const styles = StyleSheet.create({
   cityScrollerWrap: {
     flex: 1,
     minWidth: 0,
+  },
+  tutorialStretchTarget: {
+    alignSelf: 'stretch',
+  },
+  tutorialProductPriceTarget: {
+    alignSelf: 'stretch',
+    width: '100%',
   },
   marketTitle: {
     fontSize: 24,

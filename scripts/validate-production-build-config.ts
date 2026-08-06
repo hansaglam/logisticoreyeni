@@ -112,7 +112,11 @@ assert(
   gradle.includes(`applicationId '${EXPECTED_PACKAGE}'`),
   'build.gradle applicationId',
 );
-assert(gradle.includes("signingConfig signingConfigs.release"), 'release uses release signing');
+assert(
+  gradle.includes('signingConfig signingConfigs.release') ||
+    gradle.includes('android.buildTypes.release.signingConfig android.signingConfigs.release'),
+  'release uses release signing',
+);
 assert(!gradle.includes('signingConfigs.debug\n            def enableShrink'), 'release not debug-signed');
 
 const versionCodeMatch = gradle.match(/versionCode\s+(\d+)/);

@@ -17,6 +17,7 @@ import {
   applyTutorialCompletion,
   getTutorialProgressEntry,
   mergeLegacyMarketTutorialProgress,
+  normalizeTutorialProgress,
   shouldAutoStartTutorial,
 } from '../src/tutorial/app/persistence';
 import {
@@ -142,6 +143,11 @@ console.log('\nEmpty fallbacks');
   assert(leaderboardEmpty.length === 3, 'empty leaderboard fallback has 3 steps');
 }
 
+console.log('\nMalformed progress normalization');
+{
+  assert(JSON.stringify(normalizeTutorialProgress(null)) === '{}', 'null progress normalizes');
+  assert(JSON.stringify(normalizeTutorialProgress([] as unknown as never)) === '{}', 'array progress normalizes');
+}
 console.log('\nSave model');
 {
   const saveSource = readFileSync('src/storage/saveGame.ts', 'utf8');

@@ -10,6 +10,10 @@ import {
 } from 'react-native';
 
 import { formatIncidentChoiceEffectSummary } from '../../simulation/deliveryIncidents';
+import {
+  getOperationChoiceDisabledReason,
+  getOperationChoiceNetCashDelta,
+} from '../../simulation/deliveryOperationChoice';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
 import type { DeliveryIncidentType } from '../../types/game';
@@ -46,6 +50,7 @@ export default function DeliveryIncidentModal({
   const [loadingChoiceId, setLoadingChoiceId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const resolveDeliveryIncident = useGameStore((state) => state.resolveDeliveryIncident);
+  const playerMoney = useGameStore((state) => state.player.money);
   const delivery = useGameStore((state) =>
     focusedDeliveryId
       ? state.activeDeliveries.find((item) => item.id === focusedDeliveryId)
@@ -137,15 +142,28 @@ export default function DeliveryIncidentModal({
               >
                 {incident.choices.map((choice) => {
                   const loading = loadingChoiceId === choice.id;
+                  const disabledReason = getOperationChoiceDisabledReason({
+                    playerMoney,
+                    effects: choice.effects,
+                    incidentResolved: resolved,
+                    deliveryActive:
+                      delivery.status === 'on_route' || delivery.status === 'preparing',
+                    isResolving: loadingChoiceId != null,
+                  });
+                  const disabled = disabledReason != null;
+                  const showFundsWarning =
+                    disabledReason === 'Bu işlem için yeterli nakit yok.' &&
+                    getOperationChoiceNetCashDelta(choice.effects) < 0;
+
                   return (
                     <Pressable
                       key={choice.id}
                       style={({ pressed }) => [
                         styles.choiceButton,
-                        pressed && styles.choicePressed,
-                        loadingChoiceId != null && styles.choiceDisabled,
+                        pressed && !disabled && styles.choicePressed,
+                        disabled && styles.choiceDisabled,
                       ]}
-                      disabled={loadingChoiceId != null}
+                      disabled={disabled}
                       onPress={() => void handleChoice(choice.id)}
                     >
                       <View style={styles.choiceCopy}>
@@ -156,6 +174,9 @@ export default function DeliveryIncidentModal({
                         <Text style={styles.effectText} numberOfLines={2}>
                           {formatIncidentChoiceEffectSummary(choice.effects)}
                         </Text>
+                        {showFundsWarning ? (
+                          <Text style={styles.fundsWarningText}>{disabledReason}</Text>
+                        ) : null}
                       </View>
                       {loading ? <ActivityIndicator color={colors.accentBlue} /> : null}
                     </Pressable>
@@ -239,5 +260,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   primaryButtonText: { ...typography.buttonText, color: '#FFFFFF' },
+  fundsWarningText: { ...typography.caption, color: colors.warning, fontWeight: '600' },
   errorText: { ...typography.caption, color: colors.danger },
 });

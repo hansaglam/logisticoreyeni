@@ -2,7 +2,7 @@
  * LogistiCore - Haftalık Liderlik Tablosu (V1)
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -12,6 +12,10 @@ import {
   View,
 } from 'react-native';
 
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import {
   AppCard,
   AppScreen,
@@ -28,14 +32,28 @@ import {
   type AccountStatus,
 } from '../services/authService';
 import {
+  LEADERBOARD_EMPTY_SEASON_MESSAGE,
+  getLeaderboardKindMessage,
+  getLeaderboardKindTitle,
+  mapLeaderboardErrorCodeToKind,
+} from '../domain/leaderboardErrorModel';
+import {
+  applyLeaderboardFetchError,
+  applyLeaderboardFetchSuccess,
+  beginLeaderboardRefresh,
+  type LeaderboardScreenState,
+} from '../domain/leaderboardScreenState';
+import {
   fetchWeeklyLeaderboard,
   isLeaderboardEligible,
+  resetLeaderboardSubmitCache,
+  submitCurrentLeaderboardScore,
   type LeaderboardRankedEntry,
 } from '../services/leaderboardService';
 import { fetchUsernameProfile } from '../services/usernameService';
 import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
 import { leaderboardConfig } from '../config/leaderboard';
-import { getWeeklySeasonLabel } from '../utils/leaderboardSeason';
+import { formatLeaderboardSeasonRange } from '../utils/leaderboardSeason';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { colors, spacing, typography } from '../theme';
 
@@ -264,61 +282,98 @@ function UsernamePromptCard({ onOpenAccountSettings }: { onOpenAccountSettings?:
 export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: LeaderboardScreenProps) {
   const { contentBottomPadding } = useTabBarLayout();
   const [account, setAccount] = useState<AccountStatus>(DEFAULT_ACCOUNT_STATUS);
-  const [fetchResult, setFetchResult] = useState<Awaited<
-    ReturnType<typeof fetchWeeklyLeaderboard>
-  > | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [screenState, setScreenState] = useState<LeaderboardScreenState>({ status: 'loading' });
   const [usernameReady, setUsernameReady] = useState<boolean | null>(null);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const requestSeqRef = React.useRef(0);
+  const listRef = useRef<FlatList<LeaderboardRankedEntry>>(null);
+  const lastAuthUidRef = React.useRef<string | null>(null);
 
-  const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);
   const eligible = isLeaderboardEligible();
   const uid = account.uid;
+
+  const fetchData =
+    screenState.status === 'ready' || screenState.status === 'refreshing'
+      ? screenState.data
+      : null;
+  const seasonLabel = useMemo(
+    () =>
+      formatLeaderboardSeasonRange(
+        fetchData?.seasonStartMs,
+        fetchData?.seasonEndMs,
+      ),
+    [fetchData?.seasonEndMs, fetchData?.seasonStartMs],
+  );
+  const entries = fetchData?.entries ?? [];
+  const playerEntry = fetchData?.playerEntry ?? null;
+  const playerRank = fetchData?.playerRank ?? null;
+
+  const leaderboardTutorial = useScreenAppTutorial({
+    tutorialId: 'leaderboard',
+    layoutReady,
+    stepOptions: { hasLeaderboardEntries: entries.length > 0 },
+  });
+
+  const isLoading = screenState.status === 'loading';
+  const isRefreshing = screenState.status === 'refreshing';
+  const errorKind = screenState.status === 'error' ? screenState.error : null;
 
   const refreshAccount = useCallback(() => {
     setAccount(getAccountStatus() ?? DEFAULT_ACCOUNT_STATUS);
   }, []);
 
   const loadLeaderboard = useCallback(async (refresh = false) => {
-    if (refresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
+    const requestSeq = ++requestSeqRef.current;
+    setScreenState((current) => beginLeaderboardRefresh(current));
 
     if (!isLeaderboardEligible()) {
-      setFetchResult({
-        ok: true,
-        seasonKey: '',
-        entries: [],
-        playerEntry: null,
-        playerRank: null,
-      });
-      setError(null);
-      setIsLoading(false);
-      setIsRefreshing(false);
+      if (requestSeq !== requestSeqRef.current) return;
+      setScreenState({ status: 'unauthenticated' });
       return;
     }
 
-    const result = await fetchWeeklyLeaderboard(uid);
-    setFetchResult(result);
-    if (!result.ok) {
-      logLeaderboardError(result.errorCode, result.error);
-      setError(resolveLeaderboardErrorMessage(result.errorCode, result.error));
-    } else {
-      setError(null);
+    const profile = await fetchUsernameProfile();
+    if (requestSeq !== requestSeqRef.current) return;
+    const hasUsername = profile.ok && profile.profile.usernameSetupCompleted;
+    setUsernameReady(hasUsername);
+    if (!hasUsername) {
+      setScreenState({ status: 'username-required' });
+      return;
     }
 
-    setIsLoading(false);
-    setIsRefreshing(false);
+    await submitCurrentLeaderboardScore({ force: true });
+    if (requestSeq !== requestSeqRef.current) return;
+
+    const result = await fetchWeeklyLeaderboard(uid);
+    if (requestSeq !== requestSeqRef.current) return;
+
+    if (!result.ok) {
+      setScreenState(
+        applyLeaderboardFetchError(
+          mapLeaderboardErrorCodeToKind(result.errorCode),
+        ),
+      );
+      logLeaderboardError(result.errorCode, result.error);
+      return;
+    }
+
+    setScreenState(applyLeaderboardFetchSuccess(result));
   }, [uid]);
 
   useEffect(() => {
     refreshAccount();
-    const unsub = subscribeAuthState(refreshAccount);
+    const unsub = subscribeAuthState((user) => {
+      refreshAccount();
+      const nextUid = user && !user.isAnonymous ? user.uid : null;
+      if (lastAuthUidRef.current !== null && lastAuthUidRef.current !== nextUid) {
+        resetLeaderboardSubmitCache();
+        setScreenState({ status: 'loading' });
+      }
+      lastAuthUidRef.current = nextUid;
+      void loadLeaderboard(true);
+    });
     return unsub;
-  }, [refreshAccount]);
+  }, [loadLeaderboard, refreshAccount]);
 
   useEffect(() => {
     if (!eligible) {
@@ -348,9 +403,9 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
     return unsub;
   }, [loadLeaderboard]);
 
-  useEffect(() => {
-    void loadLeaderboard();
-  }, [loadLeaderboard]);
+  const playerOutsideTop =
+    Boolean(playerEntry) &&
+    !entries.some((entry) => entry.uid === playerEntry?.uid);
 
   const renderItem = useCallback(
     ({ item }: { item: LeaderboardRankedEntry }) => (
@@ -361,12 +416,8 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
 
   const keyExtractor = useCallback((item: LeaderboardRankedEntry) => item.uid, []);
 
-  const entries = fetchResult?.entries ?? [];
-  const playerEntry = fetchResult?.playerEntry ?? null;
-  const playerRank = fetchResult?.playerRank ?? null;
-
   const listFooter = useMemo(() => {
-    if (error || entries.length === 0 || entries.length > 2) {
+    if (errorKind || entries.length === 0 || entries.length > 2) {
       return null;
     }
     return (
@@ -377,25 +428,27 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
         </Text>
       </View>
     );
-  }, [error, entries.length]);
+  }, [errorKind, entries.length]);
 
   const listHeader = useMemo(
     () => (
       <View style={styles.headerBlock}>
-        <AppCard variant="soft" style={styles.seasonCard} padded>
-          <View style={styles.seasonRow}>
-            <GameIcon name="company" size={18} color={colors.accentBlue} />
-            <View style={styles.seasonText}>
-              <Text style={styles.seasonTitle}>Haftalık sezon</Text>
-              <Text style={styles.seasonDates}>{seasonLabel}</Text>
+        <AppTutorialTarget tutorialId="leaderboard" targetId="weekly-season">
+          <AppCard variant="soft" style={styles.seasonCard} padded>
+            <View style={styles.seasonRow}>
+              <GameIcon name="company" size={18} color={colors.accentBlue} />
+              <View style={styles.seasonText}>
+                <Text style={styles.seasonTitle}>Haftalık sezon</Text>
+                <Text style={styles.seasonDates}>{seasonLabel}</Text>
+              </View>
+              <StatusBadge label="Canlı" variant="success" size="sm" />
             </View>
-            <StatusBadge label="Canlı" variant="success" size="sm" />
-          </View>
-          <Text style={styles.seasonHint}>
-            Sıralama şirket puanına göre yapılır. Nakit, filo ve operasyon gücün bir arada
-            değerlendirilir.
-          </Text>
-        </AppCard>
+            <Text style={styles.seasonHint}>
+              Sıralama şirket puanına göre yapılır. Nakit, filo ve operasyon gücün bir arada
+              değerlendirilir.
+            </Text>
+          </AppCard>
+        </AppTutorialTarget>
 
         {!eligible ? <GuestPromptCard /> : null}
         {eligible && usernameReady === false ? (
@@ -403,70 +456,110 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
         ) : null}
 
         {eligible && playerEntry ? (
-          <PlayerSummaryCard
-            entry={playerEntry}
-            rank={playerRank}
-            outsideTop={playerRank === null && entries.length > 0}
-          />
+          <AppTutorialTarget tutorialId="leaderboard" targetId="my-rank">
+            <PlayerSummaryCard
+              entry={playerEntry}
+              rank={playerRank}
+              outsideTop={playerOutsideTop}
+            />
+          </AppTutorialTarget>
         ) : null}
 
-        <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
+        <AppTutorialTarget tutorialId="leaderboard" targetId="company-ranking">
+          <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
+        </AppTutorialTarget>
       </View>
     ),
-    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, entries.length],
+    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, playerOutsideTop],
+  );
+
+  const headerRightAction = (
+    <AppTutorialHelpButton {...leaderboardTutorial.helpButtonProps} />
   );
 
   if (isLoading && entries.length === 0) {
     return (
-      <AppScreen scrollBottomPadding={0}>
-        {onBack ? (
-          <ScreenHeader title="Liderlik Tablosu" compact onBack={onBack} />
-        ) : (
-          <ScreenHeader title="Liderlik Tablosu" compact />
-        )}
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={colors.accentBlue} />
-          <Text style={styles.loadingText}>Sıralama yükleniyor...</Text>
-        </View>
-      </AppScreen>
+      <View style={styles.screenRoot}>
+        <AppScreen scrollBottomPadding={0}>
+          {onBack ? (
+            <ScreenHeader
+              title="Liderlik Tablosu"
+              compact
+              onBack={onBack}
+              rightAction={headerRightAction}
+            />
+          ) : (
+            <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header">
+              <ScreenHeader title="Liderlik Tablosu" compact rightAction={headerRightAction} />
+            </AppTutorialTarget>
+          )}
+          <View style={styles.loadingWrap} onLayout={() => setLayoutReady(true)}>
+            <ActivityIndicator size="large" color={colors.accentBlue} />
+            <Text style={styles.loadingText}>Sıralama yükleniyor...</Text>
+          </View>
+        </AppScreen>
+        <AppTutorialOverlay {...leaderboardTutorial.overlayProps} />
+      </View>
     );
   }
 
   return (
-    <AppScreen scrollBottomPadding={0}>
-      {onBack ? (
-        <ScreenHeader title="Liderlik Tablosu" subtitle={seasonLabel} compact onBack={onBack} />
-      ) : (
-        <ScreenHeader title="Liderlik Tablosu" subtitle={seasonLabel} compact />
-      )}
+    <View style={styles.screenRoot}>
+      <AppScreen scrollBottomPadding={0}>
+        {onBack ? (
+          <ScreenHeader
+            title="Liderlik Tablosu"
+            subtitle={seasonLabel}
+            compact
+            onBack={onBack}
+            rightAction={headerRightAction}
+          />
+        ) : (
+          <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header">
+            <ScreenHeader
+              title="Liderlik Tablosu"
+              subtitle={seasonLabel}
+              compact
+              rightAction={headerRightAction}
+            />
+          </AppTutorialTarget>
+        )}
 
-      <FlatList
-        data={entries}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
-        style={styles.list}
+        <FlatList
+          ref={listRef}
+          data={entries}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          style={styles.list}
+          onLayout={() => setLayoutReady(true)}
+          onScroll={leaderboardTutorial.handleScroll}
+          onScrollEndDrag={leaderboardTutorial.handleScrollEnd}
+          onMomentumScrollEnd={leaderboardTutorial.handleScrollEnd}
+          scrollEventThrottle={16}
         ListHeaderComponent={listHeader}
         ListFooterComponent={listFooter}
         ListEmptyComponent={
-          error ? (
+          errorKind ? (
             <EmptyState
-              title="Sıralama yüklenemedi"
-              message={error}
+              title={getLeaderboardKindTitle(errorKind)}
+              message={getLeaderboardKindMessage(errorKind)}
               icon="warning"
               actionLabel="Tekrar dene"
               onAction={() => void loadLeaderboard(true)}
             />
-          ) : (
+          ) : screenState.status === 'empty' ? (
             <EmptyState
               title="Henüz sıralama yok"
-              message={
-                eligible
-                  ? 'Bu hafta ilk katılan sen ol. Oyun ilerledikçe puanın otomatik güncellenir.'
-                  : 'Bağlı hesaplar katıldıkça haftalık sıralama burada görünecek.'
-              }
+              message={LEADERBOARD_EMPTY_SEASON_MESSAGE}
               icon="company"
             />
-          )
+          ) : screenState.status === 'username-required' ? null : screenState.status === 'unauthenticated' ? (
+            <EmptyState
+              title="Sıralamaya katılmak için hesabını bağla"
+              message="Haftalık liderlik tablosu yalnızca Google veya Apple ile bağlı hesaplar için geçerlidir."
+              icon="account"
+            />
+          ) : null
         }
         contentContainerStyle={[styles.listContent, { paddingBottom: contentBottomPadding }]}
         showsVerticalScrollIndicator={false}
@@ -481,11 +574,16 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
         maxToRenderPerBatch={16}
         windowSize={8}
       />
-    </AppScreen>
+      </AppScreen>
+      <AppTutorialOverlay {...leaderboardTutorial.overlayProps} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+  },
   list: {
     flex: 1,
   },

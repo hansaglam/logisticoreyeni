@@ -24,6 +24,7 @@ import {
   verifyRawSaveChecksum,
 } from '../utils/saveIntegrity';
 import { reputationBalance, contractGenerationBalance } from '../config/balance';
+import { normalizeReputationHistory } from '../simulation/reputationService';
 import { APP_VERSION } from '../config/appVersion';
 import { CITIES } from '../data/cities';
 import {
@@ -57,6 +58,10 @@ import {
 } from '../onboarding/onboardingProgress';
 import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
 import { normalizeMarketTutorialState } from '../tutorial/marketTutorialState';
+import {
+  mergeLegacyMarketTutorialProgress,
+  normalizeTutorialProgress,
+} from '../tutorial/app/persistence';
 import { normalizeCitiesPriceHistory, seedProductPriceHistory } from '../utils/productPriceHistory';
 import { normalizeMarketAlerts } from '../utils/marketAlerts';
 import type { MonetizationState } from '../types/monetization';
@@ -96,7 +101,7 @@ import type {
 export const SAVE_STORAGE_KEY = 'logisticore_save_v1';
 export const SAVE_BACKUP_INVALID_KEY = 'logisticore_save_backup_invalid';
 export const SAVE_BACKUP_MIGRATED_KEY = 'logisticore_save_backup_migrated';
-export const SAVE_GAME_VERSION = 4;
+export const SAVE_GAME_VERSION = 6;
 
 export interface SaveGameMeta {
   savedAt: number;
@@ -161,6 +166,7 @@ export interface SaveGamePayload {
   spotlightTutorial?: SpotlightTutorialPersistence;
   marketTutorialCompleted?: boolean;
   marketTutorialVersion?: number;
+  tutorialProgress?: import('../tutorial/app/types').TutorialProgressState;
   marketAlerts?: MarketPriceAlert[];
   worldEvents?: WorldEvent[];
   worldEventsVersion?: number;
@@ -184,6 +190,7 @@ export interface SaveGamePayload {
   cashRecoveryAssistanceGrantedAtMs?: number;
   lastRoadsideFuelAssistanceAt?: number;
   fuelTransactionKeys?: string[];
+  reputationHistory?: import('../domain/reputationModel').ReputationHistoryEntry[];
 }
 
 export interface SaveBackupStatus {
@@ -645,6 +652,20 @@ export function createDefaultSaveFallbacks(
           ? payload.marketTutorialVersion
           : undefined,
     }),
+    tutorialProgress: mergeLegacyMarketTutorialProgress(
+      normalizeTutorialProgress(
+        isRecord(payload.tutorialProgress)
+          ? (payload.tutorialProgress as import('../tutorial/app/types').TutorialProgressState)
+          : undefined,
+      ),
+      {
+        marketTutorialCompleted: payload.marketTutorialCompleted === true,
+        marketTutorialVersion:
+          typeof payload.marketTutorialVersion === 'number'
+            ? payload.marketTutorialVersion
+            : undefined,
+      },
+    ),
     marketAlerts: normalizeMarketAlerts(
       isArray(payload.marketAlerts) ? (payload.marketAlerts as MarketPriceAlert[]) : undefined,
     ),
@@ -784,6 +805,20 @@ export function normalizeSavePayload(
           ? withFallbacks.marketTutorialVersion
           : undefined,
     }),
+    tutorialProgress: mergeLegacyMarketTutorialProgress(
+      normalizeTutorialProgress(
+        isRecord(withFallbacks.tutorialProgress)
+          ? (withFallbacks.tutorialProgress as import('../tutorial/app/types').TutorialProgressState)
+          : undefined,
+      ),
+      {
+        marketTutorialCompleted: withFallbacks.marketTutorialCompleted === true,
+        marketTutorialVersion:
+          typeof withFallbacks.marketTutorialVersion === 'number'
+            ? withFallbacks.marketTutorialVersion
+            : undefined,
+      },
+    ),
     marketAlerts: normalizeMarketAlerts(withFallbacks.marketAlerts as MarketPriceAlert[] | undefined),
     ...normalizeWorldEventsState(
       withFallbacks.worldEvents,
@@ -847,6 +882,7 @@ export function normalizeSavePayload(
           .filter((key): key is string => typeof key === 'string' && key.length > 0)
           .slice(-32)
       : [],
+    reputationHistory: normalizeReputationHistory(withFallbacks.reputationHistory),
   };
 }
 
@@ -1527,6 +1563,15 @@ export function serializeGameState(
       Number.isFinite(state.marketTutorialVersion)
         ? Math.max(0, Math.floor(state.marketTutorialVersion))
         : 0,
+    tutorialProgress: structuredClone(
+      mergeLegacyMarketTutorialProgress(
+        normalizeTutorialProgress(state.tutorialProgress),
+        {
+          marketTutorialCompleted: state.marketTutorialCompleted === true,
+          marketTutorialVersion: state.marketTutorialVersion,
+        },
+      ),
+    ),
     marketAlerts: structuredClone(state.marketAlerts ?? []),
     worldEvents: structuredClone(state.worldEvents ?? []),
     worldEventsVersion: state.worldEventsVersion ?? 1,
@@ -1567,6 +1612,7 @@ export function serializeGameState(
       state.cashRecoveryAssistanceGrantedAtMs,
     lastRoadsideFuelAssistanceAt: state.lastRoadsideFuelAssistanceAt,
     fuelTransactionKeys: state.fuelTransactionKeys?.slice(-32),
+    reputationHistory: normalizeReputationHistory(state.reputationHistory).slice(0, 20),
   };
 }
 
@@ -1671,6 +1717,13 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       marketTutorialCompleted: payload.marketTutorialCompleted === true,
       marketTutorialVersion: payload.marketTutorialVersion,
     }),
+    tutorialProgress: mergeLegacyMarketTutorialProgress(
+      normalizeTutorialProgress(payload.tutorialProgress),
+      {
+        marketTutorialCompleted: payload.marketTutorialCompleted === true,
+        marketTutorialVersion: payload.marketTutorialVersion,
+      },
+    ),
     marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
     ...normalizeWorldEventsState(
       payload.worldEvents,
@@ -1776,6 +1829,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
           .filter((key): key is string => typeof key === 'string' && key.length > 0)
           .slice(-32)
       : [],
+    reputationHistory: normalizeReputationHistory(payload.reputationHistory),
   };
 }
 

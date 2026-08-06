@@ -4,8 +4,13 @@
  * Premium gelir/gider analizi — şirket sağlığı ve ticaret performansı.
  */
 
-import React, { useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 
 import {
   AppCard,
@@ -13,6 +18,7 @@ import {
   EmptyState,
   GameIcon,
   ProgressBar,
+  ScreenHeader,
   SectionTitle,
   SmallStatPill,
   StatusBadge,
@@ -291,6 +297,15 @@ function FinanceMetricStrip({
 }
 
 export default function FinanceScreen() {
+  const [layoutReady, setLayoutReady] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const financeTutorial = useScreenAppTutorial({
+    tutorialId: 'finance',
+    layoutReady,
+    scrollRef,
+  });
+
   const player = useGameStore((state) => state.player);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
@@ -609,18 +624,33 @@ export default function FinanceScreen() {
   }
 
   return (
-    <AppScreen scroll embedded>
-      <Text style={styles.embeddedSubtitle}>
-        Gelirleri, giderleri ve şirket sağlığını takip et
-      </Text>
-
-      <FinanceMetricStrip
-        cash={cash}
-        totalRevenue={totalRevenue}
-        totalExpenses={totalExpenses}
-        netProfit={netProfit}
-        dailyFixedCosts={dailyFixedCosts}
+    <View style={styles.screenRoot}>
+      <AppScreen
+        scroll
+        embedded
+        scrollRef={scrollRef}
+        onScroll={financeTutorial.handleScroll}
+        onScrollEndDrag={financeTutorial.handleScrollEnd}
+        onMomentumScrollEnd={financeTutorial.handleScrollEnd}
+        scrollEventThrottle={16}
+      >
+        <View onLayout={() => setLayoutReady(true)}>
+      <ScreenHeader
+        title="Finans"
+        subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"
+        compact
+        rightAction={<AppTutorialHelpButton {...financeTutorial.helpButtonProps} />}
       />
+
+      <AppTutorialTarget tutorialId="finance" targetId="cash-flow">
+        <FinanceMetricStrip
+          cash={cash}
+          totalRevenue={totalRevenue}
+          totalExpenses={totalExpenses}
+          netProfit={netProfit}
+          dailyFixedCosts={dailyFixedCosts}
+        />
+      </AppTutorialTarget>
 
       {showFallbackHint ? (
         <Text style={styles.summaryHint}>Finans özeti tahmini verilerle hesaplanıyor.</Text>
@@ -642,13 +672,17 @@ export default function FinanceScreen() {
       />
 
       <SectionTitle title="Gelirler" compact />
-      <BreakdownCard
-        lines={incomeLines}
-        hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
-      />
+      <AppTutorialTarget tutorialId="finance" targetId="income">
+        <BreakdownCard
+          lines={incomeLines}
+          hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
+        />
+      </AppTutorialTarget>
 
       <SectionTitle title="Teslimat Giderleri" compact />
-      <BreakdownCard lines={deliveryExpenseLines} />
+      <AppTutorialTarget tutorialId="finance" targetId="expenses">
+        <BreakdownCard lines={deliveryExpenseLines} />
+      </AppTutorialTarget>
 
       <SectionTitle
         title="Sabit Giderler"
@@ -822,26 +856,28 @@ export default function FinanceScreen() {
       )}
 
       <SectionTitle title="Finansal Sağlık" compact />
-      <AppCard
-        variant="soft"
-        style={[styles.healthCard, { borderColor: healthColor }]}
-        padded={false}
-      >
-        <View style={styles.healthHeader}>
-          <View>
-            <Text style={[styles.healthScore, { color: healthColor }]}>
-              {Math.round(financialHealth)}
-              <Text style={styles.healthScoreSuffix}> / 100</Text>
-            </Text>
-            <Text style={[styles.healthLabel, { color: healthColor }]}>{healthLabel}</Text>
+      <AppTutorialTarget tutorialId="finance" targetId="net-profit">
+        <AppCard
+          variant="soft"
+          style={[styles.healthCard, { borderColor: healthColor }]}
+          padded={false}
+        >
+          <View style={styles.healthHeader}>
+            <View>
+              <Text style={[styles.healthScore, { color: healthColor }]}>
+                {Math.round(financialHealth)}
+                <Text style={styles.healthScoreSuffix}> / 100</Text>
+              </Text>
+              <Text style={[styles.healthLabel, { color: healthColor }]}>{healthLabel}</Text>
+            </View>
+            <GameIcon name="success" size={22} color={healthColor} />
           </View>
-          <GameIcon name="success" size={22} color={healthColor} />
-        </View>
-        <ProgressBar progress={financialHealth / 100} color={healthColor} height={8} />
-        <Text style={styles.healthHint} numberOfLines={2}>
-          Nakit rezervi, sabit giderler, filo kondisyonu ve sözleşme geçmişine göre hesaplanır.
-        </Text>
-      </AppCard>
+          <ProgressBar progress={financialHealth / 100} color={healthColor} height={8} />
+          <Text style={styles.healthHint} numberOfLines={2}>
+            Nakit rezervi, sabit giderler, filo kondisyonu ve sözleşme geçmişine göre hesaplanır.
+          </Text>
+        </AppCard>
+      </AppTutorialTarget>
 
       <SectionTitle title="Son Finans Hareketleri" compact />
       {recentLedgerEntries.length === 0 ? (
@@ -904,11 +940,17 @@ export default function FinanceScreen() {
           </AppCard>
         </>
       ) : null}
-    </AppScreen>
+        </View>
+      </AppScreen>
+      <AppTutorialOverlay {...financeTutorial.overlayProps} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',

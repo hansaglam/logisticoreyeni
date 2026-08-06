@@ -136,6 +136,7 @@ const OPTIONAL_UNDEFINED_FIELD_SUFFIXES = new Set([
   'effectSummary',
   'incidentGenerated',
   'incidentResolved',
+  'incidentResolutionHistory',
 ]);
 
 function getPathLeafKey(path: string): string {

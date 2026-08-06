@@ -182,13 +182,17 @@ function MapTruckTrackingCard({
     ? formatEtaHours(metrics.etaHours)
     : 'ETA beklemede';
 
-  const CardWrapper = onPress ? TouchableOpacity : View;
+  const CardContainer = View;
 
   return (
-    <CardWrapper
-      style={[styles.card, showProgressBar && styles.cardDelivery]}
-      {...(onPress ? { onPress, activeOpacity: 0.88 } : {})}
-    >
+    <CardContainer style={[styles.card, showProgressBar && styles.cardDelivery]}>
+      <TouchableOpacity
+        style={styles.cardPressArea}
+        onPress={onPress}
+        activeOpacity={onPress ? 0.88 : 1}
+        disabled={!onPress}
+        accessibilityRole={onPress ? 'button' : undefined}
+      >
       <View style={styles.cardRow}>
         <View style={styles.artworkBox}>
           {artwork ? (
@@ -289,11 +293,17 @@ function MapTruckTrackingCard({
           <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
         </View>
       ) : null}
+      </TouchableOpacity>
 
       {showDeliveryBoost && activeDelivery ? (
-        <DeliveryBoostPanel delivery={activeDelivery} truck={truck} compact />
+        <DeliveryBoostPanel
+          delivery={activeDelivery}
+          truck={truck}
+          compact
+          currentGameTime={currentTime}
+        />
       ) : null}
-    </CardWrapper>
+    </CardContainer>
   );
 }
 
@@ -334,6 +344,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 9,
     marginBottom: 8,
+  },
+  cardPressArea: {
+    gap: 0,
   },
   cardDelivery: {
     minHeight: MAP_TRUCK_CARD_HEIGHT_DELIVERY + 52,

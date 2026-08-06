@@ -11,7 +11,7 @@ import {
   shouldRenderActiveDeliveryMarker,
 } from '../src/components/map/mapDeliveryOverlayPolicy';
 import { resolveTruckMapLocation } from '../src/components/map/mapTruckLocation';
-import { TRUCK_ICON_BASE_ROTATION_DEG } from '../src/components/map/mapTheme';
+import { TRUCK_ASSET_FORWARD_OFFSET_DEG } from '../src/components/map/mapTheme';
 import { getWorldMapCityPosition } from '../src/data/worldMapPositions';
 import type { Delivery, Truck } from '../src/types/game';
 
@@ -152,8 +152,8 @@ assert(
   'only one moving truck marker is enabled per active delivery',
 );
 assert(
-  TRUCK_ICON_BASE_ROTATION_DEG === 180,
-  'truck asset uses canonical 180° heading offset (faces left at 0°)',
+  TRUCK_ASSET_FORWARD_OFFSET_DEG === 0,
+  'truck asset uses canonical 0° forward offset (faces right at 0°)',
 );
 
 console.log('\nSynthetic route headings');
@@ -181,21 +181,23 @@ assert(
 );
 assert(angularDistance(southHeading, 90) < 0.001, 'southbound screen heading is 90°');
 assert(angularDistance(northHeading, -90) < 0.001, 'northbound screen heading is -90°');
-assert(angularDistance(curveHeading, 45) < 0.001, 'curved node heading follows smoothed tangent');
+assert(angularDistance(curveHeading, 0) < 0.001, 'L-route corner keeps active segment tangent (east ≈ 0°)');
 
 const beforeCurveHeading = getRouteHeadingAtProgress({
   points: curvedRoute,
   progress: 0.499,
-  lookAheadDistance: 0.1,
 });
 const afterCurveHeading = getRouteHeadingAtProgress({
   points: curvedRoute,
   progress: 0.501,
-  lookAheadDistance: 0.1,
 });
 assert(
-  angularDistance(beforeCurveHeading, afterCurveHeading) < 5,
-  'small progress changes do not cause a 180° heading jump',
+  angularDistance(beforeCurveHeading, 0) < 0.001,
+  'just before corner still faces east',
+);
+assert(
+  angularDistance(afterCurveHeading, 90) < 0.001,
+  'just after corner faces south on next segment',
 );
 
 const duplicateRoute = [

@@ -5,8 +5,13 @@
  * başlangıç rehberi, modül grid ve günlük destek.
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 
 import type { TabKey } from '../navigation/tabTypes';
 import {
@@ -23,6 +28,8 @@ import {
   DASHBOARD_SPLIT_MIN_WIDTH,
   dashboardStyles,
 } from '../components/dashboard';
+import ReputationDetailSheet from '../components/dashboard/ReputationDetailSheet';
+import { selectReputationSummary } from '../domain/reputationModel';
 import DashboardDailyOpsBonusCard from '../components/monetization/DashboardDailyOpsBonusCard';
 import { createDefaultMissionsState } from '../config/missions';
 import { createDefaultRetentionState } from '../simulation/retentionProgress';
@@ -89,13 +96,24 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
   const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const reputationHistory = useGameStore((state) => state.reputationHistory) ?? [];
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
   const addNotification = useGameStore((state) => state.addNotification);
+  const [reputationSheetVisible, setReputationSheetVisible] = useState(false);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const { width: screenWidth } = useWindowDimensions();
   const useSplitLayout = screenWidth >= DASHBOARD_SPLIT_MIN_WIDTH;
 
   useOnboardingScreenVisit('Dashboard');
+
+  const dashboardTutorial = useScreenAppTutorial({
+    tutorialId: 'dashboard',
+    layoutReady,
+    blockingModals: reputationSheetVisible,
+    scrollRef,
+  });
 
   const runningDeliveries = useMemo(
     () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
@@ -158,6 +176,11 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         ? calculateCompanyScore({ player, cities, products, financeLedger, currentTime })
         : 0,
     [player, cities, products, financeLedger, currentTime],
+  );
+
+  const reputationSummary = useMemo(
+    () => selectReputationSummary({ player, reputationHistory }),
+    [player, reputationHistory],
   );
 
   const retentionSummary = useMemo(
@@ -297,7 +320,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     <View style={styles.screenRoot}>
       <DashboardBackground />
       <ScrollView
+        ref={scrollRef}
         style={styles.scroll}
+        onScroll={dashboardTutorial.handleScroll}
+        onScrollEndDrag={dashboardTutorial.handleScrollEnd}
+        onMomentumScrollEnd={dashboardTutorial.handleScrollEnd}
+        scrollEventThrottle={16}
         contentContainerStyle={[
           styles.screenContent,
           {
@@ -308,7 +336,14 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
           },
         ]}
         showsVerticalScrollIndicator={false}
+        onLayout={() => setLayoutReady(true)}
       >
+      <View style={styles.headerRow}>
+        <View style={styles.headerSpacer} />
+        <AppTutorialHelpButton {...dashboardTutorial.helpButtonProps} />
+      </View>
+
+      <AppTutorialTarget tutorialId="dashboard" targetId="resource-bar">
       <DashboardResourceBar
         money={player.money}
         level={levelProgress.level}
@@ -316,7 +351,9 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         isPaused={isPaused}
         onTogglePause={isPaused ? resumeGame : pauseGame}
       />
+      </AppTutorialTarget>
 
+      <AppTutorialTarget tutorialId="dashboard" targetId="company-summary">
       <DashboardHeroCard
         companyName={player.companyName}
         level={levelProgress.level}
@@ -328,9 +365,18 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         isMaxLevel={levelProgress.isMaxLevel}
         money={player.money}
         companyScore={companyScore}
-        reputation={player.reputation ?? 0}
+        reputationSummary={reputationSummary}
         idleTrucks={fleetSnapshot.idleTrucks}
         activeDeliveries={runningDeliveries.length}
+        onReputationPress={() => setReputationSheetVisible(true)}
+      />
+      </AppTutorialTarget>
+
+      <ReputationDetailSheet
+        visible={reputationSheetVisible}
+        summary={reputationSummary}
+        history={reputationHistory}
+        onClose={() => setReputationSheetVisible(false)}
       />
 
       {showCashWarning ? (
@@ -377,6 +423,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       ) : null}
 
       <View style={dashboardStyles.lowerSection}>
+      <AppTutorialTarget tutorialId="dashboard" targetId="management-tools">
       <DashboardModuleGrid
         onNavigate={handleNavigate}
         onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
@@ -385,6 +432,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         warehouseFillRatio={warehouseFillRatio}
         onPressTip={(target) => handleTipPress(target)}
       />
+      </AppTutorialTarget>
 
       <DashboardDailyOpsBonusCard
         playerLevel={levelProgress.level}
@@ -393,6 +441,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       />
       </View>
       </ScrollView>
+      <AppTutorialOverlay {...dashboardTutorial.overlayProps} />
     </View>
   );
 }
@@ -418,5 +467,14 @@ const styles = StyleSheet.create({
   screenContent: {
     gap: DASHBOARD_SECTION_GAP,
     justifyContent: 'flex-start',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginBottom: -4,
+  },
+  headerSpacer: {
+    flex: 1,
   },
 });

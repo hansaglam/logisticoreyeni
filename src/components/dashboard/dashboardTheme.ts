@@ -7,11 +7,11 @@ export function getDashboardMoneyColor(money: number): string {
   return money < 0 ? colors.danger : colors.success;
 }
 
-/** Dashboard arka plan ve hero dekor opaklıkları */
-export const DASHBOARD_BG_GRID_OPACITY = 0.022;
-export const DASHBOARD_BG_SCRIM_OPACITY = 0.36;
-export const DASHBOARD_HERO_PORT_OPACITY = 0.058;
-export const DASHBOARD_CARD_GRID_OPACITY = 0.035;
+/** Dashboard arka plan katman opaklıkları */
+export const DASHBOARD_BG_PORT_OPACITY = 0.14;
+export const DASHBOARD_BG_SCRIM_OPACITY = 0.56;
+export const DASHBOARD_BG_LOWER_VIGNETTE_OPACITY = 0.28;
+export const DASHBOARD_BG_BOTTOM_FADE_OPACITY = 0.38;
 export const DASHBOARD_HORIZONTAL_PADDING = 16;
 export const DASHBOARD_SECTION_GAP = 11;
 export const DASHBOARD_SECTION_GAP_TIGHT = 8;

@@ -7,16 +7,24 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { shouldShowTestAdLabel } from '../../config/adMob';
 import { slotIdToPlacement } from '../../config/rewardedPlacements';
+import {
+  AD_PRIVACY_ACTION_DESCRIPTION,
+  AD_PRIVACY_ERROR_MESSAGE,
+} from '../../domain/adPrivacyState';
+import {
+  resolveRewardedAdAvailability,
+  rewardedAdAvailabilityHelperText,
+  rewardedAdAvailabilityToButtonLabel,
+  shouldEnableRewardedAdCta,
+} from '../../domain/rewardedAdAvailability';
+import { useAdPrivacyAction } from '../../hooks/useAdPrivacyAction';
+import { useAdPrivacyAvailability } from '../../hooks/useAdPrivacyAvailability';
+import { useRewardedPlacement } from '../../hooks/useRewardedPlacement';
 import { areAdsFeatureEnabled } from '../../services/adProvider';
-import { canRequestAdsAfterConsent } from '../../services/adsConsentService';
 import { canGrantAdReward, resetDailyUsageIfNeeded } from '../../simulation/adRewardGrants';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
 import type { AdRewardGrantContext, AdRewardSlotId } from '../../types/monetization';
-import {
-  getRewardedPlacementStatusMessage,
-  useRewardedPlacement,
-} from '../../hooks/useRewardedPlacement';
 import { ActionButton } from '../ui';
 
 declare const __DEV__: boolean | undefined;
@@ -29,6 +37,7 @@ export interface AdRewardButtonProps {
   onSuccess?: () => void;
   variant?: 'primary' | 'secondary';
   compact?: boolean;
+  onNavigateToPreferences?: () => void | Promise<void>;
 }
 
 export default function AdRewardButton({
@@ -39,6 +48,7 @@ export default function AdRewardButton({
   onSuccess,
   variant = 'secondary',
   compact = true,
+  onNavigateToPreferences,
 }: AdRewardButtonProps) {
   const applyAdReward = useGameStore((state) => state.applyAdReward);
   const monetization = useGameStore((state) => state.monetization);
@@ -51,11 +61,15 @@ export default function AdRewardButton({
   const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
+  const { availability: privacyAvailability } = useAdPrivacyAvailability();
+  const {
+    loading: privacyLoading,
+    error: privacyError,
+    runPrivacyAction,
+  } = useAdPrivacyAction({ onNavigateToPreferences });
+
   const trackedPlacement = slotIdToPlacement(slotId);
   const placementState = useRewardedPlacement(trackedPlacement ?? 'daily_operations');
-  const placementMessage = trackedPlacement
-    ? getRewardedPlacementStatusMessage(placementState)
-    : null;
 
   const fullContext = useMemo(
     (): AdRewardGrantContext => ({
@@ -76,30 +90,40 @@ export default function AdRewardButton({
     return null;
   }
 
-  const consentReady = canRequestAdsAfterConsent();
-  const adRuntimeBlocked =
-    trackedPlacement != null &&
-    placementState.status !== 'ready' &&
-    placementState.status !== 'showing';
+  const baseWatchLabel = shouldShowTestAdLabel() ? `${label} (Test reklam)` : label;
+  const rewardedAvailability = resolveRewardedAdAvailability({
+    privacy: privacyAvailability,
+    placementStatus: placementState.status,
+  });
 
-  const baseLabel = shouldShowTestAdLabel() ? `${label} (Test reklam)` : label;
-  const buttonLabel = loading
-    ? 'Reklam hazırlanıyor…'
-    : failed
-      ? 'Tekrar Dene'
-      : !consentReady
-        ? 'Gizlilik tercihi gerekli'
-        : adRuntimeBlocked && eligibility.ok
-          ? placementMessage ?? 'Reklam hazırlanıyor…'
-          : baseLabel;
+  const buttonLabel = privacyLoading
+    ? 'Gizlilik tercihleri açılıyor…'
+    : loading
+      ? 'Reklam hazırlanıyor…'
+      : rewardedAdAvailabilityToButtonLabel(rewardedAvailability, {
+          watchLabel: baseWatchLabel,
+          retryLabel: failed ? 'Tekrar Dene' : 'Tekrar Dene',
+        });
+
+  const helperText =
+    rewardedAvailability === 'privacy-action-required'
+      ? AD_PRIVACY_ACTION_DESCRIPTION
+      : rewardedAdAvailabilityHelperText(rewardedAvailability);
 
   const handlePress = async () => {
-    if (loading) {
+    if (loading || privacyLoading) {
       return;
     }
 
-    if (!consentReady) {
-      setErrorText('Reklamları kullanmak için gizlilik tercihini tamamla.');
+    if (
+      rewardedAvailability === 'privacy-action-required' ||
+      rewardedAvailability === 'privacy-error'
+    ) {
+      await runPrivacyAction();
+      return;
+    }
+
+    if (rewardedAvailability !== 'ready' && !failed) {
       return;
     }
 
@@ -128,25 +152,9 @@ export default function AdRewardButton({
             : result.reason ?? 'Reklam ödülü alınamadı.';
         setErrorText(reason);
         setFailed(true);
-        if (typeof __DEV__ !== 'undefined' && __DEV__ === true) {
-          console.warn('[AdRewardButton] applyAdReward failed', {
-            slotId,
-            reason,
-            selectedDeliveryId: fullContext.selectedDeliveryId,
-          });
-        }
         return;
       }
       setFailed(false);
-      if (typeof __DEV__ !== 'undefined' && __DEV__ === true && slotId === 'delivery_boost') {
-        const delivery = useGameStore
-          .getState()
-          .activeDeliveries.find((item) => item.id === fullContext.selectedDeliveryId);
-        console.log('[AdRewardButton] delivery_boost granted', {
-          selectedDeliveryId: fullContext.selectedDeliveryId,
-          progress: delivery?.progress,
-        });
-      }
       onSuccess?.();
     } catch (error) {
       setFailed(true);
@@ -155,6 +163,13 @@ export default function AdRewardButton({
       setLoading(false);
     }
   };
+
+  const ctaEnabled =
+    shouldEnableRewardedAdCta(rewardedAvailability) &&
+    (rewardedAvailability === 'privacy-action-required' ||
+      rewardedAvailability === 'privacy-error' ||
+      failed ||
+      eligibility.ok);
 
   return (
     <View style={styles.root}>
@@ -166,26 +181,26 @@ export default function AdRewardButton({
       <ActionButton
         label={buttonLabel}
         onPress={handlePress}
-        disabled={loading || (!eligibility.ok && !failed && !consentReady)}
+        disabled={!ctaEnabled || loading || privacyLoading}
         variant={variant}
         compact={compact}
-        icon={loading ? undefined : 'play'}
+        icon={loading || privacyLoading ? undefined : 'play'}
         iconSize={13}
         style={styles.button}
       />
-      {!consentReady ? (
-        <Text style={styles.disabledReason} numberOfLines={2}>
-          Reklamları kullanmak için gizlilik tercihini tamamla.
+      {helperText ? (
+        <Text style={styles.infoText} numberOfLines={3}>
+          {helperText}
         </Text>
       ) : null}
-      {!eligibility.ok && eligibility.reason && !failed ? (
-        <Text style={styles.disabledReason} numberOfLines={2}>
+      {!eligibility.ok && eligibility.reason && rewardedAvailability === 'ready' && !failed ? (
+        <Text style={styles.infoText} numberOfLines={2}>
           {eligibility.reason}
         </Text>
       ) : null}
-      {placementMessage && eligibility.ok && adRuntimeBlocked && !failed ? (
-        <Text style={styles.disabledReason} numberOfLines={2}>
-          {placementMessage}
+      {privacyError ? (
+        <Text style={styles.errorText} numberOfLines={2}>
+          {AD_PRIVACY_ERROR_MESSAGE}
         </Text>
       ) : null}
       {errorText ? (
@@ -193,7 +208,9 @@ export default function AdRewardButton({
           {errorText}
         </Text>
       ) : null}
-      {loading ? <ActivityIndicator size="small" color={colors.accentBlue} style={styles.loader} /> : null}
+      {loading || privacyLoading ? (
+        <ActivityIndicator size="small" color={colors.accentBlue} style={styles.loader} />
+      ) : null}
     </View>
   );
 }
@@ -210,8 +227,9 @@ const styles = StyleSheet.create({
   },
   button: {
     alignSelf: 'stretch',
+    minHeight: 44,
   },
-  disabledReason: {
+  infoText: {
     ...typography.caption,
     fontSize: 10,
     color: colors.textMuted,

@@ -121,7 +121,7 @@ console.log('\nMarket state routing');
 
 console.log('\nTransition state machine');
 {
-  const hook = readFileSync('src/hooks/useMarketTutorial.ts', 'utf8');
+  const hook = readFileSync('src/hooks/useAppTutorial.ts', 'utf8');
   const overlay = readFileSync('src/components/market/MarketTutorialOverlay.tsx', 'utf8');
   const screen = readFileSync('src/screens/MarketScreen.tsx', 'utf8');
 

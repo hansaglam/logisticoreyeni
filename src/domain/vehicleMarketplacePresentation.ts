@@ -1,3 +1,7 @@
+import {
+  getMarketplaceKindMessage,
+  mapFailureReasonToMarketplaceKind,
+} from './marketplaceErrorModel';
 import type {
   VehicleMarketplaceListing,
   VehicleMarketplacePage,
@@ -94,6 +98,25 @@ export function mergeMarketplacePage(
   return [...byId.values()];
 }
 
+export function hasActiveMarketplaceFilters(filters: MarketplaceFilters): boolean {
+  return (
+    filters.query.trim().length > 0 ||
+    filters.minPrice != null ||
+    filters.maxPrice != null ||
+    filters.minCondition != null ||
+    filters.maxMileage != null ||
+    Boolean(filters.cityId) ||
+    filters.minUpgradeLevel != null ||
+    filters.sort !== DEFAULT_MARKETPLACE_FILTERS.sort
+  );
+}
+
+export function getMarketplaceScreenErrorMessage(reason?: string): string {
+  return getMarketplaceKindMessage(mapFailureReasonToMarketplaceKind(
+    reason as Parameters<typeof mapFailureReasonToMarketplaceKind>[0],
+  ));
+}
+
 export function getMarketplaceErrorMessage(reason?: string): string {
   switch (reason) {
     case 'auth-required':
@@ -110,7 +133,11 @@ export function getMarketplaceErrorMessage(reason?: string): string {
     case 'not-owner':
       return 'Bu araç seçili hesaba ait değil.';
     case 'network-error':
-      return 'Ağ bağlantısı kurulamadı. Bağlantını kontrol edip tekrar dene.';
+      return 'İnternet bağlantısı bulunamadı.';
+    case 'timeout':
+      return 'Araç Pazarı yanıt vermedi. Tekrar deneyin.';
+    case 'invalid-request':
+      return 'Sunucudan geçersiz veri alındı.';
     case 'function-not-found':
       return 'Araç Pazarı servisi bu sürüm için deploy edilmemiş.';
     case 'permission-denied':

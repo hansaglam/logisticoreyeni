@@ -98,6 +98,7 @@ export type GetLeaderboardResult =
       playerRank: number | null;
       hasMore: boolean;
       nextCursor: LeaderboardCursor | null;
+      totalParticipants: number;
     }
   | {
       ok: false;

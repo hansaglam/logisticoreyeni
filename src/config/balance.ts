@@ -596,20 +596,26 @@ export const financeBalance = {
 
 /**
  * İtibar puanı — teslimat sonuçlarına göre kazanım/kayıp.
- * Zamanında teslimat itibar kazandırır; geç teslimat para cezası yer ama
- * itibar kazandırmaz; başarısız teslimat itibar kaybettirir.
+ * Canonical kurallar: src/config/reputationRules.ts
  */
+import {
+  INITIAL_REPUTATION,
+  REPUTATION_MAX,
+  REPUTATION_MIN,
+  REPUTATION_RULES,
+} from './reputationRules';
+
 export const reputationBalance = {
   /** Yeni oyunda başlangıç itibarı */
-  initial: 50,
+  initial: INITIAL_REPUTATION,
   /** Zamanında tamamlanan teslimat kazancı */
-  onTimeDeliveryGain: 2,
+  onTimeDeliveryGain: REPUTATION_RULES.deliveryOnTime,
   /** Başarısız teslimat kaybı */
-  failedDeliveryLoss: 5,
+  failedDeliveryLoss: Math.abs(REPUTATION_RULES.deliveryFailed),
   /** Alt sınır */
-  min: 0,
+  min: REPUTATION_MIN,
   /** Üst sınır */
-  max: 100,
+  max: REPUTATION_MAX,
 } as const;
 
 /** Şirket puanı (Company Score) — haftalık leaderboard sıralaması için */

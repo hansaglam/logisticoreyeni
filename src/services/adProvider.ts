@@ -641,6 +641,15 @@ export async function initializeAdProvider(): Promise<void> {
   preloadAllTrackedRewardedPlacements();
 }
 
+/** Consent tamamlandıktan sonra placement state ve preload yenilenir. */
+export async function refreshAdsAfterConsentChange(): Promise<void> {
+  notifyPlacementState();
+  if (!canRequestAdsAfterConsent()) {
+    return;
+  }
+  await initializeAdProvider();
+}
+
 export function getAdsMode(): AdsMode {
   return resolveAdsMode();
 }

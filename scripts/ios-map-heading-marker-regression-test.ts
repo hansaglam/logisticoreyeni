@@ -16,7 +16,7 @@ import {
   buildVisibleMapMarkers,
   computeDeliveryRouteVersion,
 } from '../src/components/map/mapMarkerState';
-import { TRUCK_ICON_BASE_ROTATION_DEG } from '../src/components/map/mapTheme';
+import { TRUCK_ASSET_FORWARD_OFFSET_DEG } from '../src/components/map/mapTheme';
 import type { Delivery, TruckTransfer } from '../src/types/game';
 
 let pass = 0;
@@ -48,7 +48,7 @@ function headingAt(
   return getRouteHeadingDegrees({
     routePoints: route,
     progress,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
     coordinateScaleX,
     coordinateScaleY,
   });
@@ -133,27 +133,27 @@ console.log('\nHeading — cardinal synthetic segments');
   const east = getRouteHeadingDegrees({
     routePoints: [{ x: 0, y: 0 }, { x: 1, y: 0 }],
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
   });
   const west = getRouteHeadingDegrees({
     routePoints: [{ x: 1, y: 0 }, { x: 0, y: 0 }],
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
   });
   const south = getRouteHeadingDegrees({
     routePoints: [{ x: 0, y: 0 }, { x: 0, y: 1 }],
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
   });
   const north = getRouteHeadingDegrees({
     routePoints: [{ x: 0, y: 1 }, { x: 0, y: 0 }],
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
   });
-  assert(angularDistance(east, 180) < 0.01, 'horizontal east with base ≈ 180°');
-  assert(angularDistance(west, 0) < 0.01, 'horizontal west with base ≈ 0°');
-  assert(angularDistance(south, 270) < 0.01, 'vertical south with base ≈ 270°');
-  assert(angularDistance(north, 90) < 0.01, 'vertical north with base ≈ 90°');
+  assert(angularDistance(east, 0) < 0.01, 'horizontal east with base ≈ 0°');
+  assert(angularDistance(west, 180) < 0.01, 'horizontal west with base ≈ 180°');
+  assert(angularDistance(south, 90) < 0.01, 'vertical south with base ≈ 90°');
+  assert(angularDistance(north, 270) < 0.01, 'vertical north with base ≈ 270°');
 }
 
 console.log('\nHeading — duplicate points + fallback');
@@ -165,24 +165,24 @@ console.log('\nHeading — duplicate points + fallback');
       { x: 1, y: 0 },
     ],
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
     fallbackHeadingDeg: 33,
   });
-  assert(angularDistance(dup, 180) < 0.01, 'duplicate collinear points use next segment (east + base)');
+  assert(angularDistance(dup, 0) < 0.01, 'duplicate collinear points use next segment (east + base)');
   const zero = getRouteHeadingDegrees({
     routePoints: [{ x: 2, y: 2 }, { x: 2, y: 2 }],
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ICON_BASE_ROTATION_DEG,
+    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
     fallbackHeadingDeg: 44,
   });
-  assert(zero === 224, 'zero-length tangent keeps fallback + base', String(zero));
+  assert(zero === 44, 'zero-length tangent keeps fallback + base', String(zero));
 }
 
 console.log('\nHeading — normalize + no platform hack');
 {
   assert(normalizeHeadingDegrees360(-90) === 270, 'normalizeHeadingDegrees360(-90) = 270');
   assert(normalizeHeadingDegrees360(720) === 0, 'normalizeHeadingDegrees360(720) = 0');
-  assert(TRUCK_ICON_BASE_ROTATION_DEG === 180, 'asset base is explicit 180° (truck faces left at 0°)');
+  assert(TRUCK_ASSET_FORWARD_OFFSET_DEG === 0, 'asset forward offset is explicit 0° (truck faces right at 0°)');
 }
 
 console.log('\nMarker identity — route version changes on topology');

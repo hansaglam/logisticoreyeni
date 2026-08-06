@@ -92,8 +92,8 @@ android {
         applicationId 'com.ethemsincar.logisticore'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 12
-        versionName "1.0.11"
+        versionCode 13
+        versionName "1.0.12"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -105,19 +105,8 @@ android {
             keyPassword 'android'
         }
         release {
-            def keystorePropertiesFile = rootProject.file('keystore.properties')
-            if (!keystorePropertiesFile.exists()) {
-                throw new GradleException(
-                    "Missing android/keystore.properties — required for release signing. " +
-                    "See android/UPLOAD_KEYSTORE_BACKUP.txt (local only)."
-                )
-            }
-            def keystoreProperties = new Properties()
-            keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-            storeFile file(keystoreProperties['storeFile'])
-            storePassword keystoreProperties['storePassword']
-            keyAlias keystoreProperties['keyAlias']
-            keyPassword keystoreProperties['keyPassword']
+            // Configured below when android/keystore.properties is present.
+            // Missing keystore must not break debug/tasks/export configuration.
         }
     }
     buildTypes {
@@ -126,7 +115,7 @@ android {
         }
         release {
             // Play Console requires a non-debug upload keystore.
-            signingConfig signingConfigs.release
+            // signingConfig assigned after keystore.properties load (below).
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -143,6 +132,38 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+// Release upload keystore — load only when present so debug/tasks/export stay usable.
+def releaseKeystorePropertiesFile = rootProject.file('keystore.properties')
+def hasReleaseKeystoreProperties = releaseKeystorePropertiesFile.exists()
+if (hasReleaseKeystoreProperties) {
+    def releaseKeystoreProperties = new Properties()
+    releaseKeystoreProperties.load(new FileInputStream(releaseKeystorePropertiesFile))
+    android.signingConfigs.release.storeFile file(releaseKeystoreProperties['storeFile'])
+    android.signingConfigs.release.storePassword releaseKeystoreProperties['storePassword']
+    android.signingConfigs.release.keyAlias releaseKeystoreProperties['keyAlias']
+    android.signingConfigs.release.keyPassword releaseKeystoreProperties['keyPassword']
+    android.buildTypes.release.signingConfig android.signingConfigs.release
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def needsReleaseSigning = taskGraph.allTasks.any { task ->
+        def name = task.name.toLowerCase()
+        return name.contains('release') && (
+            name.contains('bundle') ||
+            name.contains('assemble') ||
+            name.contains('package') ||
+            name.contains('sign') ||
+            name.contains('install')
+        )
+    }
+    if (needsReleaseSigning && !hasReleaseKeystoreProperties) {
+        throw new IllegalStateException(
+            "Missing android/keystore.properties — required for release signing.\n" +
+            "See android/UPLOAD_KEYSTORE_BACKUP.txt (local only)."
+        )
     }
 }
 

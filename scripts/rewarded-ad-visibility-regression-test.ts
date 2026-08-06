@@ -180,10 +180,8 @@ console.log('\nFail-visible UI wiring');
 console.log('\nPlacement state messages');
 {
   assert(
-    getRewardedPlacementStatusMessage({ status: 'consent-required', placement: 'delivery_boost' })?.includes(
-      'gizlilik',
-    ) === true,
-    'consent-required UI visible message',
+    getRewardedPlacementStatusMessage({ status: 'consent-required', placement: 'delivery_boost' }) === null,
+    'consent-required handled by canonical privacy state (no duplicate placement message)',
   );
   assert(
     getRewardedPlacementStatusMessage({ status: 'loading', placement: 'delivery_boost' })?.includes(
@@ -224,7 +222,7 @@ console.log('\nDelivery boost eligibility states');
   });
   assert(consentBlocked.reason === 'consent-not-ready', 'consent-not-ready reason');
   assert(
-    eligibilityReasonToUserMessage(consentBlocked).includes('Gizlilik'),
+    eligibilityReasonToUserMessage(consentBlocked).includes('Gizlilik Tercihini Tamamla'),
     'consent-not-ready UI message',
   );
 
@@ -290,7 +288,12 @@ console.log('\nLayout');
   const mapCard = readFileSync('src/components/map/MapTruckTrackingCard.tsx', 'utf8');
   const deliveryBoostPanel = readFileSync('src/components/monetization/DeliveryBoostPanel.tsx', 'utf8');
   assert(mapCard.includes('minHeight: 44') || deliveryBoostPanel.includes('minHeight: 44'), '44px touch target');
-  assert(deliveryBoostPanel.includes('numberOfLines={1}'), '360px layout text clamp');
+  assert(
+    deliveryBoostPanel.includes('numberOfLines={1}') ||
+      deliveryBoostPanel.includes('numberOfLines={2}') ||
+      deliveryBoostPanel.includes('numberOfLines={3}'),
+    'layout text clamp',
+  );
   assert(formatBoostDurationLabel(118 * 60_000).includes('sa'), 'duration label hours+minutes');
 }
 

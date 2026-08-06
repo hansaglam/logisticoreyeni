@@ -22,9 +22,10 @@ const COMPACT_BREAKPOINT = 360;
 
 export interface MapHeaderProps {
   onRefresh?: () => void;
+  helpAction?: React.ReactNode;
 }
 
-export default function MapHeader({ onRefresh }: MapHeaderProps) {
+export default function MapHeader({ onRefresh, helpAction }: MapHeaderProps) {
   const { width } = useWindowDimensions();
   const isCompact = width < COMPACT_BREAKPOINT;
   const iconSize = isCompact ? MAP_HEADER_ICON_SIZE_COMPACT : MAP_HEADER_ICON_SIZE;
@@ -55,21 +56,24 @@ export default function MapHeader({ onRefresh }: MapHeaderProps) {
         </Text>
       </View>
 
-      <TouchableOpacity
-        style={[
-          styles.refreshBtn,
-          {
-            width: refreshSize,
-            height: refreshSize,
-          },
-        ]}
-        onPress={onRefresh}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Haritayı yenile"
-      >
-        <GameIcon name="refresh" size={isCompact ? 18 : 20} color={MAP_TITLE_COLOR} />
-      </TouchableOpacity>
+      <View style={styles.actions}>
+        {helpAction ?? null}
+        <TouchableOpacity
+          style={[
+            styles.refreshBtn,
+            {
+              width: refreshSize,
+              height: refreshSize,
+            },
+          ]}
+          onPress={onRefresh}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Haritayı yenile"
+        >
+          <GameIcon name="refresh" size={isCompact ? 18 : 20} color={MAP_TITLE_COLOR} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -102,6 +106,12 @@ const styles = StyleSheet.create({
     fontSize: MAP_HEADER_SUBTITLE_SIZE,
     color: MAP_MUTED,
     lineHeight: 15,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
   },
   refreshBtn: {
     borderRadius: 14,

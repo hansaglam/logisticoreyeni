@@ -4,8 +4,13 @@
  * Premium kompakt filo yönetimi — kamyonlar, şoförler ve mağaza.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import OwnedTruckCard from '../components/fleet/OwnedTruckCard';
@@ -230,6 +235,24 @@ export default function FleetScreen() {
   const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
   const [managingUpgradesTruckId, setManagingUpgradesTruckId] = useState<string | null>(null);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const fleetTutorial = useScreenAppTutorial({
+    tutorialId: 'fleet',
+    layoutReady,
+    blockingModals:
+      transferModalTruck != null ||
+      refuelSheetTruck != null ||
+      roadsideFuelJobId != null,
+    stepOptions: { hasTrucks: trucks.length > 0 },
+    scrollRef,
+  });
+
+  const firstLeasedTruckId = useMemo(
+    () => visibleTrucks.find((truck) => truck.ownershipType === 'leased')?.id,
+    [visibleTrucks],
+  );
 
   useEffect(() => {
     if (!pendingFleetSubTab) return;
@@ -730,14 +753,24 @@ export default function FleetScreen() {
   }
 
   return (
-    <AppScreen scroll scrollBottomPadding={contentBottomPadding}>
-      <View style={styles.screenStack}>
-        <View style={styles.fleetHeader}>
-          <View style={styles.fleetHeaderText}>
-            <Text style={styles.fleetTitle}>Filo</Text>
-            <Text style={styles.fleetSubtitle}>Araçlarını ve şoförlerini yönet</Text>
+    <View style={styles.screenRoot}>
+      <AppScreen
+        scroll
+        scrollRef={scrollRef}
+        scrollBottomPadding={contentBottomPadding}
+        onScroll={fleetTutorial.handleScroll}
+        onScrollEndDrag={fleetTutorial.handleScrollEnd}
+        onMomentumScrollEnd={fleetTutorial.handleScrollEnd}
+        scrollEventThrottle={16}
+      >
+        <View style={styles.screenStack} onLayout={() => setLayoutReady(true)}>
+          <View style={styles.fleetHeader}>
+            <AppTutorialTarget tutorialId="fleet" targetId="fleet-header" style={styles.fleetHeaderText}>
+              <Text style={styles.fleetTitle}>Filo</Text>
+              <Text style={styles.fleetSubtitle}>Araçlarını ve şoförlerini yönet</Text>
+            </AppTutorialTarget>
+            <AppTutorialHelpButton {...fleetTutorial.helpButtonProps} />
           </View>
-        </View>
 
         {statusMessage ? (
           <AppCard
@@ -784,30 +817,52 @@ export default function FleetScreen() {
             />
           ) : (
             <>
-              {visibleTrucks.map((truck) => (
-                <OwnedTruckCard
-                  key={truck.id}
-                  truck={truck}
-                  trailers={trailers}
-                  playerMoney={playerMoney}
-                  delivery={deliveryByTruckId.get(truck.id)}
-                  transfer={transferByTruckId.get(truck.id)}
-                  drivers={drivers}
-                  homeCityId={homeCityId}
-                  monetization={monetization}
-                  sellCheck={sellCheckByTruckId.get(truck.id) ?? { canSell: false }}
-                  onRepair={handleRepair}
-                  onManageUpgrades={handleManageUpgrades}
-                  onTransfer={handleOpenTransfer}
-                  onRefuel={setRefuelSheetTruck}
-                  onRoadsideFuel={setRoadsideFuelJobId}
-                  onSell={handleSellTruck}
-                  onMarketplaceSell={(selectedTruck) =>
-                    openVehicleMarketplaceForTruck(selectedTruck.id)
-                  }
-                  onShowSellBlocked={handleShowSellBlocked}
-                />
-              ))}
+              {visibleTrucks.map((truck, index) => {
+                const truckCard = (
+                  <OwnedTruckCard
+                    key={truck.id}
+                    truck={truck}
+                    trailers={trailers}
+                    playerMoney={playerMoney}
+                    delivery={deliveryByTruckId.get(truck.id)}
+                    transfer={transferByTruckId.get(truck.id)}
+                    drivers={drivers}
+                    homeCityId={homeCityId}
+                    monetization={monetization}
+                    sellCheck={sellCheckByTruckId.get(truck.id) ?? { canSell: false }}
+                    onRepair={handleRepair}
+                    onManageUpgrades={handleManageUpgrades}
+                    onTransfer={handleOpenTransfer}
+                    onRefuel={setRefuelSheetTruck}
+                    onRoadsideFuel={setRoadsideFuelJobId}
+                    onSell={handleSellTruck}
+                    onMarketplaceSell={(selectedTruck) =>
+                      openVehicleMarketplaceForTruck(selectedTruck.id)
+                    }
+                    onShowSellBlocked={handleShowSellBlocked}
+                  />
+                );
+
+                if (index === 0) {
+                  return (
+                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="truck-status">
+                      <AppTutorialTarget tutorialId="fleet" targetId="fuel-maintenance">
+                        {truckCard}
+                      </AppTutorialTarget>
+                    </AppTutorialTarget>
+                  );
+                }
+
+                if (truck.id === firstLeasedTruckId) {
+                  return (
+                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="rental-return">
+                      {truckCard}
+                    </AppTutorialTarget>
+                  );
+                }
+
+                return truckCard;
+              })}
               {showFleetTip ? (
                 <AppCard variant="highlighted" style={styles.tipCard} padded>
                   <View style={styles.tipTitleRow}>
@@ -885,19 +940,31 @@ export default function FleetScreen() {
               compact
             />
           ) : (
-            drivers.map((driver) => (
-              <DriverCard
-                key={driver.id}
-                driver={driver}
-                trucks={trucks}
-                homeCityId={homeCityId}
-                activeDelivery={deliveryByDriverId.get(driver.id)}
-                onAssign={handleAssignDriver}
-                onTraining={handleDriverTraining}
-                onDetail={handleDriverDetail}
-                onMore={handleDriverMore}
-              />
-            ))
+            drivers.map((driver, index) => {
+              const driverCard = (
+                <DriverCard
+                  key={driver.id}
+                  driver={driver}
+                  trucks={trucks}
+                  homeCityId={homeCityId}
+                  activeDelivery={deliveryByDriverId.get(driver.id)}
+                  onAssign={handleAssignDriver}
+                  onTraining={handleDriverTraining}
+                  onDetail={handleDriverDetail}
+                  onMore={handleDriverMore}
+                />
+              );
+
+              if (index === 0) {
+                return (
+                  <AppTutorialTarget key={driver.id} tutorialId="fleet" targetId="driver-assignment">
+                    {driverCard}
+                  </AppTutorialTarget>
+                );
+              }
+
+              return driverCard;
+            })
           )}
         </View>
       ) : null}
@@ -926,11 +993,16 @@ export default function FleetScreen() {
         onSuccess={(message) => setStatusMessage({ type: 'success', text: message })}
       />
       </View>
-    </AppScreen>
+      </AppScreen>
+      <AppTutorialOverlay {...fleetTutorial.overlayProps} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
@@ -962,6 +1034,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingTop: 8,
+    gap: spacing.sm,
   },
   fleetHeaderText: {
     flex: 1,

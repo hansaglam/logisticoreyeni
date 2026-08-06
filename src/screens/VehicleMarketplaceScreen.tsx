@@ -1,7 +1,6 @@
 import * as Crypto from 'expo-crypto';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -10,6 +9,10 @@ import {
   View,
 } from 'react-native';
 
+import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
+import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useAppDialog } from '../components/AppDialogProvider';
 import MarketplaceFiltersSheet from '../components/marketplace/MarketplaceFiltersSheet';
 import VehicleListingCreateSheet from '../components/marketplace/VehicleListingCreateSheet';
@@ -20,6 +23,7 @@ import {
   MarketplaceHistory,
   MyVehicleListings,
 } from '../components/marketplace/MarketplaceListingGroups';
+import { MarketplaceListingSkeletonList } from '../components/marketplace/MarketplaceListingSkeleton';
 import MarketplaceTabs from '../components/marketplace/MarketplaceTabs';
 import VehicleListingCard, {
   getMarketplaceTruckName,
@@ -30,13 +34,27 @@ import {
 } from '../components/marketplace/VehicleMarketplaceSheets';
 import { VEHICLE_MARKETPLACE_ENABLED } from '../config/backendRoadmap';
 import {
+  getMarketplaceKindMessage,
+  getMarketplaceKindTitle,
+  mapFailureReasonToMarketplaceKind,
+} from '../domain/marketplaceErrorModel';
+import {
+  applyMarketplaceFetchError,
+  applyMarketplaceFetchSuccess,
+  beginMarketplaceRefresh,
+  type MarketplaceScreenState,
+} from '../domain/vehicleMarketplaceScreenState';
+import {
   DEFAULT_MARKETPLACE_FILTERS,
   filterAndSortMarketplaceListings,
   getMarketplaceErrorMessage,
+  hasActiveMarketplaceFilters,
   mergeMarketplacePage,
   type MarketplaceFilters,
   type MarketplaceTab,
 } from '../domain/vehicleMarketplacePresentation';
+import { subscribeAuthState } from '../services/authService';
+import { getFirebaseAuthSafe } from '../services/firebase';
 import {
   cancelVehicleListing,
   createVehicleListing,
@@ -44,12 +62,12 @@ import {
   getVehicleMarketplaceListings,
   purchaseVehicleListing,
 } from '../services/vehicleMarketplaceService';
-import { getFirebaseAuthSafe } from '../services/firebase';
 import { useGameStore } from '../store/gameStore';
 import { SAVE_GAME_VERSION } from '../storage/saveGame';
 import { colors, spacing } from '../theme';
 import type {
   VehicleMarketplaceCursor,
+  VehicleMarketplaceFailureReason,
   VehicleMarketplaceListing,
 } from '../types/vehicleMarketplace';
 import { AppScreen, EmptyState, GameIcon } from '../components/ui';
@@ -62,6 +80,11 @@ function actionEnvelope(prefix: string) {
     transactionId: `${prefix}-${id}`,
     idempotencyKey: `${prefix}-${id}`,
   };
+}
+
+function isLinkedMarketplaceUser(): boolean {
+  const user = getFirebaseAuthSafe()?.currentUser ?? null;
+  return Boolean(user && !user.isAnonymous);
 }
 
 export default function VehicleMarketplaceScreen({
@@ -81,16 +104,14 @@ export default function VehicleMarketplaceScreen({
     (state) => state.clearPendingMarketplaceSellTruckId,
   );
   const [activeTab, setActiveTab] = useState<MarketplaceTab>('available');
-  const [listings, setListings] = useState<VehicleMarketplaceListing[]>([]);
+  const [screenState, setScreenState] = useState<MarketplaceScreenState>({ status: 'idle' });
   const [myListings, setMyListings] = useState<VehicleMarketplaceListing[]>([]);
+  const [myListingsError, setMyListingsError] = useState<string | null>(null);
   const [cursor, setCursor] = useState<VehicleMarketplaceCursor>();
   const [hasMore, setHasMore] = useState(false);
   const [fleetLimit, setFleetLimit] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
-  const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [filters, setFilters] = useState<MarketplaceFilters>(DEFAULT_MARKETPLACE_FILTERS);
   const [filtersVisible, setFiltersVisible] = useState(false);
   const [selected, setSelected] = useState<VehicleMarketplaceListing | null>(null);
@@ -99,14 +120,57 @@ export default function VehicleMarketplaceScreen({
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const requestSeqRef = useRef(0);
+  const lastAuthUidRef = useRef<string | null>(null);
+  const listRef = useRef<FlatList<VehicleMarketplaceListing>>(null);
+
+  const listings = useMemo(() => {
+    if (screenState.status === 'ready' || screenState.status === 'refreshing') {
+      return screenState.listings;
+    }
+    return [];
+  }, [screenState]);
+
+  const marketplaceTutorial = useScreenAppTutorial({
+    tutorialId: 'vehicle-marketplace',
+    layoutReady,
+    blockingModals:
+      filtersVisible ||
+      selected != null ||
+      purchaseTarget != null ||
+      createVisible,
+    stepOptions: { hasListings: listings.length > 0 },
+  });
+
+  const isInitialLoading = screenState.status === 'idle' || screenState.status === 'loading';
+  const isRefreshing = screenState.status === 'refreshing';
+  const isUnavailable = screenState.status === 'error';
+  const unavailableKind = screenState.status === 'error' ? screenState.error : null;
+
+  const resetMarketplaceData = useCallback(() => {
+    setScreenState({ status: 'idle' });
+    setMyListings([]);
+    setMyListingsError(null);
+    setCursor(undefined);
+    setHasMore(false);
+    setFleetLimit(null);
+    setSelected(null);
+    setPurchaseTarget(null);
+  }, []);
 
   const syncMineAndReconcile = useCallback(async (): Promise<{
     ok: boolean;
     reason?: string;
   }> => {
     const result = await getMyVehicleListings();
-    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.ok) {
+      setMyListings([]);
+      setMyListingsError(result.reason ?? 'service-unavailable');
+      return { ok: false, reason: result.reason };
+    }
     setMyListings(result.listings);
+    setMyListingsError(null);
     if (result.reconciliation) {
       applyReconciliation(result.reconciliation);
       setFleetLimit(
@@ -121,27 +185,35 @@ export default function VehicleMarketplaceScreen({
   const loadFirstPage = useCallback(async (): Promise<{
     ok: boolean;
     reason?: string;
+    listings?: VehicleMarketplaceListing[];
   }> => {
     const page = await getVehicleMarketplaceListings(PAGE_SIZE);
     if (!page.ok) {
-      setListings([]);
       setHasMore(false);
+      setCursor(undefined);
       return { ok: false, reason: page.reason };
     }
-    setListings(mergeMarketplacePage([], page));
+    const merged = mergeMarketplacePage([], page);
     setCursor(page.nextCursor);
     setHasMore(page.hasMore);
-    return { ok: true };
+    return { ok: true, listings: merged };
   }, []);
 
-  const refreshAll = useCallback(async () => {
-    const user = getFirebaseAuthSafe()?.currentUser ?? null;
-    if (!user || user.isAnonymous) {
-      setUnavailable(true);
-      setUnavailableReason('auth-required');
-      setListings([]);
+  const refreshAll = useCallback(async (options?: { isRetry?: boolean }) => {
+    const requestSeq = ++requestSeqRef.current;
+    setScreenState((current) => beginMarketplaceRefresh(current));
+    if (options?.isRetry) setRetrying(true);
+
+    if (!isLinkedMarketplaceUser()) {
+      if (requestSeq !== requestSeqRef.current) return;
+      setScreenState(
+        applyMarketplaceFetchError(
+          mapFailureReasonToMarketplaceKind('auth-required'),
+        ),
+      );
       setMyListings([]);
-      setHasMore(false);
+      setMyListingsError('auth-required');
+      setRetrying(false);
       return;
     }
 
@@ -150,38 +222,50 @@ export default function VehicleMarketplaceScreen({
       syncMineAndReconcile(),
     ]);
 
+    if (requestSeq !== requestSeqRef.current) return;
+
     if (!publicResult.ok) {
-      setUnavailable(true);
-      setUnavailableReason(publicResult.reason ?? 'service-unavailable');
+      setScreenState(
+        applyMarketplaceFetchError(
+          mapFailureReasonToMarketplaceKind(
+            publicResult.reason as VehicleMarketplaceFailureReason | undefined,
+          ),
+        ),
+      );
+      setRetrying(false);
       return;
     }
 
+    setScreenState(applyMarketplaceFetchSuccess(publicResult.listings ?? []));
     if (
       !myResult.ok &&
       (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
     ) {
-      setUnavailable(true);
-      setUnavailableReason('auth-required');
-      return;
+      setScreenState(
+        applyMarketplaceFetchError(
+          mapFailureReasonToMarketplaceKind('auth-required'),
+        ),
+      );
     }
-
-    setUnavailable(false);
-    setUnavailableReason(null);
+    setRetrying(false);
   }, [loadFirstPage, syncMineAndReconcile]);
 
   useEffect(() => {
-    let active = true;
-    if (!VEHICLE_MARKETPLACE_ENABLED) {
-      setLoading(false);
-      return;
-    }
-    void refreshAll().finally(() => {
-      if (active) setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
+    if (!VEHICLE_MARKETPLACE_ENABLED) return;
+    void refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    if (!VEHICLE_MARKETPLACE_ENABLED) return;
+    const unsub = subscribeAuthState((user) => {
+      const uid = user && !user.isAnonymous ? user.uid : null;
+      if (lastAuthUidRef.current === uid) return;
+      lastAuthUidRef.current = uid;
+      resetMarketplaceData();
+      void refreshAll();
+    });
+    return unsub;
+  }, [refreshAll, resetMarketplaceData]);
 
   useEffect(() => {
     if (!VEHICLE_MARKETPLACE_ENABLED || !pendingSellTruckId) return;
@@ -190,24 +274,27 @@ export default function VehicleMarketplaceScreen({
   }, [pendingSellTruckId]);
 
   const loadMore = async () => {
-    if (!hasMore || !cursor || loadingMore || activeTab !== 'available') return;
+    if (!hasMore || !cursor || loadingMore || activeTab !== 'available' || isUnavailable) return;
     setLoadingMore(true);
     const page = await getVehicleMarketplaceListings(PAGE_SIZE, cursor);
     if (page.ok) {
-      setListings((current) => mergeMarketplacePage(current, page));
+      const merged = mergeMarketplacePage(listings, page);
+      setScreenState(applyMarketplaceFetchSuccess(merged));
       setCursor(page.nextCursor);
       setHasMore(page.hasMore);
     } else {
-      setUnavailable(true);
-      setUnavailableReason(page.reason ?? 'service-unavailable');
+      setScreenState(
+        applyMarketplaceFetchError(
+          mapFailureReasonToMarketplaceKind(page.reason),
+        ),
+      );
     }
     setLoadingMore(false);
   };
 
   const onRefresh = async () => {
-    setRefreshing(true);
-    await refreshAll();
-    setRefreshing(false);
+    if (retrying || isRefreshing) return;
+    await refreshAll({ isRetry: true });
   };
 
   const activeMine = useMemo(
@@ -222,6 +309,7 @@ export default function VehicleMarketplaceScreen({
     () => filterAndSortMarketplaceListings(listings, filters, getMarketplaceTruckName),
     [filters, listings],
   );
+  const filtersActive = useMemo(() => hasActiveMarketplaceFilters(filters), [filters]);
   const stats = useMemo<MarketplaceStats>(() => {
     const prices = listings
       .map((listing) => listing.askingPrice)
@@ -234,6 +322,18 @@ export default function VehicleMarketplaceScreen({
       myListings: activeMine.length,
     };
   }, [activeMine.length, listings]);
+
+  const canCreateListing = useMemo(() => {
+    const activeListingTruckIds = new Set(
+      activeMine.map((listing) => listing.truckSnapshot.truckId),
+    );
+    return player.trucks.some(
+      (truck) =>
+        truck.status === 'idle' &&
+        truck.ownershipType !== 'leased' &&
+        !activeListingTruckIds.has(truck.id),
+    );
+  }, [activeMine, player.trucks]);
 
   const beginPurchase = (listing: VehicleMarketplaceListing) => {
     const uid = getFirebaseAuthSafe()?.currentUser?.uid;
@@ -342,28 +442,69 @@ export default function VehicleMarketplaceScreen({
     );
   }
 
+  const showAvailableEmpty =
+    !isInitialLoading &&
+    !isUnavailable &&
+    activeTab === 'available' &&
+    screenState.status === 'empty';
+  const showFilteredEmpty =
+    !isInitialLoading &&
+    !isUnavailable &&
+    activeTab === 'available' &&
+    screenState.status === 'ready' &&
+    visibleListings.length === 0;
+
   return (
-    <AppScreen padding={false}>
-      <FlatList
-        data={activeTab === 'available' ? visibleListings : []}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <VehicleListingCard
-            listing={item}
-            onDetail={() => setSelected(item)}
-            onPurchase={() => beginPurchase(item)}
-          />
-        )}
+    <View style={styles.screenRoot}>
+      <AppScreen padding={false}>
+        <FlatList
+          ref={listRef}
+          data={activeTab === 'available' && !isUnavailable ? visibleListings : []}
+          keyExtractor={(item) => item.id}
+          onLayout={() => setLayoutReady(true)}
+          onScroll={marketplaceTutorial.handleScroll}
+          onScrollEndDrag={marketplaceTutorial.handleScrollEnd}
+          onMomentumScrollEnd={marketplaceTutorial.handleScrollEnd}
+          scrollEventThrottle={16}
+          renderItem={({ item, index }) => {
+            const listingCard = (
+              <VehicleListingCard
+                listing={item}
+                onDetail={() => setSelected(item)}
+                onPurchase={() => beginPurchase(item)}
+              />
+            );
+
+            if (index === 0) {
+              return (
+                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="listings">
+                  {listingCard}
+                </AppTutorialTarget>
+              );
+            }
+
+            return listingCard;
+          }}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accentBlue} />
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => void onRefresh()}
+            tintColor={colors.accentBlue}
+          />
         }
         onEndReached={() => void loadMore()}
         onEndReachedThreshold={0.35}
         ListHeaderComponent={
           <>
-            <MarketplaceHeader stats={stats} onBack={onBack} />
+            <MarketplaceHeader
+              stats={stats}
+              onBack={onBack}
+              loading={isInitialLoading || isRefreshing}
+              onCreateListing={() => setCreateVisible(true)}
+              helpAction={<AppTutorialHelpButton {...marketplaceTutorial.helpButtonProps} />}
+            />
             <MarketplaceTabs
               activeTab={activeTab}
               onChange={setActiveTab}
@@ -375,11 +516,16 @@ export default function VehicleMarketplaceScreen({
             />
             {activeTab === 'available' ? (
               <View style={styles.toolbar}>
-                <Text style={styles.resultText}>{visibleListings.length} araç gösteriliyor</Text>
-                <TouchableOpacity style={styles.filterButton} onPress={() => setFiltersVisible(true)}>
-                  <GameIcon name="filter" size={16} color={colors.accentBlue} />
-                  <Text style={styles.filterText}>Filtreler</Text>
-                </TouchableOpacity>
+                <Text style={styles.resultText}>
+                  {isInitialLoading ? 'Yükleniyor…' : `${visibleListings.length} araç gösteriliyor`}
+                </Text>
+                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="filters">
+                  <TouchableOpacity style={styles.filterButton} onPress={() => setFiltersVisible(true)}>
+                    <GameIcon name="filter" size={16} color={colors.accentBlue} />
+                    <Text style={styles.filterText}>Filtreler</Text>
+                    {filtersActive ? <View style={styles.filterDot} /> : null}
+                  </TouchableOpacity>
+                </AppTutorialTarget>
               </View>
             ) : activeTab === 'mine' ? (
               <View style={styles.toolbar}>
@@ -390,70 +536,70 @@ export default function VehicleMarketplaceScreen({
                 </TouchableOpacity>
               </View>
             ) : <View style={styles.tabGap} />}
-            {loading ? (
-              <ActivityIndicator color={colors.accentBlue} style={styles.centerLoader} />
-            ) : null}
-            {!loading && unavailable ? (
+            {isInitialLoading ? <MarketplaceListingSkeletonList count={3} /> : null}
+            {isUnavailable && unavailableKind ? (
               <EmptyState
-                title={
-                  unavailableReason === 'auth-required' ||
-                  unavailableReason === 'unauthenticated'
-                    ? 'Araç Pazarı hesabı gerekli'
-                    : 'Araç Pazarı şu anda kullanılamıyor.'
-                }
-                message={
-                  unavailableReason === 'auth-required' ||
-                  unavailableReason === 'unauthenticated'
-                    ? getMarketplaceErrorMessage('auth-required')
-                    : unavailableReason === 'network-error'
-                      ? getMarketplaceErrorMessage('network-error')
-                      : getMarketplaceErrorMessage(
-                          unavailableReason ?? 'marketplace-unavailable',
-                        )
-                }
+                title={getMarketplaceKindTitle(unavailableKind)}
+                message={getMarketplaceKindMessage(unavailableKind)}
                 actionLabel={
-                  unavailableReason === 'auth-required' ||
-                  unavailableReason === 'unauthenticated'
-                    ? undefined
-                    : 'Tekrar Dene'
+                  unavailableKind === 'unauthenticated' ? undefined : 'Tekrar Dene'
                 }
                 onAction={
-                  unavailableReason === 'auth-required' ||
-                  unavailableReason === 'unauthenticated'
+                  unavailableKind === 'unauthenticated' || retrying
                     ? undefined
                     : () => void onRefresh()
                 }
-                icon={
-                  unavailableReason === 'auth-required' ||
-                  unavailableReason === 'unauthenticated'
-                    ? 'lock'
-                    : 'warning'
-                }
+                icon={unavailableKind === 'unauthenticated' ? 'lock' : 'warning'}
                 compact
               />
             ) : null}
-            {!loading && !unavailable && activeTab === 'available' && visibleListings.length === 0 ? (
+            {showAvailableEmpty ? (
               <EmptyState
-                title="Şu anda satışta araç bulunmuyor."
-                message="Yeni ilanlar sunucudan geldiğinde burada görünecek."
+                title="Aktif ilan bulunmuyor."
+                message="Oyuncular araçlarını satışa çıkardığında burada görebilirsin."
+                actionLabel={canCreateListing ? 'Aracını Satışa Çıkar' : undefined}
+                onAction={canCreateListing ? () => setCreateVisible(true) : undefined}
                 icon="truck"
                 compact
               />
             ) : null}
-            {activeTab === 'mine' ? (
-              <MyVehicleListings
-                listings={activeMine}
-                cancellingId={cancellingId}
-                onDetail={setSelected}
-                onCancel={requestCancel}
-                onSellVehicle={() => setCreateVisible(true)}
+            {showFilteredEmpty ? (
+              <EmptyState
+                title="Filtrelere uygun ilan yok."
+                message="Filtreleri temizleyerek tüm aktif ilanları görebilirsin."
+                actionLabel="Filtreleri Temizle"
+                onAction={() => setFilters(DEFAULT_MARKETPLACE_FILTERS)}
+                icon="filter"
+                compact
               />
             ) : null}
-            {activeTab === 'history' ? <MarketplaceHistory listings={history} /> : null}
+            {activeTab === 'mine' && !isInitialLoading && !isUnavailable ? (
+              myListingsError === 'marketplace-state-missing' ? (
+                <EmptyState
+                  title="İlanlarım hazırlanıyor"
+                  message={getMarketplaceErrorMessage('marketplace-state-missing')}
+                  icon="time"
+                  compact
+                />
+              ) : (
+                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="my-listings">
+                  <MyVehicleListings
+                    listings={activeMine}
+                    cancellingId={cancellingId}
+                    onDetail={setSelected}
+                    onCancel={requestCancel}
+                    onSellVehicle={() => setCreateVisible(true)}
+                  />
+                </AppTutorialTarget>
+              )
+            ) : null}
+            {activeTab === 'history' && !isInitialLoading && !isUnavailable ? (
+              <MarketplaceHistory listings={history} />
+            ) : null}
           </>
         }
         ListFooterComponent={
-          loadingMore ? <ActivityIndicator color={colors.accentBlue} style={styles.footerLoader} /> : null
+          loadingMore ? <MarketplaceListingSkeletonList count={1} /> : null
         }
       />
       <MarketplaceFiltersSheet
@@ -488,11 +634,16 @@ export default function VehicleMarketplaceScreen({
         onClose={() => setPurchaseTarget(null)}
         onConfirm={() => void confirmPurchase()}
       />
-    </AppScreen>
+      </AppScreen>
+      <AppTutorialOverlay {...marketplaceTutorial.overlayProps} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+  },
   content: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
   separator: { height: spacing.md },
   toolbar: {
@@ -506,7 +657,12 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.borderStrong,
   },
   filterText: { color: colors.accentBlue, fontSize: 11, fontWeight: '800' },
+  filterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.accentBlue,
+    marginLeft: 2,
+  },
   tabGap: { height: spacing.md },
-  centerLoader: { marginVertical: spacing.xl },
-  footerLoader: { marginVertical: spacing.xl },
 });

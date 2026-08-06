@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import { GameIcon, IconButton } from '../ui';
 
@@ -14,28 +15,44 @@ export interface MarketplaceStats {
 export default function MarketplaceHeader({
   stats,
   onBack,
+  loading = false,
+  onCreateListing,
+  helpAction,
 }: {
   stats: MarketplaceStats;
   onBack: () => void;
+  loading?: boolean;
+  onCreateListing?: () => void;
+  helpAction?: React.ReactNode;
 }) {
+  const formatStat = (value: string) => (loading ? '—' : value);
   const items = [
-    ['Aktif İlan', String(stats.activeListings)],
-    ['Ort. Fiyat', stats.averagePrice == null ? '—' : formatMoney(stats.averagePrice)],
-    ['Satıştaki Model', String(stats.modelCount)],
-    ['İlanlarım', String(stats.myListings)],
+    ['Aktif İlan', formatStat(String(stats.activeListings))],
+    ['Ort. Fiyat', loading || stats.averagePrice == null ? '—' : formatMoney(stats.averagePrice)],
+    ['Satıştaki Model', formatStat(String(stats.modelCount))],
+    ['İlanlarım', formatStat(String(stats.myListings))],
   ];
   return (
     <>
       <View style={styles.hero}>
         <IconButton icon="back" onPress={onBack} color={colors.textPrimary} />
-        <View style={styles.heroText}>
+        <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="marketplace-header" style={styles.heroText}>
           <Text style={styles.title}>Araç Pazarı</Text>
           <Text style={styles.subtitle}>
             Oyuncuların satışa çıkardığı kullanılmış araçları keşfet
           </Text>
-        </View>
-        <View style={styles.icon}>
-          <GameIcon name="truck" size={24} color={colors.info} />
+        </AppTutorialTarget>
+        <View style={styles.heroActions}>
+          {helpAction ?? null}
+          {onCreateListing ? (
+            <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="create-listing-button">
+              <IconButton icon="truck" onPress={onCreateListing} color={colors.info} />
+            </AppTutorialTarget>
+          ) : (
+            <View style={styles.icon}>
+              <GameIcon name="truck" size={24} color={colors.info} />
+            </View>
+          )}
         </View>
       </View>
       <View style={styles.stats}>
@@ -58,6 +75,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   heroText: { flex: 1, minWidth: 0 },
+  heroActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexShrink: 0,
+  },
   title: { ...typography.screenTitle, fontSize: 22 },
   subtitle: { ...typography.screenSubtitle, fontSize: 11, marginTop: 2 },
   icon: {

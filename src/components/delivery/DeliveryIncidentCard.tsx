@@ -6,6 +6,10 @@ import React, { useCallback } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { formatIncidentChoiceEffectSummary } from '../../simulation/deliveryIncidents';
+import {
+  getOperationChoiceDisabledReason,
+  getOperationChoiceNetCashDelta,
+} from '../../simulation/deliveryOperationChoice';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
 import type { Delivery, DeliveryIncidentChoice } from '../../types/game';
@@ -18,7 +22,9 @@ export interface DeliveryIncidentCardProps {
 
 function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncidentCardProps) {
   const resolveDeliveryIncident = useGameStore((state) => state.resolveDeliveryIncident);
+  const playerMoney = useGameStore((state) => state.player.money);
   const [loadingChoiceId, setLoadingChoiceId] = React.useState<string | null>(null);
+  const [choiceError, setChoiceError] = React.useState<string | null>(null);
   const incident = delivery.incident;
 
   const handleChoice = useCallback(
@@ -27,8 +33,12 @@ function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncide
         return;
       }
       setLoadingChoiceId(choiceId);
+      setChoiceError(null);
       try {
-        await resolveDeliveryIncident(delivery.id, choiceId);
+        const result = await resolveDeliveryIncident(delivery.id, choiceId);
+        if (!result.ok) {
+          setChoiceError(result.reason ?? 'Karar uygulanamadı.');
+        }
       } finally {
         setLoadingChoiceId(null);
       }
@@ -87,19 +97,41 @@ function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncide
       <Text style={[styles.prompt, compact && styles.promptCompact]}>
         Operasyon kararını seç.
       </Text>
+      {choiceError ? (
+        <Text style={[styles.choiceError, compact && styles.choiceErrorCompact]}>
+          {choiceError}
+        </Text>
+      ) : null}
       <View style={styles.choices}>
-        {incident.choices.map((choice) => (
-          <IncidentChoiceButton
-            key={choice.id}
-            choice={choice}
-            compact={compact}
-            loading={loadingChoiceId === choice.id}
-            disabled={loadingChoiceId != null}
-            onPress={() => {
-              void handleChoice(choice.id);
-            }}
-          />
-        ))}
+        {incident.choices.map((choice) => {
+          const disabledReason = getOperationChoiceDisabledReason({
+            playerMoney,
+            effects: choice.effects,
+            incidentResolved: delivery.incidentResolved,
+            deliveryActive:
+              delivery.status === 'on_route' || delivery.status === 'preparing',
+            isResolving: loadingChoiceId != null,
+          });
+          const disabled = disabledReason != null;
+          const showFundsWarning =
+            disabled &&
+            disabledReason === 'Bu işlem için yeterli nakit yok.' &&
+            getOperationChoiceNetCashDelta(choice.effects) < 0;
+
+          return (
+            <IncidentChoiceButton
+              key={choice.id}
+              choice={choice}
+              compact={compact}
+              loading={loadingChoiceId === choice.id}
+              disabled={disabled}
+              disabledReason={showFundsWarning ? disabledReason : disabled ? disabledReason : null}
+              onPress={() => {
+                void handleChoice(choice.id);
+              }}
+            />
+          );
+        })}
       </View>
     </View>
   );
@@ -110,6 +142,7 @@ interface IncidentChoiceButtonProps {
   compact: boolean;
   loading: boolean;
   disabled: boolean;
+  disabledReason?: string | null;
   onPress: () => void;
 }
 
@@ -118,6 +151,7 @@ function IncidentChoiceButton({
   compact,
   loading,
   disabled,
+  disabledReason,
   onPress,
 }: IncidentChoiceButtonProps) {
   const summary = formatIncidentChoiceEffectSummary(choice.effects);
@@ -146,6 +180,14 @@ function IncidentChoiceButton({
         >
           {summary}
         </Text>
+        {disabled && disabledReason ? (
+          <Text
+            style={[styles.choiceDisabledReason, compact && styles.choiceDisabledReasonCompact]}
+            numberOfLines={2}
+          >
+            {disabledReason}
+          </Text>
+        ) : null}
       </View>
       {loading ? <ActivityIndicator size="small" color={colors.accentBlue} /> : null}
     </TouchableOpacity>
@@ -262,6 +304,26 @@ const styles = StyleSheet.create({
   choiceEffectCompact: {
     fontSize: 9,
     lineHeight: 12,
+  },
+  choiceDisabledReason: {
+    ...typography.caption,
+    fontSize: 9,
+    color: colors.warning,
+    fontWeight: '600',
+    lineHeight: 12,
+  },
+  choiceDisabledReasonCompact: {
+    fontSize: 8,
+    lineHeight: 11,
+  },
+  choiceError: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.warning,
+    fontWeight: '700',
+  },
+  choiceErrorCompact: {
+    fontSize: 9,
   },
   resolvedWrap: {
     marginTop: spacing.sm,

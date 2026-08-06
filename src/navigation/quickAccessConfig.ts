@@ -6,16 +6,16 @@ export type QuickAccessIconTone = 'info' | 'amber';
 export interface QuickAccessItemDef {
   key: QuickAccessAction;
   label: string;
-  subtitle?: string;
+  defaultSubtitle?: string;
   icon: GameIconName;
   iconTone?: QuickAccessIconTone;
   accessibilityLabel: string;
   accessibilityHint: string;
 }
 
-export const QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO = 0.85;
-export const QUICK_ACCESS_TILE_GAP = 14;
-export const QUICK_ACCESS_TILE_HEIGHT = 76;
+export const QUICK_ACCESS_PANEL_MAX_HEIGHT_RATIO = 0.76;
+export const QUICK_ACCESS_TILE_GAP = 12;
+export const QUICK_ACCESS_TILE_HEIGHT = 128;
 
 const BASE_QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = [
   {
@@ -51,7 +51,7 @@ const BASE_QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = [
 const VEHICLE_MARKETPLACE_ITEM: QuickAccessItemDef = {
   key: 'vehicleMarketplace',
   label: 'Araç Pazarı',
-  subtitle: 'Oyuncu ilanları',
+  defaultSubtitle: 'Oyuncu ilanları',
   icon: 'truck',
   accessibilityLabel: 'Araç pazarını aç',
   accessibilityHint: 'Oyuncu ilanlarını görüntüler',
@@ -68,7 +68,7 @@ const TRAILING_QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = [
   {
     key: 'leaderboard',
     label: 'Liderlik',
-    subtitle: 'Haftalık sıralama',
+    defaultSubtitle: 'Sezon sıralaması',
     icon: 'trophy',
     iconTone: 'amber',
     accessibilityLabel: 'Liderlik tablosunu aç',
@@ -77,7 +77,7 @@ const TRAILING_QUICK_ACCESS_ITEMS: QuickAccessItemDef[] = [
   {
     key: 'account',
     label: 'Hesap',
-    subtitle: 'Profil ve ayarlar',
+    defaultSubtitle: 'Profil ve tercihler',
     icon: 'account',
     accessibilityLabel: 'Hesap ayarlarını aç',
     accessibilityHint: 'Profil, giriş ve hesap seçeneklerini görüntüler',

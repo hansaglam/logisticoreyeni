@@ -8,6 +8,7 @@
  */
 
 import { create } from 'zustand';
+import type { PendingMoreSubRoute } from '../navigation/managementNavigation';
 import type { ShopCategory } from '../navigation/tabTypes';
 import type {
   City,
@@ -172,6 +173,12 @@ import {
   createDebugDeliveryIncident,
   resolveDeliveryIncident as resolveDeliveryIncidentSim,
 } from '../simulation/deliveryIncidents';
+import {
+  buildDeliverySettlementId,
+  computeRequiredDeliveryCatchUpGameHours,
+  countActiveRouteDeliveriesInList,
+  reconcileDeliveriesWithRealTime,
+} from '../simulation/deliveryOfflineProgress';
 import {
   buildOfflineProgressSummary,
   calculateOfflineElapsed,
@@ -350,8 +357,6 @@ import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
   computeElapsedOperatingDays,
-  formatOperatingCostEventLogMessage,
-  formatOperatingCostNotificationMessage,
   getSkippedOperatingDaysDueToCap,
   processExpiredTruckLeases,
   resolveOperatingCostElapsedDays,
@@ -436,6 +441,8 @@ let gameInitPromise: Promise<void> | null = null;
 const completedDeliveryNotificationIds = new Set<string>();
 const completedTransferNotificationIds = new Set<string>();
 const settledWarehouseStockTransferIds = new Set<string>();
+/** Depo yükseltme double-tap koruması */
+const upgradeInProgressWarehouseIds = new Set<string>();
 
 let offlineProgressionActive = false;
 let offlineProgressApplying = false;
@@ -454,12 +461,20 @@ interface OfflineProgressCollector {
 let offlineProgressCollector: OfflineProgressCollector | null = null;
 
 const OFFLINE_META_PERSIST_INTERVAL_MS = 15_000;
+const OFFLINE_META_PERSIST_INTERVAL_ACTIVE_DELIVERY_MS = 5_000;
 let lastOfflineMetaPersistAt = 0;
 let cachedOfflineMetaLastSimulated: number | null = null;
 
-function schedulePersistOfflineMeta(lastSimulatedRealTimeMs: number, lastSimulationGameSpeed: number): void {
+function schedulePersistOfflineMeta(
+  lastSimulatedRealTimeMs: number,
+  lastSimulationGameSpeed: number,
+  options?: { hasActiveDeliveries?: boolean },
+): void {
   const now = Date.now();
-  if (now - lastOfflineMetaPersistAt < OFFLINE_META_PERSIST_INTERVAL_MS) {
+  const interval = options?.hasActiveDeliveries
+    ? OFFLINE_META_PERSIST_INTERVAL_ACTIVE_DELIVERY_MS
+    : OFFLINE_META_PERSIST_INTERVAL_MS;
+  if (now - lastOfflineMetaPersistAt < interval) {
     return;
   }
   lastOfflineMetaPersistAt = now;
@@ -1093,7 +1108,7 @@ function buildDailyOperatingCostDebugSnapshot(
     currentTime,
     hoursUntilNextDailyCost: Math.max(0, nextDue - currentTime),
     dailyOperatingCost: breakdown.total,
-    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays ?? 3,
+    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays ?? 0,
     elapsedOperatingDays: lastCharge?.elapsedDays ?? null,
     chargedOperatingDays: lastCharge?.days ?? null,
     skippedOperatingDaysDueToCap: lastCharge?.skippedDays ?? 0,
@@ -1327,7 +1342,7 @@ export interface GameStore extends StoreGameState {
   /** Geçici UI bildirimleri — save'e yazılmaz */
   notifications: GameNotification[];
   navigationRequest: NavigationRequest | null;
-  pendingMoreSubRoute: 'finance' | 'warehouse' | 'debug' | 'missions' | 'leaderboard' | 'upgrades' | null;
+  pendingMoreSubRoute: PendingMoreSubRoute | null;
   pendingUpgradeTruckId: string | null;
   pendingFleetSubTab: FleetSubTab | null;
   pendingShopCategory: ShopCategory | null;
@@ -1565,7 +1580,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     currentTime: 0,
     hoursUntilNextDailyCost: DAILY_COST_INTERVAL_HOURS,
     dailyOperatingCost: 0,
-    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays ?? 3,
+    maxOfflineChargeDays: operatingCostBalance.maxOfflineChargeDays ?? 0,
     elapsedOperatingDays: null,
     chargedOperatingDays: null,
     skippedOperatingDaysDueToCap: 0,
@@ -3152,6 +3167,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const nowMs = getEconomyNow();
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
+    const hasActiveDeliveries = countActiveRouteDeliveriesInList(state.activeDeliveries) > 0;
     const baselineMs = resolveOfflineBaselineMs({
       stateLastSimulated: state.lastSimulatedRealTimeMs,
       metaLastSimulated: cachedOfflineMetaLastSimulated,
@@ -3176,6 +3192,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         baselineMs,
         state.lastOfflineProgressAppliedAt,
         nowMs,
+        { hasActiveDeliveries },
       )
     ) {
       set({ lastSeenRealTimeMs: nowMs, lastSimulatedRealTimeMs: nowMs });
@@ -3183,7 +3200,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    const elapsed = calculateOfflineElapsed(baselineMs, nowMs);
+    const elapsed = calculateOfflineElapsed(baselineMs, nowMs, { hasActiveDeliveries });
     if (!elapsed.shouldApply) {
       set({
         lastSeenRealTimeMs: nowMs,
@@ -3208,12 +3225,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const beforeSnapshot = createOfflineProgressSnapshot(state);
-    const gameHours = realMsToGameHours(elapsed.appliedMs, simulationGameSpeed);
+    const elapsedGameHours = realMsToGameHours(elapsed.appliedMs, simulationGameSpeed);
+    const deliveryCatchUpHours = computeRequiredDeliveryCatchUpGameHours({
+      deliveries: state.activeDeliveries,
+      nowMs,
+      gameSpeed: simulationGameSpeed,
+      baselineMs,
+    });
+    const gameHours = Math.max(elapsedGameHours, deliveryCatchUpHours);
 
     if (__DEV__) {
       const scale = buildTimeScaleDebugSnapshot(simulationGameSpeed);
       console.log(
-        `[time-debug-offline] elapsedRealMs=${elapsed.appliedMs} appliedMs=${elapsed.appliedMs} gameSpeed=${scale.gameSpeed} msPerGameHour=${scale.msPerGameHour} gameHours=${gameHours.toFixed(2)} gameHoursPerRealMinute=${scale.gameHoursPerRealMinute.toFixed(2)}`,
+        `[time-debug-offline] elapsedRealMs=${elapsed.appliedMs} appliedMs=${elapsed.appliedMs} gameSpeed=${scale.gameSpeed} msPerGameHour=${scale.msPerGameHour} gameHours=${gameHours.toFixed(2)} deliveryCatchUpHours=${deliveryCatchUpHours.toFixed(2)} gameHoursPerRealMinute=${scale.gameHoursPerRealMinute.toFixed(2)}`,
       );
     }
 
@@ -3223,18 +3247,43 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (gameHours > 0) {
         get().advanceTime(gameHours);
       }
+
+      // Wall-clock reconcile — advanceTime sonrası güvenlik ağı
+      const midDeliveries = get().activeDeliveries;
+      const reconciled = reconcileDeliveriesWithRealTime({
+        deliveries: midDeliveries,
+        nowMs,
+        gameSpeed: simulationGameSpeed,
+        baselineMs,
+      });
+      if (reconciled.progressedCount > 0 || reconciled.completedIds.length > 0) {
+        set({ activeDeliveries: reconciled.deliveries });
+      }
+      for (const deliveryId of reconciled.completedIds) {
+        const current = get().activeDeliveries.find((d) => d.id === deliveryId);
+        if (
+          current &&
+          (current.status === 'on_route' || current.status === 'preparing') &&
+          isDeliveryProgressComplete(current.progress) &&
+          current.settledAt == null &&
+          !current.settlementId
+        ) {
+          get().completeDeliveryById(deliveryId);
+        }
+      }
     } finally {
       offlineProgressionActive = false;
       offlineProgressApplying = false;
     }
 
     const midState = get();
+    // Offline sabit işletme gideri tamamen kapalı — period deduction üretme.
     const periodic = buildPeriodicCostDeductions({
       player: midState.player,
       economyNowMs: nowMs,
       lastProcessedEconomyAt: midState.lastProcessedEconomyAt ?? baselineMs,
       alreadyAppliedPeriodKeys: midState.appliedEconomyPeriodKeys ?? [],
-      maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+      maxOfflineCostPeriods: 0,
     });
     const mergedPeriodKeys = [
       ...(midState.appliedEconomyPeriodKeys ?? []),
@@ -3318,7 +3367,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lateDeliveries: collector.lateDeliveries,
       worldEventsUpdated: collector.worldEventsUpdated,
       marketUpdated: collector.marketUpdated,
-      dailyCostsApplied: collector.dailyCostsApplied,
+      dailyCostsApplied: false,
     });
 
     if (__DEV__) {
@@ -3358,7 +3407,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!offlineProgressionActive) {
       const nowMs = getEconomyNow();
       set({ lastSimulationGameSpeed: simulationGameSpeed, lastSimulatedRealTimeMs: nowMs });
-      schedulePersistOfflineMeta(nowMs, simulationGameSpeed);
+      schedulePersistOfflineMeta(nowMs, simulationGameSpeed, {
+        hasActiveDeliveries: countActiveRouteDeliveriesInList(state.activeDeliveries) > 0,
+      });
     }
 
     const newTime = state.currentTime + hours;
@@ -3408,21 +3459,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
 
     if (elapsedDays > 0) {
-      const maxOfflineDays = operatingCostBalance.maxOfflineChargeDays ?? 3;
-      const chargedDays = Math.min(elapsedDays, maxOfflineDays);
       const newLastDailyOperatingCostTime =
-        lastDailyOperatingCostTime + chargedDays * DAILY_COST_INTERVAL_HOURS;
+        lastDailyOperatingCostTime + elapsedDays * DAILY_COST_INTERVAL_HOURS;
 
-      get().processDailyOperatingCosts({
-        days: chargedDays,
-        elapsedDays,
-        reason:
-          elapsedDays > 1 || chargedDays < elapsedDays
-            ? 'offline_catchup'
-            : 'daily_tick',
-        currentTime: newTime,
-        lastDailyOperatingCostTime: newLastDailyOperatingCostTime,
-      });
+      if (offlineProgressionActive) {
+        // Offline/cold-start: sabit işletme gideri kesilmez; gün işaretçisi senkron kalır
+        // ki online tick geriye dönük catch-up yapmasın.
+        get().processDailyOperatingCosts({
+          days: 0,
+          elapsedDays,
+          reason: 'offline_skip',
+          currentTime: newTime,
+          lastDailyOperatingCostTime: newLastDailyOperatingCostTime,
+        });
+      } else {
+        // Uygulama açıkken: geçen oyun günleri için canonical günlük gider.
+        get().processDailyOperatingCosts({
+          days: elapsedDays,
+          elapsedDays,
+          reason: 'daily_tick',
+          currentTime: newTime,
+          lastDailyOperatingCostTime: newLastDailyOperatingCostTime,
+        });
+      }
     } else {
       set({
         dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
@@ -3508,9 +3567,39 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => {
     const state = get();
-    const chargedDays = Math.max(0, Math.floor(options?.days ?? 1));
-    const currentTime = options?.currentTime ?? state.currentTime ?? 0;
     const reason = options?.reason ?? 'daily_tick';
+    const currentTime = options?.currentTime ?? state.currentTime ?? 0;
+
+    // Offline / catch-up: asla sabit işletme gideri kesme; yalnız gün işaretçisini güncelle.
+    if (
+      offlineProgressionActive ||
+      reason === 'offline_catchup' ||
+      reason === 'offline_skip'
+    ) {
+      if (options?.lastDailyOperatingCostTime != null) {
+        set({
+          lastDailyOperatingCostTime: options.lastDailyOperatingCostTime,
+          dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
+            {
+              ...state,
+              currentTime,
+              lastDailyOperatingCostTime: options.lastDailyOperatingCostTime,
+            },
+            {
+              days: 0,
+              elapsedDays: resolveOperatingCostElapsedDays(options?.elapsedDays, 0),
+              skippedDays: resolveOperatingCostElapsedDays(options?.elapsedDays, 0),
+              total: 0,
+              at: currentTime,
+              reason,
+            },
+          ),
+        });
+      }
+      return;
+    }
+
+    const chargedDays = Math.max(0, Math.floor(options?.days ?? 1));
     const elapsedDays = resolveOperatingCostElapsedDays(options?.elapsedDays, chargedDays);
     const skippedDays = getSkippedOperatingDaysDueToCap(elapsedDays, chargedDays);
 
@@ -3550,10 +3639,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const totalCost = breakdown.total * chargedDays;
-    if (offlineProgressionActive && offlineProgressCollector) {
-      offlineProgressCollector.expenses += totalCost;
-      offlineProgressCollector.dailyCostsApplied = true;
-    }
     const ledgerEntry = buildSummarizedDailyOperatingCostLedgerEntry(
       breakdown,
       currentTime,
@@ -3574,19 +3659,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       at: currentTime,
       reason,
     };
-
-    const notificationMessage = formatOperatingCostNotificationMessage(
-      { elapsedDays, chargedDays, amount: totalCost },
-      formatNotificationMoney,
-    );
-    const eventLogMessage = formatOperatingCostEventLogMessage({
-      elapsedDays,
-      chargedDays,
-    });
-    const shouldSurfaceCatchup =
-      elapsedDays > chargedDays ||
-      chargedDays > 1 ||
-      reason === 'offline_catchup';
 
     const patch: Partial<GameStore> = {
       player: {
@@ -3612,39 +3684,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       patch.lastDailyOperatingCostTime = options.lastDailyOperatingCostTime;
     }
 
-    if (shouldSurfaceCatchup && eventLogMessage && !offlineProgressionActive) {
-      patch.eventLog = prependGameEvent(
-        state.eventLog,
-        {
-          time: currentTime,
-          type: 'system',
-          title: 'İşletme giderleri işlendi',
-          message: eventLogMessage,
-          importance: 'medium',
-        },
-        currentTime,
-      );
-    }
-
     set(patch);
 
-    const shouldNotify =
-      elapsedDays > chargedDays ||
-      (chargedDays > 1 && operatingCostBalance.notifyWhenMultipleDaysCharged);
-
-    if (shouldNotify && notificationMessage && !offlineProgressionActive) {
-      try {
-        get().addNotification({
-          time: currentTime,
-          type: 'info',
-          title: 'İşletme giderleri işlendi',
-          message: notificationMessage,
-          autoDismissMs: 4000,
-        });
-      } catch (error) {
-        console.warn('[gameStore] daily operating cost notification failed:', error);
-      }
-    }
+    // "İşletme giderleri işlendi" bildirimi / event-log — ürün kararı: hiçbir koşulda gösterilmez.
 
     get().markSaveDirty();
   },
@@ -4347,6 +4389,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         currentTime: state.currentTime,
         sequence: state.activeDeliveries.length + 1,
         trailers,
+        startedRealAtMs: getEconomyNow(),
       });
     } catch (error) {
       const message =
@@ -4577,6 +4620,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
 
       let updated = updateDeliveryProgress(delivery, hoursPassed);
+      if ((updated.progress ?? 0) !== (delivery.progress ?? 0) || offlineProgressionActive) {
+        updated = {
+          ...updated,
+          lastProgressedRealAtMs: getEconomyNow(),
+          startedRealAtMs: delivery.startedRealAtMs ?? getEconomyNow(),
+          expectedDurationGameHours:
+            delivery.expectedDurationGameHours ?? delivery.travelHours,
+        };
+      }
 
       if (
         !offlineProgressionActive &&
@@ -4943,7 +4995,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       hasDeliveryCompletionLedgerEntry(state.financeLedger, deliveryId) ||
       deliveryRecord.status === 'completed' ||
       deliveryRecord.status === 'failed' ||
-      deliveryRecord.settledAt != null;
+      deliveryRecord.settledAt != null ||
+      Boolean(deliveryRecord.settlementId);
 
     if (alreadySettled) {
       const repair = ensureFleetAtDeliveryDestination(
@@ -4986,7 +5039,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
-    if (delivery.settledAt != null) {
+    if (delivery.settledAt != null || delivery.settlementId) {
       return;
     }
 
@@ -5147,8 +5200,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       activeDeliveryCleared: true,
     });
     const settledAt = state.currentTime;
+    const settlementId = buildDeliverySettlementId(deliveryId);
     const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
-      item.id === deliveryId ? { ...item, settledAt } : item,
+      item.id === deliveryId ? { ...item, settledAt, settlementId } : item,
     );
     const completionLedgerEntries = buildDeliveryCompletionLedgerEntries(
       settlement,
@@ -6368,90 +6422,198 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
   upgradeWarehouse: (warehouseId: string): TradeActionResult => {
     const state = get();
-    const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
-    if (!warehouse) {
-      return tradeFail('warehouse-required', 'Depo bulunamadı.', 'WAREHOUSE_NOT_FOUND');
-    }
 
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
-    const city = state.cities.find((candidate) => candidate.id === warehouse.cityId);
-    const preview = getWarehouseUpgradePreview(warehouse, city);
-
-    if (preview.nextLevel == null || preview.upgradePrice == null || preview.nextCapacity == null) {
-      return tradeFail('upgrade-maxed', 'Depo maksimum kapasitede.');
-    }
-
-    if (preview.requiredPlayerLevel != null && playerLevel < preview.requiredPlayerLevel) {
+    if (upgradeInProgressWarehouseIds.has(warehouseId)) {
       return tradeFail(
-        'level-required',
-        `Bu yükseltme için Level ${preview.requiredPlayerLevel} gerekli.`,
+        'upgrade-in-progress',
+        'Yükseltme işlemi devam ediyor.',
       );
     }
 
-    const capacityIncrease = preview.nextCapacity - preview.currentCapacity;
-    if (capacityIncrease <= 0) {
-      return tradeFail('upgrade-maxed', 'Depo maksimum kapasitede.');
-    }
+    upgradeInProgressWarehouseIds.add(warehouseId);
 
-    const upgradeCost = preview.upgradePrice;
-
-    if (!canAffordVoluntaryPurchase(state.player.money, upgradeCost)) {
-      return tradeFail(
-        'insufficient-funds',
-        `Depo yükseltmek için ${formatNotificationMoney(upgradeCost)} gerekli.`,
-        'INSUFFICIENT_FUNDS',
-      );
-    }
-
-    const cityName = city?.name ?? warehouse.cityId;
-    const nextTier = preview.nextLevel;
-    const upgradeLabel = nextTier === 2 ? 'Orta depo' : 'Büyük depo';
-    const updatedWarehouses = state.player.warehouses.map((candidate) => {
-      if (candidate.id !== warehouse.id) {
-        return candidate;
+    try {
+      const warehouse = state.player.warehouses.find((candidate) => candidate.id === warehouseId);
+      if (!warehouse) {
+        if (__DEV__) {
+          console.log('[warehouse-upgrade]', {
+            stage: 'validate',
+            warehouseId,
+            warehouseFound: false,
+            success: false,
+            failureReason: 'warehouse-not-found',
+          });
+        }
+        return tradeFail('warehouse-required', 'Depo bulunamadı.', 'WAREHOUSE_NOT_FOUND');
       }
-      const upgraded = {
-        ...candidate,
-        capacityTons: preview.nextCapacity!,
-        capacityTon: preview.nextCapacity!,
-        upgradeTier: nextTier,
-      };
-      return {
-        ...upgraded,
-        dailyOperatingCost: resolveWarehouseDailyOperatingCost(upgraded, city),
-      };
-    });
 
-    set({
-      player: {
-        ...state.player,
-        money: state.player.money - upgradeCost,
-        warehouses: updatedWarehouses,
-      },
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'warehouse_open',
-        amount: upgradeCost,
-        description: `${cityName} deposu yükseltildi`,
-      }),
-      eventLog: prependGameEvent(
-        state.eventLog,
+      const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+      const playerMoney = state.player.money ?? 0;
+      const city = state.cities.find((candidate) => candidate.id === warehouse.cityId);
+      const preview = getWarehouseUpgradePreview(warehouse, city, playerMoney);
+
+      const logBase = {
+        warehouseId,
+        warehouseFound: true,
+        currentLevel: preview.currentLevel,
+        targetLevel: preview.nextLevel,
+        currentCapacity: preview.currentCapacity,
+        nextCapacity: preview.nextCapacity,
+        currentDailyCost: preview.currentDailyCost,
+        nextDailyCost: preview.nextDailyCost,
+        upgradeCost: preview.upgradeCost,
+        playerMoney,
+        canAfford: preview.canAfford,
+        maxLevelReached: preview.isMaxLevel,
+      };
+
+      if (!preview.isValid || preview.nextLevel == null || preview.upgradeCost == null || preview.nextCapacity == null) {
+        if (__DEV__) {
+          console.log('[warehouse-upgrade]', {
+            stage: 'preview',
+            ...logBase,
+            success: false,
+            failureReason: preview.failureReason ?? 'max-level',
+          });
+        }
+        if (preview.failureReason === 'invalid-upgrade-config') {
+          return tradeFail(
+            'invalid-upgrade-config',
+            'Yükseltme bilgileri yüklenemedi.',
+          );
+        }
+        return tradeFail('upgrade-maxed', 'Bu depo maksimum seviyede.');
+      }
+
+      if (preview.requiredPlayerLevel != null && playerLevel < preview.requiredPlayerLevel) {
+        if (__DEV__) {
+          console.log('[warehouse-upgrade]', {
+            stage: 'level-gate',
+            ...logBase,
+            success: false,
+            failureReason: 'level-required',
+          });
+        }
+        return tradeFail(
+          'level-required',
+          `Bu yükseltme için Level ${preview.requiredPlayerLevel} gerekli.`,
+        );
+      }
+
+      const capacityIncrease = preview.nextCapacity - preview.currentCapacity;
+      if (capacityIncrease <= 0) {
+        return tradeFail('upgrade-maxed', 'Bu depo maksimum seviyede.');
+      }
+
+      const upgradeCost = preview.upgradeCost;
+      if (!canAffordVoluntaryPurchase(playerMoney, upgradeCost)) {
+        if (__DEV__) {
+          console.log('[warehouse-upgrade]', {
+            stage: 'funds',
+            ...logBase,
+            success: false,
+            failureReason: 'insufficient-funds',
+          });
+        }
+        const missing = Math.max(0, upgradeCost - playerMoney);
+        return tradeFail(
+          'insufficient-funds',
+          `Yükseltme için bakiye yetersiz. ${formatNotificationMoney(missing)} daha gerekiyor.`,
+          'INSUFFICIENT_FUNDS',
+        );
+      }
+
+      const cityName = city?.name ?? warehouse.cityId;
+      const nextTier = preview.nextLevel;
+      const previousLevel = preview.currentLevel;
+      const upgradeLabel = nextTier === 2 ? 'Orta depo' : 'Büyük depo';
+      const nextDailyCost = preview.nextDailyCost ?? resolveWarehouseDailyOperatingCost(
         {
-          time: state.currentTime,
-          type: 'warehouse',
-          title: 'Depo yükseltildi',
-          message: `${cityName} deposu ${upgradeLabel} seviyesine yükseltildi (+${capacityIncrease} ton).`,
-          importance: 'medium',
+          ...warehouse,
+          capacityTons: preview.nextCapacity,
+          capacityTon: preview.nextCapacity,
+          upgradeTier: nextTier,
+          dailyOperatingCost: undefined,
         },
-        state.currentTime,
-      ),
-    });
+        city,
+      );
 
-    get().addCompanyXp(levelBalance.xpRewards.warehouseUpgrade, 'warehouse_upgrade');
-    get().markSaveDirty();
-    get().autoSave('warehouse');
-    return tradeOk(`${cityName} deposu yükseltildi (+${capacityIncrease} ton, ${upgradeLabel}).`);
+      const updatedWarehouses = state.player.warehouses.map((candidate) => {
+        if (candidate.id !== warehouse.id) {
+          return candidate;
+        }
+        return {
+          ...candidate,
+          capacityTons: preview.nextCapacity!,
+          capacityTon: preview.nextCapacity!,
+          upgradeTier: nextTier,
+          dailyOperatingCost: nextDailyCost,
+          // inventory / city / type / id korunur (spread)
+        };
+      });
+
+      const moneyAfter = playerMoney - upgradeCost;
+
+      set({
+        player: {
+          ...state.player,
+          money: moneyAfter,
+          warehouses: updatedWarehouses,
+        },
+        ...patchFinanceLedger(state, {
+          time: state.currentTime,
+          type: 'expense',
+          category: 'warehouse_open',
+          amount: upgradeCost,
+          title: 'Depo yükseltmesi',
+          description: `${cityName} · Seviye ${previousLevel} → ${nextTier}`,
+        }),
+        eventLog: prependGameEvent(
+          state.eventLog,
+          {
+            time: state.currentTime,
+            type: 'warehouse',
+            title: 'Depo yükseltildi',
+            message: `${cityName} deposu ${upgradeLabel} seviyesine yükseltildi (+${capacityIncrease} ton).`,
+            importance: 'medium',
+          },
+          state.currentTime,
+        ),
+      });
+
+      if (__DEV__) {
+        console.log('[warehouse-upgrade]', {
+          stage: 'applied',
+          ...logBase,
+          targetLevel: nextTier,
+          nextCapacity: preview.nextCapacity,
+          nextDailyCost,
+          success: true,
+          failureReason: null,
+        });
+      }
+
+      try {
+        get().addNotification({
+          time: state.currentTime,
+          type: 'success',
+          title: 'Depo yükseltildi',
+          message: `${cityName}: Sv.${previousLevel} → ${nextTier} · +${capacityIncrease} t`,
+          autoDismissMs: 3500,
+        });
+      } catch (error) {
+        console.warn('[gameStore] warehouse upgrade notification failed:', error);
+      }
+
+      get().addCompanyXp(levelBalance.xpRewards.warehouseUpgrade, 'warehouse_upgrade');
+      get().markSaveDirty();
+      get().autoSave('warehouse');
+      return tradeOk(
+        `${cityName} deposu yükseltildi (Sv.${previousLevel} → ${nextTier}, +${capacityIncrease} ton).`,
+      );
+    } finally {
+      upgradeInProgressWarehouseIds.delete(warehouseId);
+    }
   },
 
   buyProductForWarehouse: ({

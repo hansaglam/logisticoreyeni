@@ -221,11 +221,12 @@ test('one charge per game day interval', () => {
   assert.equal(computeElapsedOperatingDays(last, last + hoursPerDay * 2.9), 2);
 });
 
-test('offline days capped — no unbounded debt', () => {
+test('offline fixed operating costs disabled — no charge, no friendly cap', () => {
+  assert.equal(operatingCostBalance.maxOfflineChargeDays, 0);
   const elapsed = 10;
   const charged = Math.min(elapsed, operatingCostBalance.maxOfflineChargeDays);
-  assert.equal(charged, 3);
-  assert.equal(getSkippedOperatingDaysDueToCap(elapsed, charged), 7);
+  assert.equal(charged, 0);
+  assert.equal(getSkippedOperatingDaysDueToCap(elapsed, charged), 10);
 });
 
 test('cold warehouse daily cost higher than standard', () => {

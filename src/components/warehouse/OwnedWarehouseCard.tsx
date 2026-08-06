@@ -39,7 +39,7 @@ export default function OwnedWarehouseCard({
   onToggle,
   onManageStock,
   onTransfer,
-  onUpgrade: _onUpgrade,
+  onUpgrade,
   onMore,
   onGoToMarket,
   onSellStock,
@@ -51,10 +51,18 @@ export default function OwnedWarehouseCard({
   const statusVariant = getStatusBadgeVariant(card.status);
   const accent = card.type === 'cold' ? warehouseVisual.accentPurple : warehouseVisual.accentBlue;
   const isEmpty = card.stocks.length === 0;
+  const canUpgrade =
+    card.upgradePreview.nextLevel != null && card.upgradePreview.upgradePrice != null;
+  const upgradeDisabled = card.upgradeDisabled;
+  const upgradeLabel = card.upgradePreview.nextLevel == null ? 'Maks. Sv.' : 'Yükselt';
 
   const handleToggle = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     onToggle();
+  };
+
+  const handleUpgradePress = () => {
+    onUpgrade();
   };
 
   return (
@@ -170,6 +178,34 @@ export default function OwnedWarehouseCard({
             <Text style={styles.transferBtnText}>Taşı</Text>
           </Pressable>
           <Pressable
+            onPress={handleUpgradePress}
+            style={[
+              styles.upgradeBtn,
+              (upgradeDisabled || !canUpgrade) && styles.upgradeBtnDisabled,
+            ]}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: upgradeDisabled || !canUpgrade }}
+            accessibilityLabel={`${card.cityName} deposunu yükselt`}
+            hitSlop={6}
+          >
+            <GameIcon
+              name="upgrade"
+              size={13}
+              color={
+                upgradeDisabled || !canUpgrade ? colors.textMuted : warehouseVisual.accentAmber
+              }
+            />
+            <Text
+              style={[
+                styles.upgradeBtnText,
+                (upgradeDisabled || !canUpgrade) && styles.upgradeBtnTextDisabled,
+              ]}
+              numberOfLines={1}
+            >
+              {upgradeLabel}
+            </Text>
+          </Pressable>
+          <Pressable
             onPress={onMore}
             style={styles.moreBtn}
             accessibilityRole="button"
@@ -181,17 +217,30 @@ export default function OwnedWarehouseCard({
 
         {expanded ? (
           <View style={styles.expanded}>
-            {card.upgradePreview.nextLevel != null && card.upgradePreview.upgradePrice != null ? (
-              <View style={styles.upgradeBanner}>
+            {canUpgrade ? (
+              <Pressable
+                onPress={handleUpgradePress}
+                style={[styles.upgradeBanner, upgradeDisabled && styles.upgradeBannerDisabled]}
+                accessibilityRole="button"
+                accessibilityLabel={`${card.cityName} yükseltme önizlemesi`}
+              >
                 <GameIcon name="upgrade" size={12} color={warehouseVisual.accentAmber} />
                 <Text style={styles.upgradeHint} numberOfLines={2}>
                   Sv.{card.upgradePreview.currentLevel} → {card.upgradePreview.nextLevel} ·{' '}
                   {Math.round(card.upgradePreview.currentCapacity)} →{' '}
                   {Math.round(card.upgradePreview.nextCapacity ?? 0)} t ·{' '}
-                  {formatMoney(card.upgradePreview.upgradePrice)}
+                  {formatMoney(card.upgradePreview.upgradePrice ?? 0)}
+                  {card.upgradeHelperText ? ` · ${card.upgradeHelperText}` : ''}
+                </Text>
+              </Pressable>
+            ) : (
+              <View style={styles.upgradeBanner}>
+                <GameIcon name="upgrade" size={12} color={colors.textMuted} />
+                <Text style={styles.upgradeHint} numberOfLines={2}>
+                  {card.upgradeHelperText ?? 'Maksimum seviyeye ulaşıldı'}
                 </Text>
               </View>
-            ) : null}
+            )}
 
             {isEmpty ? (
               <View style={styles.emptyExpanded}>
@@ -325,43 +374,78 @@ const styles = StyleSheet.create({
   },
   primaryBtn: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 44,
+    minWidth: 0,
     borderRadius: 12,
     backgroundColor: warehouseVisual.accentBlue,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
+    paddingHorizontal: 6,
   },
   primaryBtnText: {
     color: colors.textPrimary,
     fontWeight: '800',
-    fontSize: 13,
+    fontSize: 12,
   },
   transferBtn: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 44,
+    minWidth: 0,
     borderRadius: 12,
-    backgroundColor: warehouseVisual.accentAmber,
+    backgroundColor: 'rgba(12,24,48,0.9)',
+    borderWidth: 1,
+    borderColor: warehouseVisual.border,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
+    paddingHorizontal: 6,
   },
   transferBtnText: {
-    color: '#1A1200',
+    color: colors.textPrimary,
     fontWeight: '800',
-    fontSize: 13,
+    fontSize: 12,
+  },
+  upgradeBtn: {
+    flex: 1.15,
+    minHeight: 44,
+    minWidth: 0,
+    borderRadius: 12,
+    backgroundColor: warehouseVisual.softAmber,
+    borderWidth: 1,
+    borderColor: 'rgba(255,170,0,0.45)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+  },
+  upgradeBtnDisabled: {
+    opacity: 0.55,
+    borderColor: warehouseVisual.border,
+    backgroundColor: 'rgba(4, 10, 20, 0.45)',
+  },
+  upgradeBtnText: {
+    color: warehouseVisual.accentAmber,
+    fontWeight: '800',
+    fontSize: 12,
+    flexShrink: 1,
+  },
+  upgradeBtnTextDisabled: {
+    color: colors.textMuted,
   },
   moreBtn: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: warehouseVisual.border,
     backgroundColor: 'rgba(4, 10, 20, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   expanded: {
     borderTopWidth: 1,
@@ -377,9 +461,13 @@ const styles = StyleSheet.create({
     backgroundColor: warehouseVisual.softAmber,
     borderRadius: 10,
     paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingVertical: 8,
     marginTop: 4,
     marginBottom: 4,
+    minHeight: 44,
+  },
+  upgradeBannerDisabled: {
+    opacity: 0.7,
   },
   upgradeHint: {
     ...typography.caption,

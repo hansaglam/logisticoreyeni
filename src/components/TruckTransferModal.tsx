@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 
+import { getModalSheetPaddingBottom } from '../constants/layout';
 import { ActionButton, GameIcon, IconButton } from './ui';
 import { CITIES_BY_ID, CITY_IDS } from '../data/cities';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
@@ -179,8 +180,7 @@ export default function TruckTransferModal({
     onError?.(result.message ?? 'Transfer başlatılamadı.');
   };
 
-  const safeAreaBottom = insets.bottom ?? 0;
-  const footerBottomPadding = safeAreaBottom + 16;
+  const footerBottomPadding = getModalSheetPaddingBottom(insets);
   const scrollBottomPadding = FOOTER_SUMMARY_HEIGHT + FOOTER_BUTTON_HEIGHT + footerBottomPadding + 24;
 
   return (

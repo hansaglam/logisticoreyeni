@@ -8,7 +8,9 @@ import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
-import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
+import { MIN_TOUCH_TARGET } from '../constants/layout';
+import { getScreenTopPadding } from '../utils/screenInsets';
+import { UI } from '../theme/ui';
 import { useGameStore } from '../store/gameStore';
 import type { GameNotification, GameNotificationType } from '../types/game';
 import { resolveNotificationDismissMs } from '../types/game';
@@ -47,7 +49,7 @@ function ToastCard({ notification, onDismiss, onAction }: ToastCardProps) {
       <TouchableOpacity
         style={styles.closeButton}
         onPress={onDismiss}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         activeOpacity={0.7}
       >
         <Text style={styles.closeText}>×</Text>
@@ -80,7 +82,7 @@ export default function GameToast() {
     return null;
   }
 
-  const topOffset = Math.max(insets.top, STATUS_BAR_HEIGHT) + 12;
+  const topOffset = getScreenTopPadding(insets) + 4;
 
   const handleAction = () => {
     if (notification.actionTarget === 'market' && notification.marketFocus) {
@@ -133,6 +135,7 @@ const styles = StyleSheet.create({
   title: {
     color: UI.colors.text,
     fontSize: 14,
+    lineHeight: 18,
     fontWeight: '800',
     marginBottom: 4,
   },
@@ -151,8 +154,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   closeButton: {
-    width: 28,
-    height: 28,
+    width: MIN_TOUCH_TARGET,
+    height: MIN_TOUCH_TARGET,
     alignItems: 'center',
     justifyContent: 'center',
   },

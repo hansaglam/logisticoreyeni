@@ -168,14 +168,26 @@ export interface WarehouseUpgradePreview {
   nextCapacity: number | null;
   currentDailyCost: number;
   nextDailyCost: number | null;
+  /** @deprecated use upgradeCost */
   upgradePrice: number | null;
+  upgradeCost: number | null;
   requiredPlayerLevel: number | null;
+  canAfford: boolean;
+  isMaxLevel: boolean;
+  isValid: boolean;
+  missingMoney: number;
+  failureReason?:
+    | 'max-level'
+    | 'insufficient-funds'
+    | 'level-required'
+    | 'invalid-upgrade-config';
 }
 
-/** UI karşılaştırma paneli için yükseltme önizlemesi */
+/** UI + store ortak yükseltme önizlemesi */
 export function getWarehouseUpgradePreview(
   warehouse: WarehouseCostInput,
   city?: Pick<City, 'warehouseCostModifier'>,
+  playerMoney = Number.POSITIVE_INFINITY,
 ): WarehouseUpgradePreview {
   const currentLevel = getWarehouseUpgradeTier(warehouse);
   const currentCapacity = getWarehouseCapacityTons(warehouse);
@@ -192,7 +204,13 @@ export function getWarehouseUpgradePreview(
       currentDailyCost,
       nextDailyCost: null,
       upgradePrice: null,
+      upgradeCost: null,
       requiredPlayerLevel: null,
+      canAfford: false,
+      isMaxLevel: true,
+      isValid: false,
+      missingMoney: 0,
+      failureReason: 'max-level',
     };
   }
 
@@ -211,7 +229,30 @@ export function getWarehouseUpgradePreview(
     },
     city,
   );
-  const upgradePrice = estimateWarehouseUpgradeCost(city, warehouse.cityId);
+  const upgradeCost = estimateWarehouseUpgradeCost(city, warehouse.cityId);
+  if (!Number.isFinite(upgradeCost) || upgradeCost < 0) {
+    return {
+      currentLevel,
+      nextLevel: null,
+      currentCapacity,
+      nextCapacity: null,
+      currentDailyCost,
+      nextDailyCost: null,
+      upgradePrice: null,
+      upgradeCost: null,
+      requiredPlayerLevel,
+      canAfford: false,
+      isMaxLevel: false,
+      isValid: false,
+      missingMoney: 0,
+      failureReason: 'invalid-upgrade-config',
+    };
+  }
+
+  const safeMoney = Number.isFinite(playerMoney) ? playerMoney : 0;
+  const ignoreMoney = !Number.isFinite(playerMoney) || playerMoney === Number.POSITIVE_INFINITY;
+  const canAfford = ignoreMoney ? true : safeMoney >= upgradeCost;
+  const missingMoney = ignoreMoney ? 0 : Math.max(0, upgradeCost - safeMoney);
 
   return {
     currentLevel,
@@ -220,7 +261,13 @@ export function getWarehouseUpgradePreview(
     nextCapacity,
     currentDailyCost,
     nextDailyCost,
-    upgradePrice,
+    upgradePrice: upgradeCost,
+    upgradeCost,
     requiredPlayerLevel,
+    canAfford,
+    isMaxLevel: false,
+    isValid: capacityGain > 0 && nextCapacity > currentCapacity && upgradeCost >= 0,
+    missingMoney,
+    failureReason: !canAfford ? 'insufficient-funds' : undefined,
   };
 }

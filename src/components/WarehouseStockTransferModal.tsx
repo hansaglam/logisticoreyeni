@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 
+import { getModalSheetPaddingBottom } from '../constants/layout';
 import { ActionButton, GameIcon, IconButton } from './ui';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import { tradingBalance } from '../config/balance';
@@ -218,7 +219,7 @@ export default function WarehouseStockTransferModal({
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <View style={[styles.sheet, { paddingBottom: getModalSheetPaddingBottom(insets) }]}>
           <View style={styles.header}>
             <View style={styles.headerText}>
               <Text style={styles.title}>Ürünü Taşı</Text>

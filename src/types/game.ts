@@ -515,6 +515,15 @@ export interface Delivery {
   estimatedProfit: number;
   /** Tahmini seyahat süresi (saat) — progress hesabında kullanılır */
   travelHours: number;
+  /**
+   * Canonical süre (oyun saati) — travelHours ile aynı kaynak;
+   * offline reconcile için açık alan.
+   */
+  expectedDurationGameHours?: number;
+  /** Teslimat başlatıldığı gerçek zaman (ms) */
+  startedRealAtMs?: number;
+  /** Son progress uygulandığı gerçek zaman (ms) */
+  lastProgressedRealAtMs?: number;
   /** Arıza olasılığı (0–1) */
   breakdownChance: number;
   /** Kaza olasılığı (0–1) */
@@ -523,8 +532,10 @@ export interface Delivery {
   conditionLoss: number;
   /** Başarısızlık nedeni — yalnızca failed durumunda */
   failureReason?: DeliveryFailureReason;
-  /** Finansal settlement uygulandı (çift ödeme koruması) */
+  /** Finansal settlement uygulandı (çift ödeme koruması) — oyun zamanı */
   settledAt?: number;
+  /** Settlement kimliği — çift ödül koruması */
+  settlementId?: string;
   /** Aktif operasyon olayı */
   incident?: DeliveryIncident;
   /** Bu teslimat için olay roll'ü yapıldı mı (max 1) */
@@ -749,7 +760,9 @@ export type WarehouseActionReason =
   | 'route-not-found'
   | 'incompatible-warehouse'
   | 'upgrade-maxed'
-  | 'level-required';
+  | 'level-required'
+  | 'upgrade-in-progress'
+  | 'invalid-upgrade-config';
 
 /** Ticaret / depo işlemi sonucu */
 export interface TradeActionResult {

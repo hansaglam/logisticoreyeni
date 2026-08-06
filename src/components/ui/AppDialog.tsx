@@ -6,13 +6,17 @@ import React from 'react';
 import {
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 
+import { getSafeBottom, getSafeModalMaxHeight } from '../../constants/layout';
+import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { colors, radius, shadows, spacing, typography } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
 import GameIcon from './GameIcon';
@@ -141,7 +145,7 @@ function DialogActionButton({
         style,
       ]}
     >
-      <Text style={[styles.actionButtonText, { color: palette.textColor }]} numberOfLines={1}>
+      <Text style={[styles.actionButtonText, { color: palette.textColor }]} numberOfLines={2}>
         {label}
       </Text>
     </Pressable>
@@ -164,6 +168,9 @@ export default function AppDialog({
   onDismiss,
 }: AppDialogProps) {
   const config = VARIANT_CONFIG[variant];
+  const insets = useAppSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const cardMaxHeight = getSafeModalMaxHeight(windowHeight, insets, 0.82);
   const hasCustomActions = Boolean(actions && actions.length > 0);
   const isDualAction = !hasCustomActions && Boolean(cancelLabel);
   const confirmVariant = destructive ? 'destructive' : 'primary';
@@ -173,13 +180,19 @@ export default function AppDialog({
   };
 
   const handleCancel = () => {
-    onCancel?.();
+    const fn = onCancel;
     handleDismiss();
+    if (fn) {
+      queueMicrotask(() => fn());
+    }
   };
 
   const handleConfirm = () => {
-    onConfirm?.();
+    const fn = onConfirm;
     handleDismiss();
+    if (fn) {
+      queueMicrotask(() => fn());
+    }
   };
 
   return (
@@ -190,35 +203,54 @@ export default function AppDialog({
       onRequestClose={handleDismiss}
       statusBarTranslucent
     >
-      <Pressable style={styles.overlay} onPress={handleDismiss}>
-        <Pressable style={[styles.card, shadows.glowBlue, { borderColor: config.border }]} onPress={() => {}}>
+      <Pressable
+        style={[
+          styles.overlay,
+          {
+            paddingTop: Math.max(insets.top, 12) + spacing.md,
+            paddingBottom: getSafeBottom(insets) + spacing.md,
+          },
+        ]}
+        onPress={handleDismiss}
+      >
+        <Pressable
+          style={[styles.card, shadows.glowBlue, { borderColor: config.border, maxHeight: cardMaxHeight }]}
+          onPress={() => {}}
+        >
           <View style={[styles.iconBadge, { backgroundColor: config.soft, borderColor: config.border }]}>
             <GameIcon name={config.icon} size={22} color={config.accent} />
           </View>
 
           <Text style={styles.title}>{title}</Text>
 
-          {message ? <Text style={styles.message}>{message}</Text> : null}
+          <ScrollView
+            style={styles.bodyScroll}
+            contentContainerStyle={styles.bodyScrollContent}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            {message ? <Text style={styles.message}>{message}</Text> : null}
 
-          {details.length > 0 ? (
-            <View style={styles.detailsBlock}>
-              {details.map((row) => (
-                <View key={`${row.label}-${row.value}`} style={styles.detailRow}>
-                  <Text style={styles.detailLabel} numberOfLines={1}>
-                    {row.label}
-                  </Text>
-                  <Text
-                    style={[styles.detailValue, { color: getDetailToneColor(row.tone) }]}
-                    numberOfLines={2}
-                  >
-                    {row.value}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
+            {details.length > 0 ? (
+              <View style={styles.detailsBlock}>
+                {details.map((row) => (
+                  <View key={`${row.label}-${row.value}`} style={styles.detailRow}>
+                    <Text style={styles.detailLabel} numberOfLines={2}>
+                      {row.label}
+                    </Text>
+                    <Text
+                      style={[styles.detailValue, { color: getDetailToneColor(row.tone) }]}
+                      numberOfLines={3}
+                    >
+                      {row.value}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
-          {footerNote ? <Text style={styles.footerNote}>{footerNote}</Text> : null}
+            {footerNote ? <Text style={styles.footerNote}>{footerNote}</Text> : null}
+          </ScrollView>
 
           <View
             style={[
@@ -233,8 +265,10 @@ export default function AppDialog({
                   key={action.label}
                   label={action.label}
                   onPress={() => {
-                    action.onPress();
+                    const fn = action.onPress;
                     handleDismiss();
+                    // Nested dialog (ör. Yükselt confirm) dismiss tarafından silinmesin.
+                    queueMicrotask(() => fn());
                   }}
                   variant={action.variant ?? 'secondary'}
                   style={styles.actionFull}
@@ -277,7 +311,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
   },
   card: {
     width: '100%',
@@ -288,6 +321,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 22,
     paddingBottom: 20,
+  },
+  bodyScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  bodyScrollContent: {
+    paddingBottom: spacing.xs,
   },
   iconBadge: {
     width: 44,

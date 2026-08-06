@@ -157,7 +157,12 @@ export function buildDailyOperatingCostLedgerEntries(
   return entries;
 }
 
-export type DailyOperatingCostReason = 'daily_tick' | 'offline_catchup' | 'debug';
+export type DailyOperatingCostReason =
+  | 'daily_tick'
+  /** @deprecated Offline sabit gider kaldırıldı — charge edilmez */
+  | 'offline_catchup'
+  | 'offline_skip'
+  | 'debug';
 
 /** Tek özet ledger kaydı — çok günlük kesintilerde şişmeyi önler */
 export function buildSummarizedDailyOperatingCostLedgerEntry(
@@ -234,48 +239,27 @@ export function getSkippedOperatingDaysDueToCap(
   return Math.max(0, elapsed - charged);
 }
 
+/**
+ * Offline/catch-up işletme gideri bildirimi kaldırıldı — her zaman boş.
+ * Eski player-friendly offline expense toast metni artık üretilmez.
+ */
 export function formatOperatingCostNotificationMessage(
-  params: {
+  _params: {
     elapsedDays: number;
     chargedDays: number;
     amount: number;
   },
-  formatAmount: (amount: number) => string,
+  _formatAmount: (amount: number) => string,
 ): string {
-  const elapsed = resolveOperatingCostElapsedDays(params.elapsedDays, params.chargedDays);
-  const charged = Math.min(normalizeOperatingCostDays(params.chargedDays), elapsed);
-  const safeAmount = Number.isFinite(params.amount) ? params.amount : 0;
-  const amountText = formatAmount(safeAmount);
-
-  if (charged <= 0) {
-    return '';
-  }
-
-  if (elapsed > charged) {
-    return `${elapsed} gün geçti. Oyuncu dostu limit nedeniyle yalnızca ${charged} günlük sabit gider kesildi: ${amountText}`;
-  }
-
-  const dayLabel = charged === 1 ? '1 günlük' : `${charged} günlük`;
-  return `${dayLabel} sabit gider ödendi: ${amountText}`;
+  return '';
 }
 
-export function formatOperatingCostEventLogMessage(params: {
+/** Offline/catch-up event-log metni kaldırıldı — her zaman boş. */
+export function formatOperatingCostEventLogMessage(_params: {
   elapsedDays: number;
   chargedDays: number;
 }): string {
-  const elapsed = resolveOperatingCostElapsedDays(params.elapsedDays, params.chargedDays);
-  const charged = Math.min(normalizeOperatingCostDays(params.chargedDays), elapsed);
-
-  if (charged <= 0) {
-    return '';
-  }
-
-  if (elapsed > charged) {
-    return `${elapsed} günlük zaman atlaması işlendi. Maksimum offline gider limiti nedeniyle ${charged} günlük gider kesildi.`;
-  }
-
-  const dayLabel = charged === 1 ? '1 günlük' : `${charged} günlük`;
-  return `${dayLabel} işletme gideri işlendi.`;
+  return '';
 }
 
 export function summarizeDailyOperatingCostsFromLedger(

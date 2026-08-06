@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 
-import { getBottomInset } from '../../constants/layout';
+import { getBottomInset, getSafeModalMaxHeight } from '../../constants/layout';
 import { getCityName } from '../../utils/entityLookup';
 import {
   getDriverBadge,
@@ -122,7 +122,7 @@ export default function AssignmentPickerSheet({
 }: AssignmentPickerSheetProps) {
   const insets = useAppSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const sheetMaxHeight = Math.min(windowHeight * 0.55, 420);
+  const sheetMaxHeight = Math.min(getSafeModalMaxHeight(windowHeight, insets, 0.62), 420);
 
   const sortedTruckOptions = [...truckOptions].sort((a, b) => {
     if (a.selectable !== b.selectable) return a.selectable ? -1 : 1;

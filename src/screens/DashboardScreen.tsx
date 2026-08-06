@@ -19,7 +19,6 @@ import {
   DashboardResourceBar,
   DashboardWorldEventsCard,
   DASHBOARD_HORIZONTAL_PADDING,
-  DASHBOARD_SCROLL_BOTTOM_EXTRA,
   DASHBOARD_SECTION_GAP,
   DASHBOARD_SPLIT_MIN_WIDTH,
   dashboardStyles,
@@ -97,8 +96,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
   const addNotification = useGameStore((state) => state.addNotification);
-  const { tabBarHeight, screenTopPadding } = useTabBarLayout();
-  const dashboardBottomPadding = tabBarHeight + DASHBOARD_SCROLL_BOTTOM_EXTRA;
+  const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const { width: screenWidth } = useWindowDimensions();
   const useSplitLayout = screenWidth >= DASHBOARD_SPLIT_MIN_WIDTH;
 
@@ -321,8 +319,8 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         contentContainerStyle={[
           styles.screenContent,
           {
-            paddingTop: screenTopPadding + 12,
-            paddingBottom: dashboardBottomPadding,
+            paddingTop: screenTopPadding,
+            paddingBottom: contentBottomPadding,
             paddingHorizontal: DASHBOARD_HORIZONTAL_PADDING,
             flexGrow: 0,
           },

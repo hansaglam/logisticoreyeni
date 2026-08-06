@@ -646,8 +646,8 @@ function processDailyCosts(state: HeadlessSimState, newTime: number): HeadlessSi
   );
   if (elapsed <= 0) return state;
 
-  const maxDays = operatingCostBalance.maxOfflineChargeDays ?? 3;
-  const chargedDays = Math.min(elapsed, maxDays);
+  // Headless sim uygulama-açık tick'i taklit eder — offline cap yok.
+  const chargedDays = elapsed;
   const breakdown = calculateDailyOperatingCostBreakdown(state.player);
   const total = breakdown.total * chargedDays;
   if (total <= 0) {

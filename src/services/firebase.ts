@@ -17,7 +17,9 @@ import {
 } from 'firebase/auth';
 import { getFirestore, initializeFirestore, type Firestore } from 'firebase/firestore';
 
-import { devLog, devWarn } from '../utils/devLog';
+import publicFirebaseConfig from '../config/firebase.public.json';
+import { normalizeConfigValue } from '../config/firebaseRuntimeContract';
+import { devLog } from '../utils/devLog';
 
 export interface FirebaseConfig {
   apiKey?: string;
@@ -46,19 +48,13 @@ let authInstance: Auth | null = null;
 let firestoreInstance: Firestore | null = null;
 let authInitFailed = false;
 let firestoreInitFailed = false;
+let lastAppInitError: unknown = null;
+let lastAuthInitError: unknown = null;
 let envCheckLogged = false;
 let missingConfigLogged = false;
 let enabledLogged = false;
 let authInitializedLogged = false;
 let firestoreInitializedLogged = false;
-
-function normalizeEnvValue(value: unknown): string | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function readExtraFirebaseConfig(): Partial<FirebaseConfig> {
   const extra = Constants.expoConfig?.extra as
@@ -70,32 +66,77 @@ function readExtraFirebaseConfig(): Partial<FirebaseConfig> {
   }
 
   return {
-    apiKey: normalizeEnvValue(firebaseExtra.apiKey),
-    authDomain: normalizeEnvValue(firebaseExtra.authDomain),
-    projectId: normalizeEnvValue(firebaseExtra.projectId),
-    storageBucket: normalizeEnvValue(firebaseExtra.storageBucket),
-    messagingSenderId: normalizeEnvValue(firebaseExtra.messagingSenderId),
-    appId: normalizeEnvValue(firebaseExtra.appId),
+    apiKey: normalizeConfigValue(firebaseExtra.apiKey),
+    authDomain: normalizeConfigValue(firebaseExtra.authDomain),
+    projectId: normalizeConfigValue(firebaseExtra.projectId),
+    storageBucket: normalizeConfigValue(firebaseExtra.storageBucket),
+    messagingSenderId: normalizeConfigValue(firebaseExtra.messagingSenderId),
+    appId: normalizeConfigValue(firebaseExtra.appId),
+  };
+}
+
+function readPublicFirebaseConfig(): FirebaseConfig {
+  return {
+    apiKey: normalizeConfigValue(publicFirebaseConfig.apiKey),
+    authDomain: normalizeConfigValue(publicFirebaseConfig.authDomain),
+    projectId: normalizeConfigValue(publicFirebaseConfig.projectId),
+    storageBucket: normalizeConfigValue(publicFirebaseConfig.storageBucket),
+    messagingSenderId: normalizeConfigValue(publicFirebaseConfig.messagingSenderId),
+    appId: normalizeConfigValue(publicFirebaseConfig.appId),
   };
 }
 
 function readFirebaseConfig(): FirebaseConfig {
   const fromExtra = readExtraFirebaseConfig();
+  const fromPublic = readPublicFirebaseConfig();
 
   return {
     apiKey:
-      normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_API_KEY) ?? fromExtra.apiKey,
+      normalizeConfigValue(process.env.EXPO_PUBLIC_FIREBASE_API_KEY) ??
+      fromExtra.apiKey ??
+      fromPublic.apiKey,
     authDomain:
-      normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN) ?? fromExtra.authDomain,
+      normalizeConfigValue(process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN) ??
+      fromExtra.authDomain ??
+      fromPublic.authDomain,
     projectId:
-      normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID) ?? fromExtra.projectId,
+      normalizeConfigValue(process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID) ??
+      fromExtra.projectId ??
+      fromPublic.projectId,
     storageBucket:
-      normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET) ??
-      fromExtra.storageBucket,
+      normalizeConfigValue(process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET) ??
+      fromExtra.storageBucket ??
+      fromPublic.storageBucket,
     messagingSenderId:
-      normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID) ??
-      fromExtra.messagingSenderId,
-    appId: normalizeEnvValue(process.env.EXPO_PUBLIC_FIREBASE_APP_ID) ?? fromExtra.appId,
+      normalizeConfigValue(process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID) ??
+      fromExtra.messagingSenderId ??
+      fromPublic.messagingSenderId,
+    appId:
+      normalizeConfigValue(process.env.EXPO_PUBLIC_FIREBASE_APP_ID) ??
+      fromExtra.appId ??
+      fromPublic.appId,
+  };
+}
+
+export function getResolvedFirebaseConfig(): FirebaseConfig {
+  return readFirebaseConfig();
+}
+
+export function getFirebaseInitDiagnostics(): {
+  enabled: boolean;
+  missingConfigKeys: string[];
+  appInitError: unknown | null;
+  authInitError: unknown | null;
+  hasAppInstance: boolean;
+  hasAuthInstance: boolean;
+} {
+  return {
+    enabled: isFirebaseEnabled(),
+    missingConfigKeys: getMissingFirebaseEnvKeys(),
+    appInitError: lastAppInitError,
+    authInitError: lastAuthInitError,
+    hasAppInstance: appInstance !== null || getApps().length > 0,
+    hasAuthInstance: authInstance !== null || getCachedAuthFromGlobal() !== null,
   };
 }
 
@@ -194,8 +235,10 @@ export function getFirebaseAppSafe(): FirebaseApp | null {
       devLog('[firebase] enabled');
     }
 
+    lastAppInitError = null;
     return appInstance;
   } catch (error) {
+    lastAppInitError = error;
     console.warn('[firebase] app initialization failed', error);
     return null;
   }
@@ -227,6 +270,7 @@ export function getFirebaseAuthSafe(): Auth | null {
   }
 
   if (typeof getReactNativePersistence !== 'function') {
+    lastAuthInitError = new Error('getReactNativePersistence unavailable');
     console.warn(
       '[firebase] getReactNativePersistence unavailable — Metro RN resolve failed',
     );
@@ -239,6 +283,7 @@ export function getFirebaseAuthSafe(): Auth | null {
       persistence: getReactNativePersistence(ReactNativeAsyncStorage),
     });
     cacheAuthGlobally(authInstance);
+    lastAuthInitError = null;
 
     if (!authInitializedLogged) {
       authInitializedLogged = true;
@@ -251,10 +296,12 @@ export function getFirebaseAuthSafe(): Auth | null {
       const existing = getCachedAuthFromGlobal();
       if (existing) {
         authInstance = existing;
+        lastAuthInitError = null;
         devLog('[firebase] auth reused after Fast Refresh');
         return authInstance;
       }
 
+      lastAuthInitError = error;
       console.warn(
         '[firebase] auth already initialized but local reference lost — reload the app',
         error,
@@ -263,6 +310,7 @@ export function getFirebaseAuthSafe(): Auth | null {
       return null;
     }
 
+    lastAuthInitError = error;
     console.warn('[firebase] auth initialization failed', error);
     authInitFailed = true;
     return null;
@@ -366,5 +414,6 @@ export function resetFirebaseFirestoreCache(): void {
 export function resetFirebaseAuthCache(): void {
   authInstance = null;
   authInitFailed = false;
+  lastAuthInitError = null;
   delete (globalThis as GlobalAuthStore)[AUTH_GLOBAL_KEY];
 }

@@ -519,6 +519,24 @@ export function normalizeDelivery(delivery: Delivery): Delivery {
   return {
     ...delivery,
     progress: clamp(Number(delivery.progress) || 0, 0, 1),
+    travelHours: Number.isFinite(delivery.travelHours) ? delivery.travelHours : 0.1,
+    expectedDurationGameHours:
+      delivery.expectedDurationGameHours ??
+      (Number.isFinite(delivery.travelHours) ? delivery.travelHours : undefined),
+    startedRealAtMs:
+      delivery.startedRealAtMs != null && Number.isFinite(delivery.startedRealAtMs)
+        ? delivery.startedRealAtMs
+        : undefined,
+    lastProgressedRealAtMs:
+      delivery.lastProgressedRealAtMs != null && Number.isFinite(delivery.lastProgressedRealAtMs)
+        ? delivery.lastProgressedRealAtMs
+        : delivery.startedRealAtMs != null && Number.isFinite(delivery.startedRealAtMs)
+          ? delivery.startedRealAtMs
+          : undefined,
+    settlementId:
+      typeof delivery.settlementId === 'string' && delivery.settlementId.length > 0
+        ? delivery.settlementId
+        : undefined,
     incidentGenerated: delivery.incidentGenerated === true || Boolean(incident),
     incidentResolved,
     incident:

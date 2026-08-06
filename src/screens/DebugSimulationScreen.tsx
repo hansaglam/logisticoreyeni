@@ -14,13 +14,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import { useGameStore, getRecentGameEvents } from '../store/gameStore';
 import InternalTestInfoPanel from '../components/InternalTestInfoPanel';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { STATUS_BAR_HEIGHT, UI } from '../theme/ui';
+import { UI } from '../theme/ui';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import { canTruckCarryContract, getDeliveryIntegrityStats } from '../simulation/delivery';
 import {
@@ -499,7 +498,7 @@ export default function DebugSimulationScreen() {
   const addNotification = useGameStore((state) => state.addNotification);
   const expireContracts = useGameStore((state) => state.expireContracts);
   const refuelOrUpdateFuelPrice = useGameStore((state) => state.refuelOrUpdateFuelPrice);
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { contentBottomPadding } = useTabBarLayout();
   const clearOldMarketNews = useGameStore((state) => state.clearOldMarketNews);
   const clearOldGameEvents = useGameStore((state) => state.clearOldGameEvents);
   const saveGame = useGameStore((state) => state.saveGame);
@@ -1018,19 +1017,19 @@ export default function DebugSimulationScreen() {
 
   if (!isGameReady || !player) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <View style={styles.safeArea}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: contentBottomPadding }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
@@ -2065,7 +2064,7 @@ export default function DebugSimulationScreen() {
           ))}
         </Section>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -2082,7 +2081,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,
-    paddingTop: STATUS_BAR_HEIGHT,
   },
   scrollView: {
     flex: 1,

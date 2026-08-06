@@ -1,10 +1,10 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   BASE_TAB_HEIGHT,
   TAB_ACTIVE_MIN_HEIGHT,
+  TAB_BAR_CHROME_BOTTOM,
   TAB_BAR_TOP_PADDING,
   TAB_ITEM_MIN_HEIGHT,
 } from '../constants/layout';
@@ -13,7 +13,6 @@ import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { TutorialTargetId } from '../tutorial/types';
 import type { TabDefinition, TabKey } from '../navigation/tabTypes';
 import { colors, typography } from '../theme';
-import { isSafeAreaContextAvailable } from '../utils/safeArea';
 import GameIcon from './ui/GameIcon';
 
 export type { TabDefinition, TabKey } from '../navigation/tabTypes';
@@ -74,26 +73,17 @@ function TabButtons({ tabs, activeTab, onTabPress }: BottomTabBarProps) {
   );
 }
 
-function NativeBottomTabBar(props: BottomTabBarProps) {
-  return (
-    <SafeAreaView edges={['bottom']} style={styles.tabBar}>
-      <View style={styles.tabBarRow}>
-        <TabButtons {...props} />
-      </View>
-    </SafeAreaView>
-  );
-}
-
-function FallbackBottomTabBar(props: BottomTabBarProps) {
-  const { bottomInset, tabBarHeight } = useTabBarLayout();
+export default function BottomTabBar(props: BottomTabBarProps) {
+  const { safeBottom, totalBarHeight, tabBarBottom } = useTabBarLayout();
 
   return (
     <View
       style={[
         styles.tabBar,
         {
-          minHeight: tabBarHeight,
-          paddingBottom: bottomInset,
+          bottom: tabBarBottom,
+          minHeight: totalBarHeight,
+          paddingBottom: Math.max(safeBottom, TAB_BAR_CHROME_BOTTOM),
         },
       ]}
     >
@@ -102,13 +92,6 @@ function FallbackBottomTabBar(props: BottomTabBarProps) {
       </View>
     </View>
   );
-}
-
-export default function BottomTabBar(props: BottomTabBarProps) {
-  if (isSafeAreaContextAvailable()) {
-    return <NativeBottomTabBar {...props} />;
-  }
-  return <FallbackBottomTabBar {...props} />;
 }
 
 const styles = StyleSheet.create({

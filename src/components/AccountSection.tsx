@@ -5,7 +5,7 @@
  * Teknik sync / UID yalnızca __DEV__ panelinde görünür.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AuthCredential } from 'firebase/auth';
 
@@ -36,6 +36,12 @@ import {
   type CloudSaveStatusState,
 } from '../storage/cloudSaveSync';
 import {
+  getAccountConnectionHeroCopy,
+  getCloudSaveRowForConnectionState,
+  resolveAccountConnectionState,
+  type AccountConnectionState,
+} from '../utils/accountConnectionState';
+import {
   getAccountDeletionErrorMessage,
   type AccountDeletionErrorCode,
 } from '../utils/accountDeletion';
@@ -46,6 +52,15 @@ import {
   getAccountLinkGeneralErrorMessage,
   isAccountLinkConflictError,
 } from '../utils/accountLinkErrors';
+import {
+  failureFromLinkError,
+  formatAppleAuthDiagnosticDisplay,
+  getAppleAuthDiagnosticFooter,
+  isAppleAuthCancelFailure,
+  isAppleExistingAccountConflictCode,
+  normalizeAppleAuthFailure,
+  type AppleAuthFailure,
+} from '../utils/appleAuthDiagnostics';
 import { colors, spacing, typography } from '../theme';
 
 function getStatusBadgeVariant(
@@ -64,47 +79,49 @@ function getStatusBadgeVariant(
   }
 }
 
-function formatLastSaveLabel(timestamp: number | null): string {
-  if (!timestamp) {
-    return 'Henüz kaydedilmedi';
+function formatLastSaveLabel(
+  timestamp: number | null,
+  connectionState: AccountConnectionState,
+): string {
+  if (connectionState === 'cloud-protected' && timestamp) {
+    const delta = Date.now() - timestamp;
+    if (delta < 60_000) {
+      return 'Az önce';
+    }
+
+    const date = new Date(timestamp);
+    const now = new Date();
+    const time = date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+    if (date.toDateString() === now.toDateString()) {
+      return `Bugün ${time}`;
+    }
+
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) {
+      return `Dün ${time}`;
+    }
+
+    return date.toLocaleDateString('tr-TR', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
-  const date = new Date(timestamp);
-  const now = new Date();
-  const time = date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-
-  if (date.toDateString() === now.toDateString()) {
-    return `Bugün ${time}`;
+  if (
+    connectionState === 'linked-local-only' ||
+    connectionState === 'sync-retry' ||
+    connectionState === 'cloud-syncing' ||
+    connectionState === 'error' ||
+    !timestamp
+  ) {
+    return 'Henüz yok';
   }
 
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) {
-    return `Dün ${time}`;
-  }
-
-  return date.toLocaleDateString('tr-TR', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function getCloudSaveUserStatus(status: CloudSaveStatusState): {
-  label: string;
-  variant: StatusBadgeVariant;
-} {
-  if (!status.firebaseEnabled || !status.uid) {
-    return { label: 'Yerel kayıt', variant: 'muted' };
-  }
-  if (status.status === 'failed') {
-    return { label: 'Yeniden denenecek', variant: 'amber' };
-  }
-  if (status.status === 'syncing' || status.status === 'pending') {
-    return { label: 'Kaydediliyor', variant: 'blue' };
-  }
-  return { label: 'Güvende', variant: 'success' };
+  return 'Henüz kaydedilmedi';
 }
 
 function linkErrorMessage(error: string | undefined): string | null {
@@ -127,20 +144,31 @@ function linkErrorMessage(error: string | undefined): string | null {
   if (error === 'apple-not-available' || error === 'apple-not-supported') {
     return 'Apple ile giriş bu cihazda kullanılamıyor.';
   }
-  if (error === 'apple-token-missing' || error === 'apple-missing-token') {
-    return 'Apple girişi tamamlanamadı. Lütfen tekrar dene.';
+  if (
+    error === 'apple-token-missing' ||
+    error === 'apple-missing-token' ||
+    error === 'APPLE_IDENTITY_TOKEN_MISSING'
+  ) {
+    return "Apple'dan geçerli kimlik bilgisi alınamadı.";
   }
   if (error === 'apple-credential-invalid' || error === 'apple-credential-revoked') {
     return 'Apple oturumu geçersiz veya iptal edilmiş. Lütfen tekrar dene.';
   }
-  if (error === 'provider-not-enabled') {
-    return 'Apple ile giriş şu an kullanılamıyor.';
+  if (error === 'provider-not-enabled' || error === 'auth/operation-not-allowed') {
+    return 'Apple ile giriş şu anda yapılandırılamadı.';
+  }
+  if (
+    error === 'auth/missing-or-invalid-nonce' ||
+    error === 'auth/invalid-nonce' ||
+    error === 'auth/invalid-credential'
+  ) {
+    return 'Apple kimliği doğrulanamadı. Tanı kodu: APPLE_AUTH_CONFIGURATION';
   }
   if (error === 'provider-already-linked' || error === 'already-linked') {
     return 'Bu hesaba zaten bir giriş yöntemi bağlı.';
   }
   if (error === 'auth/network-request-failed') {
-    return 'Bağlantı sorunu oluştu. İnternetini kontrol edip tekrar dene.';
+    return 'İnternet bağlantısı kurulamadı. Tekrar deneyin.';
   }
   if (error === 'auth/internal-error') {
     return 'Giriş sırasında beklenmeyen bir hata oluştu. Lütfen tekrar dene.';
@@ -229,6 +257,7 @@ export default function AccountSection() {
   const [dangerExpanded, setDangerExpanded] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [configHint, setConfigHint] = useState<string | null>(null);
+  const mountedRef = useRef(true);
   const deleteAccountAndCloudData = useGameStore((state) => state.deleteAccountAndCloudData);
 
   const safeAccountStatus = account ?? DEFAULT_ACCOUNT_STATUS;
@@ -246,12 +275,14 @@ export default function AccountSection() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     configureGoogleSignIn();
     refreshAccount();
     const unsubAuth = subscribeAuthState(() => {
       refreshAccount();
     });
     return () => {
+      mountedRef.current = false;
       unsubAuth();
     };
   }, [refreshAccount]);
@@ -312,6 +343,40 @@ export default function AccountSection() {
     }
   };
 
+  const showAppleLinkFailure = (failure: AppleAuthFailure, fallbackError?: string) => {
+    if (isAppleAuthCancelFailure(failure) || fallbackError === 'cancelled') {
+      return;
+    }
+    // Conflict codes never become a generic modal — conflict dialog owns that path.
+    if (
+      isAppleExistingAccountConflictCode(failure.code) ||
+      isAppleExistingAccountConflictCode(failure.firebaseCode) ||
+      isAppleExistingAccountConflictCode(fallbackError)
+    ) {
+      return;
+    }
+    // Internal/TestFlight: stage + code always in the message body. Never drop real codes.
+    showDialog({
+      title: 'Hesap Bağlanamadı',
+      message: formatAppleAuthDiagnosticDisplay(failure),
+      variant: 'warning',
+      footerNote: getAppleAuthDiagnosticFooter(failure),
+      confirmLabel: 'Tamam',
+    });
+  };
+
+  const resolveAppleFailure = (
+    result: { error?: string; appleFailure?: AppleAuthFailure; errorKind?: string },
+  ): AppleAuthFailure => {
+    if (result.appleFailure) {
+      return result.appleFailure;
+    }
+    return failureFromLinkError(
+      result.error,
+      isAppleExistingAccountConflictCode(result.error) ? 'cloud-conflict' : 'anonymous-link-failure',
+    );
+  };
+
   const handleLink = async (provider: 'google' | 'apple') => {
     if (isLinking) {
       return;
@@ -325,19 +390,62 @@ export default function AccountSection() {
           ? await linkAnonymousAccountWithGoogle()
           : await linkAnonymousAccountWithApple();
 
+      if (!mountedRef.current) {
+        return;
+      }
+
       refreshAccount();
       refreshCloudStatus();
 
       if (result.ok) {
-        showAlert('Hesap bağlandı', 'İlerlemen artık hesabınla korunuyor.');
+        if (result.cloudSyncOk) {
+          showAlert('Hesap bağlandı', 'İlerlemen bulut kaydıyla korunuyor.');
+        } else {
+          showAlert(
+            'Hesap bağlandı',
+            'Hesabın bağlandı. İlk bulut kaydı yeniden denenecek.',
+          );
+        }
         return;
       }
 
-      if (
-        isAccountLinkConflictError(result.error, result.errorKind) &&
-        result.pendingCredential
-      ) {
-        showAccountConflictDialog(provider, result.pendingCredential);
+      if (isAccountLinkConflictError(result.error, result.errorKind)) {
+        if (provider === 'apple') {
+          const conflictFailure = resolveAppleFailure(result);
+          showDialog({
+            title: getAccountLinkConflictTitle(provider),
+            message: getAccountLinkConflictMessage(provider),
+            footerNote: [
+              getAccountLinkConflictFooter(provider),
+              '',
+              `Tanı:`,
+              `stage=${conflictFailure.stage}`,
+              `code=${conflictFailure.firebaseCode || conflictFailure.code}`,
+            ].join('\n'),
+            variant: 'warning',
+            actions: [
+              {
+                label: 'Apple Kaydına Geç',
+                variant: 'primary',
+                onPress: () => showSwitchConfirmDialog(provider, result.pendingCredential ?? null),
+              },
+              {
+                label: 'Misafir Kaydıyla Devam Et',
+                variant: 'secondary',
+                onPress: () => {},
+              },
+              {
+                label: 'Farklı Hesap Dene',
+                variant: 'secondary',
+                onPress: () => {
+                  void handleRetryLink(provider);
+                },
+              },
+            ],
+          });
+          return;
+        }
+        showAccountConflictDialog(provider, result.pendingCredential ?? null);
         return;
       }
 
@@ -348,21 +456,38 @@ export default function AccountSection() {
         setConfigHint(linkErrorMessage(result.error));
       }
 
+      if (provider === 'apple') {
+        showAppleLinkFailure(resolveAppleFailure(result), result.error);
+        return;
+      }
+
       const message = linkErrorMessage(result.error);
       if (message) {
         showAlert('Hesap Bağlanamadı', message);
       }
     } catch (error) {
       console.warn('[account] link failed', error);
+      if (!mountedRef.current) {
+        return;
+      }
+      if (provider === 'apple') {
+        showAppleLinkFailure(
+          normalizeAppleAuthFailure(error, 'anonymous-link-failure'),
+          'apple-sign-in-failed',
+        );
+        return;
+      }
       showAlert('Hesap Bağlanamadı', getAccountLinkGeneralErrorMessage());
     } finally {
-      setIsLinking(null);
+      if (mountedRef.current) {
+        setIsLinking(null);
+      }
     }
   };
 
   const handleSwitchToProviderAccount = async (
     provider: 'google' | 'apple',
-    pendingCredential: AuthCredential,
+    pendingCredential: AuthCredential | null,
   ) => {
     if (isLinking) {
       return;
@@ -371,6 +496,9 @@ export default function AccountSection() {
     setIsLinking(provider);
     try {
       const result = await switchToLinkedProviderAccount(pendingCredential, provider);
+      if (!mountedRef.current) {
+        return;
+      }
       refreshAccount();
       refreshCloudStatus();
 
@@ -403,15 +531,19 @@ export default function AccountSection() {
       showAlert('Geçiş başarısız', getAccountLinkGeneralErrorMessage());
     } catch (error) {
       console.warn('[account] switch to linked account failed', error);
-      showAlert('Geçiş başarısız', getAccountLinkGeneralErrorMessage());
+      if (mountedRef.current) {
+        showAlert('Geçiş başarısız', getAccountLinkGeneralErrorMessage());
+      }
     } finally {
-      setIsLinking(null);
+      if (mountedRef.current) {
+        setIsLinking(null);
+      }
     }
   };
 
   const showSwitchConfirmDialog = (
     provider: 'google' | 'apple',
-    pendingCredential: AuthCredential,
+    pendingCredential: AuthCredential | null,
   ) => {
     const providerLabel = provider === 'google' ? 'Google' : 'Apple';
     showDialog({
@@ -430,7 +562,7 @@ export default function AccountSection() {
 
   const showAccountConflictDialog = (
     provider: 'google' | 'apple',
-    pendingCredential: AuthCredential,
+    pendingCredential: AuthCredential | null,
   ) => {
     const switchLabel = provider === 'google' ? 'Google Kaydına Geç' : 'Apple Kaydına Geç';
     showDialog({
@@ -468,19 +600,31 @@ export default function AccountSection() {
     setIsLinking(provider);
     try {
       const result = await retryProviderAccountLink(provider);
+      if (!mountedRef.current) {
+        return;
+      }
       refreshAccount();
       refreshCloudStatus();
 
       if (result.ok) {
-        showAlert('Hesap bağlandı', 'İlerlemen artık hesabınla korunuyor.');
+        if (result.cloudSyncOk) {
+          showAlert('Hesap bağlandı', 'İlerlemen bulut kaydıyla korunuyor.');
+        } else {
+          showAlert(
+            'Hesap bağlandı',
+            'Hesabın bağlandı. İlk bulut kaydı yeniden denenecek.',
+          );
+        }
         return;
       }
 
-      if (
-        isAccountLinkConflictError(result.error, result.errorKind) &&
-        result.pendingCredential
-      ) {
-        showAccountConflictDialog(provider, result.pendingCredential);
+      if (isAccountLinkConflictError(result.error, result.errorKind)) {
+        showAccountConflictDialog(provider, result.pendingCredential ?? null);
+        return;
+      }
+
+      if (provider === 'apple') {
+        showAppleLinkFailure(resolveAppleFailure(result), result.error);
         return;
       }
 
@@ -490,9 +634,18 @@ export default function AccountSection() {
       }
     } catch (error) {
       console.warn('[account] retry link failed', error);
+      if (!mountedRef.current) {
+        return;
+      }
+      if (provider === 'apple') {
+        showAppleLinkFailure(normalizeAppleAuthFailure(error, 'anonymous-link-failure'));
+        return;
+      }
       showAlert('Hesap Bağlanamadı', getAccountLinkGeneralErrorMessage());
     } finally {
-      setIsLinking(null);
+      if (mountedRef.current) {
+        setIsLinking(null);
+      }
     }
   };
 
@@ -548,8 +701,46 @@ export default function AccountSection() {
     safeAccountStatus.isAnonymous || safeAccountStatus.provider === 'guest';
   const showApple = Platform.OS === 'ios' && appleAvailable;
   const showGoogle = Platform.OS === 'ios' || Platform.OS === 'android';
-  const cloudUserStatus = getCloudSaveUserStatus(cloudStatus);
+  const connectionState = resolveAccountConnectionState({
+    authReady: safeAccountStatus.isReady,
+    isAnonymous: safeAccountStatus.isAnonymous,
+    provider: safeAccountStatus.provider,
+    isLinking: Boolean(isLinking),
+    hasConflict: false,
+    cloudStatus: cloudStatus.status,
+    lastCloudSaveAt: cloudStatus.lastSyncAt,
+    lastCloudErrorCode: cloudStatus.lastErrorCode,
+  });
+  const heroCopy = getAccountConnectionHeroCopy(connectionState);
+  const cloudRow = getCloudSaveRowForConnectionState(connectionState);
   const cardVariant = isGuest ? 'guest' : 'linked';
+  const showManualCloudSave =
+    !isGuest &&
+    (connectionState === 'sync-retry' ||
+      connectionState === 'linked-local-only' ||
+      connectionState === 'error');
+
+  const handleManualCloudSave = async () => {
+    if (isManualSyncing) return;
+    const state = useGameStore.getState();
+    setIsManualSyncing(true);
+    try {
+      const ok = await syncLocalSaveToCloud('manual', { force: true, state });
+      refreshCloudStatus();
+      if (ok) {
+        showAlert('Bulut kaydı', 'Kayıt başarıyla doğrulandı.');
+      } else {
+        showAlert(
+          'Bulut kaydı',
+          'Kayıt şu an tamamlanamadı. Yeniden denenecek.',
+        );
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsManualSyncing(false);
+      }
+    }
+  };
 
   return (
     <AppCard
@@ -561,13 +752,19 @@ export default function AccountSection() {
           <View
             style={[
               styles.heroIconWrap,
-              cardVariant === 'linked' ? styles.heroIconWrapLinked : styles.heroIconWrapGuest,
+              connectionState === 'cloud-protected'
+                ? styles.heroIconWrapLinked
+                : styles.heroIconWrapGuest,
             ]}
           >
             <GameIcon
-              name={cardVariant === 'linked' ? 'success' : 'warning'}
+              name={connectionState === 'cloud-protected' ? 'success' : 'warning'}
               size={22}
-              color={cardVariant === 'linked' ? colors.success : colors.accentAmber}
+              color={
+                connectionState === 'cloud-protected'
+                  ? colors.success
+                  : colors.accentAmber
+              }
             />
           </View>
           <View style={styles.heroMain}>
@@ -576,20 +773,10 @@ export default function AccountSection() {
                 <Text style={styles.heroTitle}>Hesap kontrol ediliyor...</Text>
                 <Text style={styles.heroSubtitle}>Oturum bilgisi yükleniyor.</Text>
               </>
-            ) : isGuest ? (
-              <>
-                <Text style={styles.heroTitle}>Hesabını Güvenceye Al</Text>
-                <Text style={styles.heroSubtitle}>
-                  Misafir modunda oynuyorsun. İlerlemeni kaybetmemek ve liderlik tablosuna
-                  katılmak için hesabını bağla.
-                </Text>
-              </>
             ) : (
               <>
-                <Text style={styles.heroTitle}>Hesap Bağlı</Text>
-                <Text style={styles.heroSubtitle}>
-                  İlerlemen bulut kaydıyla korunuyor.
-                </Text>
+                <Text style={styles.heroTitle}>{heroCopy.title}</Text>
+                <Text style={styles.heroSubtitle}>{heroCopy.subtitle}</Text>
               </>
             )}
           </View>
@@ -601,13 +788,18 @@ export default function AccountSection() {
         {safeAccountStatus.isReady ? (
           <View style={styles.statusPanel}>
             <AccountStatusRow
-              label="Bulut Kaydı"
-              value={cloudUserStatus.label}
-              badgeVariant={cloudUserStatus.variant}
+              label="Hesap bağlantısı"
+              value={isGuest ? 'Misafir' : 'Bağlı'}
+              badgeVariant={isGuest ? 'muted' : 'success'}
             />
             <AccountStatusRow
-              label="Son kayıt"
-              value={formatLastSaveLabel(cloudStatus.lastSyncAt)}
+              label="Bulut Kaydı"
+              value={cloudRow.label}
+              badgeVariant={cloudRow.variant}
+            />
+            <AccountStatusRow
+              label="Son başarılı kayıt"
+              value={formatLastSaveLabel(cloudStatus.lastSyncAt, connectionState)}
               badgeVariant="muted"
             />
             <AccountStatusRow
@@ -644,8 +836,26 @@ export default function AccountSection() {
           </View>
         ) : null}
 
-        {safeAccountStatus.isReady && !isGuest ? (
-          <Text style={styles.secureFootnote}>Hesabın güvende · Bulut kaydı aktif</Text>
+        {showManualCloudSave ? (
+          <ActionButton
+            label={isManualSyncing ? 'Kaydediliyor...' : 'Şimdi Kaydet'}
+            onPress={() => void handleManualCloudSave()}
+            variant="secondary"
+            disabled={isManualSyncing || Boolean(isLinking)}
+            fullWidth
+            style={styles.manualSaveButton}
+          />
+        ) : null}
+
+        {safeAccountStatus.isReady && !isGuest && heroCopy.footnote ? (
+          <Text
+            style={[
+              styles.secureFootnote,
+              heroCopy.footnoteTone === 'amber' && styles.secureFootnoteAmber,
+            ]}
+          >
+            {heroCopy.footnote}
+          </Text>
         ) : null}
 
         <View style={styles.dangerZone}>
@@ -780,6 +990,12 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: '600',
     textAlign: 'center',
+    marginTop: 2,
+  },
+  secureFootnoteAmber: {
+    color: colors.accentAmber,
+  },
+  manualSaveButton: {
     marginTop: 2,
   },
   dangerZone: {

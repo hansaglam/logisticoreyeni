@@ -202,8 +202,23 @@ console.log('1. Elapsed guards');
   const now = Date.now();
   const lastSeen = now - 3 * MS_MIN;
   const short = calculateOfflineElapsed(lastSeen, now);
-  assert(!short.shouldApply, 'elapsed < 5dk ise uygulanmaz');
+  assert(!short.shouldApply, 'elapsed < 5dk (teslimatsız) ise uygulanmaz');
   assert(short.reason === 'below_minimum', 'below_minimum reason');
+
+  const shortWithDelivery = calculateOfflineElapsed(lastSeen, now, {
+    hasActiveDeliveries: true,
+  });
+  assert(
+    shortWithDelivery.shouldApply,
+    'aktif teslimat varken 3dk offline uygulanır',
+  );
+}
+
+{
+  const now = Date.now();
+  const lastSeen = now - 20_000;
+  const tiny = calculateOfflineElapsed(lastSeen, now, { hasActiveDeliveries: true });
+  assert(tiny.shouldApply, 'aktif teslimat + 20s offline uygulanır');
 }
 
 {
@@ -570,7 +585,7 @@ console.log('\n8. Online/offline time parity');
 
 {
   const now = Date.now();
-  const lastSeen = now - 15 * MS_HOUR;
+  const lastSeen = now - (MAX_OFFLINE_PROGRESS_HOURS + 2) * MS_HOUR;
   const capped = calculateOfflineElapsed(lastSeen, now);
   const hoursFromApplied = realMsToGameHours(capped.appliedMs, 1);
   const hoursFromRaw = realMsToGameHours(capped.elapsedMs, 1);
@@ -578,7 +593,7 @@ console.log('\n8. Online/offline time parity');
   assert(hoursFromApplied < hoursFromRaw, 'capped elapsed önce real ms cap sonra gameHours');
   assert(
     capped.appliedMs === MAX_OFFLINE_PROGRESS_HOURS * MS_HOUR,
-    'cap 12 saat real ms olarak uygulanır',
+    'cap 24 saat real ms olarak uygulanır',
   );
 }
 
@@ -595,10 +610,9 @@ console.log('\n8. Online/offline time parity');
 {
   const appSource = readFileSync('App.tsx', 'utf8');
   assert(
-    appSource.includes("nextState === 'background'") &&
-      appSource.includes('recordLastSeenRealTimeMs') &&
-      !appSource.includes("nextState === 'background' || nextState === 'inactive'"),
-    'lastSeen yalnızca background\'da kaydedilir (inactive değil)',
+    appSource.includes("nextState === 'background' || nextState === 'inactive'") &&
+      appSource.includes('recordLastSeenRealTimeMs'),
+    'lastSeen background + inactive (iOS) kaydedilir',
   );
 }
 

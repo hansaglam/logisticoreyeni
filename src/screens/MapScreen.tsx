@@ -209,7 +209,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const currentTime = useGameStore((state) => state.currentTime);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
   const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
-  const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+  const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Map');
   const onboardingHint = useActiveOnboardingHint(['track_delivery']);
@@ -466,7 +466,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: scrollBottomPadding },
+          { paddingBottom: contentBottomPadding },
         ]}
       >
         <MapHeader onRefresh={handleRefreshMarket} />

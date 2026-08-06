@@ -10,7 +10,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActionButton } from '../ui';
-import { getTabBarHeight } from '../../constants/layout';
+import { getSafeBottom, getTotalBarHeight } from '../../constants/layout';
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import type { TutorialLayoutRect } from '../../tutorial/types';
 import { isValidTutorialRect } from '../../tutorial/types';
@@ -132,7 +132,7 @@ export function TutorialTooltip({
         screenHeight,
         safeAreaTop: insets.top,
         safeAreaBottom: insets.bottom,
-        tabBarHeight: getTabBarHeight(insets.bottom),
+        tabBarHeight: getTotalBarHeight(getSafeBottom(insets)),
         tooltipWidth,
         tooltipHeight,
       }),

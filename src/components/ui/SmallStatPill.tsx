@@ -39,7 +39,9 @@ export default function SmallStatPill({
           </View>
         ) : null}
         <View style={styles.chipTextBlock}>
-          <Text style={styles.labelChip}>{label}</Text>
+          <Text style={styles.labelChip} numberOfLines={1}>
+            {label}
+          </Text>
           <Text
             style={[styles.valueChip, { color: accentColor }]}
             numberOfLines={1}
@@ -163,8 +165,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    minWidth: 88,
-    height: 54,
+    width: '100%',
+    minWidth: 0,
+    minHeight: 54,
     paddingHorizontal: 10,
     paddingVertical: 7,
     gap: 8,
@@ -188,13 +191,13 @@ const styles = StyleSheet.create({
   },
   labelChip: {
     fontSize: 10,
-    lineHeight: 12,
+    lineHeight: 13,
     color: colors.textMuted,
     marginBottom: 2,
   },
   valueChip: {
     fontSize: 12,
-    lineHeight: 14,
+    lineHeight: 16,
     fontWeight: '800',
   },
 });

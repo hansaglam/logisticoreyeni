@@ -101,6 +101,56 @@ export interface CloudSaveOperationResult {
   ok: boolean;
   error?: string;
   errorCode?: string;
+  documentPath?: string;
+  readBackVerified?: boolean;
+  verifiedUpdatedAt?: number | null;
+}
+
+export function getCloudSaveDocumentPath(uid: string): string {
+  return `users/${uid}/saves/${CURRENT_SAVE_DOC_ID}`;
+}
+
+export async function verifyCloudSaveReadBack(
+  uid: string,
+  expectedOwnerUid: string,
+): Promise<{ ok: boolean; errorCode?: string; updatedAt?: number }> {
+  try {
+    const payload = await loadGameFromCloud(uid);
+    if (!payload) {
+      return { ok: false, errorCode: 'read-back-failed' };
+    }
+
+    const db = getFirestoreSafe();
+    if (!db) {
+      return { ok: false, errorCode: 'firestore-unavailable' };
+    }
+
+    const snapshot = await getDoc(doc(db, 'users', uid, 'saves', CURRENT_SAVE_DOC_ID));
+    if (!snapshot.exists()) {
+      return { ok: false, errorCode: 'read-back-failed' };
+    }
+
+    const data = snapshot.data() as Record<string, unknown>;
+    const ownerUid =
+      typeof data.ownerUid === 'string' && data.ownerUid.trim().length > 0
+        ? data.ownerUid.trim()
+        : null;
+
+    // Legacy docs without ownerUid: path ownership is still auth.uid; accept if path matches.
+    if (ownerUid && ownerUid !== expectedOwnerUid) {
+      return { ok: false, errorCode: 'owner-mismatch' };
+    }
+
+    const updatedAt = timestampToMillis(data.updatedAt) || payload.updatedAt || 0;
+    if (!updatedAt && !payload.deviceUpdatedAt) {
+      return { ok: false, errorCode: 'read-back-failed' };
+    }
+
+    return { ok: true, updatedAt: updatedAt || payload.deviceUpdatedAt || Date.now() };
+  } catch (error) {
+    const info = getFirestoreErrorInfo(error);
+    return { ok: false, errorCode: info.code ?? 'read-back-failed' };
+  }
 }
 
 function getAppVersion(): string {
@@ -282,6 +332,7 @@ export async function markUserProviderLinked(
 
     const profileData = sanitizeForFirestore({
       uid,
+      ownerUid: uid,
       provider,
       isAnonymous: false,
       linkedAt: serverTimestamp(),
@@ -355,14 +406,26 @@ export async function updateUserProfileSummary(uid: string, state: StoreGameStat
 export async function saveGameToCloud(
   uid: string,
   savePayload: SaveGamePayload,
+  options?: {
+    diagnosticId?: string;
+    trigger?: string;
+    skipReadBack?: boolean;
+  },
 ): Promise<CloudSaveOperationResult> {
+  const documentPath = getCloudSaveDocumentPath(uid);
+
   if (!uid || !isFirebaseEnabled()) {
-    return { ok: false, error: 'firebase-disabled' };
+    return { ok: false, error: 'firebase-disabled', errorCode: 'firebase-disabled', documentPath };
   }
 
   const db = getFirestoreSafe();
   if (!db) {
-    return { ok: false, error: 'firestore-unavailable' };
+    return {
+      ok: false,
+      error: 'firestore-unavailable',
+      errorCode: 'firestore-unavailable',
+      documentPath,
+    };
   }
 
   const unexpectedUndefinedPaths = findUnexpectedUndefinedPaths(savePayload);
@@ -393,11 +456,17 @@ export async function saveGameToCloud(
       code: 'save-too-large',
       message: `estimated size ${estimatedSize}`,
     });
-    return { ok: false, error: 'save-too-large' };
+    return {
+      ok: false,
+      error: 'save-too-large',
+      errorCode: 'save-too-large',
+      documentPath,
+    };
   }
 
   const userRef = doc(db, 'users', uid);
   const saveRef = doc(db, 'users', uid, 'saves', CURRENT_SAVE_DOC_ID);
+  const statusRef = doc(db, 'users', uid, 'meta', META_STATUS_DOC_ID);
 
   try {
     const existing = await getDoc(userRef);
@@ -412,6 +481,7 @@ export async function saveGameToCloud(
 
     const profileData = sanitizeForFirestore({
       uid,
+      ownerUid: uid,
       provider,
       isAnonymous: provider === 'anonymous',
       appVersion: getAppVersion(),
@@ -426,38 +496,81 @@ export async function saveGameToCloud(
       ...(existing.exists() ? {} : { createdAt: serverTimestamp() }),
     });
 
-    devCloudLog('[cloud-save] write user profile started');
-    await setDoc(userRef, asRecord(profileData), { merge: true });
-    devCloudLog('[cloud-save] write user profile success');
-
+    const saveVersion = savePayload.meta?.saveVersion ?? savePayload.version ?? 1;
     const cloudSaveData = sanitizeForFirestore({
       schemaVersion: 1,
       version: savePayload.version ?? 1,
-      saveVersion: savePayload.meta?.saveVersion ?? savePayload.version ?? 1,
+      saveVersion,
+      ownerUid: uid,
       updatedAt: serverTimestamp(),
       deviceUpdatedAt,
       gameState: sanitizedGameState,
       summary: sanitizedSummary,
     });
 
-    devCloudLog('[cloud-save] write save/current started');
-    await setDoc(saveRef, asRecord(cloudSaveData), { merge: true });
-    devCloudLog('[cloud-save] write save/current success');
+    const statusData = sanitizeForFirestore({
+      cloudSaveEnabled: true,
+      ownerUid: uid,
+      lastAttemptAt: serverTimestamp(),
+      lastDeviceAttemptAt: Date.now(),
+      lastSyncStatus: 'success',
+      lastErrorCode: null,
+      lastErrorMessage: null,
+    });
 
-    const metaOk = await updateCloudSyncMeta(uid, 'success');
-    if (!metaOk) {
-      return { ok: false, error: 'meta-status-write-failed' };
+    const batch = writeBatch(db);
+    batch.set(userRef, asRecord(profileData), { merge: true });
+    batch.set(saveRef, asRecord(cloudSaveData), { merge: true });
+    batch.set(statusRef, asRecord(statusData), { merge: true });
+
+    devCloudLog('[cloud-save] atomic write started', documentPath);
+    await batch.commit();
+    devCloudLog('[cloud-save] atomic write success', documentPath);
+
+    if (options?.skipReadBack) {
+      return { ok: true, documentPath, readBackVerified: false };
     }
 
-    return { ok: true };
+    const readBack = await verifyCloudSaveReadBack(uid, uid);
+    if (!readBack.ok) {
+      await updateCloudSyncMeta(uid, 'failed', {
+        code: readBack.errorCode ?? 'read-back-failed',
+        message: 'post-write read-back failed',
+      });
+      return {
+        ok: false,
+        error: readBack.errorCode ?? 'read-back-failed',
+        errorCode: readBack.errorCode ?? 'read-back-failed',
+        documentPath,
+        readBackVerified: false,
+      };
+    }
+
+    return {
+      ok: true,
+      documentPath,
+      readBackVerified: true,
+      verifiedUpdatedAt: readBack.updatedAt ?? Date.now(),
+    };
   } catch (error) {
     const info = getFirestoreErrorInfo(error);
-    console.warn('[cloud-save] saveGameToCloud failed:', info.message);
+    console.warn('[cloud-save] saveGameToCloud failed:', {
+      code: info.code,
+      message: info.message,
+      documentPath,
+      trigger: options?.trigger ?? null,
+      diagnosticId: options?.diagnosticId ?? null,
+    });
     await updateCloudSyncMeta(uid, 'failed', {
       code: info.code,
       message: info.message,
     });
-    return { ok: false, error: info.message };
+    return {
+      ok: false,
+      error: info.message,
+      errorCode: info.code ?? 'unknown',
+      documentPath,
+    };
   }
 }
 

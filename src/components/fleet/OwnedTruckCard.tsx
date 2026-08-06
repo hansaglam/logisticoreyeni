@@ -28,6 +28,10 @@ import { selectDriverForTransfer } from '../../simulation/truckTransfer';
 import { useGameStore } from '../../store/gameStore';
 import { colors, formatMoney } from '../../theme';
 import { getCityName } from '../../utils/entityLookup';
+import {
+  formatFuelPercentLabel,
+  getTruckFuelSnapshot,
+} from '../../utils/truckFuel';
 import type { Delivery, Driver, Trailer, Truck, TruckTransfer } from '../../types/game';
 import type { MonetizationState } from '../../types/monetization';
 import {
@@ -146,6 +150,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const capacityTons = getTruckEffectiveCapacityTons(truck, trailers);
   const capacityLabel = `${Math.round(capacityTons)} t`;
   const attachedTrailer = getAttachedTrailerForTruck(truck.id, trailers);
+  const fuelSnapshot = getTruckFuelSnapshot(truck);
 
   const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
     monetization,
@@ -276,6 +281,18 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           <Text style={styles.featureLabel}>Kapasite</Text>
           <Text style={styles.featureValue} numberOfLines={1}>
             {capacityLabel}
+          </Text>
+        </View>
+        <View style={styles.featurePill}>
+          <Text style={styles.featureLabel}>Yakıt</Text>
+          <Text
+            style={[
+              styles.featureValue,
+              fuelSnapshot.percentage <= 20 ? styles.fuelCritical : null,
+            ]}
+            numberOfLines={1}
+          >
+            {formatFuelPercentLabel(fuelSnapshot.percentage)}
           </Text>
         </View>
         <View style={styles.featurePill}>
@@ -532,6 +549,9 @@ const styles = StyleSheet.create({
     color: '#F3F7FF',
     lineHeight: 13,
   },
+  fuelCritical: {
+    color: colors.danger,
+  },
   conditionBlock: {
     marginTop: 5,
     gap: 3,
@@ -564,7 +584,8 @@ const styles = StyleSheet.create({
   actionBtn: {
     flex: 1,
     minWidth: 0,
-    height: 37,
+    minHeight: 44,
+    height: 44,
     borderRadius: 11,
     flexDirection: 'row',
     alignItems: 'center',

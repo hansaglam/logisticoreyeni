@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -10,7 +12,7 @@ import {
   View,
 } from 'react-native';
 
-import { getBottomInset } from '../../constants/layout';
+import { getBottomInset, getSafeModalMaxHeight } from '../../constants/layout';
 import type { MarketPriceAlertCondition } from '../../types/game';
 import type { City, Product } from '../../types/game';
 import { colors, spacing, typography } from '../../theme';
@@ -77,7 +79,7 @@ export default function MarketAlertModal({
   const targetPrice = useMemo(() => parsePriceInput(priceInput), [priceInput]);
   const isValidTarget = targetPrice != null;
 
-  const sheetMaxHeight = Math.min(windowHeight * 0.62, 420);
+  const sheetMaxHeight = Math.min(getSafeModalMaxHeight(windowHeight, insets, 0.7), 420);
 
   const handleConfirm = async () => {
     if (!targetPrice || submitting) return;
@@ -95,6 +97,7 @@ export default function MarketAlertModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <Pressable style={styles.backdrop} onPress={onClose} />
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View
           style={[
             styles.sheet,
@@ -174,6 +177,7 @@ export default function MarketAlertModal({
             />
           </View>
         </View>
+        </KeyboardAvoidingView>
       </View>
     </Modal>
   );

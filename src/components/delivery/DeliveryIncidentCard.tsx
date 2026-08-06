@@ -74,7 +74,7 @@ function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncide
       <Text style={[styles.title, compact && styles.titleCompact]}>HIZLI MÜDAHALE</Text>
       <Text
         style={[styles.incidentTitle, compact && styles.incidentTitleCompact]}
-        numberOfLines={1}
+        numberOfLines={2}
       >
         {incident.title}
       </Text>
@@ -136,7 +136,7 @@ function IncidentChoiceButton({
       <View style={styles.choiceMain}>
         <Text
           style={[styles.choiceLabel, compact && styles.choiceLabelCompact]}
-          numberOfLines={1}
+          numberOfLines={2}
         >
           {choice.label}
         </Text>
@@ -240,6 +240,7 @@ const styles = StyleSheet.create({
   },
   choiceMain: {
     flex: 1,
+    minWidth: 0,
     gap: 3,
   },
   choiceLabel: {

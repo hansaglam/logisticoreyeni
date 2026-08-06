@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 
+import { getModalSheetPaddingBottom, getSafeModalMaxHeight } from '../../constants/layout';
 import { ActionButton, GameIcon, IconButton, StatusBadge } from '../ui';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { colors, formatMoney, typography } from '../../theme';
@@ -32,7 +33,8 @@ export default function WarehouseOpportunityCard({
   measureLayout = false,
 }: WarehouseOpportunityCardProps) {
   const insets = useAppSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const sheetMaxHeight = getSafeModalMaxHeight(height, insets, 0.8);
   const stacked = width < 380;
   const [sheetOpen, setSheetOpen] = useState(false);
   const [selectedType, setSelectedType] = useState<'standard' | 'cold'>(
@@ -82,15 +84,17 @@ export default function WarehouseOpportunityCard({
           <Text style={styles.city} numberOfLines={1}>
             {opportunity.cityName}
           </Text>
-          <StatusBadge
-            label={
-              opportunity.signalCount > 0
-                ? `${opportunity.signalCount} sinyal`
-                : opportunity.economicLabel
-            }
-            variant="amber"
-            size="sm"
-          />
+          <View style={styles.badgeWrap}>
+            <StatusBadge
+              label={
+                opportunity.signalCount > 0
+                  ? `${opportunity.signalCount} sinyal`
+                  : opportunity.economicLabel
+              }
+              variant="amber"
+              size="sm"
+            />
+          </View>
           <Text style={styles.modifier}>{opportunity.costModifier.toFixed(2)}x</Text>
         </View>
 
@@ -133,7 +137,15 @@ export default function WarehouseOpportunityCard({
       >
         <View style={styles.backdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setSheetOpen(false)} />
-          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 14) }]}>
+          <View
+            style={[
+              styles.sheet,
+              {
+                maxHeight: sheetMaxHeight,
+                paddingBottom: getModalSheetPaddingBottom(insets),
+              },
+            ]}
+          >
             <View style={styles.sheetHeader}>
               <View style={styles.sheetTitleBlock}>
                 <Text style={styles.sheetTitle}>{opportunity.cityName}</Text>
@@ -226,11 +238,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
   },
+  badgeWrap: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
   modifier: {
     ...typography.caption,
     color: colors.textMuted,
     fontSize: 11,
     fontWeight: '700',
+    flexShrink: 0,
   },
   optionsRow: {
     flexDirection: 'row',

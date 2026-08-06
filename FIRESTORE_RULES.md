@@ -18,7 +18,24 @@ service cloud.firestore {
       allow read, create, update, delete: if request.auth != null && request.auth.uid == userId;
 
       match /saves/{saveId} {
-        allow read, create, update, delete: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null
+          && request.auth.uid == userId
+          && (
+            !('ownerUid' in request.resource.data)
+            || request.resource.data.ownerUid == request.auth.uid
+          );
+        allow update: if request.auth != null
+          && request.auth.uid == userId
+          && (
+            !('ownerUid' in request.resource.data)
+            || request.resource.data.ownerUid == request.auth.uid
+          )
+          && (
+            !('ownerUid' in resource.data)
+            || resource.data.ownerUid == request.auth.uid
+          );
+        allow delete: if request.auth != null && request.auth.uid == userId;
       }
 
       match /meta/{docId} {

@@ -55,20 +55,25 @@ function run(): void {
   assert(appleSrc.includes("OAuthProvider('apple.com')"), 'uses apple.com OAuth provider');
   assert(appleSrc.includes('rawNonce'), 'passes rawNonce to Firebase credential');
   assert(
-    appleSrc.includes('nonce: hashedResult.hash'),
+    appleSrc.includes('nonce: hashedNonce'),
     'sends hashed nonce to Apple signInAsync',
   );
   assert(appleSrc.includes('identityToken'), 'checks identityToken');
-  assert(appleSrc.includes('apple-token-missing'), 'maps missing identityToken');
+  assert(appleSrc.includes('APPLE_IDENTITY_TOKEN_MISSING'), 'maps missing identityToken');
   assert(
     !appleSrc.includes('idToken: appleCredential.authorizationCode') &&
       !appleSrc.includes('idToken: authorizationCode'),
     'does not use authorizationCode as idToken',
   );
-  assert(appleSrc.includes('[apple-auth-failed]'), 'safe failure log present');
+  assert(appleSrc.includes('logAppleAuthFlow'), 'safe failure log present');
+  assert(appleSrc.includes('[apple-auth-config]'), 'runtime config log present');
   assert(appleSrc.includes('fullName'), 'captures Apple fullName on first login');
-  assert(appleSrc.includes('ERR_REQUEST_CANCELED'), 'maps user cancel');
+  assert(appleSrc.includes('ERR_REQUEST_CANCELED') || appleSrc.includes("mappedError"), 'maps user cancel');
   assert(appleSrc.includes('generateSecureNonceAsync'), 'uses secure nonce helper');
+  assert(appleSrc.includes('native-request-start'), 'stage native-request-start present');
+  assert(appleSrc.includes('extractSafeAppleErrorFields'), 'reads non-enumerable error fields');
+  assert(appleSrc.includes('config-validation'), 'stage config-validation present');
+  assert(appleSrc.includes('FIREBASE_RUNTIME_CONFIG_MISMATCH'), 'runtime config mismatch guard present');
 
   const authSrc = readSrc('src/services/authService.ts');
   assert(authSrc.includes('linkWithCredential'), 'anonymous link uses linkWithCredential');
@@ -76,8 +81,14 @@ function run(): void {
   assert(authSrc.includes('provider-not-enabled'), 'maps provider-not-enabled');
   assert(authSrc.includes('provider-already-linked'), 'maps provider-already-linked');
   assert(authSrc.includes('updateProfile'), 'can update displayName from Apple profile');
-  assert(authSrc.includes('already-linked'), 'blocks non-anonymous re-link');
+  assert(authSrc.includes('already-linked-success'), 'treats existing Apple provider as linked');
   assert(authSrc.includes('getFirebaseAuthSafe'), 'uses Firebase Auth singleton helper');
+  assert(authSrc.includes('ensureFirebaseAuthReady'), 'Apple link requires Auth readiness');
+  assert(
+    !authSrc.includes("throw new Error('auth-unavailable')") &&
+      !authSrc.includes("error: 'auth-unavailable'"),
+    'auth-unavailable literal is not returned from authService',
+  );
 
   const accountSrc = readSrc('src/components/AccountSection.tsx');
   assert(

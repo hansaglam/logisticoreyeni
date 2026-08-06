@@ -15,7 +15,6 @@ import OwnedTrailerCard from '../components/fleet/OwnedTrailerCard';
 import {
   FLEET_HEADER_HEIGHT,
   FLEET_METRIC_HEIGHT,
-  FLEET_SCROLL_BOTTOM_EXTRA,
   FLEET_SECTION_GAP,
   FLEET_SEGMENT_BG,
   FLEET_SEGMENT_BORDER,
@@ -196,8 +195,7 @@ export default function FleetScreen() {
   const { showDialog, alert: showAlert } = useAppDialog();
   const { width: screenWidth } = useWindowDimensions();
   const driverHireLayout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
-  const { tabBarHeight } = useTabBarLayout();
-  const fleetScrollBottomPadding = tabBarHeight + FLEET_SCROLL_BOTTOM_EXTRA;
+  const { contentBottomPadding } = useTabBarLayout();
   const player = useGameStore((state) => state.player);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
@@ -699,7 +697,7 @@ export default function FleetScreen() {
   }
 
   return (
-    <AppScreen scroll scrollBottomPadding={fleetScrollBottomPadding}>
+    <AppScreen scroll scrollBottomPadding={contentBottomPadding}>
       <View style={styles.screenStack}>
         <View style={styles.fleetHeader}>
           <View style={styles.fleetHeaderText}>

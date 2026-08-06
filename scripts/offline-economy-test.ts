@@ -79,18 +79,32 @@ const first = buildPeriodicCostDeductions({
   economyNowMs: now,
   lastProcessedEconomyAt: last,
   alreadyAppliedPeriodKeys: [],
-  maxOfflineCostPeriods: 3,
+  maxOfflineCostPeriods: 0,
 });
 
-assert(first.periodsCharged === 3, 'G: offline cost max 3 dönem', `charged=${first.periodsCharged}`);
-assert(first.capped === true, 'G: 10 dönem elapsed → capped');
-assert(first.periodKeysApplied.length === 3, 'period keys unique count');
+assert(first.periodsCharged === 0, 'G: offline cost disabled → 0 dönem', `charged=${first.periodsCharged}`);
+assert(first.totalAmount === 0, 'G: offline cost disabled → totalAmount 0');
+assert(first.periodKeysApplied.length === 0, 'period keys empty when disabled');
+
+const legacyCapped = buildPeriodicCostDeductions({
+  player,
+  economyNowMs: now,
+  lastProcessedEconomyAt: last,
+  alreadyAppliedPeriodKeys: [],
+  maxOfflineCostPeriods: 3,
+});
+assert(
+  legacyCapped.periodsCharged === 3,
+  'legacy helper max=3 hâlâ cap eder (production max=0)',
+  `charged=${legacyCapped.periodsCharged}`,
+);
+assert(legacyCapped.capped === true, 'legacy: 10 dönem elapsed → capped');
 
 const second = buildPeriodicCostDeductions({
   player,
   economyNowMs: now,
   lastProcessedEconomyAt: last,
-  alreadyAppliedPeriodKeys: first.periodKeysApplied,
+  alreadyAppliedPeriodKeys: legacyCapped.periodKeysApplied,
   maxOfflineCostPeriods: 3,
 });
 

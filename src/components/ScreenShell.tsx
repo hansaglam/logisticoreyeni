@@ -26,7 +26,7 @@ export default function ScreenShell({
   loadingText = 'Loading...',
   contentStyle,
 }: ScreenShellProps) {
-  const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+  const { contentBottomPadding: scrollBottomPadding, screenTopPadding } = useTabBarLayout();
 
   if (loading) {
     return (

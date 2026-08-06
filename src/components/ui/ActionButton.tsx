@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, type StyleProp, type ViewStyle } from 'react-native';
 
+import { MIN_TOUCH_TARGET } from '../../constants/layout';
 import { colors, radius, spacing, typography } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
 import GameIcon from './GameIcon';
@@ -98,7 +99,10 @@ export default function ActionButton({
       ]}
     >
       {icon ? <GameIcon name={icon} size={iconSize} color={palette.textColor} /> : null}
-      <Text style={[styles.label, compact && styles.labelCompact, { color: palette.textColor }]}>
+      <Text
+        style={[styles.label, compact && styles.labelCompact, { color: palette.textColor }]}
+        numberOfLines={2}
+      >
         {label}
       </Text>
     </TouchableOpacity>
@@ -109,6 +113,7 @@ const styles = StyleSheet.create({
   button: {
     borderRadius: radius.md,
     borderWidth: 1,
+    minHeight: MIN_TOUCH_TARGET,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     alignItems: 'center',
@@ -129,7 +134,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    minHeight: 40,
+    minHeight: MIN_TOUCH_TARGET,
   },
   labelCompact: {
     fontSize: 12,

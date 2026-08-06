@@ -15,6 +15,11 @@ import GameTabBar from './src/components/navigation/GameTabBar';
 import GameToast from './src/components/GameToast';
 import type { TabDefinition, TabKey } from './src/navigation/tabTypes';
 import type { QuickAccessAction } from './src/navigation/quickAccessTypes';
+import {
+  getManagementNavigationTarget,
+  resolveManagementModule,
+  type ManagementModule,
+} from './src/navigation/managementNavigation';
 import TutorialOverlay from './src/components/tutorial/TutorialOverlay';
 import { ENABLE_SPOTLIGHT_TUTORIAL } from './src/tutorial/featureFlags';
 import { useGameLoop } from './src/hooks/useGameLoop';
@@ -28,6 +33,7 @@ import {
 } from './src/services/notifications';
 import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
+import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
 import { initializeAdProvider } from './src/services/adProvider';
 import type { ProductId } from './src/types/game';
@@ -100,41 +106,32 @@ function AppShell() {
   }, []);
 
   const handleOpenWarehouse = () => {
-    useGameStore.setState({
-      navigationRequest: { tab: 'more' },
-      pendingMoreSubRoute: 'warehouse',
-    });
+    navigateToManagementModule('Warehouses');
+  };
+
+  const navigateToManagementModule = (module: ManagementModule) => {
+    const target = getManagementNavigationTarget(module);
+    if (target.moreSubRoute) {
+      useGameStore.setState({
+        navigationRequest: { tab: target.tab },
+        pendingMoreSubRoute: target.moreSubRoute,
+      });
+      return;
+    }
+    setActiveTab(target.tab);
   };
 
   const handleQuickAccess = (action: QuickAccessAction) => {
-    switch (action) {
-      case 'fleet':
-        setActiveTab('fleet');
-        break;
-      case 'shop':
-        setActiveTab('shop');
-        break;
-      case 'warehouse':
-        handleOpenWarehouse();
-        break;
-      case 'finance':
-        useGameStore.setState({
-          navigationRequest: { tab: 'more' },
-          pendingMoreSubRoute: 'finance',
-        });
-        break;
-      case 'missions':
-        useGameStore.setState({
-          navigationRequest: { tab: 'more' },
-          pendingMoreSubRoute: 'missions',
-        });
-        break;
-      case 'settings':
-      case 'account':
-        setActiveTab('more');
-        break;
-      default:
-        break;
+    const module = resolveManagementModule(action);
+    if (module) {
+      navigateToManagementModule(module);
+      return;
+    }
+    if (action === 'settings') {
+      useGameStore.setState({
+        navigationRequest: { tab: 'more' },
+        pendingMoreSubRoute: 'menu',
+      });
     }
   };
 
@@ -198,6 +195,7 @@ export default function App() {
   useEffect(() => {
     // Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.
     configureGoogleSignIn();
+    logFirebaseRuntimeConfigOnce();
     // Auth restore tamamlanana kadar anonymous sign-in yapılmaz.
     void initAnonymousAuth();
     void useGameStore.getState().initializeGame();
@@ -219,9 +217,12 @@ export default function App() {
         useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
         useGameStore.getState().applyOfflineProgressionIfNeeded();
       }
-      if (nextState === 'background') {
+      // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
+      if (nextState === 'background' || nextState === 'inactive') {
         useGameStore.getState().recordLastSeenRealTimeMs();
-        void useGameStore.getState().saveGame();
+        if (nextState === 'background') {
+          void useGameStore.getState().saveGame();
+        }
       }
     });
 

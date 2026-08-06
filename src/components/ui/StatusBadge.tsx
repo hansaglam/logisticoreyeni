@@ -74,6 +74,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   badgeWithIcon: {
     flexDirection: 'row',

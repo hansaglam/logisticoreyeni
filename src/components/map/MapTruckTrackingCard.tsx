@@ -5,6 +5,7 @@ import { getTruckArtwork } from '../../assets/fleetAssets';
 import { stripLeaseSuffixFromTruckName } from '../fleet/fleetTheme';
 import type { Delivery, Driver, Truck, TruckTransfer } from '../../types/game';
 import { getCityName } from '../../utils/entityLookup';
+import { formatFuelPercentLabel } from '../../utils/truckFuel';
 import { getTruckTrackingMetrics } from '../../utils/truckTrackingMetrics';
 import { GameIcon, StatusBadge, type StatusBadgeVariant } from '../ui';
 import {
@@ -130,7 +131,18 @@ function MapTruckTrackingCard({
         transfer,
         driver,
       }),
-    [truck, activeDelivery, transfer, driver],
+    [
+      truck,
+      truck.id,
+      truck.currentFuelL,
+      truck.fuelTankCapacityL,
+      truck.capacity,
+      truck.fuelConsumptionPerKm,
+      truck.status,
+      activeDelivery,
+      transfer,
+      driver,
+    ],
   );
 
   const kmLabel = metrics.isMoving
@@ -190,7 +202,7 @@ function MapTruckTrackingCard({
           <View style={styles.metricItem}>
             <GameIcon name="fuel" size={14} color={fuelTone(metrics.fuelPercent)} />
             <Text style={[styles.metricValue, { color: fuelTone(metrics.fuelPercent) }]}>
-              %{metrics.fuelPercent}
+              {formatFuelPercentLabel(metrics.fuelPercent)}
             </Text>
           </View>
           <View style={styles.metricDivider} />
@@ -225,7 +237,17 @@ function MapTruckTrackingCard({
 }
 
 function arePropsEqual(prev: MapTruckTrackingCardProps, next: MapTruckTrackingCardProps): boolean {
-  if (prev.truck !== next.truck) return false;
+  if (prev.truck.id !== next.truck.id) return false;
+  if (prev.truck.status !== next.truck.status) return false;
+  if (prev.truck.currentFuelL !== next.truck.currentFuelL) return false;
+  if (prev.truck.fuelTankCapacityL !== next.truck.fuelTankCapacityL) return false;
+  if (prev.truck.capacity !== next.truck.capacity) return false;
+  if (prev.truck.fuelConsumptionPerKm !== next.truck.fuelConsumptionPerKm) return false;
+  if (prev.truck.name !== next.truck.name) return false;
+  if (prev.truck.catalogId !== next.truck.catalogId) return false;
+  if (prev.truck.currentCityId !== next.truck.currentCityId) return false;
+  if (prev.truck.ownershipType !== next.truck.ownershipType) return false;
+  if (prev.truck.leaseExpired !== next.truck.leaseExpired) return false;
   if (prev.delivery !== next.delivery) return false;
   if (prev.transfer !== next.transfer) return false;
   if (prev.driver !== next.driver) return false;

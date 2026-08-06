@@ -11,7 +11,6 @@ export function getDashboardMoneyColor(money: number): string {
 export const DASHBOARD_HORIZONTAL_PADDING = 16;
 export const DASHBOARD_SECTION_GAP = 11;
 export const DASHBOARD_SECTION_GAP_TIGHT = 8;
-export const DASHBOARD_SCROLL_BOTTOM_EXTRA = 17;
 export const DASHBOARD_SECTION_GAP_LARGE = 16;
 export const DASHBOARD_NARROW_WIDTH = 370;
 export const DASHBOARD_SPLIT_MIN_WIDTH = 390;

@@ -1,12 +1,13 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { MIN_TOUCH_TARGET } from '../../constants/layout';
 import { colors, spacing, typography } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
 import GameIcon from './GameIcon';
 import IconButton from './IconButton';
 
-const SIDE_SLOT_WIDTH = 48;
+const SIDE_SLOT_WIDTH = MIN_TOUCH_TARGET + 4;
 
 interface ScreenHeaderProps {
   title: string;
@@ -46,7 +47,7 @@ export default function ScreenHeader({
           {titleIcon && !compact ? (
             <GameIcon name={titleIcon} size={22} color={titleIconColor} />
           ) : null}
-          <Text style={[styles.title, compact && styles.titleCompact]} numberOfLines={1}>
+          <Text style={[styles.title, compact && styles.titleCompact]} numberOfLines={2}>
             {title}
           </Text>
         </View>
@@ -75,7 +76,7 @@ const styles = StyleSheet.create({
     width: SIDE_SLOT_WIDTH,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 34,
+    minHeight: MIN_TOUCH_TARGET,
   },
   center: {
     flex: 1,
@@ -94,7 +95,9 @@ const styles = StyleSheet.create({
   title: {
     ...typography.screenTitle,
     fontSize: 22,
+    lineHeight: 28,
     textAlign: 'center',
+    flexShrink: 1,
   },
   subtitle: {
     ...typography.screenSubtitle,

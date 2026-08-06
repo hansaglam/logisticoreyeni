@@ -21,9 +21,9 @@ import { useAppDialog } from './AppDialogProvider';
 import { tradingBalance } from '../config/balance';
 import { getBottomInset } from '../constants/layout';
 import {
-  calculateTradeBuyCost,
   calculateTradeProfit,
   calculateTradeSellRevenue,
+  getTradeBuyCashPreview,
   getTradeQuantityPresets,
 } from '../simulation/trading';
 import {
@@ -34,7 +34,7 @@ import type { StorageSuitability } from '../simulation/warehouseStorage';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney } from '../theme/format';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
-import { ActionButton, IconButton, ProductIcon } from './ui';
+import { ActionButton, GameIcon, IconButton, ProductIcon } from './ui';
 import type { City, Product, WarehouseType } from '../types/game';
 
 const OVERLAY_OPACITY = 0.52;
@@ -254,7 +254,12 @@ export default function TradeProductModal({
   const safeFreeCapacity = Number.isFinite(selectedFreeCapacity) ? selectedFreeCapacity : 0;
   const safeInventoryQty = Number.isFinite(inventoryQuantity) ? inventoryQuantity : 0;
   const safeAvgBuy = Number.isFinite(averageBuyPrice) ? averageBuyPrice : 0;
-  const totalBuyCost = calculateTradeBuyCost(safePrice, quantity);
+  const buyCashPreview = getTradeBuyCashPreview({
+    currentCash: playerCash,
+    unitPrice: safePrice,
+    quantity,
+  });
+  const totalBuyCost = buyCashPreview.totalCost;
   const totalSellRevenue = calculateTradeSellRevenue(currentPrice, quantity, inventoryQuality);
   const estimatedProfit = calculateTradeProfit(
     currentPrice,
@@ -262,13 +267,12 @@ export default function TradeProductModal({
     quantity,
     inventoryQuality,
   );
-  const remainingCash = playerCash - totalBuyCost;
   const remainingCapacity = Math.max(0, safeFreeCapacity - quantity);
 
   const canConfirm =
     quantity >= tradingBalance.minTradeQuantity &&
     quantity <= maxQuantity &&
-    (mode === 'sell' || (remainingCash >= 0 && selectedWarehouseId != null));
+    (mode === 'sell' || (buyCashPreview.canAfford && selectedWarehouseId != null));
 
   const confirmButton = (() => {
     const minQty = tradingBalance.minTradeQuantity;
@@ -301,7 +305,7 @@ export default function TradeProductModal({
     if (quantity > safeFreeCapacity) {
       return { label: 'Depo alanı yetersiz', disabled: true };
     }
-    if (remainingCash < 0) {
+    if (!buyCashPreview.canAfford) {
       return { label: 'Nakit yetersiz', disabled: true };
     }
     if (quantity < minQty || quantity > maxQuantity) {
@@ -370,12 +374,41 @@ export default function TradeProductModal({
             <IconButton icon="close" onPress={onClose} size={18} color={colors.textMuted} />
           </View>
 
+          {mode === 'buy' ? (
+            <View style={styles.cashRow}>
+              <View style={styles.cashLeft}>
+                <GameIcon name="cash" size={16} color={colors.accentBlue} />
+                <View style={styles.cashTextCol}>
+                  <Text style={styles.cashLabel}>Nakit</Text>
+                  <Text style={styles.cashValue} numberOfLines={1} adjustsFontSizeToFit>
+                    {formatMoney(buyCashPreview.currentCash)}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.cashRight}>
+                <Text style={styles.cashLabel}>Satın alma sonrası</Text>
+                <Text
+                  style={[
+                    styles.cashValue,
+                    styles.cashRemaining,
+                    !buyCashPreview.canAfford && styles.cashRemainingNegative,
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {formatMoney(buyCashPreview.remainingCash)}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={[styles.scrollContent, { paddingBottom: footerHeight }]}
             showsVerticalScrollIndicator={false}
             bounces={false}
             keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
           >
             <View style={styles.infoCard}>
               <View style={styles.infoGrid}>
@@ -583,6 +616,52 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  cashRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardSoft,
+  },
+  cashLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  cashRight: {
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    maxWidth: '48%',
+  },
+  cashTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  cashLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  cashValue: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginTop: 1,
+  },
+  cashRemaining: {
+    color: colors.success,
+  },
+  cashRemainingNegative: {
+    color: colors.danger,
   },
   scroll: {
     flexGrow: 0,

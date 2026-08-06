@@ -9,6 +9,7 @@ import {
   isDeliveryProgressComplete,
   updateDeliveryProgress,
 } from './delivery';
+import { resolveOfflineProgressMinMs } from './deliveryOfflineProgress';
 import type {
   Delivery,
   Driver,
@@ -22,6 +23,7 @@ export { realMsToGameHours };
 export const OFFLINE_PROGRESS_VERSION = 1;
 /** Offline catch-up tavanı — saat (24 saat = 24 * 60 * 60 * 1000 ms). Saniye/dakika değil. */
 export const MAX_OFFLINE_PROGRESS_HOURS = operatingCostBalance.maxOfflineProgressHours;
+/** Genel (teslimatsız) minimum — aktif teslimat varken düşürülür. */
 export const MIN_OFFLINE_PROGRESS_MINUTES = 5;
 
 export interface OfflineElapsedResult {
@@ -124,6 +126,10 @@ export interface ApplyOfflineDeliveriesResult {
 export function calculateOfflineElapsed(
   lastSeenMs: number | undefined | null,
   nowMs: number,
+  options?: {
+    hasActiveDeliveries?: boolean;
+    minElapsedMs?: number;
+  },
 ): OfflineElapsedResult {
   if (lastSeenMs == null || !Number.isFinite(lastSeenMs) || lastSeenMs <= 0) {
     return {
@@ -146,7 +152,9 @@ export function calculateOfflineElapsed(
     };
   }
 
-  const minMs = MIN_OFFLINE_PROGRESS_MINUTES * MS_PER_MINUTE;
+  const minMs =
+    options?.minElapsedMs ??
+    resolveOfflineProgressMinMs(Boolean(options?.hasActiveDeliveries));
   if (rawElapsed < minMs) {
     return {
       elapsedMs: rawElapsed,
@@ -424,6 +432,7 @@ export function shouldSkipDuplicateOfflineApply(
   lastSeenMs: number | undefined | null,
   lastAppliedAtMs: number | undefined | null,
   nowMs: number,
+  options?: { hasActiveDeliveries?: boolean },
 ): boolean {
   if (lastAppliedAtMs == null || lastSeenMs == null) {
     return false;
@@ -431,7 +440,8 @@ export function shouldSkipDuplicateOfflineApply(
   if (lastAppliedAtMs >= nowMs) {
     return true;
   }
-  return lastAppliedAtMs >= lastSeenMs && nowMs - lastAppliedAtMs < MIN_OFFLINE_PROGRESS_MINUTES * MS_PER_MINUTE;
+  const minMs = resolveOfflineProgressMinMs(Boolean(options?.hasActiveDeliveries));
+  return lastAppliedAtMs >= lastSeenMs && nowMs - lastAppliedAtMs < minMs;
 }
 
 export function normalizeOfflineProgressFields(

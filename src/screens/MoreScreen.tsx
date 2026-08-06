@@ -4,10 +4,20 @@
  * Premium şirket yönetim merkezi — finans, depolar ve yönetim araçları.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  InteractionManager,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  type LayoutChangeEvent,
+  type ScrollView,
+} from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
+import { MIN_TOUCH_TARGET } from '../constants/layout';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 
 import {
   AppCard,
@@ -34,6 +44,10 @@ import MissionsScreen from './MissionsScreen';
 import WarehouseScreen from './WarehouseScreen';
 import UpgradesScreen from './UpgradesScreen';
 import AccountSection from '../components/AccountSection';
+import {
+  resolveMoreScreenRoute,
+  shouldFocusAccountSection,
+} from '../navigation/managementNavigation';
 
 type MoreRoute = 'menu' | 'warehouse' | 'finance' | 'debug' | 'missions' | 'leaderboard' | 'upgrades';
 
@@ -179,20 +193,36 @@ function CompanyGrowthCard({
 
       <View style={styles.growthStats}>
         <View style={styles.growthStatItem}>
-          <Text style={styles.growthStatLabel}>Seviye</Text>
-          <Text style={styles.growthStatValue}>{level}</Text>
+          <Text style={styles.growthStatLabel} numberOfLines={2}>
+            Seviye
+          </Text>
+          <Text style={styles.growthStatValue} numberOfLines={1}>
+            {level}
+          </Text>
         </View>
         <View style={styles.growthStatItem}>
-          <Text style={styles.growthStatLabel}>Sözleşme</Text>
-          <Text style={styles.growthStatValue}>{completedContracts}</Text>
+          <Text style={styles.growthStatLabel} numberOfLines={2}>
+            Sözleşme
+          </Text>
+          <Text style={styles.growthStatValue} numberOfLines={1}>
+            {completedContracts}
+          </Text>
         </View>
         <View style={styles.growthStatItem}>
-          <Text style={styles.growthStatLabel}>Filo</Text>
-          <Text style={styles.growthStatValue}>{truckCount}</Text>
+          <Text style={styles.growthStatLabel} numberOfLines={2}>
+            Filo
+          </Text>
+          <Text style={styles.growthStatValue} numberOfLines={1}>
+            {truckCount}
+          </Text>
         </View>
         <View style={styles.growthStatItem}>
-          <Text style={styles.growthStatLabel}>Depo</Text>
-          <Text style={styles.growthStatValue}>{warehouseCount}</Text>
+          <Text style={styles.growthStatLabel} numberOfLines={2}>
+            Depo
+          </Text>
+          <Text style={styles.growthStatValue} numberOfLines={1}>
+            {warehouseCount}
+          </Text>
         </View>
       </View>
 
@@ -210,18 +240,44 @@ function ModuleChevron() {
 export default function MoreScreen() {
   const { alert: showAlert } = useAppDialog();
   const [route, setRoute] = useState<MoreRoute>('menu');
+  const [focusAccountSection, setFocusAccountSection] = useState(false);
   const player = useGameStore((state) => state.player);
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
   const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
+  const menuScrollRef = useRef<ScrollView | null>(null);
+  const accountSectionYRef = useRef(0);
 
   const pendingUpgradeTruckId = useGameStore((state) => state.pendingUpgradeTruckId);
   const clearPendingUpgradeTruckId = useGameStore((state) => state.clearPendingUpgradeTruckId);
 
   useEffect(() => {
     if (!pendingMoreSubRoute) return;
-    setRoute(pendingMoreSubRoute);
+    const nextRoute = resolveMoreScreenRoute(pendingMoreSubRoute);
+    const focusAccount = shouldFocusAccountSection(pendingMoreSubRoute);
+    if (nextRoute) {
+      setRoute(nextRoute);
+    }
+    setFocusAccountSection(focusAccount);
     clearPendingMoreSubRoute();
   }, [pendingMoreSubRoute, clearPendingMoreSubRoute]);
+
+  useEffect(() => {
+    if (!focusAccountSection || route !== 'menu') {
+      return;
+    }
+    const task = InteractionManager.runAfterInteractions(() => {
+      menuScrollRef.current?.scrollTo({
+        y: Math.max(0, accountSectionYRef.current - 12),
+        animated: true,
+      });
+      setFocusAccountSection(false);
+    });
+    return () => task.cancel();
+  }, [focusAccountSection, route]);
+
+  const handleAccountSectionLayout = (event: LayoutChangeEvent) => {
+    accountSectionYRef.current = event.nativeEvent.layout.y;
+  };
 
   const levelProgress = useMemo(
     () => (player ? getLevelProgress(player) : null),
@@ -238,19 +294,19 @@ export default function MoreScreen() {
 
   if (route === 'warehouse') {
     return (
-      <View style={styles.embeddedRoot}>
+      <EmbeddedModule>
         <SubNavBar title="Depolar" onBack={() => setRoute('menu')} />
         <WarehouseScreen />
-      </View>
+      </EmbeddedModule>
     );
   }
 
   if (route === 'finance') {
     return (
-      <View style={styles.embeddedRoot}>
+      <EmbeddedModule>
         <SubNavBar title="Finans" onBack={() => setRoute('menu')} />
         <FinanceScreen />
-      </View>
+      </EmbeddedModule>
     );
   }
 
@@ -287,10 +343,10 @@ export default function MoreScreen() {
 
   if (route === 'debug' && __DEV__) {
     return (
-      <View style={styles.embeddedRoot}>
+      <EmbeddedModule>
         <SubNavBar title="Simülasyon Testi" onBack={() => setRoute('menu')} />
         <DebugSimulationScreen />
-      </View>
+      </EmbeddedModule>
     );
   }
 
@@ -305,7 +361,7 @@ export default function MoreScreen() {
   const xpProgress = levelProgress?.progressRatio ?? 0;
 
   return (
-    <AppScreen scroll>
+    <AppScreen scroll scrollRef={menuScrollRef}>
       <ScreenHeader
         title="Şirket"
         subtitle="Şirket özeti, gelişim ve yönetim modülleri"
@@ -342,7 +398,9 @@ export default function MoreScreen() {
         </>
       ) : null}
 
-      <AccountSection />
+      <View onLayout={handleAccountSectionLayout} collapsable={false}>
+        <AccountSection />
+      </View>
 
       <SectionTitle title="Yönetim Modülleri" compact />
 
@@ -430,6 +488,11 @@ export default function MoreScreen() {
   );
 }
 
+function EmbeddedModule({ children }: { children: React.ReactNode }) {
+  const { screenTopPadding } = useTabBarLayout();
+  return <View style={[styles.embeddedRoot, { paddingTop: screenTopPadding }]}>{children}</View>;
+}
+
 function SubNavBar({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <View style={styles.subNav}>
@@ -459,7 +522,8 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   subNavBack: {
-    paddingVertical: 6,
+    minHeight: MIN_TOUCH_TARGET,
+    justifyContent: 'center',
     paddingRight: 12,
   },
   subNavBackText: {
@@ -534,17 +598,20 @@ const styles = StyleSheet.create({
   },
   growthStatItem: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: colors.cardSoft,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
+    paddingHorizontal: 4,
     alignItems: 'center',
   },
   growthStatLabel: {
     ...typography.caption,
     fontSize: 10,
+    lineHeight: 13,
+    textAlign: 'center',
   },
   growthStatValue: {
     ...typography.bodySmall,

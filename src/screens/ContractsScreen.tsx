@@ -558,6 +558,8 @@ const ContractCard = React.memo(function ContractCard({
           <Text
             style={[styles.contractPayment, isMuted && styles.contractPaymentMuted]}
             numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
             ellipsizeMode="tail"
           >
             {formatMoney(payment)}
@@ -565,6 +567,8 @@ const ContractCard = React.memo(function ContractCard({
           <Text
             style={[styles.contractProfit, { color: profitColor }]}
             numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
             ellipsizeMode="tail"
           >
             İş kârı {formatMoney(estimatedProfit)}
@@ -789,7 +793,7 @@ export default function ContractsScreen() {
   );
   const notifyContractsScreenOpened = useGameStore((state) => state.notifyContractsScreenOpened);
   const notifyContractAssignmentOpened = useGameStore((state) => state.notifyContractAssignmentOpened);
-  const { scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+  const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Contracts');
   const onboardingHint = useActiveOnboardingHint(['choose_first_contract', 'assign_team']);
@@ -1499,7 +1503,7 @@ export default function ContractsScreen() {
           style={styles.listScroll}
           contentContainerStyle={[
             styles.listScrollContent,
-            { paddingBottom: scrollBottomPadding },
+            { paddingBottom: contentBottomPadding },
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -1897,10 +1901,10 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   rightPrice: {
-    flexShrink: 0,
+    flexShrink: 1,
     alignItems: 'flex-end',
-    minWidth: 100,
-    maxWidth: 130,
+    minWidth: 88,
+    maxWidth: '42%',
     paddingLeft: 6,
   },
   contractIconBox: {

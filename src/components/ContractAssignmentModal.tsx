@@ -15,6 +15,7 @@ import {
 import { useAppDialog } from './AppDialogProvider';
 
 import { getBottomInset } from '../constants/layout';
+import { getScreenTopPadding } from '../utils/screenInsets';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import {
   buildContractPreview,
@@ -604,7 +605,7 @@ export default function ContractAssignmentModal({
       presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={[styles.root, { paddingTop: getScreenTopPadding(insets) }]}>
         <View style={styles.headerWrap}>
           <ScreenHeader
             title="Teslimat Ekibi Seç"

@@ -2,8 +2,8 @@
  * Expo app config — .env içindeki EXPO_PUBLIC_* değerlerini
  * Constants.expoConfig.extra üzerinden runtime'a taşır.
  *
- * Gerçek secret/value hardcode edilmez; sadece process.env okunur.
- * Expo CLI app.config değerlendirmesinden önce .env yükler.
+ * EXPO_PUBLIC_* varsa onu kullanır; yoksa src/config/firebase.public.json
+ * (client-side public Firebase web/iOS config) Xcode archive için fallback'tir.
  *
  * TODO (native Google Sign-In / Apple):
  * - iOS: reversed client id URL scheme (GoogleService / OAuth iOS client)
@@ -13,6 +13,17 @@
  */
 
 const appJson = require('./app.json');
+const publicFirebase = require('./src/config/firebase.public.json');
+
+function readFirebaseExtraValue(envKey, publicKey) {
+  const fromEnv =
+    typeof process.env[envKey] === 'string' ? process.env[envKey].trim() : '';
+  if (fromEnv.length > 0) {
+    return fromEnv;
+  }
+  const fromPublic = publicFirebase?.[publicKey];
+  return typeof fromPublic === 'string' ? fromPublic : '';
+}
 
 module.exports = () => {
   const expo = appJson.expo ?? {};
@@ -77,12 +88,18 @@ module.exports = () => {
     extra: {
       ...(expo.extra ?? {}),
       firebase: {
-        apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '',
-        authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? '',
-        projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? '',
-        storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ?? '',
-        messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? '',
-        appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? '',
+        apiKey: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_API_KEY', 'apiKey'),
+        authDomain: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN', 'authDomain'),
+        projectId: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID', 'projectId'),
+        storageBucket: readFirebaseExtraValue(
+          'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
+          'storageBucket',
+        ),
+        messagingSenderId: readFirebaseExtraValue(
+          'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
+          'messagingSenderId',
+        ),
+        appId: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_APP_ID', 'appId'),
       },
       google: {
         webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '',

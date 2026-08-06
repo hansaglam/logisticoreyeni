@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { getModalSheetPaddingBottom } from '../../constants/layout';
 import { AppCard, EmptyState, IconButton, StatusBadge } from '../ui';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { getWarehouseStockTransferReasonMessage } from '../../simulation/warehouseStockTransfer';
@@ -109,7 +110,7 @@ export default function WarehouseTransfersSection({
       >
         <View style={styles.backdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setHistoryOpen(false)} />
-          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={[styles.sheet, { paddingBottom: getModalSheetPaddingBottom(insets) }]}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>Geçmiş Transferler</Text>
               <IconButton icon="close" onPress={() => setHistoryOpen(false)} />

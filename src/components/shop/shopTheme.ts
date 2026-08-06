@@ -11,7 +11,6 @@ import { getTrailerAccentTint } from '../fleet/fleetTheme';
 export const SHOP_HORIZONTAL_PADDING = 16;
 export const SHOP_NARROW_BREAKPOINT = 360;
 export const SHOP_NARROW_HERO_BREAKPOINT = 360;
-export const SHOP_SCROLL_BOTTOM_EXTRA = 28;
 
 /** shop-hero-warehouse.png kenar/üst boşluklarından örneklenen baskın koyu arka plan (mode rgb 0,0,12) */
 export const SHOP_BACKGROUND = '#00000C';

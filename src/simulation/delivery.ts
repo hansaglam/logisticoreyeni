@@ -1238,6 +1238,8 @@ export interface CreateDeliveryParams {
   sequence?: number;
   /** Bağlı dorse dahil kapasite doğrulaması için — startDelivery güncel store'dan geçirir */
   trailers?: Trailer[];
+  /** Gerçek zaman damgası — offline progress anchor */
+  startedRealAtMs?: number;
 }
 
 export interface DeliveryStartCapacitySnapshot {
@@ -1325,6 +1327,7 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     currentTime,
     sequence = randomIntBetween(1, 999_999),
     trailers = [],
+    startedRealAtMs,
   } = params;
 
   const capacitySnapshot = buildDeliveryStartCapacitySnapshot({
@@ -1365,6 +1368,10 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
   const estimatedProfit = cashFlow.estimatedNetProfit;
   const estimatedArrivalTime = currentTime + travelHours;
   const deadlineTime = currentTime + contract.deadlineHours;
+  const realNow =
+    startedRealAtMs != null && Number.isFinite(startedRealAtMs) && startedRealAtMs > 0
+      ? startedRealAtMs
+      : Date.now();
 
   return {
     id: createDeliveryId(contract.id, currentTime, sequence),
@@ -1387,6 +1394,9 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     maintenanceCost,
     estimatedProfit,
     travelHours,
+    expectedDurationGameHours: travelHours,
+    startedRealAtMs: realNow,
+    lastProgressedRealAtMs: realNow,
     breakdownChance,
     accidentChance,
     conditionLoss,
@@ -1402,13 +1412,17 @@ export function updateDeliveryProgress(delivery: Delivery, hoursPassed: number):
     return delivery;
   }
 
-  const safeTravelHours = Math.max(delivery.travelHours, 0.1);
+  const safeTravelHours = Math.max(
+    delivery.expectedDurationGameHours ?? delivery.travelHours,
+    0.1,
+  );
   const progressDelta = hoursPassed / safeTravelHours;
   const newProgress = clamp(delivery.progress + progressDelta, 0, 1);
 
   return {
     ...delivery,
     progress: newProgress,
+    expectedDurationGameHours: delivery.expectedDurationGameHours ?? delivery.travelHours,
   };
 }
 

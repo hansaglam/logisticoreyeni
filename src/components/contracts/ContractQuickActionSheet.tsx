@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 
-import { getBottomInset } from '../../constants/layout';
+import { getBottomInset, getSafeModalMaxHeight } from '../../constants/layout';
 import type { ContractPreview } from '../../simulation/contractPreview';
 import {
   buildContractPreview,
@@ -255,7 +255,7 @@ export default function ContractQuickActionSheet({
 
   const routeLine = `${getCityName(contract.originCityId)} → ${getCityName(contract.destinationCityId)}`;
   const subtitleLine = `${getProductName(contract.productId)} · ${cargoWeight.toFixed(1)} t · ${formatTimeLeft(contract.deadlineHours)}`;
-  const sheetMaxHeight = Math.min(windowHeight * 0.85, 700);
+  const sheetMaxHeight = Math.min(getSafeModalMaxHeight(windowHeight, insets, 0.88), 700);
   const bottomInset = getBottomInset(insets);
 
   const canStartBase =

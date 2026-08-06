@@ -1,12 +1,12 @@
 import React, { useMemo } from 'react';
 import {
-  Dimensions,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -16,6 +16,7 @@ import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
 import { getMissionDisplayStatus } from '../../utils/missionProgress';
+import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import GameIcon from '../ui/GameIcon';
 
 interface QuickAccessItemDef {
@@ -73,10 +74,14 @@ export default function QuickAccessMenu({
   onQuickAccess,
 }: QuickAccessMenuProps) {
   const missionsReadyCount = useMissionsReadyBadge();
-  const maxPanelHeight = Dimensions.get('window').height * 0.55;
+  const insets = useAppSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const maxPanelHeight = Math.min(
+    windowHeight * 0.55,
+    Math.max(220, windowHeight - bottomOffset - insets.top - 16),
+  );
 
   const handleItemPress = (action: QuickAccessAction) => {
-    onClose();
     onQuickAccess(action);
   };
 

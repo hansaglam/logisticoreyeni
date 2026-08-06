@@ -1,7 +1,7 @@
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import { getBottomInset } from '../../constants/layout';
+import { getModalSheetPaddingBottom, getSafeModalMaxHeight } from '../../constants/layout';
 import type { OfflineProgressSummary } from '../../simulation/offlineProgression';
 import { formatOfflineElapsedDuration } from '../../simulation/offlineProgression';
 import { colors, formatMoney, spacing, typography } from '../../theme';
@@ -37,6 +37,9 @@ export default function OfflineProgressSummaryModal({
   onDismiss,
 }: OfflineProgressSummaryModalProps) {
   const insets = useAppSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const sheetMaxHeight = getSafeModalMaxHeight(windowHeight, insets, 0.86);
+  const sheetPaddingBottom = getModalSheetPaddingBottom(insets);
 
   if (!summary) {
     return null;
@@ -46,10 +49,10 @@ export default function OfflineProgressSummaryModal({
   const cappedNote = summary.capped ? ' (12 saat sınırı uygulandı)' : '';
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss} statusBarTranslucent>
       <Pressable style={styles.overlay} onPress={onDismiss}>
         <Pressable
-          style={[styles.sheet, { paddingBottom: getBottomInset(insets) + spacing.lg }]}
+          style={[styles.sheet, { maxHeight: sheetMaxHeight, paddingBottom: sheetPaddingBottom }]}
           onPress={() => {}}
         >
           <View style={styles.header}>
@@ -65,7 +68,12 @@ export default function OfflineProgressSummaryModal({
             </View>
           </View>
 
-          <View style={styles.body}>
+          <ScrollView
+            style={styles.bodyScroll}
+            contentContainerStyle={styles.body}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
             <SummaryRow label="Tamamlanan teslimatlar" value={String(summary.completedDeliveries)} />
             {summary.lateDeliveries > 0 ? (
               <SummaryRow
@@ -111,9 +119,9 @@ export default function OfflineProgressSummaryModal({
                 Geciken teslimatlarda mevcut ceza ve itibar kuralları uygulandı.
               </Text>
             ) : null}
-          </View>
+          </ScrollView>
 
-          <ActionButton label="Tamam" onPress={onDismiss} variant="primary" />
+          <ActionButton label="Tamam" onPress={onDismiss} variant="primary" fullWidth />
         </Pressable>
       </Pressable>
     </Modal>
@@ -151,6 +159,11 @@ const styles = StyleSheet.create({
   },
   headerText: {
     flex: 1,
+    minWidth: 0,
+  },
+  bodyScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
   },
   title: {
     ...typography.cardTitle,
@@ -178,6 +191,8 @@ const styles = StyleSheet.create({
   rowValue: {
     ...typography.bodySmall,
     fontWeight: '800',
+    flexShrink: 0,
+    textAlign: 'right',
   },
   noteBlock: {
     marginTop: spacing.xs,

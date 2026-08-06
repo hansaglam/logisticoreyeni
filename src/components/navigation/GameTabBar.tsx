@@ -1,5 +1,6 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -7,14 +8,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { TAB_BAR_CHROME_BOTTOM } from '../../constants/layout';
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import { getContractAvailability } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
 import { TutorialTarget } from '../../tutorial/TutorialTarget';
 import type { TutorialTargetId } from '../../tutorial/types';
-import { isSafeAreaContextAvailable } from '../../utils/safeArea';
 import { countActiveMarketAlerts } from '../../utils/marketAlerts';
 import GameIcon from '../ui/GameIcon';
 import type { TabDefinition, TabKey } from '../../navigation/tabTypes';
@@ -39,15 +39,10 @@ const TAB_INACTIVE_ICON = '#8493AA';
 const TAB_INACTIVE_LABEL = '#8694AA';
 
 const TAB_BAR_PADDING_TOP = 8;
-const TAB_BAR_PADDING_BOTTOM_MIN = 6;
 const TAB_BAR_ROW_HEIGHT = 58;
 const CENTER_BUTTON_SIZE = 58;
 const CENTER_BUTTON_RING_SIZE = 61;
 const CENTER_BUTTON_LIFT = 9;
-
-function getGameTabBarHeight(bottomInset: number): number {
-  return TAB_BAR_PADDING_TOP + TAB_BAR_ROW_HEIGHT + Math.max(bottomInset, TAB_BAR_PADDING_BOTTOM_MIN);
-}
 
 function isMainTabKey(tab: TabKey): boolean {
   return (MAIN_TAB_KEYS as readonly TabKey[]).includes(tab);
@@ -162,31 +157,24 @@ const SideTabButton = React.memo(function SideTabButton({ tab, isActive, badgeCo
   );
 });
 
-interface GameTabBarContentProps extends GameTabBarProps {
-  bottomInset: number;
-  tabBarHeight: number;
-  anchored?: boolean;
-}
-
 function GameTabBarContent({
   tabs,
   activeTab,
   onTabPress,
   onQuickAccess,
-  bottomInset,
-  tabBarHeight,
-  anchored = true,
-}: GameTabBarContentProps) {
+}: GameTabBarProps) {
+  const { safeBottom, totalBarHeight, tabBarBottom } = useTabBarLayout();
   const [quickAccessOpen, setQuickAccessOpen] = useState(false);
+  const managementNavLockRef = useRef(false);
   const badges = useTabBadges();
 
   const tabMap = useMemo(() => new Map(tabs.map((tab) => [tab.key, tab])), [tabs]);
   const leftTabs = LEFT_TAB_KEYS.map((key) => tabMap.get(key)).filter(Boolean) as TabDefinition[];
   const rightTabs = RIGHT_TAB_KEYS.map((key) => tabMap.get(key)).filter(Boolean) as TabDefinition[];
 
-  const quickAccessPanelOffset = tabBarHeight + CENTER_BUTTON_LIFT + 8;
+  const quickAccessPanelOffset = totalBarHeight + CENTER_BUTTON_LIFT + 8;
   const highlightedTab = isMainTabKey(activeTab) ? activeTab : null;
-  const bottomPadding = Math.max(bottomInset, TAB_BAR_PADDING_BOTTOM_MIN);
+  const bottomPadding = Math.max(safeBottom, TAB_BAR_CHROME_BOTTOM);
 
   const handleTabPress = useCallback(
     (tab: TabKey) => {
@@ -206,8 +194,18 @@ function GameTabBarContent({
 
   const handleQuickAccessAction = useCallback(
     (action: QuickAccessAction) => {
+      if (managementNavLockRef.current) {
+        return;
+      }
+      managementNavLockRef.current = true;
       setQuickAccessOpen(false);
-      onQuickAccess(action);
+      InteractionManager.runAfterInteractions(() => {
+        try {
+          onQuickAccess(action);
+        } finally {
+          managementNavLockRef.current = false;
+        }
+      });
     },
     [onQuickAccess],
   );
@@ -217,9 +215,10 @@ function GameTabBarContent({
       <View
         style={[
           styles.tabBar,
-          anchored && styles.tabBarAnchored,
+          styles.tabBarAnchored,
           {
-            minHeight: tabBarHeight,
+            bottom: tabBarBottom,
+            minHeight: totalBarHeight,
             paddingBottom: bottomPadding,
           },
         ]}
@@ -278,63 +277,11 @@ function GameTabBarContent({
   );
 }
 
-function NativeGameTabBar(props: GameTabBarProps) {
-  const tabBarHeight = getGameTabBarHeight(Platform.OS === 'android' ? 0 : TAB_BAR_PADDING_BOTTOM_MIN);
-
-  if (Platform.OS === 'android') {
-    return (
-      <View style={styles.safeArea}>
-        <GameTabBarContent
-          {...props}
-          bottomInset={0}
-          tabBarHeight={tabBarHeight}
-          anchored={false}
-        />
-      </View>
-    );
-  }
-
-  return (
-    <SafeAreaView edges={['bottom']} style={styles.safeArea}>
-      <GameTabBarContent
-        {...props}
-        bottomInset={0}
-        tabBarHeight={tabBarHeight}
-        anchored={false}
-      />
-    </SafeAreaView>
-  );
-}
-
-function FallbackGameTabBar(props: GameTabBarProps) {
-  const { bottomInset } = useTabBarLayout();
-  const tabBottomInset = Platform.OS === 'android' ? 0 : bottomInset;
-  const tabBarHeight = getGameTabBarHeight(tabBottomInset);
-
-  return (
-    <GameTabBarContent
-      {...props}
-      bottomInset={tabBottomInset}
-      tabBarHeight={tabBarHeight}
-      anchored
-    />
-  );
-}
-
 export default function GameTabBar(props: GameTabBarProps) {
-  if (isSafeAreaContextAvailable()) {
-    return <NativeGameTabBar {...props} />;
-  }
-  return <FallbackGameTabBar {...props} />;
+  return <GameTabBarContent {...props} />;
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
   tabBar: {
     backgroundColor: TAB_BAR_BG,
     borderTopLeftRadius: 20,

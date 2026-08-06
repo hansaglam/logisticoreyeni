@@ -139,6 +139,32 @@ export function calculateTradeBuyCost(unitPrice: number, quantity: number): numb
   return base + fee;
 }
 
+/** Satın Al popup — nakit / maliyet / kalan tek kaynak. */
+export interface TradeBuyCashPreview {
+  currentCash: number;
+  totalCost: number;
+  remainingCash: number;
+  canAfford: boolean;
+}
+
+export function getTradeBuyCashPreview(input: {
+  currentCash: number;
+  unitPrice: number;
+  quantity: number;
+}): TradeBuyCashPreview {
+  const currentCash = Number.isFinite(input.currentCash) ? input.currentCash : 0;
+  const unitPrice = Math.max(0, Number.isFinite(input.unitPrice) ? input.unitPrice : 0);
+  const quantity = Math.max(0, Number.isFinite(input.quantity) ? input.quantity : 0);
+  const totalCost = calculateTradeBuyCost(unitPrice, quantity);
+  const remainingCash = currentCash - totalCost;
+  return {
+    currentCash,
+    totalCost,
+    remainingCash,
+    canAfford: remainingCash >= 0,
+  };
+}
+
 export function calculateTradeSellRevenue(
   unitPrice: number,
   quantity: number,

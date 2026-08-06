@@ -34,8 +34,10 @@ export function getAccountLinkConflictTitle(provider: 'google' | 'apple'): strin
 }
 
 export function getAccountLinkConflictMessage(provider: 'google' | 'apple'): string {
-  const providerLabel = provider === 'google' ? 'Google' : 'Apple';
-  return `Seçtiğin ${providerLabel} hesabı zaten başka bir oyun kaydına bağlı. Mevcut misafir kaydınla bu hesabı birleştiremiyoruz.`;
+  if (provider === 'apple') {
+    return 'Bu Apple hesabı daha önce başka bir oyun hesabına bağlanmış.';
+  }
+  return 'Seçtiğin Google hesabı zaten başka bir oyun kaydına bağlı. Mevcut misafir kaydınla bu hesabı birleştiremiyoruz.';
 }
 
 export function getAccountLinkConflictFooter(provider: 'google' | 'apple'): string {

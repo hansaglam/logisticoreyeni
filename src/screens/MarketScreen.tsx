@@ -6,6 +6,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  PixelRatio,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,11 +30,10 @@ import {
   MARKET_CARD_BORDER,
   MARKET_HEADER_HEIGHT,
   MARKET_METRIC_HEIGHT,
-  MARKET_PRODUCT_CARD_HEIGHT,
-  MARKET_PRODUCT_CARD_HEIGHT_NARROW,
+  MARKET_PRODUCT_CARD_MIN_HEIGHT,
+  MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW,
   MARKET_REFRESH_BG,
   MARKET_REFRESH_BORDER,
-  MARKET_SCROLL_BOTTOM_EXTRA,
   MARKET_SECTION_GAP,
   MARKET_SECTION_GAP_TIGHT,
   MARKET_SEGMENT_BG,
@@ -519,6 +520,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   canSell,
   buyButtonLabel,
   buyButtonDisabled,
+  buyButtonDetailLabel,
   showSellButton,
   sellButtonLabel,
   sellButtonDisabled,
@@ -543,6 +545,7 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
   canSell: boolean;
   buyButtonLabel: string;
   buyButtonDisabled: boolean;
+  buyButtonDetailLabel?: string;
   showSellButton: boolean;
   sellButtonLabel: string;
   sellButtonDisabled: boolean;
@@ -600,17 +603,56 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
       : 'Depoda yok';
 
   const cardBody = (
-    <View style={[styles.productCardInner, { height: cardHeight }]}>
-      <View style={[styles.productLeftCol, { width: leftColWidth }]}>
+    <View
+      style={[styles.productCardInner, { minHeight: cardHeight }]}
+      onLayout={(event) => {
+        if (!__DEV__) return;
+        const { width: cardWidth } = event.nativeEvent.layout;
+        // eslint-disable-next-line no-console
+        console.log('[market-card-layout]', {
+          platform: Platform.OS,
+          productId: market.productId,
+          cardWidth,
+          infoColumnWidth: leftColWidth,
+          contentColumnWidth: Math.max(0, cardWidth - leftColWidth - actionColWidth - 12),
+          actionColumnWidth: actionColWidth,
+          titleWidth: Math.max(0, leftColWidth - (narrowScreen ? 28 : 32) - 5),
+          actionLabelWidth: Math.max(0, actionColWidth - 12),
+          fontScale: PixelRatio.getFontScale(),
+        });
+      }}
+    >
+      <View
+        style={[
+          styles.productLeftCol,
+          { flexBasis: leftColWidth, maxWidth: leftColWidth, width: leftColWidth },
+        ]}
+      >
         <View style={styles.productTitleRow}>
-          <View style={[styles.productIconBox, { borderColor: `${accentColor}44` }]}>
-            <ProductIcon productId={market.productId} size={narrowScreen ? 14 : 15} color={accentColor} />
+          <View
+            style={[
+              styles.productIconBox,
+              narrowScreen && styles.productIconBoxNarrow,
+              { borderColor: `${accentColor}44` },
+            ]}
+          >
+            <ProductIcon
+              productId={market.productId}
+              size={narrowScreen ? 13 : 14}
+              color={accentColor}
+            />
           </View>
-          <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">
+          <Text
+            style={styles.productName}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.86}
+            ellipsizeMode="tail"
+          >
             {getProductName(market.productId)}
           </Text>
         </View>
-        <Text style={styles.productPrice} numberOfLines={1}>
+        <Text style={styles.productPrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
           {formatMoney(shownPrice)}
           <Text style={styles.productPriceUnit}> / ton</Text>
         </Text>
@@ -636,8 +678,9 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
           priceHistory={market.priceHistory}
           currentPrice={market.currentPrice}
           changePercent={trend.changePercent}
+          width={chartMinWidth}
         />
-        <Text style={styles.productHint} numberOfLines={2}>
+        <Text style={styles.productHint} numberOfLines={3}>
           {hint}
         </Text>
         <Text style={styles.stockMeta} numberOfLines={1}>
@@ -648,14 +691,25 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
         </Text>
       </View>
 
-      <View style={[styles.productActionsCol, { width: actionColWidth }]}>
+      <View
+        style={[
+          styles.productActionsCol,
+          { width: actionColWidth, minWidth: actionColWidth, maxWidth: actionColWidth },
+        ]}
+      >
         <Pressable
           style={[styles.productBuyBtn, buyButtonDisabled && styles.productBtnDisabled]}
           onPress={() => onBuyPress(market.productId)}
           disabled={buyButtonDisabled}
+          accessibilityLabel={buyButtonDetailLabel ?? buyButtonLabel}
         >
           <GameIcon name="cash" size={narrowScreen ? 12 : 13} color="#FFFFFF" />
-          <Text style={styles.productBuyBtnText} numberOfLines={1}>
+          <Text
+            style={styles.productBuyBtnText}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+          >
             {buyButtonLabel}
           </Text>
         </Pressable>
@@ -666,7 +720,12 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
             disabled={sellButtonDisabled}
           >
             <GameIcon name="market" size={12} color={colors.textSecondary} />
-            <Text style={styles.productSellBtnText} numberOfLines={1}>
+            <Text
+              style={styles.productSellBtnText}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}
+            >
               {sellButtonLabel}
             </Text>
           </Pressable>
@@ -839,13 +898,12 @@ interface MarketScreenProps {
 export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const { alert: showAlert } = useAppDialog();
   const { width: screenWidth } = useWindowDimensions();
-  const { tabBarHeight } = useTabBarLayout();
-  const marketScrollBottomPadding = tabBarHeight + MARKET_SCROLL_BOTTOM_EXTRA;
+  const { contentBottomPadding } = useTabBarLayout();
   const productLayout = useMemo(() => getMarketProductColumnWidths(screenWidth), [screenWidth]);
   const narrowScreen = screenWidth < 360;
   const productCardHeight = narrowScreen
-    ? MARKET_PRODUCT_CARD_HEIGHT_NARROW
-    : MARKET_PRODUCT_CARD_HEIGHT;
+    ? MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW
+    : MARKET_PRODUCT_CARD_MIN_HEIGHT;
   const player = useGameStore((state) => state.player);
   const playerMoney = useGameStore((state) => state.player?.money ?? 0);
   const playerWarehouses = useGameStore((state) => state.player?.warehouses ?? []);
@@ -1094,6 +1152,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       canSell: boolean;
       buyButtonLabel: string;
       buyButtonDisabled: boolean;
+      buyButtonDetailLabel: string;
       showSellButton: boolean;
       sellButtonLabel: string;
       sellButtonDisabled: boolean;
@@ -1166,6 +1225,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         canSell: sellButton.canSell,
         buyButtonLabel: buyButton.label,
         buyButtonDisabled: buyButton.disabled,
+        buyButtonDetailLabel: buyButton.detailLabel,
         showSellButton: sellButton.showSellButton,
         sellButtonLabel: sellButton.label,
         sellButtonDisabled: sellButton.disabled,
@@ -1460,7 +1520,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   }
 
   return (
-    <AppScreen scroll scrollBottomPadding={marketScrollBottomPadding}>
+    <AppScreen scroll scrollBottomPadding={contentBottomPadding}>
       <View style={styles.screenStack}>
         <View style={styles.marketHeader}>
           <View style={styles.marketHeaderText}>
@@ -1568,6 +1628,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                           canSell={cardData.canSell}
                           buyButtonLabel={cardData.buyButtonLabel}
                           buyButtonDisabled={cardData.buyButtonDisabled}
+                          buyButtonDetailLabel={cardData.buyButtonDetailLabel}
                           showSellButton={cardData.showSellButton}
                           sellButtonLabel={cardData.sellButtonLabel}
                           sellButtonDisabled={cardData.sellButtonDisabled}
@@ -2009,7 +2070,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   productLeftCol: {
-    flexShrink: 0,
+    minWidth: 0,
+    flexGrow: 0,
+    flexShrink: 1,
     justifyContent: 'space-between',
     gap: 1,
   },
@@ -2021,9 +2084,10 @@ const styles = StyleSheet.create({
   },
   productChartCol: {
     flex: 1,
-    minWidth: 68,
+    minWidth: 0,
+    flexShrink: 1,
     justifyContent: 'center',
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
   },
   productActionsCol: {
     flexShrink: 0,
@@ -2033,25 +2097,29 @@ const styles = StyleSheet.create({
   productBadgeRow: {
     marginTop: 2,
     alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   stockMeta: {
     fontSize: 9,
-    lineHeight: 11,
+    lineHeight: 12,
     color: colors.textMuted,
     marginTop: 1,
   },
   productBuyBtn: {
-    height: 40,
+    minHeight: 44,
+    height: 44,
     borderRadius: 11,
     backgroundColor: colors.accentBlue,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
+    gap: 3,
+    paddingHorizontal: 8,
+    overflow: 'hidden',
   },
   productSellBtn: {
-    height: 34,
+    minHeight: 36,
+    height: 36,
     borderRadius: 11,
     backgroundColor: 'rgba(12,24,48,0.65)',
     borderWidth: 1,
@@ -2059,10 +2127,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
     paddingHorizontal: 5,
+    overflow: 'hidden',
   },
   productAlarmBtn: {
+    minHeight: 36,
     height: 36,
     borderRadius: 11,
     backgroundColor: 'transparent',
@@ -2071,24 +2141,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
     paddingHorizontal: 5,
+    overflow: 'hidden',
   },
   productBtnDisabled: {
     opacity: 0.45,
   },
   productBuyBtnText: {
-    fontSize: 10.5,
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '800',
     color: '#FFFFFF',
   },
   productSellBtnText: {
-    fontSize: 9.5,
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: 10,
+    lineHeight: 13,
     fontWeight: '700',
     color: colors.textSecondary,
   },
   productAlarmBtnText: {
+    flexShrink: 1,
+    minWidth: 0,
     fontSize: 10,
+    lineHeight: 13,
     fontWeight: '700',
     color: colors.textSecondary,
   },
@@ -2109,14 +2189,19 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   productIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
     backgroundColor: 'rgba(35,136,255,0.10)',
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+  },
+  productIconBoxNarrow: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
   },
   cardMain: {
     flex: 1,
@@ -2125,6 +2210,7 @@ const styles = StyleSheet.create({
   productName: {
     flex: 1,
     fontSize: 13.5,
+    lineHeight: 17,
     fontWeight: '800',
     color: colors.textPrimary,
     minWidth: 0,
@@ -2152,8 +2238,8 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   productHint: {
-    fontSize: 8.5,
-    lineHeight: 10.5,
+    fontSize: 9,
+    lineHeight: 12,
     color: colors.textMuted,
     marginTop: 3,
   },

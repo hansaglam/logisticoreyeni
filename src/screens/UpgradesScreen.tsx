@@ -402,7 +402,7 @@ export default function UpgradesScreen({
   onBack,
   backLabel = '‹ Geri',
 }: UpgradesScreenProps) {
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { contentBottomPadding } = useTabBarLayout();
   const player = useGameStore((state) => state.player);
   const currentTime = useGameStore((state) => state.currentTime);
   const upgradeTruck = useGameStore((state) => state.upgradeTruck);
@@ -459,10 +459,8 @@ export default function UpgradesScreen({
     [addNotification, currentTime, selectedTruck, upgradeTruck],
   );
 
-  const bottomPadding = scrollBottomPadding + spacing.xl;
-
   return (
-    <AppScreen scroll scrollBottomPadding={bottomPadding}>
+    <AppScreen scroll scrollBottomPadding={contentBottomPadding}>
       <View style={styles.topNav}>
         <Pressable style={styles.backButton} onPress={onBack}>
           <Text style={styles.backButtonText}>{backLabel}</Text>
@@ -555,7 +553,9 @@ const styles = StyleSheet.create({
   },
   backButton: {
     alignSelf: 'flex-start',
-    paddingVertical: 4,
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingVertical: 8,
   },
   backButtonText: {
     color: colors.accentAmber,

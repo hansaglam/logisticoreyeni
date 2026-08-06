@@ -13,7 +13,9 @@ import type { Delivery, Driver, Route, Truck, TruckTransfer } from '../types/gam
 import {
   applyFuelConsumptionForProgress,
   getFuelPercent,
+  getTruckFuelSnapshot,
   normalizeTruckFuel,
+  toFuelNumber,
 } from './truckFuel';
 
 export interface TruckTrackingMetrics {
@@ -44,15 +46,14 @@ function resolveFuelState(
   progress: number,
   distanceKm?: number,
 ): { currentFuelL: number; fuelTankCapacityL: number; fuelPercent: number } {
-  const normalized = normalizeTruckFuel(truck);
-  const fuelTankCapacityL = normalized.fuelTankCapacityL ?? 120;
+  const snapshot = getTruckFuelSnapshot(truck);
+  const fuelTankCapacityL = snapshot.capacityLiters;
 
-  if (fuelLitersAtStart != null && fuelLitersTotal != null) {
-    const currentFuelL = applyFuelConsumptionForProgress(
-      fuelLitersAtStart,
-      fuelLitersTotal,
-      progress,
-    );
+  const startFuel = toFuelNumber(fuelLitersAtStart);
+  const totalFuel = toFuelNumber(fuelLitersTotal);
+
+  if (startFuel != null && totalFuel != null) {
+    const currentFuelL = applyFuelConsumptionForProgress(startFuel, totalFuel, progress);
     return {
       currentFuelL,
       fuelTankCapacityL,
@@ -61,12 +62,11 @@ function resolveFuelState(
   }
 
   // Eski job kayıtları: mesafeden tahmini tüketim (yalnızca UI)
-  if (distanceKm != null && distanceKm > 0 && progress > 0) {
-    const estimatedBurn = Math.round(
-      distanceKm * (truck.fuelConsumptionPerKm ?? 0.32) * progress,
-    );
-    const startFuel = normalized.currentFuelL ?? fuelTankCapacityL;
-    const currentFuelL = Math.max(0, startFuel - estimatedBurn);
+  const distance = toFuelNumber(distanceKm);
+  if (distance != null && distance > 0 && progress > 0) {
+    const consumption = toFuelNumber(truck.fuelConsumptionPerKm) ?? 0.32;
+    const estimatedBurn = Math.round(distance * consumption * progress);
+    const currentFuelL = Math.max(0, snapshot.currentLiters - estimatedBurn);
     return {
       currentFuelL,
       fuelTankCapacityL,
@@ -74,11 +74,10 @@ function resolveFuelState(
     };
   }
 
-  const currentFuelL = normalized.currentFuelL ?? fuelTankCapacityL;
   return {
-    currentFuelL,
+    currentFuelL: snapshot.currentLiters,
     fuelTankCapacityL,
-    fuelPercent: getFuelPercent(currentFuelL, fuelTankCapacityL),
+    fuelPercent: snapshot.percentage,
   };
 }
 
@@ -175,14 +174,13 @@ export function getTruckTrackingMetrics(
     };
   }
 
-  const normalized = normalizeTruckFuel(truck);
-  const fuelTankCapacityL = normalized.fuelTankCapacityL ?? 120;
-  const currentFuelL = normalized.currentFuelL ?? fuelTankCapacityL;
+  // Boşta / bakımdaki kamyon — canonical snapshot (Fleet ile aynı)
+  const snapshot = getTruckFuelSnapshot(normalizeTruckFuel(truck));
 
   return {
-    fuelPercent: getFuelPercent(currentFuelL, fuelTankCapacityL),
-    currentFuelL,
-    fuelTankCapacityL,
+    fuelPercent: snapshot.percentage,
+    currentFuelL: snapshot.currentLiters,
+    fuelTankCapacityL: snapshot.capacityLiters,
     remainingDistanceKm: 0,
     currentSpeedKmh: 0,
     isMoving: false,

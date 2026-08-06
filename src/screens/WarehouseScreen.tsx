@@ -49,7 +49,7 @@ const GUIDE_MESSAGE =
 
 export default function WarehouseScreen() {
   const { width } = useWindowDimensions();
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { contentBottomPadding } = useTabBarLayout();
   const { alert: showAlert, showDialog } = useAppDialog();
 
   const player = useGameStore((state) => state.player);
@@ -144,27 +144,56 @@ export default function WarehouseScreen() {
   };
 
   const handleUpgrade = (warehouseId: string) => {
+    const warehouse = findWarehouse(warehouseId);
     const card = viewModel?.warehouses.find((item) => item.warehouse.id === warehouseId);
-    if (!card) return;
-
-    const preview = card.upgradePreview;
-    if (preview.nextLevel == null || preview.upgradePrice == null) {
-      showAlert('Yükseltme', card.upgradeHelperText ?? 'Bu depo daha fazla yükseltilemez.');
+    if (!warehouse || !card) {
+      showAlert('Depo bulunamadı', 'Seçilen depo artık mevcut değil.');
       return;
     }
 
+    const preview = card.upgradePreview;
+    const money = player?.money ?? 0;
+
+    if (preview.isMaxLevel || preview.nextLevel == null || preview.upgradeCost == null) {
+      showAlert('Yükseltme', card.upgradeHelperText ?? 'Bu depo maksimum seviyede.');
+      return;
+    }
+
+    if (preview.requiredPlayerLevel != null) {
+      const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+      if (playerLevel < preview.requiredPlayerLevel) {
+        showAlert(
+          'Seviye yetersiz',
+          `Bu yükseltme için Level ${preview.requiredPlayerLevel} gerekli.`,
+        );
+        return;
+      }
+    }
+
+    const afterMoney = money - preview.upgradeCost;
     const body =
       `Seviye: ${preview.currentLevel} → ${preview.nextLevel}\n` +
       `Kapasite: ${Math.round(preview.currentCapacity)} → ${Math.round(preview.nextCapacity ?? 0)} t\n` +
       `Günlük gider: ${formatMoney(preview.currentDailyCost)} → ${formatMoney(preview.nextDailyCost ?? 0)}\n` +
-      `Yükseltme maliyeti: ${formatMoney(preview.upgradePrice)}\n\n` +
-      `Mevcut stok korunur.`;
+      `Yükseltme maliyeti: ${formatMoney(preview.upgradeCost)}\n` +
+      `Mevcut nakit: ${formatMoney(money)}\n` +
+      `Yükseltme sonrası: ${formatMoney(afterMoney)}\n\n` +
+      (preview.canAfford
+        ? 'Mevcut stok korunur.'
+        : `Bakiye yetersiz. ${formatMoney(preview.missingMoney)} daha gerekiyor.`);
 
-    showAlert('Depo Yükselt', body, [
+    showAlert('Depo Yükseltme', body, [
       { text: 'İptal', style: 'cancel' },
       {
-        text: 'Yükselt',
+        text: preview.canAfford ? 'Yükselt' : 'Bakiye Yetersiz',
         onPress: () => {
+          if (!preview.canAfford) {
+            showAlert(
+              'Bakiye yetersiz',
+              `Bu yükseltme için ${formatMoney(preview.missingMoney)} daha gerekiyor.`,
+            );
+            return;
+          }
           const result = upgradeWarehouse(warehouseId);
           if (!result.success) {
             showAlert('Depo yükseltilemedi', result.message ?? 'İşlem tamamlanamadı.');
@@ -315,7 +344,7 @@ export default function WarehouseScreen() {
       scroll
       scrollRef={scrollRef}
       embedded
-      scrollBottomPadding={scrollBottomPadding}
+      scrollBottomPadding={contentBottomPadding}
     >
       <View
         style={styles.header}
@@ -327,8 +356,7 @@ export default function WarehouseScreen() {
         }}
       >
         <View style={styles.headerText}>
-          <Text style={styles.pageTitle}>Depolar</Text>
-          <Text style={styles.pageSubtitle} numberOfLines={1}>
+          <Text style={styles.pageSubtitle} numberOfLines={2}>
             Stoklarını ve şehirler arası ürün akışını yönet
           </Text>
         </View>

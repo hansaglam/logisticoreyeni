@@ -41,8 +41,10 @@ export function calculatePeriodicCostPeriods(params: {
   periodStarts: number[];
   capped: boolean;
 } {
-  const maxPeriods =
-    params.maxOfflineCostPeriods ?? operatingCostBalance.maxOfflineChargeDays ?? 3;
+  const maxPeriods = Math.max(
+    0,
+    params.maxOfflineCostPeriods ?? operatingCostBalance.maxOfflineChargeDays ?? 0,
+  );
   const now = Math.max(0, params.economyNowMs);
   const last =
     params.lastProcessedEconomyAt != null &&
@@ -52,6 +54,11 @@ export function calculatePeriodicCostPeriods(params: {
       : now;
 
   if (now <= last) {
+    return { periodsElapsed: 0, periodStarts: [], capped: false };
+  }
+
+  // Offline sabit gider kapalı (maxPeriods=0). Not: Array#slice(-0) tüm diziye eşittir.
+  if (maxPeriods <= 0) {
     return { periodsElapsed: 0, periodStarts: [], capped: false };
   }
 

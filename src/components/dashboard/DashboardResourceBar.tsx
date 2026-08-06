@@ -152,8 +152,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.amber,
   },
   pauseBtn: {
-    width: 35,
-    height: 35,
+    width: 44,
+    height: 44,
     borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',

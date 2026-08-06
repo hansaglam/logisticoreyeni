@@ -2,13 +2,20 @@
  * Piyasa / depo ticaret UI — kâr/zarar metinleri ve buton validasyonu.
  */
 
-import { tradingBalance } from '../config/balance';
 import {
   buildTradeProfitBreakdown,
-  calculateTradeBuyCost,
   type TradeProfitBreakdown,
 } from '../simulation/trading';
 import { colors, formatMoney } from '../theme';
+
+export {
+  resolveMarketBuyState,
+  resolveMarketSellState,
+  type MarketBuyState,
+  type MarketBuyStateInput,
+  type MarketSellState,
+  type MarketSellStateInput,
+} from './marketTradeState';
 
 export const TRADE_FEE_NEGATIVE_PROFIT_NOTE =
   'Komisyon nedeniyle anlık zarar normal. Fiyat yükselirse kâra geçebilir.';
@@ -63,86 +70,5 @@ export function resolveInventoryTradeProfit(
   return {
     breakdown,
     display: formatTradeProfitDisplay(breakdown.netProfit),
-  };
-}
-
-export interface MarketBuyStateInput {
-  hasWarehouse: boolean;
-  marketStock: number;
-  freeCapacity: number;
-  playerMoney: number;
-  unitPrice: number;
-  canStoreProduct?: boolean;
-  minTradeQuantity?: number;
-}
-
-export interface MarketBuyState {
-  canBuy: boolean;
-  label: string;
-  disabled: boolean;
-}
-
-export function resolveMarketBuyState(input: MarketBuyStateInput): MarketBuyState {
-  const minQty = input.minTradeQuantity ?? tradingBalance.minTradeQuantity;
-  const minCost = calculateTradeBuyCost(Math.max(input.unitPrice, 0), minQty);
-
-  if (!input.hasWarehouse) {
-    return { canBuy: false, label: 'Depo gerekli', disabled: true };
-  }
-  if (input.canStoreProduct === false) {
-    return { canBuy: false, label: 'Depo uygun değil', disabled: true };
-  }
-  if (input.marketStock < minQty) {
-    return { canBuy: false, label: 'Stok yetersiz', disabled: true };
-  }
-  if (input.freeCapacity < minQty) {
-    return { canBuy: false, label: 'Depoda yer yok', disabled: true };
-  }
-  if (input.playerMoney < minCost) {
-    return { canBuy: false, label: 'Nakit yetersiz', disabled: true };
-  }
-
-  return { canBuy: true, label: 'Satın Al', disabled: false };
-}
-
-export interface MarketSellStateInput {
-  hasWarehouse: boolean;
-  inventoryQuantity: number;
-  minTradeQuantity?: number;
-}
-
-export interface MarketSellState {
-  canSell: boolean;
-  showSellButton: boolean;
-  label: string;
-  disabled: boolean;
-}
-
-export function resolveMarketSellState(input: MarketSellStateInput): MarketSellState {
-  const minQty = input.minTradeQuantity ?? tradingBalance.minTradeQuantity;
-
-  if (!input.hasWarehouse || input.inventoryQuantity <= 0) {
-    return {
-      canSell: false,
-      showSellButton: false,
-      label: 'Sat',
-      disabled: true,
-    };
-  }
-
-  if (input.inventoryQuantity < minQty) {
-    return {
-      canSell: false,
-      showSellButton: true,
-      label: `Min. ${minQty} ton`,
-      disabled: true,
-    };
-  }
-
-  return {
-    canSell: true,
-    showSellButton: true,
-    label: 'Sat',
-    disabled: false,
   };
 }

@@ -7,7 +7,6 @@ import {
   getCityUnlockLevel,
   getMaxWarehousesForLevel,
   getNextLevelForMoreWarehouses,
-  getWarehouseUpgradeRequiredLevel,
   isWarehouseCityUnlocked,
 } from '../config/levelConfig';
 import { getCityName, getProductName } from './entityLookup';
@@ -232,11 +231,10 @@ export function buildWarehouseScreenViewModel(params: {
       metrics.occupancyPercent,
       metrics.productTypeCount > 0,
     );
-    const upgradePreview = getWarehouseUpgradePreview(warehouse, city);
-    const canAffordUpgrade =
-      upgradePreview.upgradePrice != null && playerMoney >= upgradePreview.upgradePrice;
-    const requiredLevel = getWarehouseUpgradeRequiredLevel(warehouse.upgradeTier ?? 1);
-    const isMaxed = upgradePreview.nextLevel == null;
+    const upgradePreview = getWarehouseUpgradePreview(warehouse, city, playerMoney);
+    const canAffordUpgrade = upgradePreview.canAfford;
+    const requiredLevel = upgradePreview.requiredPlayerLevel;
+    const isMaxed = upgradePreview.isMaxLevel || upgradePreview.nextLevel == null;
     const levelLocked = requiredLevel != null && playerLevel < requiredLevel;
     const upgradeDisabled = isMaxed || levelLocked || !canAffordUpgrade;
 

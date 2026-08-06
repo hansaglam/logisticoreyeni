@@ -237,7 +237,7 @@ interface MissionsScreenProps {
 }
 
 export default function MissionsScreen({ onBack }: MissionsScreenProps) {
-  const { scrollBottomPadding } = useTabBarLayout();
+  const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const [activeTab, setActiveTab] = useState<MissionsTab>('missions');
 
   const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
@@ -348,7 +348,10 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   return (
     <ScrollView
       style={styles.root}
-      contentContainerStyle={[styles.content, { paddingBottom: scrollBottomPadding }]}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: screenTopPadding, paddingBottom: contentBottomPadding },
+      ]}
       showsVerticalScrollIndicator={false}
     >
       <ScreenHeader
@@ -500,12 +503,15 @@ const styles = StyleSheet.create({
   },
   tabButton: {
     flex: 1,
+    minHeight: 44,
     paddingVertical: spacing.sm,
+    paddingHorizontal: 4,
     borderRadius: 10,
     backgroundColor: colors.cardSoft,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   tabButtonActive: {
     backgroundColor: colors.accentBlueSoft,
@@ -515,6 +521,7 @@ const styles = StyleSheet.create({
     ...typography.caption,
     fontWeight: '700',
     color: colors.textMuted,
+    textAlign: 'center',
   },
   tabButtonTextActive: {
     color: colors.accentBlue,

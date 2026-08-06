@@ -1,20 +1,33 @@
 import { StyleSheet, type ViewStyle } from 'react-native';
 
 import { colors } from '../../theme';
+import {
+  getMarketProductColumnWidths,
+  MARKET_HORIZONTAL_PADDING as LAYOUT_HORIZONTAL_PADDING,
+  MARKET_NARROW_BREAKPOINT as LAYOUT_NARROW_BREAKPOINT,
+  MARKET_PRODUCT_CARD_MIN_HEIGHT as LAYOUT_CARD_MIN_HEIGHT,
+  MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW as LAYOUT_CARD_MIN_HEIGHT_NARROW,
+} from '../../utils/marketCardLayout';
+
+export { getMarketProductColumnWidths } from '../../utils/marketCardLayout';
 
 /** Market ekranı layout token'ları */
-export const MARKET_HORIZONTAL_PADDING = 16;
+export const MARKET_HORIZONTAL_PADDING = LAYOUT_HORIZONTAL_PADDING;
 export const MARKET_SECTION_GAP = 11;
 export const MARKET_SECTION_GAP_TIGHT = 7;
-export const MARKET_SCROLL_BOTTOM_EXTRA = 16;
-export const MARKET_NARROW_BREAKPOINT = 360;
+export const MARKET_NARROW_BREAKPOINT = LAYOUT_NARROW_BREAKPOINT;
 
 export const MARKET_HEADER_HEIGHT = 60;
 export const MARKET_METRIC_HEIGHT = 58;
 export const MARKET_WORLD_EVENT_HEIGHT = 72;
 export const MARKET_SUMMARY_STRIP_HEIGHT = 58;
-export const MARKET_PRODUCT_CARD_HEIGHT = 110;
-export const MARKET_PRODUCT_CARD_HEIGHT_NARROW = 104;
+/** Kart içeriği büyüyebilir; sabit height yerine minHeight kullan. */
+export const MARKET_PRODUCT_CARD_MIN_HEIGHT = LAYOUT_CARD_MIN_HEIGHT;
+export const MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW = LAYOUT_CARD_MIN_HEIGHT_NARROW;
+/** @deprecated Use MARKET_PRODUCT_CARD_MIN_HEIGHT */
+export const MARKET_PRODUCT_CARD_HEIGHT = MARKET_PRODUCT_CARD_MIN_HEIGHT;
+/** @deprecated Use MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW */
+export const MARKET_PRODUCT_CARD_HEIGHT_NARROW = MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW;
 
 export const MARKET_CARD_BG = '#081426';
 export const MARKET_CARD_BORDER = 'rgba(50,95,150,0.30)';
@@ -31,19 +44,6 @@ export const marketStyles = StyleSheet.create({
     gap: MARKET_SECTION_GAP_TIGHT,
   },
 });
-
-export function getMarketProductColumnWidths(screenWidth: number): {
-  leftCol: number;
-  actionCol: number;
-  chartMinWidth: number;
-} {
-  const isNarrow = screenWidth < MARKET_NARROW_BREAKPOINT;
-  return {
-    leftCol: isNarrow ? 92 : 106,
-    actionCol: isNarrow ? 80 : 88,
-    chartMinWidth: isNarrow ? 68 : 80,
-  };
-}
 
 export function getProductAccentColor(productId: string): string {
   switch (productId) {

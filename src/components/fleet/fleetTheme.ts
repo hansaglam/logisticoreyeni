@@ -5,7 +5,6 @@ import type { TrailerType } from '../../types/game';
 
 export const FLEET_HORIZONTAL_PADDING = 16;
 export const FLEET_SECTION_GAP = 10;
-export const FLEET_SCROLL_BOTTOM_EXTRA = 16;
 export const FLEET_NARROW_BREAKPOINT = 360;
 
 export const FLEET_HEADER_HEIGHT = 58;

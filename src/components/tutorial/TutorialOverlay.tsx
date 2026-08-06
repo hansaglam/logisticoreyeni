@@ -15,7 +15,7 @@ import {
   shouldShowTutorialPointer,
   type TutorialLayoutRect,
 } from '../../tutorial/types';
-import { getTabBarHeight } from '../../constants/layout';
+import { getSafeBottom, getTotalBarHeight } from '../../constants/layout';
 import { useSpotlightTutorialStore } from '../../store/spotlightTutorialStore';
 import { SpotlightMask, TutorialFingerHint } from './SpotlightMask';
 import { TutorialTooltip } from './TutorialTooltip';
@@ -220,7 +220,7 @@ export default function TutorialOverlay({ layer = 'root' }: TutorialOverlayProps
 
 function TutorialOverlayActive({ layer = 'root' }: TutorialOverlayProps) {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = getTabBarHeight(insets.bottom);
+  const tabBarHeight = getTotalBarHeight(getSafeBottom(insets));
   const [screenSize, setScreenSize] = useState({
     width: 0,
     height: 0,

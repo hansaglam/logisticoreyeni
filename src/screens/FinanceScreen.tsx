@@ -5,7 +5,7 @@
  */
 
 import React, { useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import {
   AppCard,
@@ -13,7 +13,6 @@ import {
   EmptyState,
   GameIcon,
   ProgressBar,
-  ScreenHeader,
   SectionTitle,
   SmallStatPill,
   StatusBadge,
@@ -231,11 +230,7 @@ function FinanceMetricStrip({
   dailyFixedCosts: number;
 }) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.metricStrip}
-    >
+    <View style={styles.metricStrip}>
       <View style={styles.metricPillWrap}>
         <SmallStatPill
           label="Nakit"
@@ -272,7 +267,7 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-      <View style={styles.metricPillWrap}>
+      <View style={styles.metricPillWrapWide}>
         <SmallStatPill
           label="Günlük sabit gider"
           value={formatMoney(dailyFixedCosts)}
@@ -281,7 +276,7 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-    </ScrollView>
+    </View>
   );
 }
 
@@ -605,11 +600,9 @@ export default function FinanceScreen() {
 
   return (
     <AppScreen scroll embedded>
-      <ScreenHeader
-        title="Finans"
-        subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"
-        compact
-      />
+      <Text style={styles.embeddedSubtitle}>
+        Gelirleri, giderleri ve şirket sağlığını takip et
+      </Text>
 
       <FinanceMetricStrip
         cash={cash}
@@ -916,15 +909,30 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
   },
+  embeddedSubtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    lineHeight: 16,
+    marginBottom: spacing.md,
+  },
 
   metricStrip: {
-    gap: spacing.md,
-    paddingRight: spacing.lg,
-    paddingBottom: spacing.xs,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
     marginBottom: 12,
   },
   metricPillWrap: {
-    minWidth: 108,
+    flexGrow: 1,
+    flexBasis: '47%',
+    minWidth: 148,
+    maxWidth: '100%',
+  },
+  metricPillWrapWide: {
+    flexGrow: 1,
+    flexBasis: '100%',
+    minWidth: 148,
+    maxWidth: '100%',
   },
   summaryHint: {
     ...typography.caption,

@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 
-import { getBottomInset } from '../../constants/layout';
+import { getBottomInset, getSafeModalMaxHeight } from '../../constants/layout';
 import { useGameStore } from '../../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import type { ProductId } from '../../types/game';
@@ -144,7 +144,7 @@ export default function ProductMarketDetailModal({
     return null;
   }
 
-  const sheetMaxHeight = Math.min(windowHeight * 0.8, 640);
+  const sheetMaxHeight = Math.min(getSafeModalMaxHeight(windowHeight, insets, 0.86), 640);
   const inventoryTrade =
     viewModel.warehouseQuantity > 0
       ? resolveInventoryTradeProfit(

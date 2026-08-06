@@ -5,8 +5,11 @@
  * Bu fazda cloud'dan otomatik restore yapılmaz.
  */
 
-import { getCurrentUserId, initAnonymousAuth } from '../services/authService';
+import { AppState, type AppStateStatus } from 'react-native';
+
+import { getAccountStatus, getCurrentUserId, initAnonymousAuth } from '../services/authService';
 import {
+  getCloudSaveDocumentPath,
   getCloudSaveMeta,
   saveGameToCloud,
   updateUserProfileSummary,
@@ -26,6 +29,12 @@ import {
   estimateCloudSaveDocumentBytes,
   MAX_SAVE_SIZE_BYTES,
 } from '../utils/cloudSaveSize';
+import {
+  classifyCloudSaveError,
+  createLinkFlowDiagnosticId,
+  logCloudSaveAfterLink,
+} from '../utils/accountLinkFlowLog';
+import { reconcileLocalSaveOwnershipAfterAccountLink } from '../utils/cloudSaveOwnership';
 
 export type CloudSyncReason =
   | 'app_start'
@@ -37,7 +46,12 @@ export type CloudSyncReason =
   | 'purchase'
   | 'mission_claim'
   | 'account_delete'
-  | 'account_link';
+  | 'account_link'
+  | 'account-link-apple'
+  | 'account-link-google'
+  | 'retry'
+  | 'foreground'
+  | 'network_reconnect';
 
 export type CloudSaveDisplayStatus = 'disabled' | 'pending' | 'syncing' | 'success' | 'failed';
 
@@ -56,11 +70,18 @@ export interface CloudSaveStatusState {
   uidShort: string | null;
   lastSyncAt: number | null;
   lastError: string | null;
+  lastErrorCode: string | null;
+  nextRetryAt: number | null;
   firebaseEnabled: boolean;
   restoreCandidate: CloudRestoreCandidate | null;
+  cloudProtected: boolean;
 }
 
 const MIN_SYNC_INTERVAL_MS = 30_000;
+const RETRY_BASE_MS = 2_000;
+const RETRY_MAX_MS = 60_000;
+const RETRY_MAX_ATTEMPTS = 8;
+
 const FORCE_SYNC_REASONS = new Set<CloudSyncReason>([
   'app_start',
   'manual',
@@ -69,6 +90,11 @@ const FORCE_SYNC_REASONS = new Set<CloudSyncReason>([
   'purchase',
   'account_delete',
   'account_link',
+  'account-link-apple',
+  'account-link-google',
+  'retry',
+  'foreground',
+  'network_reconnect',
 ]);
 
 const STATUS_LABELS: Record<CloudSaveDisplayStatus, string> = {
@@ -82,15 +108,23 @@ const STATUS_LABELS: Record<CloudSaveDisplayStatus, string> = {
 let lastCloudSyncAt = 0;
 let cloudSaveStatus: CloudSaveDisplayStatus = 'disabled';
 let lastCloudSyncError: string | null = null;
+let lastCloudSyncErrorCode: string | null = null;
+let nextRetryAt: number | null = null;
+let retryAttempt = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let syncInFlight: Promise<boolean> | null = null;
 let lastSaveTooLargeAt = 0;
 let lastSaveTooLargeEnvelopeBytes = 0;
 let restoreCandidate: CloudRestoreCandidate | null = null;
 let backendInitPromise: Promise<void> | null = null;
 let cloudSyncInitialized = false;
 let isAccountDeletionInProgress = false;
+let appStateSubscriptionAttached = false;
+let pendingRetryStateGetter: (() => StoreGameState) | null = null;
 
 export function beginAccountDeletion(): void {
   isAccountDeletionInProgress = true;
+  clearCloudSaveRetry();
   if (__DEV__) {
     console.log('[cloud-save] account deletion in progress — sync paused');
   }
@@ -116,10 +150,89 @@ function notifyStatusListeners(): void {
   }
 }
 
-function setCloudSaveStatus(status: CloudSaveDisplayStatus, error: string | null = null): void {
+function setCloudSaveStatus(
+  status: CloudSaveDisplayStatus,
+  error: string | null = null,
+  errorCode: string | null = null,
+): void {
   cloudSaveStatus = status;
   lastCloudSyncError = error;
+  lastCloudSyncErrorCode = errorCode;
+  if (status === 'success') {
+    nextRetryAt = null;
+    retryAttempt = 0;
+  }
   notifyStatusListeners();
+}
+
+function clearCloudSaveRetry(): void {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  nextRetryAt = null;
+}
+
+function scheduleCloudSaveRetry(getState: () => StoreGameState, diagnosticId?: string): void {
+  if (lastCloudSyncErrorCode) {
+    const classified = classifyCloudSaveError(lastCloudSyncErrorCode);
+    if (classified.permanent) {
+      nextRetryAt = null;
+      notifyStatusListeners();
+      return;
+    }
+  }
+
+  if (retryAttempt >= RETRY_MAX_ATTEMPTS) {
+    nextRetryAt = null;
+    notifyStatusListeners();
+    return;
+  }
+
+  pendingRetryStateGetter = getState;
+  const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** retryAttempt);
+  retryAttempt += 1;
+  nextRetryAt = Date.now() + delay;
+  notifyStatusListeners();
+
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+  }
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    const stateGetter = pendingRetryStateGetter;
+    if (!stateGetter) return;
+    void syncLocalSaveToCloud('retry', {
+      force: true,
+      state: stateGetter(),
+      diagnosticId,
+    });
+  }, delay);
+
+  logCloudSaveAfterLink({
+    stage: 'retry-scheduled',
+    retryScheduled: true,
+    firebaseErrorCode: lastCloudSyncErrorCode,
+    diagnosticId: diagnosticId ?? createLinkFlowDiagnosticId('cloud'),
+  });
+}
+
+function ensureAppStateRetryHook(): void {
+  if (appStateSubscriptionAttached) return;
+  appStateSubscriptionAttached = true;
+  AppState.addEventListener('change', (next: AppStateStatus) => {
+    if (next !== 'active') return;
+    if (cloudSaveStatus !== 'failed') return;
+    if (!pendingRetryStateGetter) return;
+    if (lastCloudSyncErrorCode) {
+      const classified = classifyCloudSaveError(lastCloudSyncErrorCode);
+      if (classified.permanent) return;
+    }
+    void syncLocalSaveToCloud('foreground', {
+      force: true,
+      state: pendingRetryStateGetter(),
+    });
+  });
 }
 
 function formatUidShort(uid: string | null): string | null {
@@ -152,8 +265,12 @@ export function getCloudSaveStatus(): CloudSaveStatusState {
     uidShort: formatUidShort(uid),
     lastSyncAt: lastCloudSyncAt > 0 ? lastCloudSyncAt : null,
     lastError: lastCloudSyncError,
+    lastErrorCode: lastCloudSyncErrorCode,
+    nextRetryAt,
     firebaseEnabled: isFirebaseEnabled(),
     restoreCandidate,
+    cloudProtected:
+      cloudSaveStatus === 'success' && lastCloudSyncAt > 0,
   };
 }
 
@@ -229,93 +346,246 @@ export async function syncLocalSaveToCloud(
   options?: {
     force?: boolean;
     state?: StoreGameState;
+    diagnosticId?: string;
+    previousUid?: string | null;
+    localOwnerUid?: string | null;
   },
 ): Promise<boolean> {
-  if (isAccountDeletionInProgress) {
-    if (__DEV__) {
-      console.log('[cloud-save] sync skipped — account deletion in progress');
-    }
-    return false;
+  if (syncInFlight) {
+    return syncInFlight;
   }
 
-  if (!isFirebaseEnabled()) {
-    setCloudSaveStatus('disabled');
-    return false;
-  }
+  const run = (async (): Promise<boolean> => {
+    const diagnosticId = options?.diagnosticId ?? createLinkFlowDiagnosticId('cloud');
+    const isAccountLinkTrigger =
+      reason === 'account_link' ||
+      reason === 'account-link-apple' ||
+      reason === 'account-link-google';
 
-  const uid = getCurrentUserId();
-  if (!uid) {
-    setCloudSaveStatus('disabled');
-    return false;
-  }
-
-  const force = options?.force ?? FORCE_SYNC_REASONS.has(reason);
-  const now = Date.now();
-
-  if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < MIN_SYNC_INTERVAL_MS) {
-    if (cloudSaveStatus !== 'failed' && cloudSaveStatus !== 'pending' && cloudSaveStatus !== 'syncing') {
-      setCloudSaveStatus('pending');
-    }
-    return false;
-  }
-
-  if (!options?.state) {
-    console.warn('[cloud-save] syncLocalSaveToCloud skipped: missing game state');
-    return false;
-  }
-
-  const payload = serializeGameState(options.state);
-  const envelopeBytes = estimateCloudSaveDocumentBytes(payload);
-
-  if (lastCloudSyncError === 'save-too-large' && envelopeBytes > MAX_SAVE_SIZE_BYTES) {
-    if (__DEV__) {
-      console.log('[cloud-save] sync skipped — payload still exceeds cloud limit', envelopeBytes);
-    }
-    setCloudSaveStatus('failed', 'save-too-large');
-    return false;
-  }
-
-  if (__DEV__ && debugConfig.cloudSaveSizeLogsEnabled) {
-    const sizeReport = analyzeSavePayloadSize(payload);
-    console.log('[cloud-save-size]', {
-      totalBytes: sizeReport.totalBytes,
-      totalKb: sizeReport.totalKb,
-      envelopeBytes,
-      topLevelKeys: sizeReport.topLevelKeys,
-    });
-  }
-
-  try {
-    setCloudSaveStatus('syncing');
-    if (__DEV__) {
-      console.log('[cloud-save] sync started', reason);
-    }
-    const result = await saveGameToCloud(uid, payload);
-
-    if (!result.ok) {
-      if (result.error === 'save-too-large') {
-        lastSaveTooLargeAt = Date.now();
-        lastSaveTooLargeEnvelopeBytes = envelopeBytes;
+    const logAfterLink = (payload: Parameters<typeof logCloudSaveAfterLink>[0]) => {
+      if (isAccountLinkTrigger || reason === 'retry' || reason === 'manual') {
+        logCloudSaveAfterLink(payload);
       }
-      console.warn('[cloud-save] sync failed', result.error ?? '');
-      setCloudSaveStatus('failed', result.error ?? 'Cloud sync failed');
+    };
+
+    if (isAccountDeletionInProgress) {
+      if (__DEV__) {
+        console.log('[cloud-save] sync skipped — account deletion in progress');
+      }
       return false;
     }
 
-    lastSaveTooLargeAt = 0;
-    lastSaveTooLargeEnvelopeBytes = 0;
-    lastCloudSyncAt = Date.now();
-    setCloudSaveStatus('success');
-    void syncLeaderboardFromGameState(options.state);
-    if (__DEV__) {
-      console.log('[cloud-save] sync success');
+    if (!isFirebaseEnabled()) {
+      setCloudSaveStatus('disabled');
+      return false;
     }
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Cloud sync failed';
-    console.warn('[cloud-save] sync failed', message);
-    setCloudSaveStatus('failed', message);
-    return false;
+
+    ensureAppStateRetryHook();
+
+    const account = getAccountStatus();
+    const uid = getCurrentUserId();
+    if (!uid) {
+      setCloudSaveStatus('disabled');
+      logAfterLink({
+        stage: 'auth-gate',
+        trigger: reason,
+        authReady: account.isReady,
+        authUidPresent: false,
+        authUserAnonymous: account.isAnonymous,
+        diagnosticId,
+      });
+      return false;
+    }
+
+    const force = options?.force ?? FORCE_SYNC_REASONS.has(reason);
+    const now = Date.now();
+
+    if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < MIN_SYNC_INTERVAL_MS) {
+      if (
+        cloudSaveStatus !== 'failed' &&
+        cloudSaveStatus !== 'pending' &&
+        cloudSaveStatus !== 'syncing'
+      ) {
+        setCloudSaveStatus('pending');
+      }
+      return false;
+    }
+
+    if (!options?.state) {
+      console.warn('[cloud-save] syncLocalSaveToCloud skipped: missing game state');
+      return false;
+    }
+
+    const ownership = reconcileLocalSaveOwnershipAfterAccountLink({
+      previousUid: options.previousUid ?? uid,
+      currentUid: uid,
+      localOwnerUid: options.localOwnerUid ?? uid,
+      providerId:
+        reason === 'account-link-apple' || account.provider === 'apple'
+          ? 'apple.com'
+          : 'google.com',
+    });
+
+    if (ownership.result === 'conflict' || ownership.result === 'rejected') {
+      const code = ownership.result === 'conflict' ? 'owner-mismatch' : 'owner-mismatch';
+      setCloudSaveStatus('failed', code, code);
+      logAfterLink({
+        stage: 'write-failed',
+        trigger: reason,
+        authUidPresent: true,
+        authUserAnonymous: account.isAnonymous,
+        localOwnerUidPresent: Boolean(options.localOwnerUid),
+        ownerMatchesAuth: false,
+        documentPath: getCloudSaveDocumentPath(uid),
+        firebaseErrorCode: code,
+        diagnosticId,
+      });
+      return false;
+    }
+
+    const payload = serializeGameState(options.state);
+    const envelopeBytes = estimateCloudSaveDocumentBytes(payload);
+    const documentPath = getCloudSaveDocumentPath(uid);
+
+    logAfterLink({
+      stage: 'payload-prepare',
+      trigger: reason,
+      authReady: account.isReady,
+      authUidPresent: true,
+      authUserAnonymous: account.isAnonymous,
+      providerIds: account.provider === 'guest' ? [] : [account.provider],
+      localOwnerUidPresent: Boolean(options.localOwnerUid ?? uid),
+      ownerMatchesAuth: ownership.resolvedOwnerUid === uid,
+      documentPath,
+      payloadPrepared: true,
+      diagnosticId,
+    });
+
+    if (lastCloudSyncError === 'save-too-large' && envelopeBytes > MAX_SAVE_SIZE_BYTES) {
+      if (__DEV__) {
+        console.log('[cloud-save] sync skipped — payload still exceeds cloud limit', envelopeBytes);
+      }
+      setCloudSaveStatus('failed', 'save-too-large', 'save-too-large');
+      return false;
+    }
+
+    if (__DEV__ && debugConfig.cloudSaveSizeLogsEnabled) {
+      const sizeReport = analyzeSavePayloadSize(payload);
+      console.log('[cloud-save-size]', {
+        totalBytes: sizeReport.totalBytes,
+        totalKb: sizeReport.totalKb,
+        envelopeBytes,
+        topLevelKeys: sizeReport.topLevelKeys,
+      });
+    }
+
+    try {
+      setCloudSaveStatus('syncing');
+      logAfterLink({
+        stage: 'write-start',
+        trigger: reason,
+        authUidPresent: true,
+        writeStarted: true,
+        documentPath,
+        diagnosticId,
+      });
+      if (__DEV__) {
+        console.log('[cloud-save] sync started', reason);
+      }
+
+      const result = await saveGameToCloud(uid, payload, {
+        diagnosticId,
+        trigger: reason,
+      });
+
+      if (!result.ok) {
+        const classified = classifyCloudSaveError(result.errorCode ?? result.error);
+        if (classified.code === 'save-too-large') {
+          lastSaveTooLargeAt = Date.now();
+          lastSaveTooLargeEnvelopeBytes = envelopeBytes;
+        }
+        console.warn('[cloud-save] sync failed', {
+          error: result.error ?? '',
+          errorCode: classified.code,
+          documentPath: result.documentPath ?? documentPath,
+        });
+        setCloudSaveStatus('failed', result.error ?? classified.code, classified.code);
+        logAfterLink({
+          stage: 'write-failed',
+          trigger: reason,
+          writeStarted: true,
+          writeSucceeded: false,
+          readBackSucceeded: result.readBackVerified === true,
+          documentPath: result.documentPath ?? documentPath,
+          firebaseErrorCode: classified.code,
+          diagnosticId,
+        });
+        if (!classified.permanent) {
+          scheduleCloudSaveRetry(() => options.state as StoreGameState, diagnosticId);
+        }
+        return false;
+      }
+
+      if (result.readBackVerified === false) {
+        setCloudSaveStatus('failed', 'read-back-failed', 'read-back-failed');
+        logAfterLink({
+          stage: 'read-back-failed',
+          trigger: reason,
+          writeSucceeded: true,
+          readBackSucceeded: false,
+          documentPath,
+          firebaseErrorCode: 'read-back-failed',
+          diagnosticId,
+        });
+        scheduleCloudSaveRetry(() => options.state as StoreGameState, diagnosticId);
+        return false;
+      }
+
+      lastSaveTooLargeAt = 0;
+      lastSaveTooLargeEnvelopeBytes = 0;
+      lastCloudSyncAt = result.verifiedUpdatedAt ?? Date.now();
+      clearCloudSaveRetry();
+      setCloudSaveStatus('success');
+      void syncLeaderboardFromGameState(options.state);
+      logAfterLink({
+        stage: 'cloud-ready',
+        trigger: reason,
+        writeSucceeded: true,
+        readBackSucceeded: true,
+        documentPath,
+        diagnosticId,
+      });
+      if (__DEV__) {
+        console.log('[cloud-save] sync success');
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Cloud sync failed';
+      const classified = classifyCloudSaveError(message);
+      console.warn('[cloud-save] sync failed', message);
+      setCloudSaveStatus('failed', message, classified.code);
+      logAfterLink({
+        stage: 'write-failed',
+        trigger: reason,
+        writeSucceeded: false,
+        firebaseErrorCode: classified.code,
+        documentPath,
+        diagnosticId,
+      });
+      if (!classified.permanent) {
+        scheduleCloudSaveRetry(() => options.state as StoreGameState, diagnosticId);
+      }
+      return false;
+    }
+  })();
+
+  syncInFlight = run;
+  try {
+    return await run;
+  } finally {
+    if (syncInFlight === run) {
+      syncInFlight = null;
+    }
   }
 }
 
@@ -386,8 +656,10 @@ export async function initializeCloudBackend(getState: () => StoreGameState): Pr
 }
 
 export function resetCloudSaveSyncState(): void {
+  clearCloudSaveRetry();
   lastCloudSyncAt = 0;
   lastCloudSyncError = null;
+  lastCloudSyncErrorCode = null;
   lastSaveTooLargeAt = 0;
   lastSaveTooLargeEnvelopeBytes = 0;
   restoreCandidate = null;
@@ -395,6 +667,8 @@ export function resetCloudSaveSyncState(): void {
   backendInitPromise = null;
   cloudSyncInitialized = false;
   isAccountDeletionInProgress = false;
+  retryAttempt = 0;
+  pendingRetryStateGetter = null;
   notifyStatusListeners();
 }
 

@@ -34,6 +34,7 @@ import {
 } from '../services/leaderboardService';
 import { leaderboardConfig } from '../config/leaderboard';
 import { getWeeklySeasonLabel } from '../utils/leaderboardSeason';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { colors, spacing, typography } from '../theme';
 
 interface LeaderboardScreenProps {
@@ -125,7 +126,9 @@ const LeaderboardRow = React.memo(function LeaderboardRow({
           </Text>
         </View>
         <View style={styles.scoreCol}>
-          <Text style={styles.scoreValue}>{formatScore(entry.companyScore)}</Text>
+          <Text style={styles.scoreValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            {formatScore(entry.companyScore)}
+          </Text>
           <Text style={styles.scoreLabel}>puan</Text>
         </View>
       </View>
@@ -198,6 +201,7 @@ function GuestPromptCard() {
 }
 
 export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
+  const { contentBottomPadding } = useTabBarLayout();
   const [account, setAccount] = useState<AccountStatus>(DEFAULT_ACCOUNT_STATUS);
   const [fetchResult, setFetchResult] = useState<Awaited<
     ReturnType<typeof fetchWeeklyLeaderboard>
@@ -307,7 +311,7 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
 
   if (isLoading && entries.length === 0) {
     return (
-      <AppScreen>
+      <AppScreen scrollBottomPadding={0}>
         {onBack ? (
           <ScreenHeader title="Liderlik Tablosu" compact onBack={onBack} />
         ) : (
@@ -322,7 +326,7 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
   }
 
   return (
-    <AppScreen>
+    <AppScreen scrollBottomPadding={0}>
       {onBack ? (
         <ScreenHeader title="Liderlik Tablosu" subtitle={seasonLabel} compact onBack={onBack} />
       ) : (
@@ -357,7 +361,7 @@ export default function LeaderboardScreen({ onBack }: LeaderboardScreenProps) {
             />
           )
         }
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: contentBottomPadding }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -379,7 +383,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    paddingBottom: spacing.xl,
     gap: spacing.sm,
   },
   headerBlock: {
@@ -460,6 +463,7 @@ const styles = StyleSheet.create({
   },
   playerStat: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: colors.cardSoft,
     borderRadius: 10,
     borderWidth: 1,
@@ -553,6 +557,7 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     fontWeight: '700',
     flexShrink: 1,
+    minWidth: 0,
   },
   rowMeta: {
     ...typography.caption,
@@ -560,7 +565,9 @@ const styles = StyleSheet.create({
   },
   scoreCol: {
     alignItems: 'flex-end',
-    minWidth: 72,
+    minWidth: 64,
+    maxWidth: 96,
+    flexShrink: 0,
   },
   scoreValue: {
     ...typography.bodySmall,

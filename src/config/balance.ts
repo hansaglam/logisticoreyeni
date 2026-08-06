@@ -38,12 +38,15 @@ export const operatingCostBalance = {
   operationsPerDriver: 15,
   /** Haftalık kira süresi (oyun saati) */
   leaseDurationHours: 7 * 24,
-  /** Offline / büyük zaman atlamasında en fazla kesilecek 24s dönem sayısı */
-  maxOfflineChargeDays: 3,
+  /**
+   * Offline sabit işletme gideri kapalı (0 = cold start / background dönüşünde kesim yok).
+   * Uygulama açıkken günlük gider advanceTime üzerinden çalışmaya devam eder.
+   */
+  maxOfflineChargeDays: 0,
   /** advanceTime başına en fazla ledger kaydı */
   maxDailyCostEntriesPerAdvance: 1,
-  /** Birden fazla gün kesildiğinde oyuncuya bildirim göster */
-  notifyWhenMultipleDaysCharged: true,
+  /** Çok günlük kesimde bildirim — offline gider sistemi kaldırıldığı için kapalı */
+  notifyWhenMultipleDaysCharged: false,
   /**
    * Offline gerçek-zamanlı progress tavanı (saat).
    * 24 saat = 24 * 60 * 60 * 1000 ms — saniye/dakika değil.

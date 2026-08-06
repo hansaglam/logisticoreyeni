@@ -44,7 +44,7 @@ export default function AppScreen({
   scrollBottomPadding: scrollBottomPaddingOverride,
   scrollRef,
 }: AppScreenProps) {
-  const { scrollBottomPadding: defaultScrollPadding, screenTopPadding } = useTabBarLayout();
+  const { contentBottomPadding: defaultScrollPadding, screenTopPadding } = useTabBarLayout();
   const bottomPadding = resolveBottomPadding(
     defaultScrollPadding,
     contentContainerStyle,

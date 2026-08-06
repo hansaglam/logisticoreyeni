@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, TouchableOpacity, type StyleProp, type ViewStyle } from 'react-native';
 
+import { MIN_TOUCH_TARGET } from '../../constants/layout';
 import { colors, radius } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
 import GameIcon from './GameIcon';
@@ -41,7 +42,7 @@ export default function IconButton({
         },
         style,
       ]}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
     >
       <GameIcon name={icon} size={size} color={disabled ? colors.textDisabled : color} />
     </TouchableOpacity>
@@ -50,8 +51,8 @@ export default function IconButton({
 
 const styles = StyleSheet.create({
   button: {
-    width: 36,
-    height: 36,
+    width: MIN_TOUCH_TARGET,
+    height: MIN_TOUCH_TARGET,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',

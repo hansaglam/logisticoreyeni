@@ -1,5 +1,7 @@
 /**
  * Kamyon yakıt tankı — varsayılan kapasite, normalize ve tüketim yardımcıları.
+ *
+ * Canonical UI/sim okuma yolu: getTruckFuelSnapshot(truck).
  */
 
 import type { Contract, Driver, Product, Route, Truck } from '../types/game';
@@ -10,6 +12,16 @@ import {
 } from './deliveryMetrics';
 import { clamp } from './math';
 
+/** Boş transfer — hafif yük çarpanı. */
+const EMPTY_TRANSFER_LOAD_MULTIPLIER = 0.55;
+
+export type TruckFuelSnapshot = {
+  currentLiters: number;
+  capacityLiters: number;
+  percentage: number;
+  isValid: boolean;
+};
+
 function hashTruckId(truckId: string): number {
   let hash = 0;
   for (let i = 0; i < truckId.length; i += 1) {
@@ -18,17 +30,38 @@ function hashTruckId(truckId: string): number {
   return hash;
 }
 
+/**
+ * Hydration-safe sayı: string "180" kabul, "" / null / NaN / Infinity reddedilir.
+ * `Number("") === 0` tuzağına düşmemek için boş string → null.
+ */
+export function toFuelNumber(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'boolean') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /** Kapasite sınıfına göre tank hacmi (L). */
 export function getDefaultFuelTankCapacityL(
   truck: Pick<Truck, 'capacity' | 'fuelConsumptionPerKm'>,
 ): number {
-  if (truck.capacity >= 28) {
+  const capacity = toFuelNumber(truck.capacity) ?? 0;
+  if (capacity >= 28) {
     return 520;
   }
-  if (truck.capacity >= 22) {
+  if (capacity >= 22) {
     return 400;
   }
-  if (truck.capacity >= 18) {
+  if (capacity >= 18) {
     return 180;
   }
   return 120;
@@ -40,31 +73,58 @@ export function getDefaultFuelFillRatio(truckId: string): number {
 }
 
 export function getFuelPercent(currentFuelL: number, fuelTankCapacityL: number): number {
-  const capacity = Math.max(fuelTankCapacityL, 1);
-  return Math.round(clamp((currentFuelL / capacity) * 100, 0, 100));
+  const current = toFuelNumber(currentFuelL);
+  const capacityRaw = toFuelNumber(fuelTankCapacityL);
+  if (current == null || capacityRaw == null || capacityRaw <= 0) {
+    return 0;
+  }
+  const capacity = Math.max(capacityRaw, 1);
+  return Math.round(clamp((current / capacity) * 100, 0, 100));
 }
 
-export function normalizeTruckFuel(truck: Truck): Truck {
-  const fuelTankCapacityL =
-    truck.fuelTankCapacityL != null && truck.fuelTankCapacityL > 0
-      ? truck.fuelTankCapacityL
+/**
+ * Tek canonical yakıt okuma — Map, Fleet ve simülasyon UI aynı snapshot'ı kullanır.
+ * Eksik / string / NaN alanlarda default fill uygular; geçerli 0 litreyi korur.
+ */
+export function getTruckFuelSnapshot(
+  truck: Pick<Truck, 'id' | 'capacity' | 'fuelConsumptionPerKm' | 'currentFuelL' | 'fuelTankCapacityL'>,
+): TruckFuelSnapshot {
+  const capacityFromTruck = toFuelNumber(truck.fuelTankCapacityL);
+  const capacityLiters =
+    capacityFromTruck != null && capacityFromTruck > 0
+      ? capacityFromTruck
       : getDefaultFuelTankCapacityL(truck);
 
-  const currentFuelL =
-    truck.currentFuelL != null && Number.isFinite(truck.currentFuelL)
-      ? clamp(truck.currentFuelL, 0, fuelTankCapacityL)
-      : Math.round(fuelTankCapacityL * getDefaultFuelFillRatio(truck.id));
+  const currentRaw = toFuelNumber(truck.currentFuelL);
+  const hasExplicitCurrent = currentRaw != null;
+  const currentLiters = hasExplicitCurrent
+    ? clamp(currentRaw, 0, capacityLiters)
+    : Math.round(capacityLiters * getDefaultFuelFillRatio(truck.id));
+
+  const percentage = getFuelPercent(currentLiters, capacityLiters);
+  const isValid = capacityLiters > 0 && Number.isFinite(currentLiters) && Number.isFinite(percentage);
 
   return {
-    ...truck,
-    fuelTankCapacityL,
-    currentFuelL: Math.round(currentFuelL),
-    totalMileageKm: Math.max(0, truck.totalMileageKm ?? 0),
+    currentLiters: Math.round(currentLiters),
+    capacityLiters: Math.round(capacityLiters),
+    percentage: isValid ? percentage : 0,
+    isValid,
   };
 }
 
-/** Boş transfer — hafif yük çarpanı. */
-const EMPTY_TRANSFER_LOAD_MULTIPLIER = 0.55;
+export function getTruckFuelPercent(truck: Truck): number {
+  return getTruckFuelSnapshot(truck).percentage;
+}
+
+export function normalizeTruckFuel(truck: Truck): Truck {
+  const snapshot = getTruckFuelSnapshot(truck);
+  return {
+    ...truck,
+    fuelTankCapacityL: snapshot.capacityLiters,
+    currentFuelL: snapshot.currentLiters,
+    totalMileageKm: Math.max(0, toFuelNumber(truck.totalMileageKm) ?? 0),
+  };
+}
 
 export function calculateTransferFuelLiters(
   truck: Truck,
@@ -103,8 +163,11 @@ export function applyFuelConsumptionForProgress(
   fuelLitersTotal: number,
   progress: number,
 ): number {
-  const normalizedProgress = clamp(progress > 1 ? progress / 100 : progress, 0, 1);
-  return Math.max(0, Math.round(fuelLitersAtStart - fuelLitersTotal * normalizedProgress));
+  const start = toFuelNumber(fuelLitersAtStart) ?? 0;
+  const total = toFuelNumber(fuelLitersTotal) ?? 0;
+  const progressRaw = toFuelNumber(progress) ?? 0;
+  const normalizedProgress = clamp(progressRaw > 1 ? progressRaw / 100 : progressRaw, 0, 1);
+  return Math.max(0, Math.round(start - total * normalizedProgress));
 }
 
 export function syncTruckFuelFromJob(params: {
@@ -159,4 +222,10 @@ export function refuelTruckPartial(truck: Truck, targetRatio = 0.85): Truck {
     ...normalized,
     currentFuelL: Math.round(capacity * clamp(targetRatio, 0.2, 1)),
   };
+}
+
+/** Map / Fleet ortak yüzde etiketi — native format tuzağı olmadan. */
+export function formatFuelPercentLabel(percentage: number): string {
+  const safe = Number.isFinite(percentage) ? Math.round(percentage) : 0;
+  return `%${safe}`;
 }

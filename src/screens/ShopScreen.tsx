@@ -20,7 +20,6 @@ import {
   isExpertDriverTier,
   getDriverMarketSortRank,
   SHOP_BACKGROUND,
-  SHOP_SCROLL_BOTTOM_EXTRA,
   SHOP_SPACING_RESOURCE_TO_HERO,
   SHOP_SPACING_TABS_TO_FILTERS,
   type ShopCategory,
@@ -80,8 +79,7 @@ const DRIVER_FILTERS = [
 
 export default function ShopScreen() {
   const { showDialog } = useAppDialog();
-  const { tabBarHeight } = useTabBarLayout();
-  const scrollBottomPadding = tabBarHeight + SHOP_SCROLL_BOTTOM_EXTRA;
+  const { contentBottomPadding } = useTabBarLayout();
 
   const player = useGameStore((state) => state.player);
   const buyTruck = useGameStore((state) => state.buyTruck);
@@ -323,7 +321,7 @@ export default function ShopScreen() {
   }, []);
 
   return (
-    <AppScreen scroll scrollBottomPadding={scrollBottomPadding} contentContainerStyle={styles.screenContent}>
+    <AppScreen scroll scrollBottomPadding={contentBottomPadding} contentContainerStyle={styles.screenContent}>
       <View style={styles.screenStack}>
         <View style={styles.topSection}>
           {player ? (

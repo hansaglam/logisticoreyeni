@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { InteractionManager, View, type ViewProps } from 'react-native';
+import { InteractionManager, StyleSheet, View, type ViewProps } from 'react-native';
 
 import type { TutorialLayoutRect } from '../../tutorial/types';
 import {
@@ -60,8 +60,14 @@ export function MarketTutorialTarget({
   }, [id, scrollIntoView]);
 
   return (
-    <View ref={viewRef} collapsable={false} style={style} {...rest}>
+    <View ref={viewRef} collapsable={false} style={[styles.target, style]} {...rest}>
       {children}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  target: {
+    alignSelf: 'flex-start',
+  },
+});

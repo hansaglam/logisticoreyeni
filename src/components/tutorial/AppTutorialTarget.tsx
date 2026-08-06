@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { InteractionManager, View, type ViewProps } from 'react-native';
+import { InteractionManager, StyleSheet, View, type ViewProps } from 'react-native';
 
 import type { TutorialLayoutRect } from '../../tutorial/types';
+import { APP_TUTORIALS_ENABLED } from '../../tutorial/app/featureFlags';
 import type { AppTutorialId } from '../../tutorial/app/types';
 import { registerAppTutorialTarget } from '../../tutorial/app/targetRegistry';
 
@@ -20,8 +21,13 @@ export function AppTutorialTarget({
   ...rest
 }: AppTutorialTargetProps) {
   const viewRef = useRef<View>(null);
+  const tutorialsEnabled = APP_TUTORIALS_ENABLED;
 
   useEffect(() => {
+    if (!tutorialsEnabled) {
+      return;
+    }
+
     const measure = () =>
       new Promise<TutorialLayoutRect | null>((resolve) => {
         const runMeasure = () => {
@@ -57,11 +63,22 @@ export function AppTutorialTarget({
           }
         : undefined,
     });
-  }, [scrollIntoView, targetId, tutorialId]);
+  }, [scrollIntoView, targetId, tutorialId, tutorialsEnabled]);
 
   return (
-    <View ref={viewRef} collapsable={false} style={style} {...rest}>
+    <View
+      ref={tutorialsEnabled ? viewRef : undefined}
+      collapsable={false}
+      style={[styles.target, style]}
+      {...rest}
+    >
       {children}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  target: {
+    alignSelf: 'flex-start',
+  },
+});

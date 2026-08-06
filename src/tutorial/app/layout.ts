@@ -36,6 +36,8 @@ export function isMeaningfullyDifferentRect(
   );
 }
 
+export const computeTutorialTooltipPlacement = computeTooltipLayout;
+
 export function computeTooltipLayout({
   anchorRect,
   screenWidth,

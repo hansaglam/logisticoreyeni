@@ -18,6 +18,14 @@ export function registerAppTutorialTarget(
   entry: AppTutorialTargetEntry,
 ): () => void {
   const registry = getRegistry(tutorialId);
+  if (
+    typeof __DEV__ !== 'undefined' &&
+    __DEV__ &&
+    registry.has(targetId) &&
+    registry.get(targetId) !== entry
+  ) {
+    console.warn('[tutorial] duplicate-target-id', { tutorialId, targetId });
+  }
   registry.set(targetId, entry);
   return () => {
     const current = registry.get(targetId);

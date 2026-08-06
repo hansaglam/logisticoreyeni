@@ -1,4 +1,4 @@
-import type { TutorialLayoutRect } from '../types';
+import type { TutorialLayoutRect, TutorialTargetPadding } from '../types';
 
 export type AppTutorialId =
   | 'dashboard'
@@ -22,6 +22,7 @@ export type AppTutorialStep = {
   title: string;
   description: string;
   targetId?: string;
+  spotlightPadding?: TutorialTargetPadding;
   placement?: TutorialPlacement;
   /** Son adım birincil buton etiketi */
   finalCtaLabel?: string;

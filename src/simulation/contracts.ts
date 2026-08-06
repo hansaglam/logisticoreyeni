@@ -46,6 +46,7 @@ import {
   isWarehouseCityUnlocked,
 } from '../config/levelConfig';
 import { isRoadGraphPairConnected } from '../components/map/mapRoadUtils';
+import { normalizeCityId } from '../data/networkPositions';
 import { toProductMarket } from './economy';
 import {
   getActiveDeliveryDestinationCityIds,
@@ -849,7 +850,7 @@ export function countPlayableContractsFromOrigin(
 ): number {
   return (contracts ?? []).filter(
     (contract) =>
-      contract.originCityId === originCityId &&
+      normalizeCityId(contract.originCityId) === normalizeCityId(originCityId) &&
       isPlayableContract(contract, trucks, drivers, playerLevel, currentTime, context),
   ).length;
 }
@@ -1476,6 +1477,210 @@ function buildPlayableGenerationBaseParams(
 }
 
 /**
+ * Kamyon şehirleri için havuzda yer açar — dolu listede playable üretimini engellemez.
+ */
+function freeContractPoolSlots(
+  contracts: Contract[],
+  protectedOriginCityIds: string[],
+  slotsNeeded: number,
+): Contract[] {
+  if (slotsNeeded <= 0) {
+    return contracts;
+  }
+
+  const protectedSet = new Set(protectedOriginCityIds.map((cityId) => normalizeCityId(cityId)));
+  const removable = contracts
+    .filter(
+      (contract) =>
+        contract.status === 'available' &&
+        !protectedSet.has(normalizeCityId(contract.originCityId)),
+    )
+    .sort((left, right) => (left.payment ?? 0) - (right.payment ?? 0));
+
+  const removeIds = new Set(removable.slice(0, slotsNeeded).map((contract) => contract.id));
+  if (removeIds.size === 0) {
+    return contracts;
+  }
+
+  return contracts.map((contract) =>
+    removeIds.has(contract.id) ? { ...contract, status: 'expired' as const } : contract,
+  );
+}
+
+export interface ShouldRefreshContractsParams {
+  currentTime: number;
+  lastContractGenerationTime?: number;
+  lastMarketRefreshTime?: number;
+  availableCount: number;
+  eligibleCount: number;
+  idleTruckCityCount: number;
+}
+
+/** Save hydrate / ekran açılışı / scheduler için yenileme gereksinimi. */
+export function shouldRefreshContracts(params: ShouldRefreshContractsParams): boolean {
+  const gen = contractGenerationBalance;
+  const lastGen = params.lastContractGenerationTime ?? 0;
+  const lastMarket = params.lastMarketRefreshTime ?? 0;
+
+  if (params.availableCount === 0) {
+    return true;
+  }
+  if (params.idleTruckCityCount > 0 && params.eligibleCount === 0) {
+    return true;
+  }
+  if (params.availableCount < gen.minGlobalEligibleContracts) {
+    return true;
+  }
+  if (!Number.isFinite(lastGen) || lastGen < 0) {
+    return true;
+  }
+  if (!Number.isFinite(lastMarket) || lastMarket < 0) {
+    return true;
+  }
+  if (params.currentTime - lastGen >= gen.smallGenerationIntervalHours) {
+    return true;
+  }
+  if (params.currentTime - lastMarket >= gen.mediumGenerationIntervalHours) {
+    return true;
+  }
+  return false;
+}
+
+export interface EnsureMinimumEligibleContractsResult extends EnsurePlayableContractsResult {
+  refreshedFromMarket: boolean;
+  bootstrapped: boolean;
+}
+
+/**
+ * Kamyon bulunan şehirlerde minimum uygun iş + global minimum ilan garantisi.
+ */
+export function ensureMinimumEligibleContracts(
+  params: EnsurePlayableContractsParams,
+): EnsureMinimumEligibleContractsResult {
+  const gen = contractGenerationBalance;
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const trucks = params.trucks ?? [];
+  const drivers = params.drivers ?? [];
+  const currentTime = params.currentTime ?? 0;
+  const idleCities = [...new Set((params.idleTruckOriginCityIds ?? []).map((cityId) => normalizeCityId(cityId)))];
+
+  let contracts = expireOldContracts(params.contracts ?? [], currentTime);
+  const countEligible = () =>
+    countPlayableContracts(contracts, trucks, drivers, playerLevel, currentTime);
+
+  const perCityGap = idleCities.reduce((gap, cityId) => {
+    const have = countPlayableContractsFromOrigin(
+      contracts,
+      cityId,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+    );
+    return gap + Math.max(0, gen.minAvailableContractsPerIdleTruckCity - have);
+  }, 0);
+
+  const needsSupply =
+    countAvailableContracts(contracts) === 0 ||
+    (idleCities.length > 0 && countEligible() === 0) ||
+    perCityGap > 0 ||
+    countAvailableContracts(contracts) < gen.minGlobalEligibleContracts ||
+    countContractsAtOrBelowLevel(contracts, playerLevel) < gen.minPlayerLevelEligibleContracts;
+
+  if (!needsSupply) {
+    return {
+      contracts,
+      newContracts: [],
+      playableContractsCount: countEligible(),
+      generatedPlayableCount: 0,
+      refreshedFromMarket: false,
+      bootstrapped: false,
+    };
+  }
+
+  if (perCityGap > 0) {
+    contracts = freeContractPoolSlots(
+      contracts,
+      idleCities,
+      Math.min(perCityGap, gen.bootstrapMaxContractsPerPass),
+    );
+  }
+
+  const allNew: Contract[] = [];
+  const playableResult = ensurePlayableContractSupply({
+    ...params,
+    contracts,
+    idleTruckOriginCityIds: idleCities,
+    forceFallback: true,
+    maxNewContracts: params.maxNewContracts ?? gen.bootstrapMaxContractsPerPass,
+  });
+  contracts = playableResult.contracts;
+  allNew.push(...playableResult.newContracts);
+
+  let refreshedFromMarket = false;
+  if (countAvailableContracts(contracts) < gen.minGlobalEligibleContracts) {
+    const marketRefresh = refreshContractsFromMarket({
+      ...params,
+      contracts,
+      maxContractsPerRefresh: gen.bootstrapMaxContractsPerPass,
+    });
+    contracts = marketRefresh.contracts;
+    if (marketRefresh.newContracts.length > 0) {
+      allNew.push(...marketRefresh.newContracts);
+      refreshedFromMarket = true;
+    }
+  }
+
+  const stillPerCityGap = idleCities.some(
+    (cityId) =>
+      countPlayableContractsFromOrigin(
+        contracts,
+        cityId,
+        trucks,
+        drivers,
+        playerLevel,
+        currentTime,
+      ) < gen.minAvailableContractsPerIdleTruckCity,
+  );
+  if (stillPerCityGap) {
+    contracts = freeContractPoolSlots(
+      contracts,
+      idleCities,
+      Math.min(gen.minAvailableContractsPerIdleTruckCity, gen.bootstrapMaxContractsPerPass),
+    );
+    const secondPass = ensurePlayableContractSupply({
+      ...params,
+      contracts,
+      idleTruckOriginCityIds: idleCities,
+      forceFallback: true,
+      maxNewContracts: params.maxNewContracts ?? gen.bootstrapMaxContractsPerPass,
+    });
+    contracts = secondPass.contracts;
+    allNew.push(...secondPass.newContracts);
+  }
+
+  contracts = balanceAvailableContractLevelMix(contracts, playerLevel);
+
+  return {
+    contracts,
+    newContracts: allNew,
+    playableContractsCount: countPlayableContracts(
+      contracts,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+    ),
+    generatedPlayableCount: allNew.length,
+    updatedLastPlayableContractGeneratedTime:
+      playableResult.updatedLastPlayableContractGeneratedTime ??
+      params.lastPlayableContractGeneratedTime,
+    refreshedFromMarket,
+    bootstrapped: true,
+  };
+}
+
+/**
  * Boşta kamyon şehirlerinden alınabilir sözleşme sayısını garanti eder.
  */
 export function ensurePlayableContractSupply(
@@ -1485,14 +1690,52 @@ export function ensurePlayableContractSupply(
   const playerLevel = Math.max(1, params.playerLevel ?? 1);
   const trucks = params.trucks ?? [];
   const drivers = params.drivers ?? [];
-  const idleOriginCityIds = params.idleTruckOriginCityIds ?? [];
+  const idleOriginCityIds = [...new Set((params.idleTruckOriginCityIds ?? []).map((cityId) => normalizeCityId(cityId)))];
   const currentTime = params.currentTime ?? 0;
 
   let contracts = expireOldContracts(params.contracts ?? [], currentTime);
-  const availableCount = countAvailableContracts(contracts);
-  const headroom = Math.max(0, gen.maxAvailableContracts - availableCount);
+  let availableCount = countAvailableContracts(contracts);
+  let headroom = Math.max(0, gen.maxAvailableContracts - availableCount);
 
-  if (headroom <= 0 || idleOriginCityIds.length === 0) {
+  const countCityPlayable = (originCityId: string) =>
+    countPlayableContractsFromOrigin(
+      contracts,
+      originCityId,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+    );
+
+  const needsPerCityEarly = idleOriginCityIds.some(
+    (originCityId) => countCityPlayable(originCityId) < gen.minAvailableContractsPerIdleTruckCity,
+  );
+
+  if (headroom <= 0 && needsPerCityEarly && idleOriginCityIds.length > 0) {
+    const slotsNeeded = idleOriginCityIds.reduce(
+      (sum, originCityId) =>
+        sum + Math.max(0, gen.minAvailableContractsPerIdleTruckCity - countCityPlayable(originCityId)),
+      0,
+    );
+    contracts = freeContractPoolSlots(
+      contracts,
+      idleOriginCityIds,
+      Math.min(slotsNeeded, gen.bootstrapMaxContractsPerPass),
+    );
+    availableCount = countAvailableContracts(contracts);
+    headroom = Math.max(0, gen.maxAvailableContracts - availableCount);
+  }
+
+  if (idleOriginCityIds.length === 0) {
+    return {
+      contracts,
+      newContracts: [],
+      playableContractsCount: countPlayableContracts(contracts, trucks, drivers, playerLevel, currentTime),
+      generatedPlayableCount: 0,
+    };
+  }
+
+  if (headroom <= 0 && !needsPerCityEarly && !params.forceFallback) {
     return {
       contracts,
       newContracts: [],
@@ -1505,15 +1748,7 @@ export function ensurePlayableContractSupply(
   const lastGeneratedAt = params.lastPlayableContractGeneratedTime ?? 0;
   const hoursSinceLastPlayable = Math.max(0, currentTime - lastGeneratedAt);
   const needsPerCity = idleOriginCityIds.some(
-    (originCityId) =>
-      countPlayableContractsFromOrigin(
-        contracts,
-        originCityId,
-        trucks,
-        drivers,
-        playerLevel,
-        currentTime,
-      ) < gen.minAvailableContractsPerIdleTruckCity,
+    (originCityId) => countCityPlayable(originCityId) < gen.minAvailableContractsPerIdleTruckCity,
   );
   const belowTotalMinimum = playableCount < gen.minTotalPlayableContracts;
   const longWaitFallback =
@@ -1531,9 +1766,16 @@ export function ensurePlayableContractSupply(
   }
 
   const maxGenerate = Math.min(
-    params.maxNewContracts ?? gen.maxPlayableContractsGeneratedAtOnce,
-    headroom,
-    gen.maxContractsGeneratedAtOnce,
+    params.maxNewContracts ??
+      (params.forceFallback
+        ? gen.bootstrapMaxContractsPerPass
+        : gen.maxPlayableContractsGeneratedAtOnce),
+    headroom > 0
+      ? headroom
+      : params.forceFallback
+        ? gen.bootstrapMaxContractsPerPass
+        : 0,
+    gen.bootstrapMaxContractsPerPass,
   );
 
   const generated: Contract[] = [];
@@ -2162,18 +2404,22 @@ export function processContractGenerationSchedule(
   const generatedContractsCount = allNewContracts.length;
 
   let lastPlayableGenerated = params.lastPlayableContractGeneratedTime ?? 0;
-  const playableResult = ensurePlayableContractSupply({
+  const minimumResult = ensureMinimumEligibleContracts({
     ...baseParams,
     contracts,
     currentTime: newTime,
+    trucks: params.trucks,
+    trailers: params.trailers,
+    drivers: params.drivers,
+    homeCityId: params.homeCityId,
     lastPlayableContractGeneratedTime: lastPlayableGenerated,
-    maxNewContracts: gen.maxPlayableContractsGeneratedAtOnce,
+    maxNewContracts: gen.bootstrapMaxContractsPerPass,
   });
-  if (playableResult.newContracts.length > 0) {
-    contracts = playableResult.contracts;
-    allNewContracts.push(...playableResult.newContracts);
+  if (minimumResult.newContracts.length > 0) {
+    contracts = minimumResult.contracts;
+    allNewContracts.push(...minimumResult.newContracts);
     lastPlayableGenerated =
-      playableResult.updatedLastPlayableContractGeneratedTime ?? lastPlayableGenerated;
+      minimumResult.updatedLastPlayableContractGeneratedTime ?? lastPlayableGenerated;
   }
 
   const debug = buildContractGenerationDebugSnapshot({

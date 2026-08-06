@@ -97,26 +97,19 @@ console.log('\nGlobal cap');
 
 console.log('\ndaily_ops_bonus cash grant');
 {
-  const level3 = applyAdRewardGrant(
-    createDefaultMonetizationState(),
-    'daily_ops_bonus',
-    baseContext({ playerLevel: 3 }),
-  );
-  assert(
-    level3.effects[0]?.type === 'cash' && level3.effects[0].amount === 150,
-    'level 1-3 cash is $150',
-  );
-  const level8 = applyAdRewardGrant(
-    createDefaultMonetizationState(),
-    'daily_ops_bonus',
-    baseContext({ playerLevel: 8 }),
-  );
-  assert(
-    level8.effects[0]?.type === 'cash' && level8.effects[0].amount === 200,
-    'level 4-10 cash is $200',
-  );
-  assert(getDailyOpsBonusCash(12) === 250, 'level 11+ config is $250');
-  const blocked = canGrantAdReward(level3.monetization, 'daily_ops_bonus', baseContext());
+  const player = {
+    drivers: [{ id: 'd1', salaryPerDay: 120, dailySalary: 120 } as import('../src/types/game').Driver],
+    warehouses: [{ id: 'w1', cityId: 'izmir', dailyOperatingCost: 250 } as import('../src/types/game').Warehouse],
+    trucks: [{ id: 't1', ownershipType: 'owned' as const }],
+  };
+  const ctx = baseContext({ playerLevel: 1, playerFleet: player });
+  const grant = applyAdRewardGrant(createDefaultMonetizationState(), 'daily_ops_bonus', ctx);
+  const cashEffect = grant.effects[0];
+  const cashAmount = cashEffect?.type === 'cash' ? cashEffect.amount : 0;
+  assert(cashEffect?.type === 'cash', 'daily_ops_bonus grants cash');
+  assert(cashAmount >= 500, 'reward respects economy minimum');
+  assert(getDailyOpsBonusCash(player) === cashAmount, 'UI helper matches grant');
+  const blocked = canGrantAdReward(grant.monetization, 'daily_ops_bonus', ctx);
   assert(!blocked.ok, 'daily_ops_bonus günde 1 kez');
 }
 

@@ -15,6 +15,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import TradeProductModal from '../components/TradeProductModal';
 import WarehouseStockTransferModal from '../components/WarehouseStockTransferModal';
 import {
@@ -76,7 +77,7 @@ export default function WarehouseScreen() {
   const [transferModalVisible, setTransferModalVisible] = useState(false);
   const [transferWarehouse, setTransferWarehouse] = useState<Warehouse | null>(null);
   const [transferProductId, setTransferProductId] = useState<ProductId | null>(null);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
 
   const scrollRef = useRef<ScrollView>(null);
   const transfersOffsetRef = useRef(0);
@@ -333,9 +334,9 @@ export default function WarehouseScreen() {
         onMomentumScrollEnd={warehouseTutorial.handleScrollEnd}
         scrollEventThrottle={16}
       >
-        <View onLayout={() => setLayoutReady(true)}>
+        <View onLayout={markLayoutReady}>
       <View style={styles.header}>
-        <AppTutorialTarget tutorialId="warehouses" targetId="warehouse-header" style={styles.headerText}>
+        <AppTutorialTarget tutorialId="warehouses" targetId="warehouse-header" layoutMode="stretch" style={styles.headerText}>
           <Text style={styles.pageTitle}>Depolar</Text>
           <Text style={styles.pageSubtitle} numberOfLines={1}>
             Stoklarını ve şehirler arası ürün akışını yönet
@@ -366,11 +367,11 @@ export default function WarehouseScreen() {
         onViewTransfers={() => scrollTo(transfersOffsetRef.current)}
       />
 
-      <AppTutorialTarget tutorialId="warehouses" targetId="special-products">
+      <AppTutorialTarget tutorialId="warehouses" targetId="special-products" layoutMode="stretch">
         <WarehouseInfoBanner onPress={handleShowGuide} />
       </AppTutorialTarget>
 
-      <AppTutorialTarget tutorialId="warehouses" targetId="stock-management">
+      <AppTutorialTarget tutorialId="warehouses" targetId="stock-management" layoutMode="stretch">
         <OwnedWarehousesSection
           warehouses={viewModel.warehouses}
           limitLabel={limitLabel}

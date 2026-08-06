@@ -1,211 +1,212 @@
-# FIX: Map Truck Heading — Results
+# FIX: Map Truck Heading / Route Pose — Results
 
 **Date:** 2026-08-06  
-**Scope:** Harita ekranı aktif teslimat aracı ikonu yönü (Android + iOS ortak)  
-**Verdict:** Implementation complete — manuel cihaz doğrulaması gerekli
+**Scope:** P0 harita kamyon marker yönü (Android + iOS ortak business logic)  
+**Verdict:** Implementation + regression tests PASS — gerçek cihaz manuel doğrulaması gerekli
 
 ---
 
 ## 1. Kesin kök neden
 
-İki birleşik hata vardı; ikisi de platform-specific değildi:
+### Birincil: Asset forward angle kalibrasyonu eksik/yanlış (~180° görsel hata)
 
-### A. Yanlış asset base orientation (birincil — ~180° görsel hata)
+`TRUCK_ASSET_FORWARD_OFFSET_DEG` değeri `0` iken kod, MaterialCommunityIcons `truck-outline` ikonunun **0° rotasyonda sağa (+X)** baktığını varsayıyordu. Gerçekte ikon **0° rotasyonda sola (-X)** bakıyor (kabin sola).
 
-`TRUCK_ICON_BASE_ROTATION_DEG` değeri `0` iken kod, MaterialCommunityIcons `truck-outline` ikonunun **0° rotasyonda sağa (+X)** baktığını varsayıyordu. Gerçekte ikon **0° rotasyonda sola (-X)** bakıyor. Route tangent 0° = sağa (+X) olduğundan, base offset eksikliği her iki platformda da ikonu yaklaşık **180° ters** gösteriyordu.
+Route tangent doğru hesaplanıyordu (ör. Ankara→Bursa p=0.5 tangent ≈ -145.7°), ancak marker rotation offset uygulanmadığı için kabin hareket yönünün **tersine** görünüyordu.
 
-### B. Route-end heading vektörü (ikincil — rota sonu regresyonu)
+### İkincil (önceki fix'te): Rota sonu heading vektörü
 
-`resolveRouteHeadingVector()` içinde `findNextDistinctRoutePoint(points, segmentIndex, current)` rota sonunda (`progress = 1`) `segmentIndex` ile geriye dönük arama yapınca **origin noktasını “next” sanıyordu**. Bu, `current → next` yerine `current → origin` vektörü üretip rota sonunda heading'i ters çeviriyordu.
+`progress = 1` iken geriye dönük arama origin'i "next" sanabiliyordu. Bu, look-ahead + segment tangent sistemiyle giderildi.
 
-**Doğrulanmadı / elendi:**
-- Route direction ters değil — `routePoints` origin → destination sıralı, `progress` 0→1 ilerliyor
-- Bearing vektörü ters değil — `dx = candidate.x - current.x` (current → next)
-- Platform hack gerekmedi — `scaleX: -1`, `Platform.OS` offset yok
+### Elendi
 
----
-
-## 2. Route points sırası
-
-- `getRoadRoute(originCityId, destinationCityId)` polyline'ı **origin → destination** sırasıyla döner
-- İlk nokta origin şehrine yakın, son nokta destination şehrine yakın (regression test: `startNear < 0.2`, `endNear < 0.2`)
-- `progress` 0 = origin yakını, 1 = destination yakını
+- Route point sırası ters değil (`getRoadRoute` origin→destination)
+- `atan2(dy, dx)` parametre sırası doğru
+- `dy` çift ters çevrilmiyor
+- `scaleX: -1` veya platform hack yok
+- Rota/şehir özelinde `if` hack yok
 
 ---
 
-## 3. Progress yönü
+## 2. Asset doğal yönü
 
-- `normalizeMapDeliveryProgress()` ile [0, 1] aralığına sıkıştırılır
-- `centerDistance = progress * totalLength` — artan progress ileri segmentlere gider
-- Segment index monoton artar; geriye gitmez
+| Özellik | Değer |
+|---------|-------|
+| İkon | `GameIcon name="truck"` → MaterialCommunityIcons `truck-outline` |
+| 0° rotation doğal yön | **Sola (-X)** — kabin sola |
+| Canonical sabit | `TRUCK_ASSET_FORWARD_OFFSET_DEG = 180` |
 
----
-
-## 4. Kullanılan vektör formülü
-
-Screen-space (Y aşağı, React Native koordinat sistemi):
-
-```
-dx = (next.x - current.x) * coordinateScaleX
-dy = (next.y - current.y) * coordinateScaleY
-rawHeadingDeg = atan2(dy, dx) * 180 / π
-```
-
-Rota sonunda ileri nokta yoksa son anlamlı segment yönü korunur:
-
-```
-dx = (current.x - previous.x) * coordinateScaleX
-dy = (current.y - previous.y) * coordinateScaleY
-```
-
-`resolveRouteHeadingVector()` yalnızca `segmentIndex + 1` ve sonrasından ileri nokta arar; geriye dönük arama yalnızca fallback'tir.
+Sözleşme: `0° = ekranın sağı (doğu)`. Asset sola baktığı için forward angle = **180°**.
 
 ---
 
-## 5. Asset doğal yönü
+## 3. Eski vs yeni heading formülü
 
-- **İkon:** `GameIcon name="truck"` → MaterialCommunityIcons `truck-outline`
-- **Doğal yön (0° rotation):** **sola (-X)** bakıyor
-- Route tangent 0° = sağa (+X) — ikisi zıt yön
-
----
-
-## 6. Asset base offset
+### Eski (hatalı)
 
 ```typescript
-// src/components/map/mapTheme.ts
-export const TRUCK_ICON_BASE_ROTATION_DEG = 180;
+TRUCK_ASSET_FORWARD_OFFSET_DEG = 0; // veya + ile birleştirme
+finalRotation = normalize(tangentDeg + 0); // kabin ters
 ```
 
-Android ve iOS aynı sabit; platform-specific hack yok.
+### Yeni (canonical)
+
+```typescript
+// Pixel-space tangent (mapBounds width/height scale ile)
+dx = (nextPx.x - currentPx.x) * coordinateScaleX;
+dy = (nextPx.y - currentPx.y) * coordinateScaleY;
+routeHeadingDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+
+// Look-ahead: currentDistance + ROUTE_HEADING_LOOK_AHEAD_PX (8px)
+// Rota sonunda: behind → current tangent
+
+finalRotationDeg = normalizeAngle(routeHeadingDeg - TRUCK_ASSET_FORWARD_OFFSET_DEG);
+```
 
 ---
 
-## 7. Final heading formülü
+## 4. Canonical RoutePose modeli
+
+Tek kaynak: `getRouteMarkerPose()` → `getRoutePoseAtProgress()`
 
 ```typescript
-tangentDeg = getRouteHeadingAtProgress({ routePoints, progress, coordinateScaleX, coordinateScaleY })
-finalHeadingDeg = normalizeHeadingDegrees360(
-  normalizeHeadingDegrees(tangentDeg + TRUCK_ICON_BASE_ROTATION_DEG)
-)
+type RoutePose = {
+  position: { x: number; y: number };  // normalize
+  headingDeg: number;                  // tangent (asset offset öncesi)
+  segmentIndex: number;
+  segmentProgress: number;
+};
+
+type RouteMarkerPose = RoutePose & {
+  markerHeadingDeg: number;            // tangent - assetForward, [0,360)
+  positionPx: { x: number; y: number };
+};
 ```
 
-`WorldMapCanvas.tsx` → `displayHeadingDeg` → `AnimatedDeliveryTruckMarker` `truckAngle` (radyan).
+Pozisyon ve heading **aynı directed route point dizisinden** türetilir.
 
-Transform yapısı (değişmedi):
+Directed route: `getRoadRoute(origin, dest)` — base polyline yönü eşleşmezse `reverse()`.
+
+---
+
+## 5. Look-ahead ve degenerate segmentler
+
+| Parametre | Değer |
+|-----------|-------|
+| `ROUTE_HEADING_LOOK_AHEAD_PX` | **8** |
+| Degenerate eşik | `Math.hypot(dx,dy) < POINT_EPS` (0.0001 norm / ~0.5px) |
+| Rota sonu | behind→current tangent; son geçerli heading korunur |
+
+`coordinateScaleX/Y` = `mapBounds.width/height` (production). Look-ahead piksel uzayında ölçülür.
+
+---
+
+## 6. Rotation normalization
+
+```typescript
+normalizeHeadingDegrees360(deg)  // [0, 360)
+shortestHeadingDeltaDegrees(from, to)  // animasyon için 359°→1° kısa yol
+```
+
+Marker animasyonu `AnimatedDeliveryTruckMarker` içinde shortest-angle interpolation kullanır.
+
+---
+
+## 7. Ankara ↔ Bursa sonuçları
+
+| Rota | p | Tangent° | Marker rotation° (tangent - 180) | Beklenen |
+|------|---|----------|----------------------------------|----------|
+| Ankara → Bursa | 0.5 | ≈ -145.7° | ≈ 34.3° | Kabin batı/kuzeybatı (Bursa) |
+| Bursa → Ankara | 0.5 | ≈ 34.3° | ≈ 214.3° | Kabin doğu/güneydoğu (Ankara) |
+| Complementary progress | — | — | ≈ 180° fark | Reverse invariant PASS |
+
+Regression: `bursa-ankara-truck-route-regression-test.ts` — **20/20 PASS**
+
+---
+
+## 8. Diğer rota testleri (katalog)
+
+`map-truck-heading-regression-test.ts` — Ankara↔Bursa, İzmir↔Bursa, Antalya↔Bursa @ p=0.1/0.5/0.9:
+
+- Tangent finite, normalized [0,360)
+- `final = tangent - assetForward` invariant
+- İzmir↔Bursa reverse tangent >170° fark
+
+`truck-route-heading-test.ts` — kardinal sentetik + Bursa↔Ankara + İzmir↔İstanbul + katalog smoke — **45/45 PASS**
+
+---
+
+## 9. Transform yapısı (değişmedi)
+
 ```
 map pan/zoom
   → marker position (Animated.View)
-    → rotationLayer: rotate(truckAngle)
-      → scaleLayer: scale(1/zoom)  // inverse zoom, rotation'dan izole
-        → truck icon
+    → rotationLayer: rotate(markerHeadingDeg)
+      → scaleLayer: scale(1/zoom)
+        → truck icon (truck-outline)
 ```
 
----
-
-## 8. Android sonucu
-
-- Ortak `getRouteHeadingDegrees()` + `TRUCK_ICON_BASE_ROTATION_DEG = 180` kullanılır
-- Platform-specific offset veya mirror yok
-- `npx expo export --platform android` — **PASS**
-- **Manuel doğrulama:** gerçek Android cihazda aşağıdaki test listesi gerekli
+Zoom/pan heading'i etkilemez; heading map local pixel koordinatında hesaplanır.
 
 ---
 
-## 9. iOS sonucu
+## 10. Debug modu
 
-- Android ile aynı helper ve sabit
-- Rotation/scale katman ayrımı korundu (`AnimatedDeliveryTruckMarker`)
-- `npx expo export --platform ios` — **PASS**
-- **Manuel doğrulama:** gerçek iPhone'da aynı test listesi gerekli
+`__DEV__` + debug flag açıkken:
+
+```
+[truck-route-pose] deliveryId=... origin=... destination=... progress=...
+  segmentIndex=... currentPx=... aheadPx=... dx=... dy=...
+  routeHeadingDeg=... assetForwardAngleDeg=... finalRotationDeg=...
+```
+
+Production'da kapalı.
 
 ---
 
-## 10. Değişen dosyalar
+## 11. Değişen dosyalar
 
 | Dosya | Değişiklik |
 |-------|------------|
-| `src/components/map/mapTheme.ts` | `TRUCK_ICON_BASE_ROTATION_DEG = 180`, yorum düzeltmesi |
-| `src/components/map/mapRoadUtils.ts` | Canonical `resolveRouteHeadingVector` (current→next), `getRouteHeadingDegrees`, `buildMapHeadingDebugPayload`, `logMapHeadingDebug` |
-| `src/components/map/WorldMapCanvas.tsx` | Heading debug log entegrasyonu |
-| `src/config/debug.ts` | `mapHeadingDebugEnabled` / `heading` flag |
-| `scripts/map-truck-heading-regression-test.ts` | **Yeni** kapsamlı regression testi |
-| `scripts/truck-route-heading-test.ts` | Base 180°, L-route segment testleri |
-| `scripts/ios-map-heading-marker-regression-test.ts` | Display/base beklentileri güncellendi |
-| `scripts/map-truck-position-test.ts` | Base sabit assertion |
+| `src/components/map/mapTheme.ts` | `TRUCK_ASSET_FORWARD_OFFSET_DEG = 180` |
+| `src/components/map/mapRoadUtils.ts` | Pixel-space look-ahead, `getRouteMarkerPose`, `getRoutePoseAtProgress`, `getRouteHeadingDegrees` (tangent - asset) |
+| `src/components/map/WorldMapCanvas.tsx` | `getRouteMarkerPose` tek kaynak |
+| `src/components/map/mapTruckLocation.ts` | `getRouteMarkerPose` tek kaynak |
+| `scripts/truck-route-heading-test.ts` | Kardinal + L-route + katalog (map scale) |
+| `scripts/map-truck-heading-regression-test.ts` | 108 assertion |
+| `scripts/bursa-ankara-truck-route-regression-test.ts` | Ankara→Bursa destination-facing |
+| `scripts/ios-map-heading-marker-regression-test.ts` | Offset 180° display beklentileri |
+| `scripts/map-truck-position-test.ts` | Canonical pose |
 
 ---
 
-## 11. Test sonuçları
+## 12. Test sonuçları
 
 | Komut | Sonuç |
 |-------|-------|
 | `npm run typecheck` | PASS |
 | `npm run verify` | PASS |
-| `npx tsx scripts/map-truck-heading-regression-test.ts` | **108 PASS, 0 FAIL** |
-| `npx tsx scripts/truck-route-heading-test.ts` | **42 PASS, 0 FAIL** |
-| `npx tsx scripts/ios-map-heading-marker-regression-test.ts` | **37 PASS, 0 FAIL** |
+| `truck-route-heading-test.ts` | **45 PASS** |
+| `map-truck-heading-regression-test.ts` | **108 PASS** |
+| `bursa-ankara-truck-route-regression-test.ts` | **20 PASS** |
+| `ios-map-heading-marker-regression-test.ts` | **37 PASS** |
 | `npx expo export --platform android` | PASS |
 | `npx expo export --platform ios` | PASS |
-| `git diff --check` | Uyarı: `dailyOperatingCosts.ts` EOF (bu fix kapsamı dışı) |
+| `git diff --check` | PASS (LF uyarıları only) |
 
-### Katalog rota heading örnekleri (tangent° / final° @ scale 1080×720)
-
-Format: `tangent° / final°` (final = tangent + 180° base)
-
-| Rota | p=0.1 | p=0.5 | p=0.9 |
-|------|-------|-------|-------|
-| Ankara → Bursa | 136.7° / 316.7° | -145.7° / 34.3° | 175.6° / 355.6° |
-| Bursa → Ankara | -4.4° / 175.6° | 34.3° / 214.3° | -43.3° / 136.7° |
-| İzmir → Bursa | -92.2° / 87.8° | -93.5° / 86.5° | 17.7° / 197.7° |
-| Bursa → İzmir | -162.3° / 17.7° | 114.4° / 294.4° | 87.8° / 267.8° |
-| Antalya → Bursa | -107.1° / 72.9° | -77.4° / 102.6° | -135.8° / 44.2° |
-| Bursa → Antalya | 44.2° / 224.2° | 102.6° / 282.6° | 72.9° / 252.9° |
-
-Kardinal sentetik (tangent): doğu 0°, batı 180°, güney 90°, kuzey -90°.  
-Ters rotalar (Bursa↔Ankara tangent): >170° fark.
-
-### Heading zinciri özeti
-
-| Soru | Cevap |
-|------|-------|
-| İkon render | `AnimatedDeliveryTruckMarker.tsx` |
-| Pozisyon | `getTruckPositionAlongRoadRoute()` |
-| Heading | `getRouteHeadingDegrees()` → `getRouteHeadingAtProgress()` |
-| routePoints sırası | origin → destination |
-| progress | 0 → 1 |
-| Asset doğal yön | Sola (-X) @ 0° |
-| Base offset | +180° |
-| scaleX mirror | Yok |
-| Platform hack | Yok |
+**AAB/APK/IPA/Xcode Archive üretilmedi** (istek gereği).
 
 ---
 
-## 12. Debug (internal only)
+## 13. Manuel cihaz testi (kalan)
 
-`__DEV__` + `mapHeadingDebugEnabled` (veya `truck-debug` preset) açıkken:
+Gerçek Android/iOS cihazda doğrulanacak:
 
-```
-[map-heading] { routeId, origin, destination, progress, currentPoint, nextPoint, rawHeadingDeg, assetBaseHeadingDeg, finalHeadingDeg }
-```
-
-Production'da görünmez; UID veya hassas veri loglanmaz.
-
----
-
-## 13. Manuel cihaz test gereksinimi
-
-Headless testler geçti; görsel doğrulama için gerçek cihazda:
-
-1. Ankara → Bursa, Bursa → Ankara
-2. İzmir → Bursa, Bursa → İzmir
-3. Antalya → Bursa, Bursa → Antalya
+1. Ankara → Bursa: kabin Bursa'ya
+2. Bursa → Ankara: kabin Ankara'ya
+3. İstanbul ↔ Antalya, İzmir ↔ Bursa matrisi
 4. Zoom/pan sırasında yön sabitliği
-5. Background/foreground
-6. Offline progression
-7. Yeni rota başlangıcı
-
-**Beklenen:** İkon her zaman hedef şehre doğru bakar; dönüşlerde segment tangent'ine uyar; Android ve iOS aynı davranır.
+5. Virajlarda tangent uyumu
 
 ---
 
@@ -213,11 +214,12 @@ Headless testler geçti; görsel doğrulama için gerçek cihazda:
 
 | Kriter | Durum |
 |--------|-------|
-| İkon hedef yönüne bakar (Android + iOS) | Kod + test PASS — cihaz doğrulaması bekliyor |
-| Ortak canonical heading helper | `getRouteHeadingDegrees()` |
-| Vektör current → next | `candidate.x - current.x` |
-| Asset base tek sabit | `TRUCK_ICON_BASE_ROTATION_DEG = 180` |
-| Platform +180 hack yok | Doğrulandı |
-| scaleX mirror yok | Doğrulandı |
-| Zoom/pan lifecycle yönü bozmaz | Katman ayrımı korundu |
-| AAB/APK/IPA üretilmedi | Uyuldu |
+| Pixel-space heading | ✅ |
+| Tek asset calibration offset (180°) | ✅ |
+| Rota/şehir özel hack yok | ✅ |
+| `getRouteMarkerPose` tek kaynak | ✅ |
+| Reverse route ~180° invariant | ✅ Test PASS |
+| Marker konumu değişmedi | ✅ |
+| Android/iOS ortak logic | ✅ |
+| AAB/APK/IPA üretilmedi | ✅ |
+| Gerçek cihaz görsel doğrulama | ⏳ Manuel |

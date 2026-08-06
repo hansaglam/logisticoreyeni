@@ -1,5 +1,5 @@
-import React, { useCallback } from 'react';
-import { FlatList, StyleSheet, type ListRenderItem } from 'react-native';
+import React, { useCallback, useMemo } from 'react';
+import { ScrollView, StyleSheet, View, type ScrollView as ScrollViewType } from 'react-native';
 
 import ManagementCard, { getManagementCardWidth } from './ManagementCard';
 import { MANAGEMENT_GRID_GAP } from './managementTheme';
@@ -13,7 +13,15 @@ export interface ManagementGridProps {
   listHeaderComponent?: React.ReactElement | null;
   contentBottomPadding?: number;
   scrollEnabled?: boolean;
-  listRef?: React.RefObject<FlatList<ManagementItem> | null>;
+  scrollRef?: React.RefObject<ScrollViewType | null>;
+}
+
+function chunkPairs<T>(items: T[]): T[][] {
+  const rows: T[][] = [];
+  for (let index = 0; index < items.length; index += 2) {
+    rows.push(items.slice(index, index + 2));
+  }
+  return rows;
 }
 
 export default function ManagementGrid({
@@ -24,16 +32,19 @@ export default function ManagementGrid({
   listHeaderComponent,
   contentBottomPadding = 0,
   scrollEnabled = true,
-  listRef,
+  scrollRef,
 }: ManagementGridProps) {
   const cardWidth = getManagementCardWidth({
     containerWidth: contentWidth,
     gap: MANAGEMENT_GRID_GAP,
   });
 
-  const renderItem: ListRenderItem<ManagementItem> = useCallback(
-    ({ item }) => (
+  const rows = useMemo(() => chunkPairs(items), [items]);
+
+  const renderCard = useCallback(
+    (item: ManagementItem) => (
       <ManagementCard
+        key={item.id}
         item={item}
         width={cardWidth}
         disabled={disabled}
@@ -44,16 +55,9 @@ export default function ManagementGrid({
   );
 
   return (
-    <FlatList
-      ref={listRef}
-      data={items}
-      key="management-grid-2col"
-      keyExtractor={(item) => item.id}
-      numColumns={2}
-      style={styles.list}
-      renderItem={renderItem}
-      ListHeaderComponent={listHeaderComponent ?? undefined}
-      columnWrapperStyle={styles.columnRow}
+    <ScrollView
+      ref={scrollRef}
+      style={styles.scroll}
       contentContainerStyle={[
         styles.contentContainer,
         contentBottomPadding > 0 ? { paddingBottom: contentBottomPadding } : null,
@@ -64,19 +68,33 @@ export default function ManagementGrid({
       bounces={scrollEnabled}
       keyboardShouldPersistTaps="handled"
       nestedScrollEnabled
-    />
+    >
+      {listHeaderComponent ?? null}
+      <View style={styles.grid}>
+        {rows.map((row, rowIndex) => (
+          <View key={`management-row-${rowIndex}`} style={styles.columnRow}>
+            {row.map((item) => renderCard(item))}
+            {row.length === 1 ? <View style={{ width: cardWidth }} /> : null}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  list: {
+  scroll: {
     flex: 1,
   },
+  contentContainer: {
+    flexGrow: 0,
+  },
+  grid: {
+    gap: 0,
+  },
   columnRow: {
+    flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: MANAGEMENT_GRID_GAP,
-  },
-  contentContainer: {
-    flexGrow: 1,
   },
 });

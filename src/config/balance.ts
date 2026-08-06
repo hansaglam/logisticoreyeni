@@ -389,8 +389,14 @@ export const contractGenerationBalance = {
   minAvailableContractsPerIdleTruckCity: 2,
   /** Toplam minimum alınabilir (playable) sözleşme sayısı */
   minTotalPlayableContracts: 4,
+  /** Global minimum müsait iş ilanı (eligible olmasa da listede görünür) */
+  minGlobalEligibleContracts: 6,
+  /** Oyuncu seviyesine uygun minimum müsait iş */
+  minPlayerLevelEligibleContracts: 2,
+  /** Bootstrap / acil yenilemede tek geçişte üretilebilecek üst sınır */
+  bootstrapMaxContractsPerPass: 8,
   /** Uzun bekleme sonrası zorunlu playable üretim eşiği (oyun saati) */
-  playableContractFallbackHours: 6,
+  playableContractFallbackHours: 1,
   /** Tek seferde üretilebilecek maksimum playable sözleşme */
   maxPlayableContractsGeneratedAtOnce: 2,
   /** Manuel yenileme cooldown (oyun saati) — playable varken */

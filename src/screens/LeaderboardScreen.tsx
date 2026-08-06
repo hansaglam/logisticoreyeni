@@ -16,6 +16,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import {
   AppCard,
   AppScreen,
@@ -280,7 +281,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const [account, setAccount] = useState<AccountStatus>(DEFAULT_ACCOUNT_STATUS);
   const [screenState, setScreenState] = useState<LeaderboardScreenState>({ status: 'loading' });
   const [usernameReady, setUsernameReady] = useState<boolean | null>(null);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const requestSeqRef = React.useRef(0);
   const listRef = useRef<FlatList<LeaderboardRankedEntry>>(null);
   const lastAuthUidRef = React.useRef<string | null>(null);
@@ -429,7 +430,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const listHeader = useMemo(
     () => (
       <View style={styles.headerBlock}>
-        <AppTutorialTarget tutorialId="leaderboard" targetId="weekly-season">
+        <AppTutorialTarget tutorialId="leaderboard" targetId="weekly-season" layoutMode="stretch">
           <AppCard variant="soft" style={styles.seasonCard} padded>
             <View style={styles.seasonRow}>
               <GameIcon name="company" size={18} color={colors.accentBlue} />
@@ -452,7 +453,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
         ) : null}
 
         {eligible && playerEntry ? (
-          <AppTutorialTarget tutorialId="leaderboard" targetId="my-rank">
+          <AppTutorialTarget tutorialId="leaderboard" targetId="my-rank" layoutMode="stretch">
             <PlayerSummaryCard
               entry={playerEntry}
               rank={playerRank}
@@ -461,7 +462,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
           </AppTutorialTarget>
         ) : null}
 
-        <AppTutorialTarget tutorialId="leaderboard" targetId="company-ranking">
+        <AppTutorialTarget tutorialId="leaderboard" targetId="company-ranking" layoutMode="stretch">
           <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
         </AppTutorialTarget>
       </View>
@@ -485,11 +486,11 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
               rightAction={headerRightAction}
             />
           ) : (
-            <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header">
+            <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header" layoutMode="stretch">
               <ScreenHeader title="Liderlik Tablosu" compact rightAction={headerRightAction} />
             </AppTutorialTarget>
           )}
-          <View style={styles.loadingWrap} onLayout={() => setLayoutReady(true)}>
+          <View style={styles.loadingWrap} onLayout={markLayoutReady}>
             <ActivityIndicator size="large" color={colors.accentBlue} />
             <Text style={styles.loadingText}>Sıralama yükleniyor...</Text>
           </View>
@@ -511,7 +512,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
             rightAction={headerRightAction}
           />
         ) : (
-          <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header">
+          <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header" layoutMode="stretch">
             <ScreenHeader
               title="Liderlik Tablosu"
               subtitle={seasonLabel}
@@ -527,7 +528,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           style={styles.list}
-          onLayout={() => setLayoutReady(true)}
+          onLayout={markLayoutReady}
           onScroll={leaderboardTutorial.handleScroll}
           onScrollEndDrag={leaderboardTutorial.handleScrollEnd}
           onMomentumScrollEnd={leaderboardTutorial.handleScrollEnd}

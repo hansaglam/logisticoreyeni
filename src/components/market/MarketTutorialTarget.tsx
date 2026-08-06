@@ -1,7 +1,19 @@
-import React, { useEffect, useRef } from 'react';
-import { InteractionManager, StyleSheet, View, type ViewProps } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import {
+  Dimensions,
+  InteractionManager,
+  StyleSheet,
+  View,
+  type LayoutChangeEvent,
+  type ViewProps,
+} from 'react-native';
 
 import type { TutorialLayoutRect } from '../../tutorial/types';
+import { logLayoutDimensions } from '../../tutorial/app/devLayoutInstrumentation';
+import {
+  getTargetLayoutStyle,
+  type TutorialTargetLayoutMode,
+} from '../../tutorial/app/targetLayout';
 import {
   registerMarketTutorialTarget,
   type MarketTutorialTargetId,
@@ -9,17 +21,25 @@ import {
 
 export interface MarketTutorialTargetProps extends ViewProps {
   id: MarketTutorialTargetId;
+  layoutMode?: TutorialTargetLayoutMode;
   scrollIntoView?: () => void | Promise<void>;
+  debugScreen?: string;
 }
 
 export function MarketTutorialTarget({
   id,
+  layoutMode = 'preserve',
   scrollIntoView,
+  debugScreen,
   children,
   style,
+  onLayout,
   ...rest
 }: MarketTutorialTargetProps) {
   const viewRef = useRef<View>(null);
+  const scrollIntoViewRef = useRef(scrollIntoView);
+  scrollIntoViewRef.current = scrollIntoView;
+  const layoutModeStyle = getTargetLayoutStyle(layoutMode);
 
   useEffect(() => {
     const measure = () =>
@@ -51,23 +71,50 @@ export function MarketTutorialTarget({
 
     return registerMarketTutorialTarget(id, {
       measure,
-      scrollIntoView: scrollIntoView
-        ? async () => {
-            await scrollIntoView();
-          }
-        : undefined,
+      scrollIntoView: async () => {
+        await scrollIntoViewRef.current?.();
+      },
     });
-  }, [id, scrollIntoView]);
+  }, [id]);
+
+  const handleLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      if (debugScreen) {
+        const { width } = event.nativeEvent.layout;
+        logLayoutDimensions({
+          screen: debugScreen,
+          targetId: id,
+          windowWidth: Dimensions.get('window').width,
+          wrapperWidth: width,
+          layoutMode,
+          wrapperAlignSelf:
+            layoutMode === 'stretch'
+              ? 'stretch'
+              : layoutMode === 'content'
+                ? 'flex-start'
+                : 'inherit',
+        });
+      }
+      onLayout?.(event);
+    },
+    [debugScreen, id, layoutMode, onLayout],
+  );
 
   return (
-    <View ref={viewRef} collapsable={false} style={[styles.target, style]} {...rest}>
+    <View
+      ref={viewRef}
+      collapsable={false}
+      style={[styles.base, layoutModeStyle, style]}
+      onLayout={handleLayout}
+      {...rest}
+    >
       {children}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  target: {
-    alignSelf: 'flex-start',
+  base: {
+    minWidth: 0,
   },
 });

@@ -10,6 +10,7 @@ import {
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import {
+  attemptAutomaticLocalSaveRecovery,
   buildRecoverySummary,
   confirmStartNewGameAfterRecovery,
   exportRawSaveForUser,
@@ -81,6 +82,21 @@ export default function SaveRecoveryScreen({ probe, onRecoveryComplete }: SaveRe
     [alert, onRecoveryComplete, setOperationSafe],
   );
 
+  const handleRetryRecovery = () => {
+    void runRecoveryAction('restoring-local', async () => {
+      const auto = await attemptAutomaticLocalSaveRecovery();
+      if (auto.recovered) {
+        return { ok: true };
+      }
+      const local = await restoreFromLocalBackup();
+      if (local.ok) {
+        return { ok: true };
+      }
+      const cloud = await restoreFromCloudSave();
+      return cloud.ok ? { ok: true } : { ok: false, error: cloud.error };
+    });
+  };
+
   const handleCloudRestore = () => {
     void runRecoveryAction('restoring-cloud', async () => {
       const result = await restoreFromCloudSave();
@@ -111,7 +127,7 @@ export default function SaveRecoveryScreen({ probe, onRecoveryComplete }: SaveRe
     showDialog({
       title: 'Yeni Oyuna Başla',
       message:
-        'Bozuk kayıt arşivlenecek ve yeni oyun oluşturulacak. Bu işlem mevcut aktif kaydın yerine geçer.',
+        'Yeni oyun başlatmak mevcut kayıtlarını hemen silmez. Bozuk kayıt destek için arşivlenecek. Devam edilsin mi?',
       variant: 'warning',
       confirmLabel: 'Devam Et',
       cancelLabel: 'Vazgeç',
@@ -150,6 +166,13 @@ export default function SaveRecoveryScreen({ probe, onRecoveryComplete }: SaveRe
 
         <View style={styles.actions}>
           <RecoveryButton
+            label="Kurtarmayı Yeniden Dene"
+            description="Yerel yedekleri ve bulut kaydını otomatik tarar."
+            loading={operation === 'restoring-local'}
+            disabled={isBusy && operation !== 'restoring-local'}
+            onPress={handleRetryRecovery}
+          />
+          <RecoveryButton
             label="Bulut Kaydını Geri Yükle"
             description="Hesabınıza bağlı son güvenli kaydı indirir."
             loading={operation === 'restoring-cloud'}
@@ -180,7 +203,7 @@ export default function SaveRecoveryScreen({ probe, onRecoveryComplete }: SaveRe
           />
         </View>
 
-        {probe.quarantine ? (
+        {probe.quarantine || probe.failureCode ? (
           <Pressable
             accessibilityRole="button"
             onPress={() => setShowTechnicalDetails((value) => !value)}
@@ -191,17 +214,33 @@ export default function SaveRecoveryScreen({ probe, onRecoveryComplete }: SaveRe
             </Text>
           </Pressable>
         ) : null}
-        {showTechnicalDetails && probe.quarantine ? (
-          <QuarantineDetails quarantine={probe.quarantine} />
+        {showTechnicalDetails ? (
+          <QuarantineDetails probe={probe} quarantine={probe.quarantine} />
         ) : null}
       </ScrollView>
     </View>
   );
 }
 
-function QuarantineDetails({ quarantine }: { quarantine: SaveRecoveryQuarantine }) {
+function QuarantineDetails({
+  probe,
+  quarantine,
+}: {
+  probe: SaveRecoveryProbeResult;
+  quarantine: SaveRecoveryQuarantine | null;
+}) {
+  if (!quarantine) {
+    return (
+      <View style={styles.detailsCard}>
+        <DetailRow label="Hata kodu" value={probe.failureCode ?? '—'} />
+        <DetailRow label="Aşama" value={probe.lastStage ?? '—'} />
+        <DetailRow label="Tanı ID" value={probe.diagnosticId ?? '—'} />
+      </View>
+    );
+  }
   return (
     <View style={styles.detailsCard}>
+      <DetailRow label="Hata kodu" value={probe.failureCode ?? quarantine.reason} />
       <DetailRow label="Sebep" value={quarantine.reason} />
       <DetailRow label="Aşama" value={quarantine.stage} />
       <DetailRow
@@ -210,6 +249,7 @@ function QuarantineDetails({ quarantine }: { quarantine: SaveRecoveryQuarantine 
       />
       <DetailRow label="Checksum" value={quarantine.checksumStatus} />
       <DetailRow label="Deneme" value={String(quarantine.recoveryAttempts)} />
+      <DetailRow label="Tanı ID" value={probe.diagnosticId ?? '—'} />
     </View>
   );
 }

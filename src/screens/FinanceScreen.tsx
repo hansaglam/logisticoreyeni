@@ -11,6 +11,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 
 import {
   AppCard,
@@ -301,7 +302,7 @@ function FinanceMetricStrip({
 }
 
 export default function FinanceScreen() {
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
 
   const financeTutorial = useScreenAppTutorial({
@@ -638,7 +639,7 @@ export default function FinanceScreen() {
         onMomentumScrollEnd={financeTutorial.handleScrollEnd}
         scrollEventThrottle={16}
       >
-        <View onLayout={() => setLayoutReady(true)}>
+        <View onLayout={markLayoutReady}>
       <ScreenHeader
         title="Finans"
         subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"
@@ -646,7 +647,7 @@ export default function FinanceScreen() {
         rightAction={<AppTutorialHelpButton {...financeTutorial.helpButtonProps} />}
       />
 
-      <AppTutorialTarget tutorialId="finance" targetId="cash-flow">
+      <AppTutorialTarget tutorialId="finance" targetId="cash-flow" layoutMode="stretch">
         <FinanceMetricStrip
           cash={cash}
           totalRevenue={totalRevenue}
@@ -676,7 +677,7 @@ export default function FinanceScreen() {
       />
 
       <SectionTitle title="Gelirler" compact />
-      <AppTutorialTarget tutorialId="finance" targetId="income">
+      <AppTutorialTarget tutorialId="finance" targetId="income" layoutMode="stretch">
         <BreakdownCard
           lines={incomeLines}
           hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
@@ -684,7 +685,7 @@ export default function FinanceScreen() {
       </AppTutorialTarget>
 
       <SectionTitle title="Teslimat Giderleri" compact />
-      <AppTutorialTarget tutorialId="finance" targetId="expenses">
+      <AppTutorialTarget tutorialId="finance" targetId="expenses" layoutMode="stretch">
         <BreakdownCard lines={deliveryExpenseLines} />
       </AppTutorialTarget>
 
@@ -860,7 +861,7 @@ export default function FinanceScreen() {
       )}
 
       <SectionTitle title="Finansal Sağlık" compact />
-      <AppTutorialTarget tutorialId="finance" targetId="net-profit">
+      <AppTutorialTarget tutorialId="finance" targetId="net-profit" layoutMode="stretch">
         <AppCard
           variant="soft"
           style={[styles.healthCard, { borderColor: healthColor }]}

@@ -36,7 +36,7 @@ export default function MarketplaceHeader({
     <>
       <View style={styles.hero}>
         <IconButton icon="back" onPress={onBack} color={colors.textPrimary} />
-        <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="marketplace-header" style={styles.heroText}>
+        <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="marketplace-header" layoutMode="stretch" style={styles.heroText}>
           <Text style={styles.title}>Araç Pazarı</Text>
           <Text style={styles.subtitle}>
             Oyuncuların satışa çıkardığı kullanılmış araçları keşfet
@@ -45,7 +45,7 @@ export default function MarketplaceHeader({
         <View style={styles.heroActions}>
           {helpAction ?? null}
           {onCreateListing ? (
-            <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="create-listing-button">
+            <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="create-listing-button" layoutMode="content">
               <IconButton icon="truck" onPress={onCreateListing} color={colors.info} />
             </AppTutorialTarget>
           ) : (

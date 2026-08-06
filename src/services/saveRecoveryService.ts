@@ -9,6 +9,7 @@ import {
 } from '../storage/saveRecoveryJournal';
 import {
   assertExportPayloadSafe,
+  attemptAutomaticLocalSaveRecovery,
   buildRecoverySummary,
   commitValidatedPayloadToMainSlot,
   confirmStartNewGameAfterRecoveryCore,
@@ -24,6 +25,7 @@ import {
   type RawSaveDiagnosis,
   type SaveRecoveryProbeResult,
 } from '../storage/saveRecoveryCore';
+import { logSaveBootstrap } from '../storage/saveBootstrap';
 import type { SaveRecoveryQuarantine } from '../storage/saveRecoveryQuarantine';
 import {
   payloadToStoreState,
@@ -38,6 +40,7 @@ import { executeAtomicCloudSaveRestore, validateCloudSaveRestorePayload } from '
 export type { RawSaveDiagnosis, SaveRecoveryProbeResult };
 export {
   assertExportPayloadSafe,
+  attemptAutomaticLocalSaveRecovery,
   buildRecoverySummary,
   diagnoseRawSaveString,
   extractSaveVersionFromRaw,
@@ -45,6 +48,80 @@ export {
   probeSaveRecoveryOnColdStart,
   verifyLocalSaveIntegrity,
 };
+
+const CLOUD_RECOVERY_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
+
+/** Local auto-recovery first, then optional cloud restore before showing recovery UI. */
+export async function probeSaveRecoveryWithCloudAttempt(): Promise<SaveRecoveryProbeResult> {
+  const probe = await probeSaveRecoveryOnColdStart();
+  if (!probe.required) {
+    return probe;
+  }
+
+  const uid = getCurrentUserId();
+  if (!uid) {
+    return probe;
+  }
+
+  const startedAt = Date.now();
+  logSaveBootstrap({
+    stage: 'reading-cloud',
+    source: 'cloud',
+    success: false,
+    recoverable: true,
+    authUidPresent: true,
+  });
+
+  const cloudResult = await withTimeout(restoreFromCloudSave(), CLOUD_RECOVERY_TIMEOUT_MS);
+  if (cloudResult?.ok) {
+    logSaveBootstrap({
+      stage: 'ready',
+      source: 'cloud',
+      success: true,
+      durationMs: Date.now() - startedAt,
+      authUidPresent: true,
+      payloadPresent: true,
+    });
+    return {
+      required: false,
+      fatal: false,
+      quarantine: null,
+      recoveredSource: 'cloud',
+      lastStage: 'ready',
+      diagnosticId: probe.diagnosticId,
+    };
+  }
+
+  logSaveBootstrap({
+    stage: 'recovery-required',
+    source: 'cloud',
+    success: false,
+    errorCode: 'cloud-unavailable',
+    recoverable: false,
+    durationMs: Date.now() - startedAt,
+    authUidPresent: true,
+  });
+
+  return {
+    ...probe,
+    failureCode: probe.failureCode ?? 'cloud-unavailable',
+  };
+}
 
 function buildRestoreId(source: string, ownerUid: string): string {
   return `${source}:${ownerUid}:${Date.now()}`;

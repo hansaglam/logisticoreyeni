@@ -8,12 +8,13 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 
 import type { TabKey } from '../navigation/tabTypes';
+import { GAME_CENTER_BUTTON_LIFT } from '../constants/layout';
 import {
   DashboardAlertBanner,
   DashboardBackground,
@@ -42,6 +43,13 @@ import { getLevelProgress } from '../simulation/leveling';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectActiveDeliveries,
+  selectCities,
+  selectFinanceLedger,
+  selectProducts,
+  selectReputationHistory,
+} from '../store/selectors/stableCollections';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import {
   buildOnboardingEvaluationState,
@@ -75,19 +83,16 @@ function getWarehouseFillRatio(player: Player, currentTime: number): number {
 
 export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
   const player = useGameStore((state) => state.player);
-  const products = useGameStore((state) => state.products) ?? [];
+  const products = useGameStore(selectProducts);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const globalSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
   const currentTime = useGameStore((state) => state.currentTime);
-  const cities = useGameStore((state) => state.cities) ?? [];
-  const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
+  const cities = useGameStore(selectCities);
+  const financeLedger = useGameStore(selectFinanceLedger);
   const financeTotals = useGameStore((state) => state.financeTotals);
   const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
   const onboarding = useGameStore((state) => state.onboarding);
   const advanceOnboardingProgress = useGameStore((state) => state.advanceOnboardingProgress);
-  const isPaused = useGameStore((state) => state.isPaused);
-  const pauseGame = useGameStore((state) => state.pauseGame);
-  const resumeGame = useGameStore((state) => state.resumeGame);
   const notifyActiveDeliverySeen = useGameStore((state) => state.notifyActiveDeliverySeen);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
   const syncRetentionProgress = useGameStore((state) => state.syncRetentionProgress);
@@ -95,12 +100,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
   const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
-  const reputationHistory = useGameStore((state) => state.reputationHistory) ?? [];
+  const activeDeliveries = useGameStore(selectActiveDeliveries);
+  const reputationHistory = useGameStore(selectReputationHistory);
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
   const addNotification = useGameStore((state) => state.addNotification);
   const [reputationSheetVisible, setReputationSheetVisible] = useState(false);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
   const { scrollBottomPadding: dashboardBottomPadding, screenTopPadding } = useTabBarLayout();
   const { width: screenWidth } = useWindowDimensions();
@@ -330,30 +335,26 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
           styles.screenContent,
           {
             paddingTop: screenTopPadding + 12,
-            paddingBottom: dashboardBottomPadding,
+            paddingBottom: dashboardBottomPadding + GAME_CENTER_BUTTON_LIFT,
             paddingHorizontal: DASHBOARD_HORIZONTAL_PADDING,
-            flexGrow: 0,
+            flexGrow: 1,
           },
         ]}
         showsVerticalScrollIndicator={false}
-        onLayout={() => setLayoutReady(true)}
+        onLayout={markLayoutReady}
       >
-      <View style={styles.headerRow}>
-        <View style={styles.headerSpacer} />
-        <AppTutorialHelpButton {...dashboardTutorial.helpButtonProps} />
-      </View>
-
-      <AppTutorialTarget tutorialId="dashboard" targetId="resource-bar">
+      <AppTutorialTarget tutorialId="dashboard" targetId="resource-bar" layoutMode="stretch">
       <DashboardResourceBar
         money={player.money}
         level={levelProgress.level}
         xpProgress={levelProgress.progressRatio}
-        isPaused={isPaused}
-        onTogglePause={isPaused ? resumeGame : pauseGame}
+        onHelpPress={dashboardTutorial.helpButtonProps.onPress}
+        helpDisabled={dashboardTutorial.helpButtonProps.disabled}
+        helpAccessibilityLabel={dashboardTutorial.helpButtonProps.accessibilityLabel}
       />
       </AppTutorialTarget>
 
-      <AppTutorialTarget tutorialId="dashboard" targetId="company-summary">
+      <AppTutorialTarget tutorialId="dashboard" targetId="company-summary" layoutMode="stretch">
       <DashboardHeroCard
         companyName={player.companyName}
         level={levelProgress.level}
@@ -372,12 +373,14 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       />
       </AppTutorialTarget>
 
-      <ReputationDetailSheet
-        visible={reputationSheetVisible}
-        summary={reputationSummary}
-        history={reputationHistory}
-        onClose={() => setReputationSheetVisible(false)}
-      />
+      {reputationSheetVisible ? (
+        <ReputationDetailSheet
+          visible={reputationSheetVisible}
+          summary={reputationSummary}
+          history={reputationHistory}
+          onClose={() => setReputationSheetVisible(false)}
+        />
+      ) : null}
 
       {showCashWarning ? (
         <DashboardAlertBanner
@@ -423,7 +426,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       ) : null}
 
       <View style={dashboardStyles.lowerSection}>
-      <AppTutorialTarget tutorialId="dashboard" targetId="management-tools">
+      <AppTutorialTarget tutorialId="dashboard" targetId="management-tools" layoutMode="stretch">
       <DashboardModuleGrid
         onNavigate={handleNavigate}
         onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
@@ -435,7 +438,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       </AppTutorialTarget>
 
       <DashboardDailyOpsBonusCard
-        playerLevel={levelProgress.level}
         onboardingCompleted={onboardingCompleted}
         onSuccess={handleDailyOpsBonusSuccess}
       />
@@ -467,14 +469,6 @@ const styles = StyleSheet.create({
   screenContent: {
     gap: DASHBOARD_SECTION_GAP,
     justifyContent: 'flex-start',
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginBottom: -4,
-  },
-  headerSpacer: {
-    flex: 1,
+    width: '100%',
   },
 });

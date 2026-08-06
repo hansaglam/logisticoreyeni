@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import {
   Modal,
   Pressable,
@@ -12,6 +12,7 @@ import AppTutorialHelpButton from '../tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../../hooks/useTutorialLayoutReady';
 
 import {
   REPUTATION_DECREASE_BEHAVIORS,
@@ -26,7 +27,7 @@ import { colors } from '../../theme';
 interface ReputationDetailSheetProps {
   visible: boolean;
   summary: ReputationSummary;
-  history: ReputationHistoryEntry[];
+  history: readonly ReputationHistoryEntry[];
   onClose: () => void;
 }
 
@@ -41,13 +42,19 @@ export default function ReputationDetailSheet({
   history,
   onClose,
 }: ReputationDetailSheetProps) {
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady, resetLayoutReady } = useTutorialLayoutReady();
+
+  useEffect(() => {
+    if (!visible) {
+      resetLayoutReady();
+    }
+  }, [resetLayoutReady, visible]);
 
   const reputationTutorial = useScreenAppTutorial({
     tutorialId: 'reputation',
     layoutReady,
     blockingModals: !visible,
-    autoStart: visible,
+    autoStart: false,
   });
 
   const pointsToNext =
@@ -75,9 +82,9 @@ export default function ReputationDetailSheet({
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={styles.scrollContent}
-            onLayout={() => setLayoutReady(true)}
+            onLayout={markLayoutReady}
           >
-            <AppTutorialTarget tutorialId="reputation" targetId="reputation-score">
+            <AppTutorialTarget tutorialId="reputation" targetId="reputation-score" layoutMode="stretch">
               <View style={styles.scoreCard}>
                 <Text style={styles.scoreValue}>
                   {summary.score}
@@ -100,7 +107,7 @@ export default function ReputationDetailSheet({
               </View>
             </AppTutorialTarget>
 
-            <AppTutorialTarget tutorialId="reputation" targetId="reputation-how">
+            <AppTutorialTarget tutorialId="reputation" targetId="reputation-how" layoutMode="stretch">
               <View>
                 <Text style={styles.lead}>
                   İtibar; teslimat performansını, sözleşme güvenilirliğini ve operasyon
@@ -121,7 +128,7 @@ export default function ReputationDetailSheet({
               </View>
             </AppTutorialTarget>
 
-            <AppTutorialTarget tutorialId="reputation" targetId="reputation-why">
+            <AppTutorialTarget tutorialId="reputation" targetId="reputation-why" layoutMode="stretch">
               <View>
                 <Text style={styles.sectionTitle}>Azaltan davranışlar</Text>
                 {REPUTATION_DECREASE_BEHAVIORS.map((item) => (

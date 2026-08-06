@@ -6,8 +6,8 @@ import {
   Text,
   useWindowDimensions,
   View,
+  type ScrollView,
 } from 'react-native';
-import type { FlatList } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { QuickAccessAction } from '../../navigation/quickAccessTypes';
@@ -19,8 +19,7 @@ import {
   MANAGEMENT_PANEL_MAX_HEIGHT_RATIO,
   MANAGEMENT_PANEL_PADDING,
 } from './managementTheme';
-import { estimateManagementPanelContentHeight } from './managementLayout';
-import type { ManagementItem } from './managementTypes';
+import { resolveManagementPanelHeight } from './managementLayout';
 import { useManagementItems } from './useManagementPanelData';
 
 export interface ManagementPanelProps {
@@ -37,32 +36,71 @@ export default function ManagementPanel({
   onQuickAccess,
 }: ManagementPanelProps) {
   const items = useManagementItems();
-  const listRef = useRef<FlatList<ManagementItem>>(null);
+  const scrollRef = useRef<ScrollView>(null);
   const tapLockRef = useRef(false);
+  const lastLoggedHeightRef = useRef(0);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
   const panelContentWidth =
     windowWidth - spacing.lg * 2 - MANAGEMENT_PANEL_PADDING * 2;
-  const scrollBottomPadding = Math.max(bottomOffset, spacing.md) + spacing.sm;
 
-  const maxPanelHeightCap =
+  const availableHeight =
     windowHeight * MANAGEMENT_PANEL_MAX_HEIGHT_RATIO - Math.max(insets.top, 0) * 0.15;
 
-  const naturalPanelHeight = useMemo(
-    () => estimateManagementPanelContentHeight(items.length) + scrollBottomPadding,
-    [items.length, scrollBottomPadding],
+  const layout = useMemo(
+    () =>
+      resolveManagementPanelHeight({
+        itemCount: items.length,
+        availableHeight,
+      }),
+    [availableHeight, items.length],
   );
 
-  const panelHeight = Math.min(naturalPanelHeight, maxPanelHeightCap);
-  const needsScroll = naturalPanelHeight > maxPanelHeightCap;
+  const { panelHeight, naturalHeight, needsScroll } = layout;
+  const listBottomInset = spacing.sm;
 
   useEffect(() => {
-    if (visible) {
-      listRef.current?.scrollToOffset({ offset: 0, animated: false });
-      tapLockRef.current = false;
+    if (!visible) {
+      return;
     }
-  }, [visible]);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+    tapLockRef.current = false;
+
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.info('[management-panel-layout]', {
+        visible: true,
+        windowHeight,
+        bottomOffset,
+        availableHeight,
+        naturalPanelHeight: naturalHeight,
+        panelHeight,
+        needsScroll,
+        itemCount: items.length,
+        rowCount: layout.rowCount,
+        zIndex: 'modal',
+        parentOverflow: 'modal-root',
+      });
+    }
+  }, [availableHeight, bottomOffset, items.length, layout.rowCount, naturalHeight, needsScroll, panelHeight, visible, windowHeight]);
+
+  const handlePanelLayout = useCallback(
+    (height: number) => {
+      if (typeof __DEV__ === 'undefined' || !__DEV__ || !visible) {
+        return;
+      }
+      if (Math.abs(lastLoggedHeightRef.current - height) < 1) {
+        return;
+      }
+      lastLoggedHeightRef.current = height;
+      console.info('[management-panel-layout]', {
+        panelMeasuredHeight: height,
+        contentMeasuredHeight: naturalHeight,
+        flatListMeasuredHeight: height - MANAGEMENT_PANEL_PADDING * 2,
+      });
+    },
+    [naturalHeight, visible],
+  );
 
   const handleItemPress = useCallback(
     (action: QuickAccessAction) => {
@@ -84,7 +122,7 @@ export default function ManagementPanel({
   const listHeader = (
     <View style={styles.header}>
       <View style={styles.headerIconWrap}>
-        <GameIcon name="quickAccess" size={18} color={colors.info} />
+        <GameIcon name="quickAccess" size={16} color={colors.info} />
       </View>
       <View style={styles.headerCopy}>
         <Text style={styles.title}>Yönetim</Text>
@@ -92,6 +130,10 @@ export default function ManagementPanel({
       </View>
     </View>
   );
+
+  if (!visible) {
+    return null;
+  }
 
   return (
     <Modal
@@ -108,16 +150,23 @@ export default function ManagementPanel({
         >
           <Pressable style={styles.panelPressable} onPress={(event) => event.stopPropagation()}>
             <View
-              style={[styles.panel, { height: panelHeight, maxHeight: maxPanelHeightCap }]}
+              onLayout={(event) => handlePanelLayout(event.nativeEvent.layout.height)}
+              style={[
+                styles.panel,
+                {
+                  height: panelHeight,
+                  maxHeight: availableHeight,
+                },
+              ]}
               accessibilityViewIsModal
             >
               <ManagementGrid
-                listRef={listRef}
+                scrollRef={scrollRef}
                 items={items}
                 contentWidth={panelContentWidth}
                 onItemPress={handleItemPress}
                 listHeaderComponent={listHeader}
-                contentBottomPadding={scrollBottomPadding}
+                contentBottomPadding={listBottomInset}
                 scrollEnabled={needsScroll}
               />
             </View>
@@ -138,6 +187,8 @@ const styles = StyleSheet.create({
     left: spacing.lg,
     right: spacing.lg,
     alignItems: 'stretch',
+    zIndex: 20,
+    elevation: 20,
   },
   panelPressable: {
     width: '100%',
@@ -146,11 +197,12 @@ const styles = StyleSheet.create({
   panel: {
     width: '100%',
     backgroundColor: colors.surface2,
-    borderRadius: 30,
+    borderRadius: 26,
     borderWidth: 1,
     borderColor: 'rgba(56, 129, 200, 0.28)',
     paddingHorizontal: MANAGEMENT_PANEL_PADDING,
     paddingTop: MANAGEMENT_PANEL_PADDING,
+    paddingBottom: MANAGEMENT_PANEL_PADDING,
     overflow: 'hidden',
     shadowColor: '#0EA5E9',
     shadowOpacity: 0.08,
@@ -165,32 +217,32 @@ const styles = StyleSheet.create({
     marginBottom: MANAGEMENT_HEADER_GAP,
   },
   headerIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(56, 189, 248, 0.1)',
     borderWidth: 1,
     borderColor: 'rgba(56, 189, 248, 0.22)',
-    marginTop: 2,
+    marginTop: 1,
   },
   headerCopy: {
     flex: 1,
-    gap: 4,
+    gap: 2,
   },
   title: {
     ...typography.sectionTitle,
     color: colors.textPrimary,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
-    lineHeight: 24,
+    lineHeight: 22,
   },
   subtitle: {
     ...typography.caption,
     color: colors.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '500',
   },
 });

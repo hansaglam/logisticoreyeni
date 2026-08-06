@@ -77,8 +77,9 @@ export default function OwnedWarehousesSection({
                 key={card.warehouse.id}
                 tutorialId="warehouses"
                 targetId="city-warehouse-link"
+                layoutMode="stretch"
               >
-                <AppTutorialTarget tutorialId="warehouses" targetId="capacity">
+                <AppTutorialTarget tutorialId="warehouses" targetId="capacity" layoutMode="stretch">
                   {warehouseCard}
                 </AppTutorialTarget>
               </AppTutorialTarget>

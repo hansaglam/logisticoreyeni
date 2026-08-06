@@ -159,7 +159,10 @@ console.log('\nHook wiring');
 {
   const dashSource = readFileSync('src/screens/DashboardScreen.tsx', 'utf8');
   assert(dashSource.includes('useScreenAppTutorial'), 'dashboard uses screen tutorial hook');
-  assert(dashSource.includes('AppTutorialHelpButton'), 'dashboard has help button');
+  assert(
+    dashSource.includes('onHelpPress') || dashSource.includes('AppTutorialHelpButton'),
+    'dashboard has help button wired in HUD',
+  );
 }
 
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===\n`);

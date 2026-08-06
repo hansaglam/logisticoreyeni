@@ -5,7 +5,7 @@
  * TODO V2: Unlock Europe/global network after company expansion
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -32,6 +32,7 @@ import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { GameIcon } from '../components/ui';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
@@ -42,6 +43,15 @@ import {
   getRecommendedMapAction,
 } from '../simulation/mapRecommendations';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectActiveDeliveries,
+  selectActiveTransfers,
+  selectCities,
+  selectContracts,
+  selectProducts,
+  selectRoutes,
+} from '../store/selectors/stableCollections';
+import { commitLayoutSize } from '../utils/layoutState';
 import { getWorldMapCityPosition } from '../data/worldMapPositions';
 import { getCityName } from '../utils/entityLookup';
 import type {
@@ -204,12 +214,12 @@ function CompactRecommendedActionRow({ subtitle, onPress }: CompactRecommendedAc
 
 export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () => void }) {
   const player = useGameStore((state) => state.player);
-  const cities = useGameStore((state) => state.cities) ?? [];
-  const routes = useGameStore((state) => state.routes) ?? [];
-  const products = useGameStore((state) => state.products) ?? [];
-  const contracts = useGameStore((state) => state.contracts) ?? [];
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
-  const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
+  const cities = useGameStore(selectCities);
+  const routes = useGameStore(selectRoutes);
+  const products = useGameStore(selectProducts);
+  const contracts = useGameStore(selectContracts);
+  const activeDeliveries = useGameStore(selectActiveDeliveries);
+  const activeTransfers = useGameStore(selectActiveTransfers);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
   const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
@@ -224,7 +234,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [mapGestureActive, setMapGestureActive] = useState(false);
   const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
   const mapRef = useRef<WorldMapCanvasHandle>(null);
 
@@ -251,16 +261,30 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     [activeDeliveries],
   );
 
+  const runningDeliveriesKey = useMemo(
+    () =>
+      runningDeliveries
+        .map(
+          (delivery) =>
+            `${delivery.id}:${delivery.status}:${Math.floor(delivery.progress * 10)}:${Math.floor(delivery.estimatedArrivalTime)}`,
+        )
+        .join('|'),
+    [runningDeliveries],
+  );
+
   useEffect(() => {
     if (runningDeliveries.length === 0) {
-      setSelectedDeliveryId(null);
+      setSelectedDeliveryId((current) => (current == null ? current : null));
       return;
     }
-    if (selectedDeliveryId && runningDeliveries.some((d) => d.id === selectedDeliveryId)) {
-      return;
-    }
-    setSelectedDeliveryId(runningDeliveries[0]?.id ?? null);
-  }, [runningDeliveries, selectedDeliveryId]);
+    const firstId = runningDeliveries[0]?.id ?? null;
+    setSelectedDeliveryId((current) => {
+      if (current && runningDeliveries.some((delivery) => delivery.id === current)) {
+        return current;
+      }
+      return firstId;
+    });
+  }, [runningDeliveriesKey, runningDeliveries.length]);
 
   const mapCities = useMemo(
     () => cities.filter((city) => getWorldMapCityPosition(city.id) != null),
@@ -320,16 +344,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const availableContractsKey = useMemo(
     () => availableContracts.map((contract) => `${contract.id}:${contract.status}`).join('|'),
     [availableContracts],
-  );
-  const runningDeliveriesKey = useMemo(
-    () =>
-      runningDeliveries
-        .map(
-          (delivery) =>
-            `${delivery.id}:${delivery.status}:${Math.floor(delivery.progress * 10)}:${Math.floor(delivery.estimatedArrivalTime)}`,
-        )
-        .join('|'),
-    [runningDeliveries],
   );
   const recommendationClock = Math.floor(currentTime);
 
@@ -451,6 +465,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     onOpenContracts?.();
   };
 
+  const handleRootLayout = markLayoutReady;
+
   if (!player) {
     return (
       <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
@@ -482,7 +498,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         onMomentumScrollEnd={mapTutorial.handleScrollEnd}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
-        onLayout={() => setLayoutReady(true)}
+        onLayout={handleRootLayout}
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: scrollBottomPadding },
@@ -504,14 +520,14 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           />
         ) : null}
 
-        <AppTutorialTarget tutorialId="map" targetId="map-filters">
+        <AppTutorialTarget tutorialId="map" targetId="map-filters" layoutMode="stretch">
           <MapFilterTabs
             selectedFilter={selectedMapFilter}
             onChange={setSelectedMapFilter}
           />
         </AppTutorialTarget>
 
-        <AppTutorialTarget tutorialId="map" targetId="active-routes">
+        <AppTutorialTarget tutorialId="map" targetId="active-routes" layoutMode="stretch">
           <MapStatsStrip
             cityCount={mapCities.length}
             routeCount={routeCount}
@@ -527,7 +543,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           </View>
         ) : null}
 
-        <AppTutorialTarget tutorialId="map" targetId="cities-warehouses">
+        <AppTutorialTarget tutorialId="map" targetId="cities-warehouses" layoutMode="stretch">
           <TurkeyNetworkCard>
             <WorldMapCanvas
               ref={mapRef}
@@ -549,7 +565,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           />
         ) : null}
 
-        <AppTutorialTarget tutorialId="map" targetId="truck-tracking">
+        <AppTutorialTarget tutorialId="map" targetId="truck-tracking" layoutMode="stretch">
           <MapTruckTrackingSection
             trucks={trucks}
             drivers={player.drivers ?? []}

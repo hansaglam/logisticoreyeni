@@ -3,6 +3,8 @@
  * Gerçek reklam SDK bu katmanın üstüne bağlanır.
  */
 
+import type { Player } from './game';
+
 export type AdRewardSlotId =
   | 'daily_ops_bonus'
   | 'contract_refresh'
@@ -54,6 +56,8 @@ export interface AdRewardGrantContext {
   currentGameTime: number;
   playerLevel: number;
   hasCompletedOnboarding: boolean;
+  /** Günlük operasyon desteği ödülü — zorunlu günlük gider hesabı için. */
+  playerFleet?: Pick<Player, 'drivers' | 'warehouses' | 'trucks'>;
   selectedProductId?: string;
   selectedTruckId?: string;
   selectedDeliveryId?: string;

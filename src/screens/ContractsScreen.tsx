@@ -30,6 +30,7 @@ import {
   IconButton,
   ProgressBar,
   ProductIcon,
+  ScreenHeader,
 } from '../components/ui';
 import { getRoute as findRoute } from '../data/routes';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -61,6 +62,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
@@ -771,11 +773,12 @@ export default function ContractsScreen() {
 
   const [activeSegment, setActiveSegment] = useState<SegmentKey>('available');
   const [statusMessage, setStatusMessage] = useState<StatusMessage>(null);
+  const [isRefreshingContracts, setIsRefreshingContracts] = useState(false);
   const [assignmentContract, setAssignmentContract] = useState<Contract | null>(null);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
   const [quickSheetContract, setQuickSheetContract] = useState<Contract | null>(null);
   const [quickSheetVisible, setQuickSheetVisible] = useState(false);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
 
   useEffect(() => {
     notifyContractsScreenOpened();
@@ -827,6 +830,18 @@ export default function ContractsScreen() {
     () => selectAvailableContractsForUi(contracts),
     [contracts],
   );
+
+  const idleTruckCityIds = useMemo(
+    () => getIdleTruckOriginCityIds(trucks, player?.homeCityId),
+    [trucks, player?.homeCityId],
+  );
+  const idleTruckCityLabel = useMemo(() => {
+    if (idleTruckCityIds.length === 0) {
+      return null;
+    }
+    const names = idleTruckCityIds.map((cityId) => getCityName(cityId));
+    return names.join(', ');
+  }, [idleTruckCityIds]);
 
   const contractsTutorial = useScreenAppTutorial({
     tutorialId: 'contracts',
@@ -1149,10 +1164,42 @@ export default function ContractsScreen() {
     setHighlightedContractId(null);
   };
 
-  const handleRefresh = () => {
-    refreshContractsFromMarket();
-    setStatusMessage({ type: 'success', text: 'Piyasa güncellendi' });
-  };
+  const handleRefresh = useCallback(() => {
+    if (isRefreshingContracts) {
+      return;
+    }
+
+    setIsRefreshingContracts(true);
+    const emergency = availableContracts.length === 0 || playableContractCount === 0;
+    const result = refreshContractsFromMarket({
+      bypassCooldown: emergency,
+      emergency,
+    });
+    setIsRefreshingContracts(false);
+
+    if (result.cooldownBlocked) {
+      setStatusMessage({
+        type: 'error',
+        text: 'Yenileme bekleme süresinde. Biraz sonra tekrar dene.',
+      });
+      return;
+    }
+
+    if (result.generated > 0) {
+      setStatusMessage({ type: 'success', text: 'Piyasa güncellendi' });
+      return;
+    }
+
+    setStatusMessage({
+      type: 'success',
+      text: emergency ? 'Piyasa tarandı' : 'Piyasa güncellendi',
+    });
+  }, [
+    availableContracts.length,
+    isRefreshingContracts,
+    playableContractCount,
+    refreshContractsFromMarket,
+  ]);
 
   const isRefreshOnCooldown = useMemo(() => {
     const hoursSinceManual = currentTime - lastManualContractRefreshTime;
@@ -1216,8 +1263,8 @@ export default function ContractsScreen() {
         }
 
         return (
-          <AppTutorialTarget tutorialId="contracts" targetId="payment-risk">
-            <AppTutorialTarget tutorialId="contracts" targetId="assignment">
+          <AppTutorialTarget tutorialId="contracts" targetId="payment-risk" layoutMode="stretch">
+            <AppTutorialTarget tutorialId="contracts" targetId="assignment" layoutMode="stretch">
               <TutorialTarget
                 id="contract-first-card"
                 onTutorialPress={() => openQuickSheet(item.contract)}
@@ -1241,7 +1288,7 @@ export default function ContractsScreen() {
         );
         if (runningDeliveries[0]?.id === item.delivery.id) {
           return (
-            <AppTutorialTarget tutorialId="contracts" targetId="active-delivery">
+            <AppTutorialTarget tutorialId="contracts" targetId="active-delivery" layoutMode="stretch">
               {deliveryCard}
             </AppTutorialTarget>
           );
@@ -1324,13 +1371,37 @@ export default function ContractsScreen() {
 
   const listEmpty = useMemo(() => {
     if (activeSegment === 'available') {
-      if (availableContracts.length === 0) {
+      if (isRefreshingContracts) {
         return (
           <EmptyState
-            title="Şu anda piyasada sözleşme yok."
-            message="Piyasa yeni fırsatlar oluşturdukça burada görünecek."
+            title="Yeni sözleşmeler hazırlanıyor…"
+            message="Piyasa taranıyor, lütfen bekleyin."
             icon="contract"
           />
+        );
+      }
+      if (availableContracts.length === 0) {
+        return (
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              title="Şu anda piyasada sözleşme yok."
+              message={
+                idleTruckCityLabel
+                  ? `${idleTruckCityLabel} çıkışlı yeni işler aranıyor.`
+                  : 'Piyasa yeni fırsatlar oluşturdukça burada görünecek.'
+              }
+              icon="contract"
+            />
+            <TouchableOpacity
+              style={styles.emptyRefreshButton}
+              onPress={handleRefresh}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Piyasayı yenile"
+            >
+              <Text style={styles.emptyRefreshButtonText}>Piyasayı Yenile</Text>
+            </TouchableOpacity>
+          </View>
         );
       }
       if (filteredContracts.length === 0) {
@@ -1371,32 +1442,37 @@ export default function ContractsScreen() {
     availableContracts.length,
     filteredContracts.length,
     hasActiveMarketFilter,
+    handleRefresh,
+    idleTruckCityLabel,
+    isRefreshingContracts,
   ]);
 
   return (
     <View style={styles.screenRoot}>
       <View
         style={[styles.safeArea, { paddingTop: screenTopPadding }]}
-        onLayout={() => setLayoutReady(true)}
+        onLayout={markLayoutReady}
       >
-        <View style={styles.header}>
-          <View style={styles.headerSideSlot}>
-            <AppTutorialHelpButton {...contractsTutorial.helpButtonProps} />
-          </View>
-          <AppTutorialTarget tutorialId="contracts" targetId="contracts-header">
-            <Text style={styles.headerTitle}>Sözleşmeler</Text>
-          </AppTutorialTarget>
-          <View style={styles.headerSideSlot}>
-            <IconButton
-              icon="refresh"
-              onPress={handleRefresh}
-              size={16}
-              color={COLORS.cyan}
-              backgroundColor={COLORS.card}
-              style={styles.headerIconButton}
-            />
-          </View>
-        </View>
+        <AppTutorialTarget tutorialId="contracts" targetId="contracts-header" layoutMode="stretch">
+          <ScreenHeader
+            title="Sözleşmeler"
+            compact
+            leftAction={
+              <AppTutorialHelpButton {...contractsTutorial.helpButtonProps} />
+            }
+            rightAction={
+              <IconButton
+                icon="refresh"
+                onPress={handleRefresh}
+                size={18}
+                color={COLORS.cyan}
+                backgroundColor={COLORS.card}
+                style={styles.headerIconButton}
+                disabled={isRefreshingContracts}
+              />
+            }
+          />
+        </AppTutorialTarget>
 
         {statusMessage ? (
           <View
@@ -1432,7 +1508,7 @@ export default function ContractsScreen() {
           />
         ) : null}
 
-        <AppTutorialTarget tutorialId="contracts" targetId="city-truck-requirement">
+        <AppTutorialTarget tutorialId="contracts" targetId="city-truck-requirement" layoutMode="stretch">
           <ContractsSummaryStrip
             availableCount={availableContracts.length}
             activeCount={runningDeliveries.length}
@@ -1463,7 +1539,7 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        <AppTutorialTarget tutorialId="contracts" targetId="available-jobs">
+        <AppTutorialTarget tutorialId="contracts" targetId="available-jobs" layoutMode="stretch">
           <ContractsTabBar
             segments={tabSegments}
             activeKey={activeSegment}
@@ -1546,20 +1622,9 @@ const styles = StyleSheet.create({
   listScrollContent: {
     paddingTop: spacing.sm,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-  },
-  headerSideSlot: {
-    width: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   headerIconButton: {
-    width: 34,
-    height: 34,
+    width: 44,
+    height: 44,
     borderRadius: 10,
     backgroundColor: COLORS.card,
     borderWidth: 1,
@@ -1567,19 +1632,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerIconText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: '700',
+  emptyStateWrap: {
+    gap: spacing.sm,
   },
-  headerTitle: {
-    flex: 1,
-    color: COLORS.text,
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-    textAlign: 'center',
-    minWidth: 0,
+  emptyRefreshButton: {
+    alignSelf: 'center',
+    minWidth: 168,
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.cyan,
+    backgroundColor: colors.cardSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyRefreshButtonText: {
+    color: COLORS.cyan,
+    fontSize: 13,
+    fontWeight: '700',
   },
   statusBanner: {
     borderWidth: 1,

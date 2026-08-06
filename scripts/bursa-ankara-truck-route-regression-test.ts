@@ -95,7 +95,7 @@ if (route && bursa && ankara) {
   const toAnkaraDx = (ankara.x - pose.position.x) * SCALE_X;
   const toAnkaraDy = (ankara.y - pose.position.y) * SCALE_Y;
   const bearingToAnkara = normalizeHeadingDegrees360(
-    (Math.atan2(toAnkaraDy, toAnkaraDx) * 180) / Math.PI + TRUCK_ASSET_FORWARD_OFFSET_DEG,
+    (Math.atan2(toAnkaraDy, toAnkaraDx) * 180) / Math.PI - TRUCK_ASSET_FORWARD_OFFSET_DEG,
   );
   const bearingToBursa = normalizeHeadingDegrees360(bearingToAnkara + 180);
 
@@ -130,6 +130,40 @@ if (route && bursa && ankara) {
     });
     assert(Number.isFinite(sample.headingDeg), `progress=${progress} heading finite`);
     assert(distanceToPolyline(sample.position, route) < 0.0005, `progress=${progress} on polyline`);
+  }
+}
+
+console.log('\nAnkara → Bursa (reverse catalog route)');
+{
+  const route = getRoadRoute('ankara', 'bursa');
+  assert(route != null && route.length >= 2, 'Ankara → Bursa route resolves');
+  if (route && ankara && bursa) {
+    const pose = getRoutePoseAtProgress(route, PROGRESS, {
+      coordinateScaleX: SCALE_X,
+      coordinateScaleY: SCALE_Y,
+    });
+    const displayHeading = getRouteHeadingDegrees({
+      routePoints: route,
+      progress: PROGRESS,
+      assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+      coordinateScaleX: SCALE_X,
+      coordinateScaleY: SCALE_Y,
+    });
+    const toBursaDx = (bursa.x - pose.position.x) * SCALE_X;
+    const toBursaDy = (bursa.y - pose.position.y) * SCALE_Y;
+    const bearingToBursa = normalizeHeadingDegrees360(
+      (Math.atan2(toBursaDy, toBursaDx) * 180) / Math.PI - TRUCK_ASSET_FORWARD_OFFSET_DEG,
+    );
+    assert(
+      angularDistance(displayHeading, bearingToBursa) < 75,
+      'Ankara → Bursa marker faces toward Bursa',
+      `display=${displayHeading.toFixed(1)}° bearing=${bearingToBursa.toFixed(1)}°`,
+    );
+    assert(
+      pose.headingDeg < -45 || pose.headingDeg > 135,
+      'Ankara → Bursa tangent faces west (toward Bursa)',
+      `${pose.headingDeg.toFixed(1)}°`,
+    );
   }
 }
 

@@ -3,12 +3,15 @@
  */
 
 import {
-  getDailyOpsBonusCash,
   LOW_LEVEL_ALLOWED_AD_SLOTS,
   LOW_LEVEL_MAX_PLAYER_LEVEL,
   MONETIZATION_GLOBAL_DAILY_AD_CAP,
   MONETIZATION_SLOT_CONFIG,
 } from '../config/monetization';
+import {
+  calculateDailyOperationSupportReward,
+  MIN_DAILY_OPERATION_SUPPORT_REWARD,
+} from '../domain/dailyOperationSupportReward';
 import type {
   AdRewardDailyUsage,
   AdRewardEligibilityResult,
@@ -443,7 +446,9 @@ export function applyAdRewardGrant(
 
   switch (slotId) {
     case 'daily_ops_bonus': {
-      const amount = getDailyOpsBonusCash(context.playerLevel);
+      const amount = context.playerFleet
+        ? calculateDailyOperationSupportReward(context.playerFleet)
+        : MIN_DAILY_OPERATION_SUPPORT_REWARD;
       effects.push({ type: 'cash', amount });
       monetization = incrementSlotUsage(monetization, slotId, context, `+$${amount} nakit`);
       break;

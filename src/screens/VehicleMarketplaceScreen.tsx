@@ -13,6 +13,7 @@ import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton'
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
+import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import { useAppDialog } from '../components/AppDialogProvider';
 import MarketplaceFiltersSheet from '../components/marketplace/MarketplaceFiltersSheet';
 import VehicleListingCreateSheet from '../components/marketplace/VehicleListingCreateSheet';
@@ -120,7 +121,7 @@ export default function VehicleMarketplaceScreen({
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [layoutReady, setLayoutReady] = useState(false);
+  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const requestSeqRef = useRef(0);
   const lastAuthUidRef = useRef<string | null>(null);
   const listRef = useRef<FlatList<VehicleMarketplaceListing>>(null);
@@ -461,7 +462,7 @@ export default function VehicleMarketplaceScreen({
           ref={listRef}
           data={activeTab === 'available' && !isUnavailable ? visibleListings : []}
           keyExtractor={(item) => item.id}
-          onLayout={() => setLayoutReady(true)}
+          onLayout={markLayoutReady}
           onScroll={marketplaceTutorial.handleScroll}
           onScrollEndDrag={marketplaceTutorial.handleScrollEnd}
           onMomentumScrollEnd={marketplaceTutorial.handleScrollEnd}
@@ -477,7 +478,7 @@ export default function VehicleMarketplaceScreen({
 
             if (index === 0) {
               return (
-                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="listings">
+                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="listings" layoutMode="stretch">
                   {listingCard}
                 </AppTutorialTarget>
               );
@@ -519,7 +520,7 @@ export default function VehicleMarketplaceScreen({
                 <Text style={styles.resultText}>
                   {isInitialLoading ? 'Yükleniyor…' : `${visibleListings.length} araç gösteriliyor`}
                 </Text>
-                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="filters">
+                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="filters" layoutMode="stretch">
                   <TouchableOpacity style={styles.filterButton} onPress={() => setFiltersVisible(true)}>
                     <GameIcon name="filter" size={16} color={colors.accentBlue} />
                     <Text style={styles.filterText}>Filtreler</Text>
@@ -582,7 +583,7 @@ export default function VehicleMarketplaceScreen({
                   compact
                 />
               ) : (
-                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="my-listings">
+                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="my-listings" layoutMode="stretch">
                   <MyVehicleListings
                     listings={activeMine}
                     cancellingId={cancellingId}

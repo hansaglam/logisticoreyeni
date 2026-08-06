@@ -19,6 +19,10 @@ import {
   type CloudSavePayload,
 } from '../services/cloudSaveService';
 import { submitCurrentLeaderboardScore } from '../services/leaderboardService';
+import {
+  getLeaderboardSubmitEligibility,
+  isExpectedLeaderboardSubmitSkip,
+} from '../domain/leaderboardSubmitEligibility';
 import { isFirebaseEnabled } from '../services/firebase';
 import { SAVE_GAME_VERSION, serializeGameState, analyzeSavePayloadSize, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
@@ -312,11 +316,13 @@ export async function syncLocalSaveToCloud(
     return false;
   }
 
+  const resolvedOwnerUid = options.ownerUid ?? uid ?? undefined;
+
   const payload = serializeGameState(options.state, {
-    ownerUid: options.ownerUid,
+    ownerUid: resolvedOwnerUid,
   });
-  if (options.ownerUid) {
-    payload.ownerUid = options.ownerUid;
+  if (resolvedOwnerUid) {
+    payload.ownerUid = resolvedOwnerUid;
   }
 
   const ownerGuard = assertLocalSaveOwnerMatchesAuth(payload.ownerUid, uid);
@@ -530,12 +536,20 @@ export function buildCloudSaveSummaryForState(state: StoreGameState): CloudSaveS
 }
 
 async function syncLeaderboardFromGameState(_state: StoreGameState): Promise<void> {
-  if (!getCurrentUserId()) {
+  const eligibility = getLeaderboardSubmitEligibility();
+  if (!eligibility.eligible) {
     return;
   }
 
   const result = await submitCurrentLeaderboardScore({ force: false });
-  if (!result.ok && typeof __DEV__ !== 'undefined' && __DEV__) {
+  if (
+    !result.ok &&
+    typeof __DEV__ !== 'undefined' &&
+    __DEV__ &&
+    !isExpectedLeaderboardSubmitSkip(
+      typeof result.errorCode === 'string' ? result.errorCode : undefined,
+    )
+  ) {
     console.warn('[leaderboard] trusted submit failed', {
       errorCode: result.errorCode,
       error: result.error,

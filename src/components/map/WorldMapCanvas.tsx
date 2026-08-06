@@ -52,12 +52,10 @@ import {
 } from './mapSegmentCalibration';
 import {
   getRoadRoute,
-  getRouteHeadingDegrees,
-  getRoutePoseAtProgress,
+  getRouteMarkerPose,
   logMapHeadingDebug,
   buildMapHeadingDebugPayload,
   normalizeMapDeliveryProgress,
-  normalizedPointToPixel,
   polylineToSvgPath,
   splitPolylineAtProgress,
   type MapBounds as RoadMapBounds,
@@ -386,23 +384,16 @@ function WorldMapCanvasInner(
       const normalizedProgress = normalizeMapDeliveryProgress(delivery.progress);
       const headingCacheKey = `${delivery.id}:${routeVersion}`;
       const previousHeading = lastValidHeadingByRouteKey.current.get(headingCacheKey);
-      const samplingOptions = {
-        fallbackHeadingDeg: previousHeading,
-        coordinateScaleX: roadBounds.width,
-        coordinateScaleY: roadBounds.height,
-      };
-      const routePose = getRoutePoseAtProgress(roadPoints, delivery.progress, samplingOptions);
-      const displayHeadingDeg = getRouteHeadingDegrees({
+      const markerPose = getRouteMarkerPose({
         routePoints: roadPoints,
         progress: delivery.progress,
-        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+        mapBounds: roadBounds,
+        assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         fallbackHeadingDeg: previousHeading,
         previousHeadingDeg: previousHeading,
-        coordinateScaleX: roadBounds.width,
-        coordinateScaleY: roadBounds.height,
       });
-      if (Number.isFinite(displayHeadingDeg)) {
-        lastValidHeadingByRouteKey.current.set(headingCacheKey, displayHeadingDeg);
+      if (Number.isFinite(markerPose.markerHeadingDeg)) {
+        lastValidHeadingByRouteKey.current.set(headingCacheKey, markerPose.markerHeadingDeg);
       }
       const headingDebug = buildMapHeadingDebugPayload({
         routePoints: roadPoints,
@@ -417,8 +408,8 @@ function WorldMapCanvasInner(
       if (headingDebug) {
         logMapHeadingDebug(headingDebug);
       }
-      const truckPixel = normalizedPointToPixel(routePose.position, roadBounds);
-      const truckAngleRadians = (displayHeadingDeg * Math.PI) / 180;
+      const truckPixel = markerPose.positionPx;
+      const truckAngleRadians = (markerPose.markerHeadingDeg * Math.PI) / 180;
 
       logTruckPositionDebug({
         originCityId: delivery.originCityId,
@@ -427,7 +418,7 @@ function WorldMapCanvasInner(
         normalizedProgress,
         routeStart: roadPoints[0],
         routeEnd: roadPoints[roadPoints.length - 1],
-        calculatedTruckPoint: routePose.position,
+        calculatedTruckPoint: markerPose.position,
       });
 
       const { completedPoints, remainingPoints } = splitPolylineAtProgress(
@@ -529,23 +520,16 @@ function WorldMapCanvasInner(
       const normalizedProgress = normalizeMapDeliveryProgress(transfer.progress);
       const headingCacheKey = `${transfer.id}:${routeVersion}`;
       const previousHeading = lastValidHeadingByRouteKey.current.get(headingCacheKey);
-      const samplingOptions = {
-        fallbackHeadingDeg: previousHeading,
-        coordinateScaleX: roadBounds.width,
-        coordinateScaleY: roadBounds.height,
-      };
-      const routePose = getRoutePoseAtProgress(roadPoints, transfer.progress, samplingOptions);
-      const displayHeadingDeg = getRouteHeadingDegrees({
+      const markerPose = getRouteMarkerPose({
         routePoints: roadPoints,
         progress: transfer.progress,
-        assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+        mapBounds: roadBounds,
+        assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         fallbackHeadingDeg: previousHeading,
         previousHeadingDeg: previousHeading,
-        coordinateScaleX: roadBounds.width,
-        coordinateScaleY: roadBounds.height,
       });
-      if (Number.isFinite(displayHeadingDeg)) {
-        lastValidHeadingByRouteKey.current.set(headingCacheKey, displayHeadingDeg);
+      if (Number.isFinite(markerPose.markerHeadingDeg)) {
+        lastValidHeadingByRouteKey.current.set(headingCacheKey, markerPose.markerHeadingDeg);
       }
 
       items.push({
@@ -553,8 +537,8 @@ function WorldMapCanvasInner(
         routeVersion,
         hasRoute: true,
         routePath: polylineToSvgPath(roadPoints, roadBounds),
-        truckPixel: normalizedPointToPixel(routePose.position, roadBounds),
-        truckAngle: (displayHeadingDeg * Math.PI) / 180,
+        truckPixel: markerPose.positionPx,
+        truckAngle: (markerPose.markerHeadingDeg * Math.PI) / 180,
         normalizedProgress,
         opacity,
       });

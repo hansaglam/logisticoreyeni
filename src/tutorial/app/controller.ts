@@ -61,6 +61,7 @@ export function createDisabledScreenTutorialResult(
       noticeText: null,
       onRequestStepChange: noop,
       onSkip: noop,
+      onDismiss: noop,
       onComplete: noop,
     },
     helpButtonProps: {

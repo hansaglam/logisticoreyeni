@@ -1,14 +1,18 @@
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import type { AppPreferences } from '../../services/appPreferences';
 import { updateAppPreference } from '../../services/appPreferences';
+import {
+  AD_PRIVACY_NOT_REQUIRED_MESSAGE,
+  AD_PRIVACY_OPTIONS_TITLE,
+} from '../../domain/adPrivacyState';
 import AccountActionRow from './AccountActionRow';
-import AccountInfoRow from './AccountInfoRow';
 import AccountSectionCard from './AccountSectionCard';
 import AccountSettingRow from './AccountSettingRow';
 import DangerZoneCard from './DangerZoneCard';
 import { ACCOUNT_SECTION_GAP } from './accountCenterTheme';
+import { colors, typography } from '../../theme';
 
 const SETTING_ROWS: {
   key: keyof AppPreferences;
@@ -36,7 +40,7 @@ const SETTING_ROWS: {
   },
   {
     key: 'incomeSummaryEnabled',
-    title: 'Gelir özeti penceresi',
+    title: 'Gelir özeti',
     subtitle: 'Günlük gelir özetini göster',
     icon: 'profit',
   },
@@ -49,16 +53,14 @@ export interface AccountPreferencesTabProps {
   registrationDateLabel: string;
   dangerExpanded: boolean;
   onToggleDanger: () => void;
-  isSigningOut: boolean;
   isDeleting: boolean;
   isSwitchingAccount: boolean;
   isGuest: boolean;
   isReady: boolean;
-  deleteConfirmStep: 0 | 1;
-  onSignOut: () => void;
   onDeleteAccount: () => void;
   onLanguagePress: () => void;
   onPrivacyPolicy: () => void;
+  showPrivacyOptions: boolean;
   onPrivacyChoices: () => void;
   onAccountDeletionInfo: () => void;
   onSupport: () => void;
@@ -72,24 +74,25 @@ export default function AccountPreferencesTab({
   registrationDateLabel,
   dangerExpanded,
   onToggleDanger,
-  isSigningOut,
   isDeleting,
   isSwitchingAccount,
   isGuest,
   isReady,
-  deleteConfirmStep,
-  onSignOut,
   onDeleteAccount,
   onLanguagePress,
   onPrivacyPolicy,
+  showPrivacyOptions,
   onPrivacyChoices,
   onAccountDeletionInfo,
   onSupport,
   onLegalDocuments,
 }: AccountPreferencesTabProps) {
+  const versionLabel = `${appVersion} · Build ${buildNumber}`;
+
   return (
     <View style={styles.tab}>
-      <AccountSectionCard title="Uygulama Ayarları">
+      <Text style={styles.sectionLabel}>Uygulama</Text>
+      <AccountSectionCard compact>
         {SETTING_ROWS.map((row, index) => (
           <View key={row.key}>
             <AccountSettingRow
@@ -106,35 +109,49 @@ export default function AccountPreferencesTab({
         ))}
       </AccountSectionCard>
 
-      <AccountSectionCard>
+      <AccountSectionCard compact>
         <AccountActionRow
           title="Dil"
           subtitle="Türkçe"
           icon="settings"
           onPress={onLanguagePress}
+          compact
         />
       </AccountSectionCard>
 
-      <AccountSectionCard title="Gizlilik ve Destek">
+      <Text style={styles.sectionLabel}>Gizlilik ve Destek</Text>
+      <AccountSectionCard compact>
         <AccountActionRow
           title="Gizlilik Politikası"
           subtitle="Veri işleme ve saklama"
           icon="level"
           onPress={onPrivacyPolicy}
+          compact
         />
         <View style={styles.divider} />
-        <AccountActionRow
-          title="Gizlilik ve Çerez Ayarları"
-          subtitle="Reklam ve çerez tercihleri"
-          icon="settings"
-          onPress={onPrivacyChoices}
-        />
+        {showPrivacyOptions ? (
+          <AccountActionRow
+            title={AD_PRIVACY_OPTIONS_TITLE}
+            subtitle="Reklam ve çerez tercihleri"
+            icon="settings"
+            onPress={onPrivacyChoices}
+            compact
+          />
+        ) : (
+          <View style={styles.staticRow}>
+            <Text style={styles.staticTitle}>Gizlilik ve Çerez Ayarları</Text>
+            <Text style={styles.staticValue} numberOfLines={2}>
+              {AD_PRIVACY_NOT_REQUIRED_MESSAGE}
+            </Text>
+          </View>
+        )}
         <View style={styles.divider} />
         <AccountActionRow
           title="Hesap Silme Bilgileri"
           subtitle="Silme süreci ve kapsam"
           icon="warning"
           onPress={onAccountDeletionInfo}
+          compact
         />
         <View style={styles.divider} />
         <AccountActionRow
@@ -142,32 +159,40 @@ export default function AccountPreferencesTab({
           subtitle="Yardım ve iletişim"
           icon="alert"
           onPress={onSupport}
+          compact
         />
       </AccountSectionCard>
 
-      <AccountSectionCard title="Hakkında">
-        <AccountInfoRow label="Uygulama sürümü" value={appVersion} />
-        <AccountInfoRow label="Build" value={buildNumber} />
-        <AccountInfoRow label="Kayıt tarihi" value={registrationDateLabel} />
+      <AccountSectionCard title="Hakkında" compact>
+        <View style={styles.aboutRow}>
+          <Text style={styles.aboutLabel}>Sürüm</Text>
+          <Text style={styles.aboutValue} numberOfLines={1}>
+            {versionLabel}
+          </Text>
+        </View>
+        <View style={styles.aboutRow}>
+          <Text style={styles.aboutLabel}>Kayıt tarihi</Text>
+          <Text style={styles.aboutValue} numberOfLines={1}>
+            {registrationDateLabel}
+          </Text>
+        </View>
         <View style={styles.divider} />
         <AccountActionRow
           title="Yasal Belgeler"
           subtitle="Gizlilik ve kullanım koşulları"
           icon="contract"
           onPress={onLegalDocuments}
+          compact
         />
       </AccountSectionCard>
 
       <DangerZoneCard
         expanded={dangerExpanded}
         onToggle={onToggleDanger}
-        isSigningOut={isSigningOut}
         isDeleting={isDeleting}
         isSwitchingAccount={isSwitchingAccount}
         isGuest={isGuest}
         isReady={isReady}
-        deleteConfirmStep={deleteConfirmStep}
-        onSignOut={onSignOut}
         onDelete={onDeleteAccount}
       />
     </View>
@@ -177,11 +202,53 @@ export default function AccountPreferencesTab({
 const styles = StyleSheet.create({
   tab: {
     gap: ACCOUNT_SECTION_GAP,
-    paddingBottom: 8,
+  },
+  sectionLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: -6,
   },
   divider: {
     height: 1,
     backgroundColor: 'rgba(56, 129, 200, 0.1)',
-    marginVertical: 2,
+  },
+  staticRow: {
+    paddingVertical: 8,
+    gap: 3,
+    minHeight: 48,
+  },
+  staticTitle: {
+    ...typography.bodySmall,
+    fontWeight: '700',
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  staticValue: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  aboutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    minHeight: 36,
+  },
+  aboutLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 12,
+    flex: 1,
+  },
+  aboutValue: {
+    ...typography.bodySmall,
+    fontWeight: '700',
+    fontSize: 13,
+    color: colors.textPrimary,
+    flex: 1.2,
+    textAlign: 'right',
   },
 });

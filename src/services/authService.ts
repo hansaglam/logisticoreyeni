@@ -26,6 +26,7 @@ import { setSaveBootstrapAuthUid } from '../storage/saveAuthContext';
 import {
   linkWithCredential,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   signInAnonymously,
   signInWithCredential,
   signOut,
@@ -2042,6 +2043,61 @@ export async function signOutGoogleAccountToGuest(): Promise<{
   } catch (error) {
     console.warn('[auth] sign out to guest failed', error);
     return { ok: false, error: 'sign-out-failed' };
+  }
+}
+
+export async function reauthenticateCurrentUser(): Promise<{
+  ok: boolean;
+  error?: string;
+  cancelled?: boolean;
+}> {
+  const auth = getFirebaseAuthSafe();
+  const user = auth?.currentUser;
+  if (!user || user.isAnonymous) {
+    return { ok: false, error: 'auth-required' };
+  }
+
+  const status = getAccountStatus();
+  const provider = status?.provider ?? 'unknown';
+
+  try {
+    if (provider === 'google') {
+      const googleResult = await createGoogleFirebaseCredential({
+        forceInteractivePicker: true,
+      });
+      if (!googleResult.ok) {
+        const cancelled =
+          googleResult.error === 'cancelled' || googleResult.error === 'in-progress';
+        return { ok: false, error: googleResult.error, cancelled };
+      }
+      await reauthenticateWithCredential(user, googleResult.credential);
+      return { ok: true };
+    }
+
+    if (provider === 'apple') {
+      const { signInWithAppleAccount } = await import('./appleAuthService');
+      const appleResult = await signInWithAppleAccount();
+      if (!appleResult.ok) {
+        const cancelled =
+          appleResult.error === 'apple-signin-cancelled' ||
+          appleResult.error === 'cancelled';
+        return { ok: false, error: appleResult.error, cancelled };
+      }
+      await reauthenticateWithCredential(user, appleResult.credential);
+      return { ok: true };
+    }
+
+    return { ok: false, error: 'unsupported-provider' };
+  } catch (error) {
+    console.warn('[auth] reauthenticateCurrentUser failed', error);
+    const code = getAuthDeleteErrorCode(error);
+    if (code === 'requires-recent-login') {
+      return { ok: false, error: 'requires-recent-login' };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'reauth-failed',
+    };
   }
 }
 

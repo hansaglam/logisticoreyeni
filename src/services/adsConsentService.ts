@@ -5,25 +5,40 @@
 import { Platform } from 'react-native';
 
 import { isAdsConsentDebugGeographyEnabled, isInternalBuildProfile } from '../config/buildProfile';
-import { isAdsEnabled } from '../config/adMob';
+import { getConfiguredAppId, isAdsEnabled } from '../config/adMob';
 import {
   canRequestAdsFromSnapshot,
+  classifyConsentError,
+  createEmptyAdsConsentSnapshot,
+  isPrivacyOptionsRequired,
+  isPublisherMisconfigurationError,
+  maskAdMobAppId,
   type AdsConsentSnapshot,
 } from './adsConsentPolicy';
 
 export type { AdsConsentSnapshot } from './adsConsentPolicy';
 
+export type RewardedAdPrivacyRequestResult =
+  | { allowed: true }
+  | {
+      allowed: false;
+      reason: 'config-error' | 'blocked' | 'network' | 'in-flight' | 'ads-disabled';
+      userMessage: string;
+    };
+
+export type AccountPrivacyOptionsResult =
+  | { ok: true; canRequestAds: boolean }
+  | { ok: false; reason: 'not-required' | 'module-unavailable' | 'config-error' | 'failed'; userMessage: string };
+
 declare const __DEV__: boolean | undefined;
 
-let snapshot: AdsConsentSnapshot = {
-  gathered: false,
-  canRequestAds: false,
-  status: null,
-  error: null,
-};
+const AD_UNAVAILABLE =
+  'Reklam şu anda kullanılamıyor. Daha sonra tekrar dene.';
 
+let snapshot: AdsConsentSnapshot = createEmptyAdsConsentSnapshot();
 const consentListeners = new Set<() => void>();
 let privacyActionInFlight = false;
+let configErrorLatched = false;
 
 function notifyConsentListeners(): void {
   for (const listener of consentListeners) {
@@ -62,6 +77,78 @@ function getConsentModule():
   }
 }
 
+function getConsentDebugOptions(
+  mod: typeof import('react-native-google-mobile-ads'),
+): import('react-native-google-mobile-ads').AdsConsentInfoOptions | undefined {
+  return isAdsConsentDebugGeographyEnabled()
+    ? { debugGeography: mod.AdsConsentDebugGeography.EEA }
+    : undefined;
+}
+
+function mapConsentInfo(
+  info: import('react-native-google-mobile-ads').AdsConsentInfo,
+  error: string | null = null,
+): AdsConsentSnapshot {
+  const errorCategory = error ? classifyConsentError(error) : 'none';
+  return {
+    gathered: true,
+    canRequestAds: info.canRequestAds,
+    status: String(info.status),
+    privacyOptionsRequirementStatus: String(
+      info.privacyOptionsRequirementStatus,
+    ) as AdsConsentSnapshot['privacyOptionsRequirementStatus'],
+    error,
+    errorCategory,
+  };
+}
+
+function logPublisherConfigError(error: string): void {
+  const appId = getConfiguredAppId(Platform.OS === 'ios' ? 'ios' : 'android');
+  const appIdMasked = maskAdMobAppId(appId);
+  console.warn('[ads-privacy-config-error]', {
+    platform: Platform.OS,
+    appIdPresent: appIdMasked !== 'missing',
+    appIdMasked,
+    errorCategory: 'publisher-misconfiguration',
+    errorCode: 'publisher-misconfiguration',
+  });
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.warn('[ads-privacy-config-error:detail]', error.slice(0, 240));
+  }
+}
+
+function applyConsentFailure(message: string): AdsConsentSnapshot {
+  const errorCategory = classifyConsentError(message);
+  if (errorCategory === 'publisher-misconfiguration') {
+    configErrorLatched = true;
+    logPublisherConfigError(message);
+  }
+  return updateSnapshot({
+    gathered: true,
+    canRequestAds: false,
+    status: 'ERROR',
+    privacyOptionsRequirementStatus: snapshot.privacyOptionsRequirementStatus,
+    error: message,
+    errorCategory,
+  });
+}
+
+async function refreshConsentSnapshotFromNative(): Promise<AdsConsentSnapshot> {
+  const mod = getConsentModule();
+  if (!mod) {
+    return updateSnapshot({
+      gathered: true,
+      canRequestAds: true,
+      status: 'MODULE_UNAVAILABLE',
+      privacyOptionsRequirementStatus: 'NOT_REQUIRED',
+      error: null,
+      errorCategory: 'none',
+    });
+  }
+  const info = await mod.AdsConsent.getConsentInfo();
+  return updateSnapshot(mapConsentInfo(info));
+}
+
 export function getAdsConsentSnapshot(): AdsConsentSnapshot {
   return snapshot;
 }
@@ -76,12 +163,13 @@ export function resetAdsConsentForDebug(): void {
   }
   const mod = getConsentModule();
   mod?.AdsConsent.reset();
-  snapshot = updateSnapshot({
-    gathered: false,
-    canRequestAds: false,
-    status: null,
-    error: null,
-  });
+  configErrorLatched = false;
+  snapshot = updateSnapshot(createEmptyAdsConsentSnapshot());
+}
+
+async function refreshAdsAfterConsentChange(): Promise<void> {
+  const { refreshAdsAfterConsentChange: refresh } = await import('./adProvider');
+  await refresh();
 }
 
 export async function gatherAdsConsentIfNeeded(): Promise<AdsConsentSnapshot> {
@@ -90,8 +178,14 @@ export async function gatherAdsConsentIfNeeded(): Promise<AdsConsentSnapshot> {
       gathered: true,
       canRequestAds: false,
       status: 'ADS_DISABLED',
+      privacyOptionsRequirementStatus: 'NOT_REQUIRED',
       error: null,
+      errorCategory: 'none',
     });
+  }
+
+  if (configErrorLatched) {
+    return snapshot;
   }
 
   const mod = getConsentModule();
@@ -100,118 +194,212 @@ export async function gatherAdsConsentIfNeeded(): Promise<AdsConsentSnapshot> {
       gathered: true,
       canRequestAds: true,
       status: 'MODULE_UNAVAILABLE',
+      privacyOptionsRequirementStatus: 'NOT_REQUIRED',
       error: null,
+      errorCategory: 'none',
     });
   }
 
-  const options =
-    isAdsConsentDebugGeographyEnabled()
-      ? { debugGeography: mod.AdsConsentDebugGeography.EEA }
-      : undefined;
+  const options = getConsentDebugOptions(mod);
 
   try {
     const info = await mod.AdsConsent.gatherConsent(options);
-    const next = updateSnapshot({
-      gathered: true,
-      canRequestAds: info.canRequestAds,
-      status: String(info.status),
-      error: null,
-    });
+    const next = updateSnapshot(mapConsentInfo(info));
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
       console.info('[ads-consent]', {
         status: info.status,
         canRequestAds: info.canRequestAds,
+        privacyOptionsRequirementStatus: info.privacyOptionsRequirementStatus,
         isConsentFormAvailable: info.isConsentFormAvailable,
         debugEea: isAdsConsentDebugGeographyEnabled(),
       });
     }
-    await refreshAdsAfterConsentChange();
-    return next;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const next = updateSnapshot({
-      gathered: true,
-      canRequestAds: false,
-      status: 'ERROR',
-      error: message,
-    });
-    console.warn('[ads-consent] gatherConsent failed — ads blocked, game continues', message);
-    return next;
-  }
-}
-
-/** UMP gizlilik seçenekleri formunu yeniden açar. */
-export async function showAdsPrivacyOptionsForm(): Promise<{
-  ok: boolean;
-  error?: string;
-}> {
-  const mod = getConsentModule();
-  if (!mod) {
-    return { ok: false, error: 'module-unavailable' };
-  }
-  try {
-    await mod.AdsConsent.showPrivacyOptionsForm();
-    const info = await mod.AdsConsent.getConsentInfo();
-    updateSnapshot({
-      gathered: true,
-      canRequestAds: info.canRequestAds,
-      status: String(info.status),
-      error: null,
-    });
-    await refreshAdsAfterConsentChange();
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: message };
-  }
-}
-
-async function refreshAdsAfterConsentChange(): Promise<void> {
-  const { refreshAdsAfterConsentChange: refresh } = await import('./adProvider');
-  await refresh();
-}
-
-/** Rewarded CTA ve Hesap Merkezi için ortak gizlilik tercihi akışı. */
-export async function completeAdPrivacyAction(options?: {
-  onNavigateToPreferences?: () => void | Promise<void>;
-}): Promise<{ ok: boolean; canRequestAds: boolean; error?: string }> {
-  if (privacyActionInFlight) {
-    return {
-      ok: false,
-      canRequestAds: canRequestAdsAfterConsent(),
-      error: 'in-flight',
-    };
-  }
-  privacyActionInFlight = true;
-  try {
-    const privacyOptions = await showAdsPrivacyOptionsForm();
-    if (!privacyOptions.ok) {
-      await gatherAdsConsentIfNeeded();
-    } else {
+    if (next.canRequestAds) {
       await refreshAdsAfterConsentChange();
     }
+    return next;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const next = applyConsentFailure(message);
+    console.warn('[ads-consent] gatherConsent failed — ads blocked, game continues');
+    return next;
+  }
+}
 
-    if (!canRequestAdsAfterConsent() && options?.onNavigateToPreferences) {
-      await options.onNavigateToPreferences();
+/** Account Center — privacy options only when UMP marks them required. */
+export async function openAccountPrivacyOptions(): Promise<AccountPrivacyOptionsResult> {
+  if (!isAdsEnabled()) {
+    return {
+      ok: false,
+      reason: 'not-required',
+      userMessage: 'Reklamlar bu yapılandırmada kapalı.',
+    };
+  }
+
+  if (configErrorLatched || snapshot.errorCategory === 'publisher-misconfiguration') {
+    return {
+      ok: false,
+      reason: 'config-error',
+      userMessage: AD_UNAVAILABLE,
+    };
+  }
+
+  const mod = getConsentModule();
+  if (!mod) {
+    return {
+      ok: false,
+      reason: 'module-unavailable',
+      userMessage: 'Gizlilik tercihleri bu cihazda kullanılamıyor.',
+    };
+  }
+
+  try {
+    if (!snapshot.gathered) {
       await gatherAdsConsentIfNeeded();
+    } else {
+      await mod.AdsConsent.requestInfoUpdate(getConsentDebugOptions(mod));
+      await refreshConsentSnapshotFromNative();
     }
 
-    const canRequestAds = canRequestAdsAfterConsent();
-    notifyConsentListeners();
+    if (!isPrivacyOptionsRequired(snapshot)) {
+      return {
+        ok: false,
+        reason: 'not-required',
+        userMessage: 'Ek reklam gizlilik tercihi gerekmiyor.',
+      };
+    }
+
+    await mod.AdsConsent.showPrivacyOptionsForm();
+    await refreshConsentSnapshotFromNative();
+    await refreshAdsAfterConsentChange();
     return {
-      ok: canRequestAds || privacyOptions.ok,
-      canRequestAds,
-      error: canRequestAds ? undefined : privacyOptions.error,
+      ok: true,
+      canRequestAds: canRequestAdsAfterConsent(),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, canRequestAds: false, error: message };
+    if (isPublisherMisconfigurationError(message)) {
+      applyConsentFailure(message);
+      return {
+        ok: false,
+        reason: 'config-error',
+        userMessage: AD_UNAVAILABLE,
+      };
+    }
+    return {
+      ok: false,
+      reason: 'failed',
+      userMessage: AD_UNAVAILABLE,
+    };
+  }
+}
+
+/**
+ * Canonical rewarded CTA privacy gate — never opens Account privacy options.
+ */
+export async function handleRewardedAdRequest(): Promise<RewardedAdPrivacyRequestResult> {
+  if (!isAdsEnabled()) {
+    return {
+      allowed: false,
+      reason: 'ads-disabled',
+      userMessage: AD_UNAVAILABLE,
+    };
+  }
+
+  if (privacyActionInFlight) {
+    return {
+      allowed: false,
+      reason: 'in-flight',
+      userMessage: AD_UNAVAILABLE,
+    };
+  }
+
+  if (configErrorLatched || snapshot.errorCategory === 'publisher-misconfiguration') {
+    return {
+      allowed: false,
+      reason: 'config-error',
+      userMessage: AD_UNAVAILABLE,
+    };
+  }
+
+  privacyActionInFlight = true;
+  try {
+    if (!snapshot.gathered) {
+      await gatherAdsConsentIfNeeded();
+    }
+
+    if (canRequestAdsAfterConsent()) {
+      return { allowed: true };
+    }
+
+    if (getAdsConsentSnapshot().errorCategory === 'publisher-misconfiguration') {
+      return {
+        allowed: false,
+        reason: 'config-error',
+        userMessage: AD_UNAVAILABLE,
+      };
+    }
+
+    if (snapshot.status === 'REQUIRED' || snapshot.status === 'UNKNOWN') {
+      await gatherAdsConsentIfNeeded();
+      if (canRequestAdsAfterConsent()) {
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        reason: 'blocked',
+        userMessage: AD_UNAVAILABLE,
+      };
+    }
+
+    if (snapshot.status === 'NOT_REQUIRED' || snapshot.status === 'MODULE_UNAVAILABLE') {
+      await refreshConsentSnapshotFromNative();
+      if (canRequestAdsAfterConsent()) {
+        return { allowed: true };
+      }
+    }
+
+    if (snapshot.errorCategory === 'network') {
+      return {
+        allowed: false,
+        reason: 'network',
+        userMessage: AD_UNAVAILABLE,
+      };
+    }
+
+    return {
+      allowed: false,
+      reason: 'blocked',
+      userMessage: AD_UNAVAILABLE,
+    };
   } finally {
     privacyActionInFlight = false;
   }
 }
 
+/** @deprecated Use openAccountPrivacyOptions for settings, handleRewardedAdRequest for ads. */
+export async function completeAdPrivacyAction(): Promise<{
+  ok: boolean;
+  canRequestAds: boolean;
+  error?: string;
+}> {
+  const result = await handleRewardedAdRequest();
+  return {
+    ok: result.allowed,
+    canRequestAds: canRequestAdsAfterConsent(),
+    error: result.allowed ? undefined : 'blocked',
+  };
+}
+
 /** Test helper — simulate consent states without native SDK. */
 export function __setAdsConsentSnapshotForTests(next: AdsConsentSnapshot): void {
+  configErrorLatched = next.errorCategory === 'publisher-misconfiguration';
   updateSnapshot(next);
 }
+
+export function __resetAdsConsentTestState(): void {
+  configErrorLatched = false;
+  snapshot = updateSnapshot(createEmptyAdsConsentSnapshot());
+}
+
+export { maskAdMobAppId };

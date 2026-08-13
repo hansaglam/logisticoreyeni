@@ -15,7 +15,6 @@ import {
   type MissionsTabKey,
   type PremiumMissionStatus,
 } from '../components/missions/MissionPresentation';
-import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
 import { AppCard, GameIcon } from '../components/ui';
 import {
   CAREER_MISSIONS,
@@ -26,7 +25,6 @@ import {
 import { MILESTONE_DEFINITIONS } from '../data/milestones';
 import { getWeeklyObjectiveDefinitions } from '../data/weeklyObjectives';
 import {
-  useActiveOnboardingHint,
   useOnboardingScreenVisit,
 } from '../hooks/useOnboardingScreenVisit';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
@@ -117,7 +115,6 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const claimWeeklyObjectiveReward = useGameStore((state) => state.claimWeeklyObjectiveReward);
 
   useOnboardingScreenVisit('Missions');
-  const onboardingHint = useActiveOnboardingHint(['claim_first_reward']);
   const seasonKey = useMemo(() => getWeeklySeasonKey(), []);
   const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);
 
@@ -266,17 +263,6 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
       <MissionHeroHeader onBack={onBack} />
       <MissionTabs activeTab={activeTab} onChange={setActiveTab} />
       <MissionSummaryBar {...summary} />
-
-      {onboardingHint && activeTab === 'missions' ? (
-        <OnboardingHintCard
-          title={onboardingHint.title}
-          description={onboardingHint.description}
-          icon={onboardingHint.icon}
-          badgeLabel={onboardingHint.badgeLabel}
-          accentVariant={onboardingHint.accentVariant}
-          onDismiss={onboardingHint.onDismiss}
-        />
-      ) : null}
 
       {activeTab === 'missions' ? (
         <>

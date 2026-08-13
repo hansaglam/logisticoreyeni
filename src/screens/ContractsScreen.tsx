@@ -63,9 +63,8 @@ import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
-import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
+import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
-import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
@@ -771,8 +770,6 @@ export default function ContractsScreen() {
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Contracts');
-  const onboardingHint = useActiveOnboardingHint(['choose_first_contract', 'assign_team']);
-
   const scrollRef = useRef<FlatListType<ContractsListItem>>(null);
 
   const [activeSegment, setActiveSegment] = useState<SegmentKey>('available');
@@ -1500,18 +1497,6 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        {onboardingHint ? (
-          <OnboardingHintCard
-            title={onboardingHint.title}
-            description={onboardingHint.description}
-            icon={onboardingHint.icon}
-            badgeLabel={onboardingHint.badgeLabel}
-            accentVariant={onboardingHint.accentVariant}
-            onDismiss={onboardingHint.onDismiss}
-            style={styles.onboardingHint}
-          />
-        ) : null}
-
         <AppTutorialTarget tutorialId="contracts" targetId="city-truck-requirement" layoutMode="stretch">
           <ContractsSummaryStrip
             availableCount={availableContracts.length}
@@ -1616,9 +1601,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
     paddingHorizontal: spacing.lg,
-  },
-  onboardingHint: {
-    marginBottom: 12,
   },
   listScroll: {
     flex: 1,

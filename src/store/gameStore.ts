@@ -446,9 +446,12 @@ import {
 import { createCompletedMarketTutorialState } from '../tutorial/marketTutorialState';
 import {
   applyTutorialCompletion,
+  applyTutorialOutcome,
+  applyTutorialPresented,
+  applyManualTutorialReplay,
   normalizeTutorialProgress,
 } from '../tutorial/app/persistence';
-import type { AppTutorialId } from '../tutorial/app/types';
+import type { AppTutorialId, TutorialOutcome } from '../tutorial/app/types';
 import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
@@ -1595,7 +1598,10 @@ export interface GameStore extends StoreGameState {
   saveGame: () => Promise<void>;
   loadGame: (preloaded?: Awaited<ReturnType<typeof loadGameStateWithMeta>>) => Promise<boolean>;
   clearSave: () => Promise<void>;
-  deleteAccountAndCloudData: () => Promise<{ ok: boolean; error?: string; errorCode?: string }>;
+  deleteAccountAndCloudData: (options?: {
+    skipCloudDelete?: boolean;
+    diagnosticId?: string;
+  }) => Promise<import('../utils/accountDeletion').AccountDeletionResult>;
   /** Debug/test — AsyncStorage kaydını siler ve tamamen yeni oyun başlatır */
   resetGameForTesting: () => Promise<void>;
   getDebugSaveInfo: () => {
@@ -1746,6 +1752,9 @@ export interface GameStore extends StoreGameState {
   notifyMarketScreenOpened: () => void;
   completeMarketTutorial: () => void;
   completeTutorial: (tutorialId: AppTutorialId) => void;
+  markTutorialPresented: (tutorialId: AppTutorialId) => void;
+  recordTutorialOutcome: (tutorialId: AppTutorialId, outcome: TutorialOutcome) => void;
+  recordTutorialManualReplay: (tutorialId: AppTutorialId) => void;
   createMarketPriceAlert: (input: {
     cityId: string;
     productId: ProductId;
@@ -2236,19 +2245,42 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   completeTutorial: (tutorialId: AppTutorialId) => {
+    get().recordTutorialOutcome(tutorialId, 'completed');
+  },
+
+  markTutorialPresented: (tutorialId) => {
+    const nextProgress = applyTutorialPresented(
+      normalizeTutorialProgress(get().tutorialProgress),
+      tutorialId,
+    );
+    set({ tutorialProgress: nextProgress });
+    get().markSaveDirty();
+  },
+
+  recordTutorialOutcome: (tutorialId, outcome) => {
     const state = get();
-    const nextProgress = applyTutorialCompletion(
+    const nextProgress = applyTutorialOutcome(
       normalizeTutorialProgress(state.tutorialProgress),
       tutorialId,
+      outcome,
     );
     if (tutorialId === 'market') {
       set({
-        ...createCompletedMarketTutorialState(),
+        ...(outcome === 'completed' ? createCompletedMarketTutorialState() : {}),
         tutorialProgress: nextProgress,
       });
     } else {
       set({ tutorialProgress: nextProgress });
     }
+    get().markSaveDirty();
+  },
+
+  recordTutorialManualReplay: (tutorialId) => {
+    const nextProgress = applyManualTutorialReplay(
+      normalizeTutorialProgress(get().tutorialProgress),
+      tutorialId,
+    );
+    set({ tutorialProgress: nextProgress });
     get().markSaveDirty();
   },
 
@@ -3467,8 +3499,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     await get().refreshSaveStatus();
   },
 
-  deleteAccountAndCloudData: async () => {
+  deleteAccountAndCloudData: async (options) => {
     const result = await runAccountDeletion({
+      skipCloudDelete: options?.skipCloudDelete,
+      diagnosticId: options?.diagnosticId,
       clearLocalSave: async () => {
         await clearAllDebugSaves({ includeBackups: true });
         resetTransientGameUiState();

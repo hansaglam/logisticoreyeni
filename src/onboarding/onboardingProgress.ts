@@ -365,6 +365,7 @@ export interface OnboardingDashboardAction {
   action: OnboardingAction;
 }
 
+/** @deprecated UI removed — domain helper kept for tests / dev tooling */
 export function resolveOnboardingDashboardAction(
   state: OnboardingEvaluationState,
 ): OnboardingDashboardAction | null {

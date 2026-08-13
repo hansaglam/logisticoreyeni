@@ -60,7 +60,10 @@ export function useScreenAppTutorial({
     () => normalizeTutorialProgress(rawTutorialProgress),
     [rawTutorialProgress],
   );
-  const completeTutorial = useGameStore((state) => state.completeTutorial);
+  const isGameReady = useGameStore((state) => state.isGameReady);
+  const markTutorialPresented = useGameStore((state) => state.markTutorialPresented);
+  const recordTutorialOutcome = useGameStore((state) => state.recordTutorialOutcome);
+  const recordTutorialManualReplay = useGameStore((state) => state.recordTutorialManualReplay);
   const onboardingCompleted = useGameStore((state) => state.onboarding?.completed === true);
   const pendingOfflineProgressSummary = useGameStore(
     (state) => state.pendingOfflineProgressSummary,
@@ -95,10 +98,22 @@ export function useScreenAppTutorial({
   }, [stepOptions, tutorialId]);
 
   const tutorialEnabled = !killSwitchOff && steps.length > 0;
+  const sessionDisabled = killSwitchOff;
 
-  const onCompletePersistence = useCallback(() => {
-    completeTutorial(tutorialId);
-  }, [completeTutorial, tutorialId]);
+  const onPresentPersistence = useCallback(() => {
+    markTutorialPresented(tutorialId);
+  }, [markTutorialPresented, tutorialId]);
+
+  const onTutorialOutcome = useCallback(
+    (outcome: Parameters<typeof recordTutorialOutcome>[1]) => {
+      recordTutorialOutcome(tutorialId, outcome);
+    },
+    [recordTutorialOutcome, tutorialId],
+  );
+
+  const onManualReplayPersistence = useCallback(() => {
+    recordTutorialManualReplay(tutorialId);
+  }, [recordTutorialManualReplay, tutorialId]);
 
   const tutorial = useAppTutorial({
     tutorialId,
@@ -108,6 +123,8 @@ export function useScreenAppTutorial({
     tutorialProgress,
     legacyMarket,
     layoutReady,
+    gameHydrated: isGameReady,
+    sessionDisabled,
     isOnboarding: !onboardingCompleted,
     isSaveRecovery,
     blockingModals,
@@ -116,7 +133,9 @@ export function useScreenAppTutorial({
     isAnotherTutorialActive,
     scrollRef,
     scrollYRef,
-    onCompletePersistence,
+    onPresentPersistence,
+    onTutorialOutcome,
+    onManualReplayPersistence,
   });
 
   const {
@@ -125,6 +144,7 @@ export function useScreenAppTutorial({
     requestStepChange,
     openManual,
     onSkip,
+    onDismiss,
     onComplete,
     visible: tutorialVisible,
     steps: tutorialSteps,
@@ -142,6 +162,7 @@ export function useScreenAppTutorial({
 
   const helpDisabled =
     !tutorialEnabled ||
+    sessionDisabled ||
     pendingOfflineProgressSummary != null ||
     hasPendingDeliveryIncident ||
     blockingModals ||
@@ -188,11 +209,13 @@ export function useScreenAppTutorial({
       noticeText,
       onRequestStepChange,
       onSkip,
+      onDismiss,
       onComplete,
     }),
     [
       noticeText,
       onComplete,
+      onDismiss,
       onRequestStepChange,
       onSkip,
       tutorialAnchorRect,

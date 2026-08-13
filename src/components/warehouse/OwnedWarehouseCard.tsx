@@ -7,17 +7,13 @@ import {
   View,
 } from 'react-native';
 
-import { GameIcon, ProgressBar, StatusBadge } from '../ui';
+import { GameIcon } from '../ui';
 import { colors, formatMoney, typography } from '../../theme';
 import type { OwnedWarehouseCardVm } from '../../utils/warehouseScreenViewModel';
-import {
-  getOccupancyBarColor,
-  getStatusBadgeVariant,
-  getTypeBadgeVariant,
-} from './warehouseUiHelpers';
+import { getOccupancyBarColor } from './warehouseUiHelpers';
 import { logWarehouseLayout } from './warehouseLayoutDebug';
 import WarehouseStockRow from './WarehouseStockRow';
-import { warehouseVisual } from './warehouseTheme';
+import { warehouseLayout, warehouseVisual } from './warehouseTheme';
 
 interface OwnedWarehouseCardProps {
   card: OwnedWarehouseCardVm;
@@ -47,22 +43,15 @@ export default function OwnedWarehouseCard({
   measureLayout = false,
 }: OwnedWarehouseCardProps) {
   const barColor = getOccupancyBarColor(card.occupancyPercent);
-  const typeVariant = getTypeBadgeVariant(card.type);
-  const statusVariant = getStatusBadgeVariant(card.status);
   const accent = card.type === 'cold' ? warehouseVisual.accentPurple : warehouseVisual.accentBlue;
   const isEmpty = card.stocks.length === 0;
   const canUpgrade =
     card.upgradePreview.nextLevel != null && card.upgradePreview.upgradePrice != null;
-  const upgradeDisabled = card.upgradeDisabled;
-  const upgradeLabel = card.upgradePreview.nextLevel == null ? 'Maks. Sv.' : 'Yükselt';
+  const atMaxLevel = !canUpgrade && card.upgradeHelperText != null;
 
   const handleToggle = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     onToggle();
-  };
-
-  const handleUpgradePress = () => {
-    onUpgrade();
   };
 
   return (
@@ -77,38 +66,28 @@ export default function OwnedWarehouseCard({
           : undefined
       }
     >
-      <View style={[styles.card, { borderLeftColor: accent }]}>
+      <View style={styles.card}>
         <Pressable
           onPress={handleToggle}
           accessibilityRole="button"
           accessibilityLabel={`${card.cityName} deposunu ${expanded ? 'daralt' : 'genişlet'}`}
           style={styles.header}
         >
-          <View style={[styles.iconWrap, { backgroundColor: `${accent}28` }]}>
-            <GameIcon name="warehouse" size={16} color={accent} />
+          <View style={[styles.iconWrap, { backgroundColor: `${accent}22` }]}>
+            <GameIcon name="warehouse" size={18} color={accent} />
           </View>
           <View style={styles.headerMain}>
             <Text style={styles.title} numberOfLines={1}>
               {card.cityName}
             </Text>
-            <View style={styles.badgeRow}>
-              <StatusBadge
-                label={card.type === 'cold' ? 'Soğuk' : 'Normal'}
-                variant={typeVariant}
-                size="sm"
-              />
-              <StatusBadge label={`Sv.${card.level}`} variant="amber" size="sm" />
-              <StatusBadge label={card.statusLabel} variant={statusVariant} size="sm" />
-            </View>
+            <Text style={styles.subtitle} numberOfLines={1}>
+              {card.typeLabel} · Sv.{card.level}
+            </Text>
           </View>
-          <GameIcon
-            name={expanded ? 'chevronUp' : 'chevronDown'}
-            size={16}
-            color={colors.textMuted}
-          />
+          <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
         </Pressable>
 
-        <View style={styles.metricsGrid}>
+        <View style={styles.metricsRow}>
           <View style={styles.metricCell}>
             <Text style={styles.metricLabel}>Kapasite</Text>
             <Text style={styles.metricValue} numberOfLines={1}>
@@ -123,37 +102,38 @@ export default function OwnedWarehouseCard({
           </View>
           <View style={styles.metricCell}>
             <Text style={styles.metricLabel}>Gider</Text>
-            <Text style={[styles.metricValue, { color: warehouseVisual.accentAmber }]} numberOfLines={1}>
+            <Text
+              style={[styles.metricValue, { color: warehouseVisual.accentAmber }]}
+              numberOfLines={1}
+            >
               {formatMoney(card.dailyCost)}
             </Text>
           </View>
-          <View style={styles.metricCell}>
-            <Text style={styles.metricLabel}>Stok</Text>
-            <Text
-              style={[styles.metricValue, { color: warehouseVisual.accentGreen }]}
-              numberOfLines={1}
-            >
-              {formatMoney(card.inventoryValue)}
-            </Text>
-          </View>
         </View>
 
-        <View style={styles.barWrap}>
-          <ProgressBar
-            progress={card.occupancyPercent / 100}
-            color={barColor}
-            height={5}
-            trackColor="rgba(120,160,220,0.12)"
-          />
+        <View style={styles.stockRow}>
+          <Text style={styles.stockLabel}>Stok değeri</Text>
+          <Text
+            style={[styles.stockValue, { color: warehouseVisual.accentGreen }]}
+            numberOfLines={1}
+          >
+            {formatMoney(card.inventoryValue)}
+          </Text>
         </View>
 
         {!expanded && isEmpty ? (
-          <View style={styles.emptyHintRow}>
-            <Text style={styles.emptyHint} numberOfLines={1}>
-              Henüz stok yok · Piyasadan ürün al
+          <View style={styles.emptyHint}>
+            <Text style={styles.emptyTitle}>Stok yok</Text>
+            <Text style={styles.emptyText} numberOfLines={2}>
+              Piyasadan ürün alarak depoyu kullanmaya başla.
             </Text>
-            <Pressable onPress={onGoToMarket} hitSlop={8} accessibilityRole="button">
-              <Text style={styles.marketLink}>Piyasa</Text>
+            <Pressable
+              onPress={onGoToMarket}
+              style={styles.marketBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Piyasaya git"
+            >
+              <Text style={styles.marketBtnText}>Piyasaya Git</Text>
             </Pressable>
           </View>
         ) : null}
@@ -163,85 +143,54 @@ export default function OwnedWarehouseCard({
             onPress={onManageStock}
             style={styles.primaryBtn}
             accessibilityRole="button"
-            accessibilityLabel={`${card.cityName} deposunda stok yönet`}
+            accessibilityLabel={`${card.cityName} stoklarını gör`}
           >
-            <GameIcon name="inventory" size={14} color={colors.textPrimary} />
-            <Text style={styles.primaryBtnText}>Stok</Text>
+            <Text style={styles.primaryBtnText}>Stokları Gör</Text>
           </Pressable>
           <Pressable
             onPress={onTransfer}
-            style={styles.transferBtn}
+            style={styles.secondaryBtn}
             accessibilityRole="button"
-            accessibilityLabel={`${card.cityName} deposundan ürün taşı`}
+            accessibilityLabel={`${card.cityName} deposundan transfer`}
           >
-            <GameIcon name="truck" size={14} color={colors.textPrimary} />
-            <Text style={styles.transferBtnText}>Taşı</Text>
-          </Pressable>
-          <Pressable
-            onPress={handleUpgradePress}
-            style={[
-              styles.upgradeBtn,
-              (upgradeDisabled || !canUpgrade) && styles.upgradeBtnDisabled,
-            ]}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: upgradeDisabled || !canUpgrade }}
-            accessibilityLabel={`${card.cityName} deposunu yükselt`}
-            hitSlop={6}
-          >
-            <GameIcon
-              name="upgrade"
-              size={13}
-              color={
-                upgradeDisabled || !canUpgrade ? colors.textMuted : warehouseVisual.accentAmber
-              }
-            />
-            <Text
-              style={[
-                styles.upgradeBtnText,
-                (upgradeDisabled || !canUpgrade) && styles.upgradeBtnTextDisabled,
-              ]}
-              numberOfLines={1}
-            >
-              {upgradeLabel}
-            </Text>
+            <Text style={styles.secondaryBtnText}>Transfer</Text>
           </Pressable>
           <Pressable
             onPress={onMore}
             style={styles.moreBtn}
             accessibilityRole="button"
-            accessibilityLabel={`${card.cityName} deposu diğer işlemler`}
+            accessibilityLabel={`${card.cityName} diğer işlemler`}
           >
-            <GameIcon name="more" size={16} color={colors.textSecondary} />
+            <GameIcon name="more" size={16} color={colors.textMuted} />
           </Pressable>
         </View>
 
+        {canUpgrade ? (
+          <Pressable
+            onPress={onUpgrade}
+            disabled={card.upgradeDisabled}
+            style={[styles.upgradeBtn, card.upgradeDisabled && styles.upgradeBtnDisabled]}
+            accessibilityRole="button"
+            accessibilityLabel={`${card.cityName} deposunu yükselt`}
+          >
+            <Text style={styles.upgradeText}>
+              Sv.{card.upgradePreview.currentLevel} → Sv.{card.upgradePreview.nextLevel} · Yükselt
+              {card.upgradePreview.upgradePrice != null
+                ? ` · ${formatMoney(card.upgradePreview.upgradePrice)}`
+                : ''}
+            </Text>
+            {card.upgradeDisabled && card.upgradeHelperText ? (
+              <Text style={styles.upgradeHint} numberOfLines={1}>
+                {card.upgradeHelperText}
+              </Text>
+            ) : null}
+          </Pressable>
+        ) : atMaxLevel ? (
+          <Text style={styles.maxLevel}>Maksimum Seviye</Text>
+        ) : null}
+
         {expanded ? (
           <View style={styles.expanded}>
-            {canUpgrade ? (
-              <Pressable
-                onPress={handleUpgradePress}
-                style={[styles.upgradeBanner, upgradeDisabled && styles.upgradeBannerDisabled]}
-                accessibilityRole="button"
-                accessibilityLabel={`${card.cityName} yükseltme önizlemesi`}
-              >
-                <GameIcon name="upgrade" size={12} color={warehouseVisual.accentAmber} />
-                <Text style={styles.upgradeHint} numberOfLines={2}>
-                  Sv.{card.upgradePreview.currentLevel} → {card.upgradePreview.nextLevel} ·{' '}
-                  {Math.round(card.upgradePreview.currentCapacity)} →{' '}
-                  {Math.round(card.upgradePreview.nextCapacity ?? 0)} t ·{' '}
-                  {formatMoney(card.upgradePreview.upgradePrice ?? 0)}
-                  {card.upgradeHelperText ? ` · ${card.upgradeHelperText}` : ''}
-                </Text>
-              </Pressable>
-            ) : (
-              <View style={styles.upgradeBanner}>
-                <GameIcon name="upgrade" size={12} color={colors.textMuted} />
-                <Text style={styles.upgradeHint} numberOfLines={2}>
-                  {card.upgradeHelperText ?? 'Maksimum seviyeye ulaşıldı'}
-                </Text>
-              </View>
-            )}
-
             {isEmpty ? (
               <View style={styles.emptyExpanded}>
                 <Text style={styles.emptyExpandedText}>
@@ -274,26 +223,22 @@ export default function OwnedWarehouseCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
-    marginBottom: 10,
-    overflow: 'hidden',
-    paddingBottom: 10,
+    borderRadius: 14,
+    marginBottom: warehouseLayout.cardGap,
+    padding: warehouseLayout.cardPadding,
+    gap: warehouseLayout.internalGap,
     backgroundColor: warehouseVisual.surfaceElevated,
     borderWidth: 1,
     borderColor: warehouseVisual.border,
-    borderLeftWidth: 3,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 6,
+    gap: warehouseLayout.internalGap,
   },
   iconWrap: {
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
@@ -301,76 +246,97 @@ const styles = StyleSheet.create({
   headerMain: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 2,
   },
   title: {
-    ...typography.body,
-    color: colors.textPrimary,
+    fontSize: 16,
     fontWeight: '800',
-    fontSize: 15,
+    color: colors.textPrimary,
   },
-  badgeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
+  subtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
   },
-  metricsGrid: {
+  metricsRow: {
     flexDirection: 'row',
-    paddingHorizontal: 10,
-    gap: 4,
+    gap: warehouseLayout.smallGap,
   },
   metricCell: {
     flex: 1,
     minWidth: 0,
-    backgroundColor: 'rgba(4, 10, 20, 0.45)',
-    borderRadius: 10,
+    backgroundColor: warehouseVisual.statTint,
+    borderRadius: 8,
     paddingVertical: 6,
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
+    gap: 2,
   },
   metricLabel: {
     ...typography.caption,
     color: colors.textMuted,
-    fontSize: 9,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    marginBottom: 2,
+    fontSize: 10,
+    fontWeight: '600',
   },
   metricValue: {
-    ...typography.caption,
-    color: colors.textPrimary,
+    fontSize: 13,
     fontWeight: '800',
-    fontSize: 11,
+    color: colors.textPrimary,
   },
-  barWrap: {
-    paddingHorizontal: 12,
-    marginTop: 8,
-    marginBottom: 6,
-  },
-  emptyHintRow: {
+  stockRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    marginBottom: 4,
+    paddingHorizontal: 2,
     gap: 8,
   },
-  emptyHint: {
+  stockLabel: {
     ...typography.caption,
     color: colors.textMuted,
     fontSize: 11,
-    flex: 1,
+    fontWeight: '600',
   },
-  marketLink: {
+  stockValue: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  emptyHint: {
+    backgroundColor: warehouseVisual.statTint,
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
+  },
+  emptyTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  emptyText: {
     ...typography.caption,
-    color: warehouseVisual.accentBlue,
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  marketBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: colors.accentBlueSoft,
+  },
+  marketBtnText: {
+    ...typography.caption,
+    color: colors.accentBlue,
     fontWeight: '700',
     fontSize: 11,
   },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
+    gap: warehouseLayout.internalGap,
   },
   primaryBtn: {
     flex: 1,
@@ -378,106 +344,78 @@ const styles = StyleSheet.create({
     minWidth: 0,
     borderRadius: 12,
     backgroundColor: warehouseVisual.accentBlue,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
+    paddingHorizontal: 10,
   },
   primaryBtnText: {
     color: colors.textPrimary,
     fontWeight: '800',
-    fontSize: 12,
+    fontSize: 13,
   },
-  transferBtn: {
+  secondaryBtn: {
     flex: 1,
     minHeight: 44,
     minWidth: 0,
     borderRadius: 12,
-    backgroundColor: 'rgba(12,24,48,0.9)',
     borderWidth: 1,
-    borderColor: warehouseVisual.border,
-    flexDirection: 'row',
+    borderColor: warehouseVisual.borderStrong,
+    backgroundColor: 'rgba(4, 10, 20, 0.35)',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
+    paddingHorizontal: 10,
   },
-  transferBtnText: {
+  secondaryBtnText: {
     color: colors.textPrimary,
-    fontWeight: '800',
-    fontSize: 12,
-  },
-  upgradeBtn: {
-    flex: 1.15,
-    minHeight: 44,
-    minWidth: 0,
-    borderRadius: 12,
-    backgroundColor: warehouseVisual.softAmber,
-    borderWidth: 1,
-    borderColor: 'rgba(255,170,0,0.45)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
-  },
-  upgradeBtnDisabled: {
-    opacity: 0.55,
-    borderColor: warehouseVisual.border,
-    backgroundColor: 'rgba(4, 10, 20, 0.45)',
-  },
-  upgradeBtnText: {
-    color: warehouseVisual.accentAmber,
-    fontWeight: '800',
-    fontSize: 12,
-    flexShrink: 1,
-  },
-  upgradeBtnTextDisabled: {
-    color: colors.textMuted,
+    fontWeight: '700',
+    fontSize: 13,
   },
   moreBtn: {
     width: 44,
     height: 44,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: warehouseVisual.border,
-    backgroundColor: 'rgba(4, 10, 20, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  expanded: {
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
-    marginTop: 8,
-    paddingHorizontal: 12,
-    paddingTop: 4,
-  },
-  upgradeBanner: {
-    flexDirection: 'row',
+  upgradeBtn: {
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: warehouseVisual.softAmber,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    marginTop: 4,
-    marginBottom: 4,
+    justifyContent: 'center',
     minHeight: 44,
+    paddingVertical: 4,
+    gap: 2,
   },
-  upgradeBannerDisabled: {
-    opacity: 0.7,
+  upgradeBtnDisabled: {
+    opacity: 0.55,
+  },
+  upgradeText: {
+    ...typography.caption,
+    color: warehouseVisual.accentAmber,
+    fontWeight: '700',
+    fontSize: 11,
+    textAlign: 'center',
   },
   upgradeHint: {
     ...typography.caption,
-    color: warehouseVisual.accentAmber,
-    fontSize: 11,
-    flex: 1,
+    color: colors.textMuted,
+    fontSize: 10,
+    textAlign: 'center',
+  },
+  maxLevel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 10,
     fontWeight: '600',
+    textAlign: 'center',
+  },
+  expanded: {
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    paddingTop: warehouseLayout.internalGap,
+    gap: 4,
   },
   emptyExpanded: {
-    paddingVertical: 8,
+    paddingVertical: 4,
     gap: 4,
   },
   emptyExpandedText: {
@@ -489,5 +427,11 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: warehouseVisual.accentPurple,
     fontWeight: '600',
+  },
+  marketLink: {
+    ...typography.caption,
+    color: warehouseVisual.accentBlue,
+    fontWeight: '700',
+    fontSize: 11,
   },
 });

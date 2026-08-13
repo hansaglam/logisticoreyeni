@@ -137,7 +137,7 @@ export function getMarketplaceErrorMessage(reason?: string): string {
     case 'timeout':
       return 'Araç Pazarı yanıt vermedi. Tekrar deneyin.';
     case 'invalid-request':
-      return 'Sunucudan geçersiz veri alındı.';
+      return 'İlanlar şu anda yüklenemiyor. Tekrar dene.';
     case 'function-not-found':
       return 'Araç Pazarı servisi bu sürüm için deploy edilmemiş.';
     case 'permission-denied':

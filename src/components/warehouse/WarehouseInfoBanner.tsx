@@ -1,21 +1,32 @@
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GameIcon } from '../ui';
 import { colors, typography } from '../../theme';
 import { logWarehouseLayout } from './warehouseLayoutDebug';
-import { warehouseVisual } from './warehouseTheme';
+import { warehouseLayout, warehouseVisual } from './warehouseTheme';
 
 interface WarehouseInfoBannerProps {
   onPress?: () => void;
 }
 
 export default function WarehouseInfoBanner({ onPress }: WarehouseInfoBannerProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  const handlePress = () => {
+    if (onPress) {
+      onPress();
+      return;
+    }
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded((value) => !value);
+  };
+
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       accessibilityRole="button"
-      accessibilityLabel="Depo rehberini aç"
+      accessibilityLabel="Depo ipucu"
       onLayout={(event) => {
         logWarehouseLayout({
           infoBannerHeight: Math.round(event.nativeEvent.layout.height),
@@ -23,16 +34,19 @@ export default function WarehouseInfoBanner({ onPress }: WarehouseInfoBannerProp
       }}
       style={({ pressed }) => [styles.card, pressed && styles.pressed]}
     >
-      <View style={styles.iconWrap}>
-        <GameIcon name="alert" size={14} color={colors.info} />
-      </View>
+      <Text style={styles.emoji} accessibilityElementsHidden>
+        💡
+      </Text>
       <View style={styles.textWrap}>
-        <Text style={styles.title} numberOfLines={2}>
-          Ucuz al, depola, başka şehre taşı ve kârlı piyasada sat.
+        <Text style={styles.kicker}>Depo İpucu</Text>
+        <Text style={styles.title} numberOfLines={expanded ? 3 : 1}>
+          Ucuza al · depola · doğru şehirde sat
         </Text>
-        <Text style={styles.line} numberOfLines={1}>
-          Soğuk ürünler için soğuk depo ve uygun dorse gerekir.
-        </Text>
+        {expanded ? (
+          <Text style={styles.detail} numberOfLines={3}>
+            Soğuk ürünler için uygun depo gerekir.
+          </Text>
+        ) : null}
       </View>
       <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
     </Pressable>
@@ -46,29 +60,32 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: warehouseLayout.internalGap,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 16,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.35)',
-    backgroundColor: 'rgba(14, 28, 52, 0.95)',
-    marginBottom: 12,
-    minHeight: 64,
-    maxHeight: 80,
+    borderColor: warehouseVisual.border,
+    backgroundColor: warehouseVisual.surfaceElevated,
+    marginBottom: warehouseLayout.sectionGap,
+    minHeight: 52,
   },
-  iconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
-    backgroundColor: colors.infoSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+  emoji: {
+    fontSize: 16,
+    lineHeight: 20,
   },
   textWrap: {
     flex: 1,
     minWidth: 0,
     gap: 2,
+  },
+  kicker: {
+    ...typography.caption,
+    color: colors.accentAmber,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   title: {
     ...typography.bodySmall,
@@ -77,10 +94,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  line: {
+  detail: {
     ...typography.caption,
     color: colors.textSecondary,
     fontSize: 11,
     lineHeight: 14,
+    marginTop: 2,
   },
 });

@@ -1,17 +1,15 @@
 import type { AdPrivacyAvailability } from './adPrivacyState';
 import {
-  AD_PRIVACY_ACTION_CTA,
-  AD_PRIVACY_LOADING_LABEL,
+  AD_PRIVACY_CHECKING_LABEL,
   AD_REWARDED_LOADING_LABEL,
   AD_REWARDED_OFFLINE_MESSAGE,
+  AD_REWARDED_UNAVAILABLE_MESSAGE,
   AD_REWARDED_WATCH_LABEL,
 } from './adPrivacyState';
 import type { RewardedPlacementRuntimeStatus } from '../services/adProvider';
 
 export type RewardedAdAvailability =
   | 'privacy-loading'
-  | 'privacy-action-required'
-  | 'privacy-error'
   | 'offline'
   | 'loading-ad'
   | 'ready'
@@ -26,11 +24,12 @@ export function resolveRewardedAdAvailability(input: {
   if (input.privacy.status === 'loading') {
     return 'privacy-loading';
   }
-  if (input.privacy.status === 'error') {
-    return 'privacy-error';
-  }
-  if (input.privacy.status === 'action-required') {
-    return 'privacy-action-required';
+  if (
+    input.privacy.status === 'config-error' ||
+    input.privacy.status === 'blocked' ||
+    (input.privacy.status === 'error' && !input.privacy.retryable)
+  ) {
+    return 'unavailable';
   }
   if (input.isOnline === false) {
     return 'offline';
@@ -57,11 +56,7 @@ export function rewardedAdAvailabilityToButtonLabel(
   const watchLabel = options?.watchLabel ?? AD_REWARDED_WATCH_LABEL;
   switch (availability) {
     case 'privacy-loading':
-      return AD_PRIVACY_LOADING_LABEL;
-    case 'privacy-action-required':
-      return AD_PRIVACY_ACTION_CTA;
-    case 'privacy-error':
-      return options?.retryLabel ?? 'Tekrar Dene';
+      return AD_PRIVACY_CHECKING_LABEL;
     case 'offline':
       return watchLabel;
     case 'loading-ad':
@@ -71,30 +66,29 @@ export function rewardedAdAvailabilityToButtonLabel(
       return watchLabel;
     case 'unavailable':
     default:
-      return options?.retryLabel ?? 'Tekrar Dene';
+      return options?.retryLabel ?? watchLabel;
   }
 }
 
 export function shouldEnableRewardedAdCta(availability: RewardedAdAvailability): boolean {
   return (
-    availability === 'privacy-action-required' ||
-    availability === 'privacy-error' ||
-    availability === 'ready' ||
-    availability === 'unavailable'
+    availability !== 'privacy-loading' &&
+    availability !== 'showing' &&
+    availability !== 'loading-ad'
   );
 }
 
 export function rewardedAdAvailabilityHelperText(
   availability: RewardedAdAvailability,
 ): string | null {
-  if (availability === 'privacy-action-required') {
-    return null;
-  }
   if (availability === 'offline') {
     return AD_REWARDED_OFFLINE_MESSAGE;
   }
   if (availability === 'loading-ad') {
     return AD_REWARDED_LOADING_LABEL;
+  }
+  if (availability === 'unavailable') {
+    return AD_REWARDED_UNAVAILABLE_MESSAGE;
   }
   return null;
 }

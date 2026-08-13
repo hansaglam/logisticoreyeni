@@ -2,32 +2,27 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ActionButton } from '../ui';
-import { colors, spacing, typography } from '../../theme';
+import { colors, typography } from '../../theme';
 import GameIcon from '../ui/GameIcon';
+import { ACCOUNT_CARD_PADDING } from './accountCenterTheme';
 
 export interface DangerZoneCardProps {
   expanded: boolean;
   onToggle: () => void;
-  isSigningOut: boolean;
   isDeleting: boolean;
   isSwitchingAccount: boolean;
   isGuest: boolean;
   isReady: boolean;
-  deleteConfirmStep: 0 | 1;
-  onSignOut: () => void;
   onDelete: () => void;
 }
 
 export default function DangerZoneCard({
   expanded,
   onToggle,
-  isSigningOut,
   isDeleting,
   isSwitchingAccount,
   isGuest,
   isReady,
-  deleteConfirmStep,
-  onSignOut,
   onDelete,
 }: DangerZoneCardProps) {
   return (
@@ -40,44 +35,28 @@ export default function DangerZoneCard({
         accessibilityLabel="Tehlikeli İşlemler"
       >
         <View style={styles.toggleCopy}>
-          <GameIcon name="warning" size={16} color={colors.danger} />
+          <GameIcon name="warning" size={14} color={colors.danger} />
           <Text style={styles.title}>Tehlikeli İşlemler</Text>
         </View>
         <GameIcon
           name={expanded ? 'chevronUp' : 'chevronDown'}
-          size={16}
-          color={colors.danger}
+          size={14}
+          color={colors.textMuted}
         />
       </Pressable>
       {expanded ? (
         <View style={styles.actions}>
+          <Text style={styles.deleteTitle}>Hesabı Sil</Text>
+          <Text style={styles.deleteHint}>
+            Tüm oyun verilerini kalıcı olarak sil.
+          </Text>
           <ActionButton
-            label={isSigningOut ? 'Çıkış yapılıyor…' : 'Çıkış Yap'}
-            onPress={onSignOut}
-            variant="secondary"
-            compact
-            disabled={isSwitchingAccount || isSigningOut || isDeleting}
-          />
-          <ActionButton
-            label={
-              isDeleting
-                ? 'Siliniyor…'
-                : deleteConfirmStep === 1
-                  ? 'Silme İşlemini Onayla'
-                  : isGuest
-                    ? 'Misafir Kaydını Sil'
-                    : 'Hesabı Sil'
-            }
+            label={isDeleting ? 'Siliniyor…' : isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Sil'}
             onPress={onDelete}
             variant="danger"
             compact
-            disabled={isDeleting || isSwitchingAccount || isSigningOut || !isReady}
+            disabled={isDeleting || isSwitchingAccount || !isReady}
           />
-          {deleteConfirmStep === 1 ? (
-            <Text style={styles.hint}>
-              Silinecek: yerel oyun kaydı, bulut verileri ve hesap bağlantısı.
-            </Text>
-          ) : null}
         </View>
       ) : null}
     </View>
@@ -88,18 +67,17 @@ const styles = StyleSheet.create({
   zone: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.32)',
-    backgroundColor: 'rgba(127, 29, 29, 0.12)',
+    borderColor: 'rgba(239, 68, 68, 0.22)',
+    backgroundColor: '#0A1628',
     overflow: 'hidden',
-    marginBottom: spacing.lg,
   },
   toggle: {
-    minHeight: 48,
+    minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: ACCOUNT_CARD_PADDING,
+    paddingVertical: 10,
   },
   togglePressed: {
     opacity: 0.92,
@@ -107,24 +85,31 @@ const styles = StyleSheet.create({
   toggleCopy: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: 8,
   },
   title: {
     ...typography.bodySmall,
-    color: colors.danger,
+    color: colors.textPrimary,
     fontWeight: '800',
+    fontSize: 15,
   },
   actions: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    gap: spacing.sm,
+    paddingHorizontal: ACCOUNT_CARD_PADDING,
+    paddingBottom: ACCOUNT_CARD_PADDING,
+    gap: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(239, 68, 68, 0.16)',
-    paddingTop: spacing.sm,
+    borderTopColor: 'rgba(239, 68, 68, 0.12)',
+    paddingTop: 10,
   },
-  hint: {
-    ...typography.caption,
+  deleteTitle: {
+    fontSize: 14,
+    fontWeight: '800',
     color: colors.danger,
-    lineHeight: 16,
+  },
+  deleteHint: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
   },
 });

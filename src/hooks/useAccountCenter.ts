@@ -28,6 +28,8 @@ import {
   subscribeAuthState,
   switchToLinkedProviderAccount,
   resetAccountSwitchTransition,
+  getCurrentUserId,
+  reauthenticateCurrentUser,
   type AccountStatus,
 } from '../services/authService';
 import {
@@ -54,10 +56,12 @@ import {
   resetCloudSaveSyncState,
   type CloudSaveStatusState,
 } from '../storage/cloudSaveSync';
+import { saveGameState } from '../storage/saveGame';
 import {
   getAccountDeletionErrorMessage,
   type AccountDeletionErrorCode,
 } from '../utils/accountDeletion';
+import { logAccountSignOut } from '../utils/accountLifecycleLog';
 import {
   getAccountLinkConflictFooter,
   getAccountLinkConflictMessage,
@@ -649,6 +653,29 @@ export function useAccountCenter({
     }
   };
 
+  const syncBeforeSignOutBestEffort = async (): Promise<'synced' | 'skipped' | 'failed'> => {
+    const state = useGameStore.getState();
+    if (!isLocalSaveSafeForAccountTransition(state)) {
+      return 'skipped';
+    }
+    try {
+      await state.saveGame();
+      const synced = await syncLocalSaveToCloud('manual', {
+        force: true,
+        state: useGameStore.getState(),
+      });
+      return synced ? 'synced' : 'failed';
+    } catch {
+      return 'failed';
+    }
+  };
+
+  const rebindLocalSaveToAuth = async () => {
+    const uid = getCurrentUserId();
+    if (!uid) return;
+    await saveGameState(useGameStore.getState(), { ownerUid: uid });
+  };
+
   const syncBeforeAccountTransition = async (): Promise<boolean> => {
     const state = useGameStore.getState();
     if (!isLocalSaveSafeForAccountTransition(state)) return false;
@@ -665,6 +692,7 @@ export function useAccountCenter({
     setCloudSaveAccountConflictPending(false);
     accountSwitchConflictRef.current = false;
     resetCloudSaveSyncState();
+    setUsernameProfile(null);
     useGameStore.setState({
       vehicleMarketplace: {
         activeMarketplaceListingIds: [],
@@ -869,17 +897,35 @@ export function useAccountCenter({
       );
       return;
     }
+    const linked =
+      safeAccountStatus.isReady &&
+      !safeAccountStatus.isAnonymous &&
+      safeAccountStatus.provider !== 'guest';
     setIsSigningOut(true);
+    logAccountSignOut({
+      stage: 'start',
+      authUidPresent: Boolean(getCurrentUserId()),
+      linked,
+    });
     try {
-      if (!(await syncBeforeAccountTransition())) {
-        showAlert(
-          'Çıkış iptal edildi',
-          getAccountTransitionErrorMessage('cloud-sync-failed'),
-        );
-        return;
-      }
+      const syncResult = await syncBeforeSignOutBestEffort();
+      logAccountSignOut({
+        stage: 'pre-sync',
+        authUidPresent: Boolean(getCurrentUserId()),
+        linked,
+        syncResult,
+      });
+
       const result = await signOutGoogleAccountToGuest();
       if (!result.ok) {
+        logAccountSignOut({
+          stage: 'sign-out-failed',
+          authUidPresent: Boolean(getCurrentUserId()),
+          linked,
+          syncResult,
+          success: false,
+          errorCode: result.error,
+        });
         showAlert(
           'Çıkış yapılamadı',
           getAccountTransitionErrorMessage(result.error),
@@ -887,11 +933,21 @@ export function useAccountCenter({
         return;
       }
       clearAccountScopedClientState();
+      await rebindLocalSaveToAuth();
       refreshAccount();
       refreshCloudStatus();
+      logAccountSignOut({
+        stage: 'complete',
+        authUidPresent: Boolean(getCurrentUserId()),
+        linked: false,
+        syncResult,
+        success: true,
+      });
       showAlert(
         'Çıkış yapıldı',
-        'Çıkış yaptın. Bu cihazdaki misafir kayıt korunuyor.',
+        syncResult === 'failed'
+          ? 'Çıkış yaptın. Son bulut kaydı tamamlanamadı; bağlı hesabındaki son kayıtlı ilerleme korunur.'
+          : 'Çıkış yaptın. Buluta kaydedilmiş ilerlemen korunur.',
       );
     } finally {
       setIsSigningOut(false);
@@ -900,14 +956,105 @@ export function useAccountCenter({
 
   const handleGoogleSignOut = () => {
     showDialog({
-      title: 'Hesaptan Çıkış Yap',
-      message:
-        'Önce ilerlemen buluta kaydedilecek. Bu cihazdaki oyun kaydı silinmeyecek.',
+      title: 'Çıkış yapmak istiyor musun?',
+      message: 'Hesabından çıkış yapacaksın. Buluta kaydedilmiş ilerlemen korunur.',
       variant: 'warning',
       cancelLabel: 'Vazgeç',
-      confirmLabel: 'Kaydet ve Çıkış Yap',
+      confirmLabel: 'Çıkış Yap',
       onConfirm: () => void executeGoogleSignOut(),
     });
+  };
+
+  const runAccountDeletionFlow = async (options?: {
+    skipCloudDelete?: boolean;
+    diagnosticId?: string;
+  }) => {
+    const isGuest =
+      safeAccountStatus.isAnonymous || safeAccountStatus.provider === 'guest';
+    setIsDeleting(true);
+    try {
+      const result = await deleteAccountAndCloudData(options);
+      refreshAccount();
+      refreshCloudStatus();
+      setUsernameProfile(null);
+
+      if (result.ok) {
+        showAlert(
+          isGuest ? 'Misafir kaydın silindi' : 'Hesabın silindi',
+          'Yeni oyun başlatıldı.',
+        );
+        return;
+      }
+
+      if (result.errorCode === 'requires-recent-login') {
+        showDialog({
+          title: 'Kimlik doğrulama gerekli',
+          message:
+            'Hesabını silmek için Google veya Apple ile tekrar giriş yapman gerekiyor.',
+          variant: 'warning',
+          cancelLabel: 'Vazgeç',
+          confirmLabel: 'Doğrula ve Sil',
+          onConfirm: () => {
+            void (async () => {
+              setIsDeleting(true);
+              try {
+                const reauth = await reauthenticateCurrentUser();
+                if (!reauth.ok) {
+                  if (!reauth.cancelled) {
+                    showAlert(
+                      'Hesap silinemedi',
+                      getAccountDeletionErrorMessage(
+                        reauth.error === 'requires-recent-login'
+                          ? 'requires-recent-login'
+                          : undefined,
+                      ),
+                    );
+                  }
+                  return;
+                }
+                const retry = await deleteAccountAndCloudData({
+                  skipCloudDelete: true,
+                  diagnosticId: result.diagnosticId,
+                });
+                refreshAccount();
+                refreshCloudStatus();
+                setUsernameProfile(null);
+                if (retry.ok) {
+                  showAlert(
+                    isGuest ? 'Misafir kaydın silindi' : 'Hesabın silindi',
+                    'Yeni oyun başlatıldı.',
+                  );
+                  return;
+                }
+                showAlert(
+                  'Hesap silinemedi',
+                  getAccountDeletionErrorMessage(
+                    retry.errorCode as AccountDeletionErrorCode | undefined,
+                    retry.error,
+                  ),
+                );
+              } finally {
+                setIsDeleting(false);
+              }
+            })();
+          },
+        });
+        return;
+      }
+
+      showAlert(
+        'Hesap silinemedi',
+        getAccountDeletionErrorMessage(
+          result.errorCode as AccountDeletionErrorCode | undefined,
+          result.error,
+        ),
+      );
+    } catch (error) {
+      console.warn('[account] delete failed', error);
+      showAlert('Hesap silinemedi', 'Tekrar dene.');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -917,43 +1064,27 @@ export function useAccountCenter({
 
     const isGuest =
       safeAccountStatus.isAnonymous || safeAccountStatus.provider === 'guest';
+
     showDialog({
       title: isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Sil',
       message: isGuest
-        ? 'Bu işlem yerel ilerlemeni silebilir. Devam etmek istiyor musun?'
-        : 'Oyun verilerin, bulut kaydın ve hesap bağlantın silinir. Bu işlem geri alınamaz.',
+        ? 'Yerel ilerlemen kalıcı olarak silinecek.'
+        : 'Bulut kaydın, kullanıcı adın ve hesap verilerin kalıcı olarak silinecek.',
       variant: 'danger',
-      confirmLabel: 'Kalıcı Olarak Sil',
       cancelLabel: 'Vazgeç',
-      destructive: true,
+      confirmLabel: 'Devam Et',
       onConfirm: () => {
-        void (async () => {
-          setIsDeleting(true);
-          try {
-            const result = await deleteAccountAndCloudData();
-            refreshAccount();
-            refreshCloudStatus();
-            if (result.ok) {
-              showAlert(
-                isGuest ? 'Misafir kaydın silindi' : 'Hesabın silindi',
-                'Yeni oyun başlatıldı.',
-              );
-              return;
-            }
-            showAlert(
-              'Silme Başarısız',
-              getAccountDeletionErrorMessage(
-                result.errorCode as AccountDeletionErrorCode | undefined,
-                result.error,
-              ),
-            );
-          } catch (error) {
-            console.warn('[account] delete failed', error);
-            showAlert('Silme Başarısız', 'İşlem tamamlanamadı. Lütfen tekrar deneyin.');
-          } finally {
-            setIsDeleting(false);
-          }
-        })();
+        showDialog({
+          title: isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Kalıcı Olarak Sil',
+          message: 'Bu işlem geri alınamaz. Onaylıyor musun?',
+          variant: 'danger',
+          cancelLabel: 'Vazgeç',
+          confirmLabel: 'Hesabı Kalıcı Olarak Sil',
+          destructive: true,
+          onConfirm: () => {
+            void runAccountDeletionFlow();
+          },
+        });
       },
     });
   };

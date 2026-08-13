@@ -19,8 +19,8 @@ import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAsse
 import { shouldShowTestAdLabel } from '../../config/adMob';
 import { calculateDailyOperationSupportReward } from '../../domain/dailyOperationSupportReward';
 import {
-  AD_PRIVACY_ACTION_DESCRIPTION,
-  AD_PRIVACY_ERROR_MESSAGE,
+  AD_REWARDED_LOAD_FAILED_MESSAGE,
+  AD_REWARDED_UNAVAILABLE_MESSAGE,
 } from '../../domain/adPrivacyState';
 import {
   resolveRewardedAdAvailability,
@@ -28,8 +28,8 @@ import {
   rewardedAdAvailabilityToButtonLabel,
   shouldEnableRewardedAdCta,
 } from '../../domain/rewardedAdAvailability';
-import { useAdPrivacyAction } from '../../hooks/useAdPrivacyAction';
 import { useAdPrivacyAvailability } from '../../hooks/useAdPrivacyAvailability';
+import { useRewardedAdRequest } from '../../hooks/useRewardedAdRequest';
 import { useRewardedPlacement } from '../../hooks/useRewardedPlacement';
 import { areAdsFeatureEnabled } from '../../services/adProvider';
 import { canGrantAdReward, resetDailyUsageIfNeeded } from '../../simulation/adRewardGrants';
@@ -47,33 +47,30 @@ interface DashboardDailyOpsBonusCardProps {
 }
 
 function resolveAdStatusLabel(params: {
-  privacyLoading: boolean;
+  privacyChecking: boolean;
   loading: boolean;
   eligibilityOk: boolean;
   rewardedAvailability: ReturnType<typeof resolveRewardedAdAvailability>;
   failed: boolean;
   showTestLabel: boolean;
 }): string {
-  const { privacyLoading, loading, eligibilityOk, rewardedAvailability, failed, showTestLabel } =
+  const { privacyChecking, loading, eligibilityOk, rewardedAvailability, failed, showTestLabel } =
     params;
   const testPrefix = showTestLabel ? 'Test reklamı · ' : '';
 
   if (!eligibilityOk) {
     return `${testPrefix}Günlük destek bugün kullanıldı.`;
   }
-  if (privacyLoading || loading) {
+  if (privacyChecking || loading) {
     return `${testPrefix}Reklam hazırlanıyor`;
   }
-  if (failed || rewardedAvailability === 'unavailable' || rewardedAvailability === 'privacy-error') {
+  if (failed || rewardedAvailability === 'unavailable') {
     return `${testPrefix}Reklam yüklenemedi`;
   }
-  if (rewardedAvailability === 'privacy-action-required') {
-    return AD_PRIVACY_ACTION_DESCRIPTION;
-  }
-  if (rewardedAvailability === 'ready') {
+  if (rewardedAvailability === 'ready' || rewardedAvailability === 'loading-ad') {
     return `${testPrefix}Reklam izleyerek al`;
   }
-  return `${testPrefix}${rewardedAdAvailabilityHelperText(rewardedAvailability)}`;
+  return `${testPrefix}${rewardedAdAvailabilityHelperText(rewardedAvailability) ?? 'Reklam izleyerek al'}`;
 }
 
 export default function DashboardDailyOpsBonusCard({
@@ -94,11 +91,7 @@ export default function DashboardDailyOpsBonusCard({
   const hasCompletedOnboarding = useGameStore((state) => state.onboarding?.completed === true);
   const placementState = useRewardedPlacement('daily_operations');
   const { availability: privacyAvailability } = useAdPrivacyAvailability();
-  const {
-    loading: privacyLoading,
-    error: privacyError,
-    runPrivacyAction,
-  } = useAdPrivacyAction();
+  const { checking: privacyChecking, ensureAdsAllowedForReward } = useRewardedAdRequest();
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -136,8 +129,8 @@ export default function DashboardDailyOpsBonusCard({
   const rewardAmount = player ? calculateDailyOperationSupportReward(player) : 0;
   const showTestLabel = shouldShowTestAdLabel();
 
-  const buttonLabel = privacyLoading
-    ? 'Gizlilik…'
+  const buttonLabel = privacyChecking
+    ? 'Hazırlanıyor…'
     : loading
       ? 'Hazırlanıyor…'
       : !eligibility.ok
@@ -148,7 +141,7 @@ export default function DashboardDailyOpsBonusCard({
           });
 
   const adStatusLabel = resolveAdStatusLabel({
-    privacyLoading,
+    privacyChecking,
     loading,
     eligibilityOk: eligibility.ok,
     rewardedAvailability,
@@ -158,30 +151,24 @@ export default function DashboardDailyOpsBonusCard({
 
   const isDisabled =
     loading ||
-    privacyLoading ||
+    privacyChecking ||
     !eligibility.ok ||
-    (!shouldEnableRewardedAdCta(rewardedAvailability) && !failed) ||
-    (rewardedAvailability === 'ready' && !eligibility.ok && !failed);
+    (!shouldEnableRewardedAdCta(rewardedAvailability) && !failed);
 
   const handlePress = async () => {
-    if (loading || privacyLoading) {
-      return;
-    }
-
-    if (
-      rewardedAvailability === 'privacy-action-required' ||
-      rewardedAvailability === 'privacy-error'
-    ) {
-      await runPrivacyAction();
-      return;
-    }
-
-    if (rewardedAvailability !== 'ready' && !failed) {
+    if (loading || privacyChecking) {
       return;
     }
 
     if (!eligibility.ok) {
       setErrorText(eligibility.reason ?? 'Ödül şu an kullanılamıyor.');
+      return;
+    }
+
+    const privacyResult = await ensureAdsAllowedForReward();
+    if (!privacyResult.allowed) {
+      setErrorText(privacyResult.userMessage ?? AD_REWARDED_UNAVAILABLE_MESSAGE);
+      setFailed(true);
       return;
     }
 
@@ -193,8 +180,8 @@ export default function DashboardDailyOpsBonusCard({
       if (!result.ok) {
         const reason =
           result.reason === 'Reklam yüklenemedi.'
-            ? 'Reklam yüklenemedi'
-            : result.reason ?? 'Reklam yüklenemedi';
+            ? AD_REWARDED_LOAD_FAILED_MESSAGE
+            : result.reason ?? AD_REWARDED_LOAD_FAILED_MESSAGE;
         setErrorText(reason);
         setFailed(true);
         return;
@@ -203,7 +190,7 @@ export default function DashboardDailyOpsBonusCard({
       onSuccess?.(rewardAmount);
     } catch (error) {
       setFailed(true);
-      setErrorText(error instanceof Error ? error.message : 'Reklam yüklenemedi');
+      setErrorText(error instanceof Error ? error.message : AD_REWARDED_LOAD_FAILED_MESSAGE);
     } finally {
       setLoading(false);
     }
@@ -241,11 +228,6 @@ export default function DashboardDailyOpsBonusCard({
             <Text style={styles.adStatus} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
               {adStatusLabel}
             </Text>
-            {privacyError ? (
-              <Text style={styles.inlineError} numberOfLines={1}>
-                {AD_PRIVACY_ERROR_MESSAGE}
-              </Text>
-            ) : null}
             {errorText ? (
               <Text style={styles.inlineError} numberOfLines={1}>
                 {errorText}
@@ -265,7 +247,7 @@ export default function DashboardDailyOpsBonusCard({
               accessibilityRole="button"
               accessibilityLabel={buttonLabel}
             >
-              {loading || privacyLoading ? (
+              {loading || privacyChecking ? (
                 <ActivityIndicator size="small" color="#FFAA00" />
               ) : (
                 <>
@@ -297,7 +279,7 @@ export default function DashboardDailyOpsBonusCard({
             accessibilityRole="button"
             accessibilityLabel={buttonLabel}
           >
-            {loading || privacyLoading ? (
+            {loading || privacyChecking ? (
               <ActivityIndicator size="small" color="#FFAA00" />
             ) : (
               <>

@@ -52,6 +52,7 @@ interface MarketTutorialOverlayProps {
   overlayRootRef?: React.RefObject<View | null>;
   onRequestStepChange: (direction: 'next' | 'previous') => void;
   onSkip: () => void;
+  onDismiss: () => void;
   onComplete: () => void;
   onTargetMissing?: (stepId: string) => void;
   onLog?: (payload: {
@@ -91,6 +92,7 @@ export default function MarketTutorialOverlay({
   overlayRootRef,
   onRequestStepChange,
   onSkip,
+  onDismiss,
   onComplete,
   onTargetMissing,
   onLog,
@@ -187,7 +189,7 @@ export default function MarketTutorialOverlay({
       visible={visible}
       transparent
       animationType={reduceMotion ? 'none' : 'fade'}
-      onRequestClose={controlsDisabled ? undefined : onSkip}
+      onRequestClose={controlsDisabled ? undefined : onDismiss}
       accessibilityViewIsModal
     >
       <View ref={overlayRootRef} style={styles.overlayRoot} pointerEvents="box-none" collapsable={false}>

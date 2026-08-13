@@ -23,8 +23,7 @@ import {
 } from '../../simulation/deliveryBoostAvailability';
 import { resetDailyUsageIfNeeded, canGrantAdReward } from '../../simulation/adRewardGrants';
 import {
-  AD_PRIVACY_ACTION_DESCRIPTION,
-  AD_PRIVACY_ERROR_MESSAGE,
+  AD_REWARDED_UNAVAILABLE_MESSAGE,
 } from '../../domain/adPrivacyState';
 import {
   resolveRewardedAdAvailability,
@@ -32,8 +31,8 @@ import {
   rewardedAdAvailabilityToButtonLabel,
   shouldEnableRewardedAdCta,
 } from '../../domain/rewardedAdAvailability';
-import { useAdPrivacyAction } from '../../hooks/useAdPrivacyAction';
 import { useAdPrivacyAvailability } from '../../hooks/useAdPrivacyAvailability';
+import { useRewardedAdRequest } from '../../hooks/useRewardedAdRequest';
 import { useRewardedPlacement } from '../../hooks/useRewardedPlacement';
 
 interface DeliveryBoostPanelProps {
@@ -62,11 +61,7 @@ export default function DeliveryBoostPanel({
   const gameSpeed = useGameStore((state) => getEffectiveOfflineGameSpeed(state));
   const placementState = useRewardedPlacement('delivery_boost');
   const { availability: privacyAvailability, canRequestAds } = useAdPrivacyAvailability();
-  const {
-    loading: privacyLoading,
-    error: privacyError,
-    runPrivacyAction,
-  } = useAdPrivacyAction();
+  const { checking: privacyChecking, ensureAdsAllowedForReward } = useRewardedAdRequest();
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -136,9 +131,9 @@ export default function DeliveryBoostPanel({
     isOnline,
   });
 
-  const privacyActionRequired =
-    rewardedAvailability === 'privacy-action-required' ||
-    rewardedAvailability === 'privacy-error';
+  const privacyBlocked =
+    privacyAvailability.status === 'config-error' ||
+    privacyAvailability.status === 'blocked';
 
   const isAvailable = availability.status === 'available';
   const disabledCopy =
@@ -146,26 +141,23 @@ export default function DeliveryBoostPanel({
       ? deliveryBoostDisabledReasonToUserMessage(availability.reason)
       : null;
 
-  const ctaLabel = privacyLoading
-    ? 'Gizlilik tercihleri açılıyor…'
+  const ctaLabel = privacyChecking
+    ? 'Reklam seçenekleri hazırlanıyor…'
     : rewardedAdAvailabilityToButtonLabel(rewardedAvailability, {
         watchLabel: 'Reklam İzle',
       });
 
   const helperText =
-    rewardedAvailability === 'privacy-action-required'
-      ? AD_PRIVACY_ACTION_DESCRIPTION
-      : rewardedAdAvailabilityHelperText(rewardedAvailability) ??
-        (disabledCopy?.helper && !privacyActionRequired ? disabledCopy.helper : null);
+    rewardedAdAvailabilityHelperText(rewardedAvailability) ??
+    (disabledCopy?.helper && !privacyBlocked ? disabledCopy.helper : null);
 
   const isShowingAd = loading || placementState.status === 'showing';
 
   const canPressCta =
-    !privacyLoading &&
+    !privacyChecking &&
     !isShowingAd &&
-    (privacyActionRequired
-      ? shouldEnableRewardedAdCta(rewardedAvailability)
-      : isAvailable && rewardedAvailability === 'ready');
+    shouldEnableRewardedAdCta(rewardedAvailability) &&
+    (isAvailable || privacyBlocked);
 
   const durationLabel = formatBoostDurationLabel(
     availability.status === 'available'
@@ -174,30 +166,32 @@ export default function DeliveryBoostPanel({
   );
 
   const handlePress = useCallback(() => {
-    if (privacyLoading || isShowingAd) {
+    if (privacyChecking || isShowingAd) {
       return;
     }
 
-    if (privacyActionRequired) {
-      void runPrivacyAction();
-      return;
-    }
-
-    if (!isAvailable || rewardedAvailability !== 'ready') {
-      if (disabledCopy) {
-        setStatusMessage(disabledCopy.body);
+    void (async () => {
+      const privacyResult = await ensureAdsAllowedForReward();
+      if (!privacyResult.allowed) {
+        setStatusMessage(privacyResult.userMessage ?? AD_REWARDED_UNAVAILABLE_MESSAGE);
+        return;
       }
-      return;
-    }
-    setConfirmVisible(true);
+
+      if (!isAvailable) {
+        if (disabledCopy) {
+          setStatusMessage(disabledCopy.body);
+        }
+        return;
+      }
+
+      setConfirmVisible(true);
+    })();
   }, [
     disabledCopy,
+    ensureAdsAllowedForReward,
     isAvailable,
     isShowingAd,
-    privacyActionRequired,
-    privacyLoading,
-    rewardedAvailability,
-    runPrivacyAction,
+    privacyChecking,
   ]);
 
   const handleConfirm = useCallback(async () => {
@@ -234,12 +228,13 @@ export default function DeliveryBoostPanel({
   ]);
 
   const showActiveCta =
-    privacyActionRequired ||
+    privacyBlocked ||
     rewardedAvailability === 'privacy-loading' ||
     (isAvailable &&
       (rewardedAvailability === 'ready' ||
         rewardedAvailability === 'loading-ad' ||
-        rewardedAvailability === 'showing'));
+        rewardedAvailability === 'showing' ||
+        rewardedAvailability === 'unavailable'));
 
   const confirmModal = (
     <Modal visible={confirmVisible} transparent animationType="fade">
@@ -294,7 +289,7 @@ export default function DeliveryBoostPanel({
             accessibilityLabel={ctaLabel}
           >
             {isShowingAd ||
-            privacyLoading ||
+            privacyChecking ||
             rewardedAvailability === 'loading-ad' ||
             rewardedAvailability === 'privacy-loading' ? (
               <ActivityIndicator size="small" color="#38BDF8" />
@@ -319,11 +314,6 @@ export default function DeliveryBoostPanel({
         {helperText ? (
           <Text style={styles.compactHint} numberOfLines={3}>
             {helperText}
-          </Text>
-        ) : null}
-        {privacyError ? (
-          <Text style={styles.compactError} numberOfLines={2}>
-            {AD_PRIVACY_ERROR_MESSAGE}
           </Text>
         ) : null}
 
@@ -353,7 +343,7 @@ export default function DeliveryBoostPanel({
             accessibilityLabel={ctaLabel}
           >
             {isShowingAd ||
-            privacyLoading ||
+            privacyChecking ||
             rewardedAvailability === 'loading-ad' ||
             rewardedAvailability === 'privacy-loading' ? (
               <ActivityIndicator size="small" color="#E0F2FE" />
@@ -375,7 +365,6 @@ export default function DeliveryBoostPanel({
         </Text>
       </View>
       {helperText ? <Text style={styles.hint}>{helperText}</Text> : null}
-      {privacyError ? <Text style={styles.privacyError}>{AD_PRIVACY_ERROR_MESSAGE}</Text> : null}
       {statusMessage ? <Text style={styles.status}>{statusMessage}</Text> : null}
       {confirmModal}
     </View>

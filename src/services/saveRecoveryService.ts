@@ -51,6 +51,15 @@ export {
 
 const CLOUD_RECOVERY_TIMEOUT_MS = 12_000;
 
+let coldStartProbePromise: Promise<SaveRecoveryProbeResult> | null = null;
+let coldStartProbeResult: SaveRecoveryProbeResult | null = null;
+
+/** Recovery UI / new game sonrası bir sonraki probe taze çalışsın. */
+export function invalidateSaveRecoveryColdStartProbe(): void {
+  coldStartProbePromise = null;
+  coldStartProbeResult = null;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
@@ -67,60 +76,83 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | nul
 }
 
 /** Local auto-recovery first, then optional cloud restore before showing recovery UI. */
-export async function probeSaveRecoveryWithCloudAttempt(): Promise<SaveRecoveryProbeResult> {
-  const probe = await probeSaveRecoveryOnColdStart();
-  if (!probe.required) {
-    return probe;
+export async function probeSaveRecoveryWithCloudAttempt(options?: {
+  force?: boolean;
+}): Promise<SaveRecoveryProbeResult> {
+  if (!options?.force && coldStartProbeResult) {
+    return coldStartProbeResult;
+  }
+  if (!options?.force && coldStartProbePromise) {
+    return coldStartProbePromise;
   }
 
-  const uid = getCurrentUserId();
-  if (!uid) {
-    return probe;
-  }
+  coldStartProbePromise = (async () => {
+    const probe = await probeSaveRecoveryOnColdStart();
+    if (!probe.required) {
+      coldStartProbeResult = probe;
+      return probe;
+    }
 
-  const startedAt = Date.now();
-  logSaveBootstrap({
-    stage: 'reading-cloud',
-    source: 'cloud',
-    success: false,
-    recoverable: true,
-    authUidPresent: true,
-  });
+    const uid = getCurrentUserId();
+    if (!uid) {
+      coldStartProbeResult = probe;
+      return probe;
+    }
 
-  const cloudResult = await withTimeout(restoreFromCloudSave(), CLOUD_RECOVERY_TIMEOUT_MS);
-  if (cloudResult?.ok) {
+    const startedAt = Date.now();
     logSaveBootstrap({
-      stage: 'ready',
+      stage: 'reading-cloud',
       source: 'cloud',
-      success: true,
+      success: false,
+      recoverable: true,
+      authUidPresent: true,
+    });
+
+    const cloudResult = await withTimeout(restoreFromCloudSave(), CLOUD_RECOVERY_TIMEOUT_MS);
+    if (cloudResult?.ok) {
+      logSaveBootstrap({
+        stage: 'ready',
+        source: 'cloud',
+        success: true,
+        durationMs: Date.now() - startedAt,
+        authUidPresent: true,
+        payloadPresent: true,
+      });
+      const resolved: SaveRecoveryProbeResult = {
+        required: false,
+        fatal: false,
+        quarantine: null,
+        recoveredSource: 'cloud',
+        lastStage: 'ready',
+        diagnosticId: probe.diagnosticId,
+      };
+      coldStartProbeResult = resolved;
+      return resolved;
+    }
+
+    logSaveBootstrap({
+      stage: 'recovery-required',
+      source: 'cloud',
+      success: false,
+      errorCode: 'cloud-unavailable',
+      recoverable: false,
       durationMs: Date.now() - startedAt,
       authUidPresent: true,
-      payloadPresent: true,
     });
-    return {
-      required: false,
-      fatal: false,
-      quarantine: null,
-      recoveredSource: 'cloud',
-      lastStage: 'ready',
-      diagnosticId: probe.diagnosticId,
+
+    const failed: SaveRecoveryProbeResult = {
+      ...probe,
+      failureCode: probe.failureCode ?? 'cloud-unavailable',
     };
+    coldStartProbeResult = failed;
+    return failed;
+  })();
+
+  try {
+    return await coldStartProbePromise;
+  } finally {
+    coldStartProbePromise = null;
   }
-
-  logSaveBootstrap({
-    stage: 'recovery-required',
-    source: 'cloud',
-    success: false,
-    errorCode: 'cloud-unavailable',
-    recoverable: false,
-    durationMs: Date.now() - startedAt,
-    authUidPresent: true,
-  });
-
-  return {
-    ...probe,
-    failureCode: probe.failureCode ?? 'cloud-unavailable',
-  };
 }
 
 function buildRestoreId(source: string, ownerUid: string): string {

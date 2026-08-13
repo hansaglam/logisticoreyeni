@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { StyleSheet, Switch, Text, View } from 'react-native';
 
 import { colors, typography } from '../../theme';
 import type { GameIconName } from '../../theme/icons';
@@ -25,7 +25,7 @@ export default function AccountSettingRow({
   return (
     <View style={styles.row}>
       <View style={styles.iconWrap}>
-        <GameIcon name={icon} size={18} color={colors.accentBlue} />
+        <GameIcon name={icon} size={16} color={colors.accentBlue} />
       </View>
       <View style={styles.copy}>
         <Text style={styles.title}>{title}</Text>
@@ -50,14 +50,14 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    minHeight: 52,
-    paddingVertical: 6,
+    gap: 10,
+    minHeight: 64,
+    paddingVertical: 4,
   },
   iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: 'rgba(35, 136, 255, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -70,11 +70,13 @@ const styles = StyleSheet.create({
   title: {
     ...typography.bodySmall,
     fontWeight: '700',
+    fontSize: 14,
     color: colors.textPrimary,
   },
   subtitle: {
     ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 16,
+    fontSize: 11,
+    lineHeight: 14,
   },
 });

@@ -17,6 +17,12 @@ export type TutorialPlacement = 'below' | 'above' | 'center';
 
 export type TutorialTransitionState = 'idle' | 'scrolling' | 'measuring' | 'animating';
 
+export type TutorialProgressStatus =
+  | 'never-seen'
+  | 'completed'
+  | 'skipped'
+  | 'dismissed';
+
 export type AppTutorialStep = {
   id: string;
   title: string;
@@ -38,8 +44,15 @@ export type AppTutorialDefinition = {
 };
 
 export type TutorialProgressEntry = {
-  completed: boolean;
   version: number;
+  hasBeenPresented: boolean;
+  status: TutorialProgressStatus;
+  /** @deprecated Use hasBeenPresented + status */
+  completed?: boolean;
+  completedAt?: number;
+  skippedAt?: number;
+  dismissedAt?: number;
+  lastManualReplayAt?: number;
 };
 
 export type TutorialProgressState = Partial<Record<AppTutorialId, TutorialProgressEntry>>;
@@ -52,7 +65,8 @@ export type AppTutorialLogAction =
   | 'step-skipped'
   | 'completed'
   | 'dismissed'
-  | 'target-missing';
+  | 'target-missing'
+  | 'presented';
 
 export type AppTutorialMeasureFn = () => Promise<TutorialLayoutRect | null>;
 export type AppTutorialScrollFn = () => void | Promise<void>;
@@ -61,3 +75,5 @@ export interface AppTutorialTargetEntry {
   measure: AppTutorialMeasureFn;
   scrollIntoView?: AppTutorialScrollFn;
 }
+
+export type TutorialOutcome = 'completed' | 'skipped' | 'dismissed';

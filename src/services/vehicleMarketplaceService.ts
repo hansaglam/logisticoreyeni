@@ -1,4 +1,5 @@
 import type { Functions } from 'firebase/functions';
+import { Platform } from 'react-native';
 
 import {
   VEHICLE_MARKETPLACE_ENABLED,
@@ -6,9 +7,12 @@ import {
 } from '../config/backendRoadmap';
 import type { AuthoritativeMarketplaceReconciliation } from '../domain/vehicleMarketplaceReconciliation';
 import {
+  parseVehicleMarketplaceListResponse,
+  parseVehicleMarketplaceMyListingsResponse,
+} from '../domain/vehicleMarketplaceResponseParser';
+import {
   getMarketplaceBackendReason,
   getMarketplaceFirebaseErrorCode,
-  mapMarketplaceCallableError,
 } from '../domain/vehicleMarketplaceErrors';
 import type {
   VehicleMarketplaceActionResult,
@@ -78,10 +82,12 @@ function auditCallableConfig(name: MarketplaceCallableName): void {
     callableConfigAudits.add(name);
     const firebaseApp = getFirebaseAppSafe();
     const user = getFirebaseAuthSafe()?.currentUser;
-    console.info('[marketplace-callable-config]', {
+    console.info('[vehicle-marketplace-config]', {
+      platform: Platform.OS,
       projectId: firebaseApp?.options.projectId ?? null,
-      region: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
+      functionsRegion: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
       callableName: name,
+      featureEnabled: VEHICLE_MARKETPLACE_ENABLED,
       authenticated: Boolean(user && !user.isAnonymous),
       uidPresent: Boolean(user?.uid),
     });
@@ -90,6 +96,7 @@ function auditCallableConfig(name: MarketplaceCallableName): void {
 
 type TimestampLike = number | { seconds?: number; _seconds?: number };
 
+/** @deprecated Use vehicleMarketplaceResponseParser */
 function timestampToMs(value: TimestampLike | undefined): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
   const seconds = value?.seconds ?? value?._seconds;
@@ -337,7 +344,7 @@ export async function getVehicleMarketplaceListings(
 
   const result = await invokeMarketplaceCallable<
     { limit: number; cursor?: VehicleMarketplaceCursor },
-    VehicleMarketplacePage
+    Record<string, unknown>
   >(VEHICLE_MARKETPLACE_CALLABLES.list, { limit, cursor });
   if (!result.ok) {
     return {
@@ -348,27 +355,23 @@ export async function getVehicleMarketplaceListings(
     };
   }
 
-  const page = result.data;
-  if (!page.ok) {
-    const reason = page.reason ?? 'service-unavailable';
+  const parsed = parseVehicleMarketplaceListResponse(result.data, 'list');
+  if (!parsed.success) {
     recordMarketplaceCallableResult({
       success: false,
-      code: reason,
-      detail: VEHICLE_MARKETPLACE_CALLABLES.list,
+      code: parsed.reason,
+      detail: `${VEHICLE_MARKETPLACE_CALLABLES.list}:${parsed.field ?? 'envelope'}`,
     });
     return {
-      ...page,
+      ok: false,
       listings: [],
-      reason,
+      hasMore: false,
+      reason: parsed.reason,
     };
   }
 
   recordMarketplaceCallableResult({ success: true, code: null });
-  return {
-    ...page,
-    listings: page.listings.map((listing) =>
-      normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
-  };
+  return parsed.data;
 }
 
 export async function getMyVehicleListings(): Promise<{
@@ -385,32 +388,26 @@ export async function getMyVehicleListings(): Promise<{
 
   const result = await invokeMarketplaceCallable<
     Record<string, never>,
-    {
-      ok: boolean;
-      listings: VehicleMarketplaceListing[];
-      reconciliation?: AuthoritativeMarketplaceReconciliation | null;
-      reason?: VehicleMarketplaceFailureReason;
-    }
+    Record<string, unknown>
   >(VEHICLE_MARKETPLACE_CALLABLES.myListings, {});
   if (!result.ok) {
     return { ok: false, listings: [], reason: result.reason };
   }
 
-  const payload = result.data;
-  if (!payload.ok) {
-    const reason = payload.reason ?? 'service-unavailable';
+  const parsed = parseVehicleMarketplaceMyListingsResponse(result.data);
+  if (!parsed.success) {
     recordMarketplaceCallableResult({
       success: false,
-      code: reason,
-      detail: VEHICLE_MARKETPLACE_CALLABLES.myListings,
+      code: parsed.reason,
+      detail: `${VEHICLE_MARKETPLACE_CALLABLES.myListings}:${parsed.field ?? 'envelope'}`,
     });
-    return { ...payload, listings: [], reason };
+    return { ok: false, listings: [], reason: parsed.reason };
   }
 
   return {
-    ...payload,
-    listings: payload.listings.map((listing) =>
-      normalizeListing(listing as Parameters<typeof normalizeListing>[0])),
+    ok: true,
+    listings: parsed.data.listings,
+    reconciliation: parsed.data.reconciliation as AuthoritativeMarketplaceReconciliation | null,
   };
 }
 

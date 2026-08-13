@@ -1,14 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { GameIcon, ProgressBar } from '../ui';
+import { GameIcon } from '../ui';
 import type { GameIconName } from '../../theme/icons';
 import { colors, formatMoney, typography } from '../../theme';
 import type { WarehouseScreenOverview } from '../../utils/warehouseScreenViewModel';
 import { getOccupancyBarColor } from './warehouseUiHelpers';
 import { logWarehouseLayout } from './warehouseLayoutDebug';
-import MiniProgressRing from './MiniProgressRing';
-import { warehouseVisual } from './warehouseTheme';
+import { warehouseLayout, warehouseVisual } from './warehouseTheme';
 
 interface WarehouseOverviewGridProps {
   overview: WarehouseScreenOverview;
@@ -20,66 +19,39 @@ function formatCompactTons(value: number): string {
   return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
 }
 
-function MetricCard({
+function StatCell({
   label,
   value,
-  helper,
+  sub,
   valueColor,
-  accent,
   icon,
-  onPress,
-  trailing,
+  iconColor,
 }: {
   label: string;
   value: string;
-  helper?: string;
+  sub?: string;
   valueColor: string;
-  accent: string;
   icon: GameIconName;
-  onPress?: () => void;
-  trailing?: React.ReactNode;
+  iconColor: string;
 }) {
-  const content = (
-    <View style={styles.cardInner}>
-      <View style={styles.cardTop}>
-        <View style={[styles.iconChip, { backgroundColor: `${accent}22` }]}>
-          <GameIcon name={icon} size={13} color={accent} />
-        </View>
-        {trailing}
+  return (
+    <View style={styles.statCell}>
+      <View style={styles.statLabelRow}>
+        <GameIcon name={icon} size={14} color={iconColor} />
+        <Text style={styles.statLabel} numberOfLines={1}>
+          {label}
+        </Text>
       </View>
-      <Text style={styles.label} numberOfLines={1}>
-        {label}
-      </Text>
-      <Text style={[styles.value, { color: valueColor }]} numberOfLines={1}>
+      <Text style={[styles.statValue, { color: valueColor }]} numberOfLines={1}>
         {value}
       </Text>
-      {helper ? (
-        <Text style={styles.helper} numberOfLines={1}>
-          {helper}
+      {sub ? (
+        <Text style={styles.statSub} numberOfLines={1}>
+          {sub}
         </Text>
       ) : null}
     </View>
   );
-
-  const cardStyle = [
-    styles.card,
-    { borderColor: `${accent}55`, borderLeftColor: accent, borderLeftWidth: 3 },
-  ];
-
-  if (onPress) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={cardStyle}
-        accessibilityRole="button"
-        accessibilityLabel={`${label}: ${value}`}
-      >
-        {content}
-      </Pressable>
-    );
-  }
-
-  return <View style={cardStyle}>{content}</View>;
 }
 
 export default function WarehouseOverviewGrid({
@@ -87,129 +59,127 @@ export default function WarehouseOverviewGrid({
   onViewTransfers,
 }: WarehouseOverviewGridProps) {
   const barColor = getOccupancyBarColor(overview.occupancyPercent);
-  const occupancy = overview.occupancyPercent / 100;
+  const transferLabel =
+    overview.activeTransferCount > 0
+      ? `${overview.activeTransferCount} aktif transfer`
+      : '0 aktif transfer';
 
   return (
     <View
-      style={styles.grid}
+      style={styles.summaryCard}
       onLayout={(event) => {
         logWarehouseLayout({
           overviewHeight: Math.round(event.nativeEvent.layout.height),
         });
       }}
     >
-      <View style={styles.row}>
-        <MetricCard
-          label="Toplam Stok"
+      <Text style={styles.summaryTitle}>Depo Özeti</Text>
+
+      <View style={styles.grid}>
+        <StatCell
+          label="Toplam stok"
           value={formatMoney(overview.inventoryValue)}
           valueColor={warehouseVisual.accentGreen}
-          accent={warehouseVisual.accentGreen}
           icon="inventory"
+          iconColor={warehouseVisual.accentGreen}
         />
-        <MetricCard
+        <StatCell
           label="Kapasite"
           value={`${formatCompactTons(overview.usedCapacityTons)} / ${formatCompactTons(overview.totalCapacityTons)} t`}
-          helper={`%${Math.round(overview.occupancyPercent)} dolu`}
+          sub={`%${Math.round(overview.occupancyPercent)} doluluk`}
           valueColor={barColor}
-          accent={barColor}
           icon="warehouse"
-          trailing={
-            <MiniProgressRing
-              progress={occupancy}
-              size={36}
-              strokeWidth={3.5}
-              color={barColor}
-              label={`%${Math.round(overview.occupancyPercent)}`}
-            />
-          }
+          iconColor={warehouseVisual.accentBlue}
         />
-      </View>
-      <View style={styles.row}>
-        <MetricCard
-          label="Günlük Gider"
+        <StatCell
+          label="Günlük gider"
           value={formatMoney(-Math.abs(overview.dailyOperatingCost))}
           valueColor={warehouseVisual.accentAmber}
-          accent={warehouseVisual.accentAmber}
           icon="expense"
+          iconColor={warehouseVisual.accentAmber}
         />
-        <MetricCard
-          label="Transfer"
-          value={`${overview.activeTransferCount} aktif`}
-          helper={
-            overview.activeTransferTons > 0
-              ? `${formatCompactTons(overview.activeTransferTons)} t · Gör`
-              : 'Görüntüle'
-          }
-          valueColor={warehouseVisual.accentBlue}
-          accent={warehouseVisual.accentBlue}
-          icon="truck"
+        <Pressable
           onPress={onViewTransfers}
-        />
-      </View>
-      <View style={styles.capacityBar}>
-        <ProgressBar progress={occupancy} color={barColor} height={3} trackColor="rgba(120,160,220,0.12)" />
+          disabled={!onViewTransfers}
+          style={({ pressed }) => [styles.statCell, pressed && onViewTransfers && styles.statCellPressed]}
+          accessibilityRole={onViewTransfers ? 'button' : undefined}
+          accessibilityLabel={`Transfer: ${transferLabel}`}
+        >
+          <View style={styles.statLabelRow}>
+            <GameIcon name="truck" size={14} color={warehouseVisual.accentBlue} />
+            <Text style={styles.statLabel} numberOfLines={1}>
+              Transfer
+            </Text>
+          </View>
+          <Text style={[styles.statValue, { color: warehouseVisual.accentBlue }]} numberOfLines={1}>
+            {overview.activeTransferCount}
+          </Text>
+          <Text style={styles.statSub} numberOfLines={1}>
+            {overview.activeTransferTons > 0
+              ? `${formatCompactTons(overview.activeTransferTons)} t yolda`
+              : 'aktif yok'}
+          </Text>
+        </Pressable>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  grid: {
-    gap: 8,
-    marginBottom: 12,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  card: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 76,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 16,
+  summaryCard: {
     backgroundColor: warehouseVisual.surfaceElevated,
+    borderRadius: 14,
     borderWidth: 1,
-    justifyContent: 'center',
+    borderColor: warehouseVisual.border,
+    padding: warehouseLayout.cardPadding,
+    marginBottom: warehouseLayout.sectionGap,
+    gap: warehouseLayout.internalGap,
   },
-  cardInner: {
-    gap: 2,
+  summaryTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
-  cardTop: {
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: warehouseLayout.internalGap,
+  },
+  statCell: {
+    width: '48%',
+    flexGrow: 1,
+    minWidth: '46%',
+    backgroundColor: warehouseVisual.statTint,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: warehouseLayout.smallGap,
+  },
+  statCellPressed: {
+    opacity: 0.88,
+  },
+  statLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
+    gap: 4,
   },
-  iconChip: {
-    width: 24,
-    height: 24,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  label: {
+  statLabel: {
     ...typography.caption,
     color: colors.textMuted,
+    fontSize: 11,
     fontWeight: '600',
-    fontSize: 10,
-    letterSpacing: 0.2,
-    textTransform: 'uppercase',
+    flex: 1,
+    minWidth: 0,
   },
-  value: {
-    fontSize: 15,
+  statValue: {
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.2,
   },
-  helper: {
+  statSub: {
     ...typography.caption,
     color: colors.textSecondary,
     fontSize: 10,
-    marginTop: 1,
-  },
-  capacityBar: {
-    marginTop: 2,
-    paddingHorizontal: 2,
+    fontWeight: '500',
   },
 });

@@ -5,7 +5,7 @@ import type { CloudSaveDisplayInfo } from '../../utils/accountCenterCloudStatus'
 import { ActionButton } from '../ui';
 import { colors, typography } from '../../theme';
 import GameIcon from '../ui/GameIcon';
-import AccountInfoRow from './AccountInfoRow';
+import AccountActionRow from './AccountActionRow';
 import AccountSectionCard from './AccountSectionCard';
 import AccountStatusBadge from './AccountStatusBadge';
 import { ACCOUNT_SECTION_GAP } from './accountCenterTheme';
@@ -36,18 +36,40 @@ export interface AccountConnectionTabProps {
   onSignOut: () => void;
 }
 
-function cloudIconName(key: CloudSaveDisplayInfo['key']): 'refresh' | 'warning' | 'success' | 'account' {
+function cloudStatusColor(key: CloudSaveDisplayInfo['key']): string {
   switch (key) {
     case 'synced':
-      return 'success';
+      return colors.success;
     case 'pending':
-      return 'refresh';
-    case 'conflict':
+      return colors.accentBlue;
     case 'retry':
+    case 'link-required':
+      return colors.accentAmber;
+    case 'conflict':
     case 'recovery':
-      return 'warning';
+    case 'offline':
+      return colors.danger;
     default:
-      return 'account';
+      return colors.accentBlue;
+  }
+}
+
+function cloudBadgeLabel(display: CloudSaveDisplayInfo): string {
+  switch (display.key) {
+    case 'synced':
+      return 'SENKRONİZE';
+    case 'pending':
+      return 'SENKRONİZE EDİLİYOR';
+    case 'retry':
+      return 'YENİDEN DENE';
+    case 'conflict':
+      return 'ÇAKIŞMA';
+    case 'recovery':
+      return 'KURTARMA';
+    case 'link-required':
+      return 'BAĞLANTI GEREKLİ';
+    default:
+      return display.title.toUpperCase();
   }
 }
 
@@ -76,9 +98,20 @@ export default function AccountConnectionTab({
   onAccountSwitch,
   onSignOut,
 }: AccountConnectionTabProps) {
+  const statusColor = cloudStatusColor(cloudDisplay.key);
+  const showSecureMessage = cloudDisplay.key === 'synced';
+
   return (
     <View style={styles.tab}>
-      <AccountSectionCard title="Hesap Bağlantısı">
+      <AccountSectionCard
+        title="Bağlı Hesap"
+        compact
+        headerRight={
+          !isGuest && isReady ? (
+            <AccountStatusBadge label="BAĞLI" variant="success" />
+          ) : null
+        }
+      >
         {!isReady ? (
           <Text style={styles.hint}>Hesap kontrol ediliyor…</Text>
         ) : isGuest ? (
@@ -113,74 +146,110 @@ export default function AccountConnectionTab({
             ) : null}
           </>
         ) : (
-          <>
-            <AccountInfoRow label="Bağlı hesap" value={`${providerLabel} hesabı bağlı`} />
-            {maskedEmail ? <AccountInfoRow label="E-posta" value={maskedEmail} /> : null}
-            <AccountInfoRow label="Bulut kaydı" value={cloudUserStatusLabel} />
-            <AccountInfoRow label="Son senkronizasyon" value={lastSyncLabel} />
-            {isSwitchingAccount ? (
-              <Text style={styles.statusBanner} accessibilityLiveRegion="polite">
-                Hesap geçişi sürüyor… Bulut kaydı doğrulanıyor.
-              </Text>
-            ) : null}
-            {recoveryRequired ? (
-              <Text style={styles.statusBannerDanger} accessibilityLiveRegion="polite">
-                Kurtarma gerekli — hesap geçişini tamamlaman gerekiyor.
-              </Text>
-            ) : null}
-          </>
+          <View style={styles.linkedAccount}>
+            <View style={styles.providerRow}>
+              <View style={styles.providerIcon}>
+                <GameIcon name="account" size={16} color={colors.accentBlue} />
+              </View>
+              <View style={styles.providerCopy}>
+                <Text style={styles.providerName}>{providerLabel}</Text>
+                {maskedEmail ? (
+                  <Text style={styles.providerEmail} numberOfLines={1}>
+                    {maskedEmail}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>Durum</Text>
+              <Text style={styles.statusValue}>{cloudUserStatusLabel}</Text>
+            </View>
+          </View>
         )}
       </AccountSectionCard>
 
       <AccountSectionCard
-        title="Bulut Kaydı"
+        title="Bulut Koruması"
+        compact
         headerRight={
-          <AccountStatusBadge label={cloudDisplay.title} variant={cloudDisplay.badgeVariant} />
+          <AccountStatusBadge label={cloudBadgeLabel(cloudDisplay)} variant={cloudDisplay.badgeVariant} />
         }
       >
-        <View style={styles.cloudBanner}>
-          <View style={styles.cloudIconWrap}>
-            <GameIcon name={cloudIconName(cloudDisplay.key)} size={20} color={colors.accentBlue} />
-          </View>
+        <View style={styles.cloudStatus}>
+          <GameIcon
+            name={showSecureMessage ? 'success' : cloudDisplay.key === 'retry' ? 'warning' : 'account'}
+            size={16}
+            color={statusColor}
+          />
           <View style={styles.cloudCopy}>
-            <Text style={styles.cloudTitle}>{cloudDisplay.title}</Text>
-            <Text style={styles.cloudDescription}>{cloudDisplay.description}</Text>
+            {showSecureMessage ? (
+              <Text style={[styles.cloudSecure, { color: statusColor }]}>
+                İlerlemen güvende
+              </Text>
+            ) : (
+              <Text style={styles.cloudTitle}>{cloudDisplay.title}</Text>
+            )}
+            <Text style={styles.cloudDescription} numberOfLines={2}>
+              {cloudDisplay.key === 'synced'
+                ? `Son kayıt: ${lastSyncLabel}`
+                : cloudDisplay.description}
+            </Text>
           </View>
         </View>
+
+        {isSwitchingAccount ? (
+          <Text style={styles.statusBanner} accessibilityLiveRegion="polite">
+            Hesap geçişi sürüyor… Bulut kaydı doğrulanıyor.
+          </Text>
+        ) : null}
+        {recoveryRequired ? (
+          <Text style={styles.statusBannerDanger} accessibilityLiveRegion="polite">
+            Kurtarma gerekli — hesap geçişini tamamlaman gerekiyor.
+          </Text>
+        ) : null}
+
         {cloudDisplay.ctaLabel ? (
           <ActionButton
-            label={isManualSyncing || isChecking ? 'İşleniyor…' : cloudDisplay.ctaLabel}
+            label={
+              isManualSyncing || isChecking
+                ? 'İşleniyor…'
+                : cloudDisplay.ctaLabel === 'Şimdi Senkronize Et'
+                  ? 'Senkronize Et'
+                  : cloudDisplay.ctaLabel
+            }
             onPress={onCloudCta}
             variant="primary"
             compact
-            style={styles.cardAction}
+            style={styles.cloudCta}
             disabled={isManualSyncing || isChecking || isSwitchingAccount}
           />
         ) : null}
       </AccountSectionCard>
 
       {!isGuest ? (
-        <AccountSectionCard title="Hesap İşlemleri">
-          <Text style={styles.hint}>Bağlı oturumu yönet</Text>
-          <View style={styles.actionStack}>
-            {showAccountSwitch ? (
-              <ActionButton
-                label={isSwitchingAccount ? 'Hesap değiştiriliyor…' : 'Hesap Değiştir'}
-                onPress={onAccountSwitch}
-                variant="secondary"
-                compact
+        <AccountSectionCard title="Hesap Yönetimi" compact>
+          {showAccountSwitch ? (
+            <>
+              <AccountActionRow
+                title="Hesap Değiştir"
                 icon="account"
+                onPress={onAccountSwitch}
                 disabled={isSwitchingAccount || isSigningOut || isDeleting}
+                showChevron
+                compact
               />
-            ) : null}
-            <ActionButton
-              label={isSigningOut ? 'Çıkış yapılıyor…' : 'Çıkış Yap'}
-              onPress={onSignOut}
-              variant="secondary"
-              compact
-              disabled={isSwitchingAccount || isSigningOut || isDeleting}
-            />
-          </View>
+              <View style={styles.divider} />
+            </>
+          ) : null}
+          <AccountActionRow
+            title={isSigningOut ? 'Çıkış yapılıyor…' : 'Çıkış Yap'}
+            icon="back"
+            onPress={onSignOut}
+            disabled={isSwitchingAccount || isSigningOut || isDeleting}
+            tone="warning"
+            showChevron
+            compact
+          />
         </AccountSectionCard>
       ) : null}
     </View>
@@ -190,76 +259,122 @@ export default function AccountConnectionTab({
 const styles = StyleSheet.create({
   tab: {
     gap: ACCOUNT_SECTION_GAP,
-    paddingBottom: 8,
   },
   hint: {
     ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 17,
+    lineHeight: 16,
     fontSize: 12,
   },
   authButtons: {
-    gap: 10,
+    gap: 8,
     marginTop: 4,
   },
   devHint: {
     ...typography.caption,
     color: colors.accentAmber,
     marginTop: 4,
+    fontSize: 11,
   },
-  statusBanner: {
-    ...typography.caption,
-    color: colors.accentBlue,
-    marginTop: 4,
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: colors.accentBlueSoft,
-    lineHeight: 16,
+  linkedAccount: {
+    gap: 10,
   },
-  statusBannerDanger: {
-    ...typography.caption,
-    color: colors.danger,
-    marginTop: 4,
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: colors.dangerSoft,
-    lineHeight: 16,
-  },
-  cloudBanner: {
+  providerRow: {
     flexDirection: 'row',
-    gap: 12,
-    alignItems: 'flex-start',
-    paddingVertical: 4,
+    alignItems: 'center',
+    gap: 10,
   },
-  cloudIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+  providerIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: 'rgba(35, 136, 255, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  providerCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  providerName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  providerEmail: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    minHeight: 32,
+  },
+  statusLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  statusValue: {
+    ...typography.bodySmall,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    fontSize: 13,
+  },
+  cloudStatus: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+  },
   cloudCopy: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 3,
+  },
+  cloudSecure: {
+    fontSize: 14,
+    fontWeight: '800',
   },
   cloudTitle: {
-    ...typography.bodySmall,
+    fontSize: 14,
     fontWeight: '800',
     color: colors.textPrimary,
   },
   cloudDescription: {
     ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 17,
+    fontSize: 11,
+    lineHeight: 14,
   },
-  cardAction: {
+  cloudCta: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
     marginTop: 4,
-    alignSelf: 'stretch',
   },
-  actionStack: {
-    gap: 10,
-    marginTop: 4,
+  statusBanner: {
+    ...typography.caption,
+    color: colors.accentBlue,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: colors.accentBlueSoft,
+    lineHeight: 15,
+    fontSize: 11,
+  },
+  statusBannerDanger: {
+    ...typography.caption,
+    color: colors.danger,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: colors.dangerSoft,
+    lineHeight: 15,
+    fontSize: 11,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: 'rgba(56, 129, 200, 0.1)',
   },
 });

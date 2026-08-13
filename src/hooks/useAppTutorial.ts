@@ -21,7 +21,8 @@ import {
 } from '../tutorial/app/measureTarget';
 import {
   getTutorialProgressEntry,
-  shouldAutoStartTutorial,
+  hasTutorialBeenPresented,
+  shouldAutoPresentTutorial,
 } from '../tutorial/app/persistence';
 import { scrollAppTutorialTargetIntoView } from '../tutorial/app/targetRegistry';
 import type {
@@ -31,6 +32,7 @@ import type {
   TutorialProgressState,
   TutorialTransitionState,
   TutorialPlacement,
+  TutorialOutcome,
 } from '../tutorial/app/types';
 import { APP_TUTORIAL_VERSIONS } from '../tutorial/app/versions';
 import { isValidTutorialRect, type TutorialLayoutRect } from '../tutorial/types';
@@ -107,9 +109,13 @@ export interface UseAppTutorialOptions {
   hasPendingOfflineSummary?: boolean;
   hasPendingDeliveryIncident?: boolean;
   isAnotherTutorialActive?: boolean;
+  gameHydrated?: boolean;
+  sessionDisabled?: boolean;
   scrollRef?: React.RefObject<ScrollViewType | null>;
   scrollYRef?: React.MutableRefObject<number>;
-  onCompletePersistence: () => void;
+  onPresentPersistence: () => void;
+  onTutorialOutcome: (outcome: TutorialOutcome) => void;
+  onManualReplayPersistence?: () => void;
 }
 
 export function useAppTutorial({
@@ -126,9 +132,13 @@ export function useAppTutorial({
   hasPendingOfflineSummary = false,
   hasPendingDeliveryIncident = false,
   isAnotherTutorialActive = false,
+  gameHydrated = true,
+  sessionDisabled = false,
   scrollRef,
   scrollYRef,
-  onCompletePersistence,
+  onPresentPersistence,
+  onTutorialOutcome,
+  onManualReplayPersistence,
 }: UseAppTutorialOptions) {
   const safeSteps = steps ?? [];
   const hasSteps = safeSteps.length > 0;
@@ -146,6 +156,7 @@ export function useAppTutorial({
   const [showPreparingLabel, setShowPreparingLabel] = useState(false);
 
   const autoAttemptedRef = useRef(false);
+  const presentedMarkedRef = useRef(false);
   const transitionSequenceRef = useRef(0);
   const transitionLockRef = useRef(false);
   const placementRef = useRef<TutorialPlacement | null>(null);
@@ -189,21 +200,52 @@ export function useAppTutorial({
     ],
   );
 
-  const canAutoStart = useMemo(() => {
-    if (!isEnabled) return false;
-    if (!autoStart) return false;
-    if (hasBlockers) return false;
-    if (!layoutReady) return false;
-    return shouldAutoStartTutorial(tutorialId, tutorialProgress, legacyMarket);
-  }, [
-    autoStart,
-    hasBlockers,
-    isEnabled,
-    layoutReady,
-    legacyMarket,
-    tutorialId,
-    tutorialProgress,
-  ]);
+  const hasBeenPresented = useMemo(
+    () => hasTutorialBeenPresented(tutorialId, tutorialProgress, legacyMarket),
+    [legacyMarket, tutorialId, tutorialProgress],
+  );
+
+  const canAutoStart = useMemo(
+    () =>
+      shouldAutoPresentTutorial({
+        enabled: isEnabled,
+        hydrated: gameHydrated,
+        layoutReady,
+        definitionAvailable: hasSteps,
+        hasBeenPresented,
+        blockerActive: hasBlockers,
+        sessionDisabled,
+        autoStart,
+      }),
+    [
+      autoStart,
+      gameHydrated,
+      hasBeenPresented,
+      hasBlockers,
+      hasSteps,
+      isEnabled,
+      layoutReady,
+      sessionDisabled,
+    ],
+  );
+
+  const markTutorialPresentedOnce = useCallback(() => {
+    if (presentedMarkedRef.current) {
+      return;
+    }
+    presentedMarkedRef.current = true;
+    try {
+      onPresentPersistence();
+      log('presented');
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[tutorial] present-persistence-failed', {
+          tutorialId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }, [log, onPresentPersistence, tutorialId]);
 
   const clearPreparingLabelTimer = useCallback(() => {
     if (preparingLabelTimerRef.current) {
@@ -407,6 +449,9 @@ export function useAppTutorial({
       log('step-viewed', step.id);
       setTransitionState('idle');
       endTransitionUi();
+      if (index === 0) {
+        markTutorialPresentedOnce();
+      }
     },
     [
       beginTransitionUi,
@@ -414,6 +459,7 @@ export function useAppTutorial({
       commitAnchorRect,
       endTransitionUi,
       log,
+      markTutorialPresentedOnce,
       safeSteps,
       scrollRectIntoView,
       tutorialId,
@@ -498,17 +544,29 @@ export function useAppTutorial({
     [isEnabled, log],
   );
 
+  const startTutorialAutomatically = useCallback(() => {
+    if (!isEnabled || hasBeenPresented) {
+      return;
+    }
+    startTutorial('auto-open');
+  }, [hasBeenPresented, isEnabled, startTutorial]);
+
+  const replayTutorialManually = useCallback(() => {
+    if (!isEnabled || hasBlockers || transitionLockRef.current) {
+      return;
+    }
+    try {
+      onManualReplayPersistence?.();
+    } catch {
+      // manual replay metadata is best-effort
+    }
+    startTutorial('manual-open');
+  }, [hasBlockers, isEnabled, onManualReplayPersistence, startTutorial]);
+
   useEffect(() => {
-    if (!canAutoStart) {
-      if (!visible) {
-        autoAttemptedRef.current = false;
-      }
+    if (!canAutoStart || visible) {
       return;
     }
-    if (autoAttemptedRef.current || visible) {
-      return;
-    }
-    autoAttemptedRef.current = true;
     logTutorialEffectRun({
       tutorialId,
       effect: 'auto-start',
@@ -517,19 +575,28 @@ export function useAppTutorial({
         isOpen: visible,
         layoutReady,
         blockersClear: !hasBlockers,
+        hasBeenPresented,
       },
     });
     const task = InteractionManager.runAfterInteractions(() => {
       requestAnimationFrame(() => {
-        if (!hasBlockers) {
-          startTutorial('auto-open');
-        } else {
-          autoAttemptedRef.current = false;
+        if (!canAutoStart || visible || autoAttemptedRef.current || hasBeenPresented) {
+          return;
         }
+        autoAttemptedRef.current = true;
+        startTutorialAutomatically();
       });
     });
     return () => task.cancel();
-  }, [canAutoStart, hasBlockers, layoutReady, startTutorial, tutorialId, visible]);
+  }, [
+    canAutoStart,
+    hasBeenPresented,
+    hasBlockers,
+    layoutReady,
+    startTutorialAutomatically,
+    tutorialId,
+    visible,
+  ]);
 
   const prepareStepIndexRef = useRef(prepareStepIndex);
   prepareStepIndexRef.current = prepareStepIndex;
@@ -572,7 +639,7 @@ export function useAppTutorial({
   }, [closeTutorial, isEnabled, visible]);
 
   const finishTutorial = useCallback(
-    (action: 'completed' | 'step-skipped' | 'dismissed') => {
+    (action: TutorialOutcome) => {
       transitionSequenceRef.current += 1;
       transitionLockRef.current = false;
       setVisible((previous) => (previous ? false : previous));
@@ -583,27 +650,29 @@ export function useAppTutorial({
       setLayoutAnchorRect((previous) => (previous === null ? previous : null));
       if (!manualReplay) {
         try {
-          onCompletePersistence();
+          onTutorialOutcome(action);
         } catch (error) {
           if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.warn('[tutorial] persistence-failed', {
+            console.warn('[tutorial] outcome-persistence-failed', {
               tutorialId,
+              action,
               message: error instanceof Error ? error.message : String(error),
             });
           }
         }
       }
-      log(action, safeSteps[clampedStepIndex]?.id);
+      const logAction: AppTutorialLogAction =
+        action === 'completed'
+          ? 'completed'
+          : action === 'dismissed'
+            ? 'dismissed'
+            : 'step-skipped';
+      log(logAction, safeSteps[clampedStepIndex]?.id);
     },
-    [clampedStepIndex, log, manualReplay, onCompletePersistence, safeSteps, tutorialId],
+    [clampedStepIndex, log, manualReplay, onTutorialOutcome, safeSteps, tutorialId],
   );
 
-  const openManual = useCallback(() => {
-    if (!isEnabled || hasBlockers || transitionLockRef.current) {
-      return;
-    }
-    startTutorial('manual-open');
-  }, [hasBlockers, isEnabled, startTutorial]);
+  const openManual = replayTutorialManually;
 
   const isTransitioning = transitionState !== 'idle' || transitionLockRef.current;
   const progressEntry = useMemo(
@@ -615,7 +684,14 @@ export function useAppTutorial({
     if (transitionState !== 'idle' || transitionLockRef.current) {
       return;
     }
-    finishTutorial('step-skipped');
+    finishTutorial('skipped');
+  }, [finishTutorial, transitionState]);
+
+  const onDismiss = useCallback(() => {
+    if (transitionState !== 'idle' || transitionLockRef.current) {
+      return;
+    }
+    finishTutorial('dismissed');
   }, [finishTutorial, transitionState]);
 
   const onComplete = useCallback(() => {
@@ -648,6 +724,7 @@ export function useAppTutorial({
       notifyScrollEnd,
       remeasureActiveTarget,
       onSkip,
+      onDismiss,
       onComplete,
       log,
     }),
@@ -662,6 +739,7 @@ export function useAppTutorial({
       log,
       notifyScrollEnd,
       onComplete,
+      onDismiss,
       onSkip,
       openManual,
       progressEntry,

@@ -69,11 +69,11 @@ console.log('\nAuto-start rules');
     'completed current version does not auto-start',
   );
   assert(
-    shouldAutoStartMarketTutorial({
+    !shouldAutoStartMarketTutorial({
       marketTutorialCompleted: true,
       marketTutorialVersion: 0,
     }),
-    'completed old version auto-starts after bump',
+    'completed old version does not auto-start after bump',
   );
 }
 

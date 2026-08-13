@@ -41,6 +41,7 @@ interface AppTutorialOverlayProps {
   noticeText?: string | null;
   onRequestStepChange: (direction: 'next' | 'previous') => void;
   onSkip: () => void;
+  onDismiss: () => void;
   onComplete: () => void;
 }
 
@@ -84,6 +85,7 @@ function AppTutorialOverlayContent({
   noticeText,
   onRequestStepChange,
   onSkip,
+  onDismiss,
   onComplete,
 }: AppTutorialOverlayProps) {
   const insets = useSafeAreaInsets();
@@ -177,7 +179,7 @@ function AppTutorialOverlayContent({
       visible={visible}
       transparent
       animationType={reduceMotion ? 'none' : 'fade'}
-      onRequestClose={controlsDisabled ? undefined : onSkip}
+      onRequestClose={controlsDisabled ? undefined : onDismiss}
       accessibilityViewIsModal
     >
       <View ref={overlayRootRef} style={styles.overlayRoot} pointerEvents="box-none" collapsable={false}>

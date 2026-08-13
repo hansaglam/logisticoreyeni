@@ -7,6 +7,7 @@ import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { colors, typography } from '../../theme';
 import type { WarehouseOpportunityVm } from '../../utils/warehouseScreenViewModel';
 import WarehouseOpportunityCard from './WarehouseOpportunityCard';
+import { warehouseLayout } from './warehouseTheme';
 
 const PREVIEW_LIMIT = 3;
 
@@ -112,13 +113,13 @@ export default function WarehouseOpportunitiesSection({
 
 const styles = StyleSheet.create({
   section: {
-    marginBottom: 12,
+    marginBottom: warehouseLayout.sectionGap,
   },
   title: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
     color: colors.textPrimary,
-    marginBottom: 8,
+    marginBottom: warehouseLayout.internalGap,
   },
   empty: {
     padding: 12,

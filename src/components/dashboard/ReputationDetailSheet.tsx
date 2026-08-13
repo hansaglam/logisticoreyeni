@@ -54,7 +54,7 @@ export default function ReputationDetailSheet({
     tutorialId: 'reputation',
     layoutReady,
     blockingModals: !visible,
-    autoStart: false,
+    autoStart: true,
   });
 
   const pointsToNext =

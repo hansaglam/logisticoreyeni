@@ -6,6 +6,7 @@
  */
 
 import { httpsCallable, type Functions } from 'firebase/functions';
+import { Platform } from 'react-native';
 
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 import { leaderboardConfig } from '../config/leaderboard';
@@ -171,6 +172,56 @@ let lastSuccessfulSubmitAt = 0;
 let lastSubmittedScore: number | undefined;
 const skippedSubmitLogAt = new Map<string, number>();
 const SKIPPED_SUBMIT_LOG_COOLDOWN_MS = 60_000;
+let backendConfigLogged = false;
+
+function shouldLogLeaderboardDiagnostics(): boolean {
+  return typeof __DEV__ !== 'undefined' && __DEV__;
+}
+
+export function logLeaderboardBackendConfigOnce(): void {
+  if (!shouldLogLeaderboardDiagnostics() || backendConfigLogged) {
+    return;
+  }
+  backendConfigLogged = true;
+  const account = getAccountStatus();
+  const app = getFirebaseAppSafe();
+  console.info('[leaderboard-backend-config]', {
+    platform: Platform.OS,
+    projectId: app?.options.projectId ?? null,
+    functionsRegion: FIREBASE_FUNCTIONS_REGION,
+    authenticated: account.isReady && Boolean(account.uid),
+    anonymous: account.isAnonymous,
+    seasonKeySource: 'server',
+  });
+}
+
+function logLeaderboardCrossPlatform(payload: {
+  submitSuccess?: boolean;
+  serverSeasonKey?: string;
+  entryCount?: number;
+  totalParticipants?: number;
+  currentUserRank?: number | null;
+  errorCode?: string;
+}): void {
+  if (!shouldLogLeaderboardDiagnostics()) {
+    return;
+  }
+  const account = getAccountStatus();
+  const app = getFirebaseAppSafe();
+  console.info('[leaderboard-cross-platform]', {
+    platform: Platform.OS,
+    projectId: app?.options.projectId ?? null,
+    uidPresent: Boolean(account.uid),
+    anonymous: account.isAnonymous,
+    usernamePresent: null,
+    serverSeasonKey: payload.serverSeasonKey ?? null,
+    submitSuccess: payload.submitSuccess ?? null,
+    entryCount: payload.entryCount ?? null,
+    totalParticipants: payload.totalParticipants ?? null,
+    currentUserRank: payload.currentUserRank ?? null,
+    errorCode: payload.errorCode ?? null,
+  });
+}
 
 function logLeaderboardSubmitSkipped(reason: string): void {
   if (typeof __DEV__ === 'undefined' || !__DEV__) {
@@ -287,6 +338,8 @@ export async function submitLeaderboardScore(options?: {
     return { ok: false, errorCode: 'firebase-disabled' };
   }
 
+  logLeaderboardBackendConfigOnce();
+
   const transactionId = createIdempotencyKey('lb-tx');
   const idempotencyKey = options?.idempotencyKey ?? createIdempotencyKey('lb-idem');
   const uidAtStart = getAuthUidSnapshot();
@@ -332,6 +385,10 @@ export async function submitLeaderboardScore(options?: {
       functionName: LEADERBOARD_CALLABLES.submit,
       authReady: isAuthSessionReady(),
       result: 'success',
+    });
+    logLeaderboardCrossPlatform({
+      submitSuccess: true,
+      serverSeasonKey: data.seasonKey,
     });
     return {
       ok: true,
@@ -452,6 +509,8 @@ export async function fetchWeeklyLeaderboard(
     };
   }
 
+  logLeaderboardBackendConfigOnce();
+
   const uidAtStart = getAuthUidSnapshot();
 
   try {
@@ -531,6 +590,13 @@ export async function fetchWeeklyLeaderboard(
       functionName: LEADERBOARD_CALLABLES.get,
       authReady: isAuthSessionReady(),
       result: 'success',
+    });
+    logLeaderboardCrossPlatform({
+      serverSeasonKey: resolvedSeason,
+      entryCount: entries.length,
+      totalParticipants:
+        typeof data.totalParticipants === 'number' ? data.totalParticipants : entries.length,
+      currentUserRank: data.playerRank ?? null,
     });
 
     return {

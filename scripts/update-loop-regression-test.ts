@@ -108,8 +108,12 @@ console.log('\nTutorial hook stabilization');
     'transition state updates are no-op guarded',
   );
   assert(
-    useAppTutorialSource.includes('autoAttemptedRef.current = false'),
-    'auto-start retries after blockers clear',
+    !useAppTutorialSource.includes('autoAttemptedRef.current = false'),
+    'auto-start does not reset session ref on remount/blocker (persisted hasBeenPresented is source of truth)',
+  );
+  assert(
+    useAppTutorialSource.includes('shouldAutoPresentTutorial'),
+    'auto-start uses canonical shouldAutoPresentTutorial',
   );
 
   const hook = readFileSync('src/hooks/useScreenAppTutorial.ts', 'utf8');
@@ -118,7 +122,8 @@ console.log('\nTutorial hook stabilization');
     'tutorial progress not normalized inside zustand selector',
   );
   assert(hook.includes('useMemo'), 'tutorial progress normalized via useMemo');
-  assert(hook.includes('onCompletePersistence = useCallback'), 'persistence callback is stable');
+  assert(hook.includes('onPresentPersistence = useCallback'), 'present persistence callback is stable');
+  assert(hook.includes('onTutorialOutcome = useCallback'), 'outcome persistence callback is stable');
   assert(hook.includes('warnRenderLoopSuspected'), 'render-loop dev instrumentation exists');
   assert(
     readFileSync('src/utils/renderRateInstrumentation.ts', 'utf8').includes('RENDER_THRESHOLD'),
@@ -159,7 +164,8 @@ console.log('\nScreen layout wiring');
   }
 
   const reputationSheet = readFileSync('src/components/dashboard/ReputationDetailSheet.tsx', 'utf8');
-  assert(reputationSheet.includes('autoStart: false'), 'reputation tutorial does not auto-start');
+  assert(reputationSheet.includes('autoStart: true'), 'reputation tutorial auto-starts when sheet open');
+  assert(reputationSheet.includes('blockingModals: !visible'), 'closed reputation sheet blocks tutorial');
   assert(reputationSheet.includes('useTutorialLayoutReady'), 'reputation sheet uses layout hook');
 
   const dashboard = readFileSync('src/screens/DashboardScreen.tsx', 'utf8');

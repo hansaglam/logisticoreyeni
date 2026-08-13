@@ -9,11 +9,12 @@ import {
 } from 'react-native';
 
 import { getModalSheetPaddingBottom, getSafeModalMaxHeight } from '../../constants/layout';
-import { ActionButton, GameIcon, IconButton, StatusBadge } from '../ui';
+import { ActionButton, IconButton } from '../ui';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { colors, formatMoney, typography } from '../../theme';
 import type { WarehouseOpportunityVm } from '../../utils/warehouseScreenViewModel';
 import { logWarehouseLayout } from './warehouseLayoutDebug';
+import { warehouseLayout, warehouseVisual } from './warehouseTheme';
 
 interface WarehouseOpportunityCardProps {
   opportunity: WarehouseOpportunityVm;
@@ -62,13 +63,15 @@ export default function WarehouseOpportunityCard({
     setSheetOpen(false);
   };
 
+  const signalLabel =
+    opportunity.signalCount > 0
+      ? `${opportunity.signalCount} sinyal`
+      : opportunity.economicLabel;
+
   return (
     <>
-      <Pressable
+      <View
         style={styles.card}
-        onPress={() => setSheetOpen(true)}
-        accessibilityRole="button"
-        accessibilityLabel={`${opportunity.cityName} depo seç`}
         onLayout={
           measureLayout
             ? (event) => {
@@ -80,54 +83,62 @@ export default function WarehouseOpportunityCard({
         }
       >
         <View style={styles.header}>
-          <GameIcon name="city" size={14} color={colors.accentBlue} />
           <Text style={styles.city} numberOfLines={1}>
             {opportunity.cityName}
           </Text>
-          <View style={styles.badgeWrap}>
-            <StatusBadge
-              label={
-                opportunity.signalCount > 0
-                  ? `${opportunity.signalCount} sinyal`
-                  : opportunity.economicLabel
-              }
-              variant="amber"
-              size="sm"
-            />
+          <View style={styles.headerRight}>
+            {opportunity.signalCount > 0 ? (
+              <View style={styles.signalBadge}>
+                <Text style={styles.signalText}>{signalLabel}</Text>
+              </View>
+            ) : (
+              <Text style={styles.economicLabel} numberOfLines={1}>
+                {signalLabel}
+              </Text>
+            )}
+            <Text style={styles.modifier}>{opportunity.costModifier.toFixed(2)}x</Text>
           </View>
-          <Text style={styles.modifier}>{opportunity.costModifier.toFixed(2)}x</Text>
         </View>
 
         <View style={[styles.optionsRow, stacked && styles.optionsStacked]}>
           {opportunity.mode === 'new-city' ? (
-            <View style={styles.optionChip}>
+            <View style={styles.optionCol}>
               <Text style={styles.optionLabel}>Normal</Text>
-              <Text style={styles.optionValue} numberOfLines={1}>
-                {formatMoney(opportunity.standardOpenCost)} · {formatMoney(opportunity.standardDailyCost)}
-                /gün
+              <Text style={styles.optionPrice} numberOfLines={1}>
+                {formatMoney(opportunity.standardOpenCost)}
+              </Text>
+              <Text style={styles.optionDaily} numberOfLines={1}>
+                {formatMoney(opportunity.standardDailyCost)}/gün
               </Text>
             </View>
           ) : (
-            <View style={styles.optionChip}>
+            <View style={styles.optionCol}>
               <Text style={styles.optionLabel}>Mevcut depo</Text>
-              <Text style={styles.optionValue} numberOfLines={1}>
+              <Text style={styles.optionDaily} numberOfLines={2}>
                 Soğuk zincir eklenebilir
               </Text>
             </View>
           )}
-          <View style={[styles.optionChip, styles.optionCold]}>
-            <Text style={[styles.optionLabel, { color: colors.purple }]}>Soğuk</Text>
-            <Text style={styles.optionValue} numberOfLines={1}>
-              {formatMoney(opportunity.coldOpenCost)} · {formatMoney(opportunity.coldDailyCost)}/gün
+          <View style={[styles.optionCol, styles.optionCold]}>
+            <Text style={[styles.optionLabel, styles.coldLabel]}>Soğuk</Text>
+            <Text style={styles.optionPrice} numberOfLines={1}>
+              {formatMoney(opportunity.coldOpenCost)}
+            </Text>
+            <Text style={styles.optionDaily} numberOfLines={1}>
+              {formatMoney(opportunity.coldDailyCost)}/gün
             </Text>
           </View>
         </View>
 
-        <View style={styles.selectRow}>
-          <Text style={styles.selectLabel}>Depo Seç</Text>
-          <GameIcon name="chevronRight" size={14} color={colors.accentBlue} />
-        </View>
-      </Pressable>
+        <Pressable
+          onPress={() => setSheetOpen(true)}
+          style={styles.cta}
+          accessibilityRole="button"
+          accessibilityLabel={`${opportunity.cityName} deposunu incele`}
+        >
+          <Text style={styles.ctaText}>Depoyu İncele</Text>
+        </Pressable>
+      </View>
 
       <Modal
         visible={sheetOpen}
@@ -174,7 +185,7 @@ export default function WarehouseOpportunityCard({
               style={[styles.typeOption, selectedType === 'cold' && styles.typeOptionActiveCold]}
               onPress={() => setSelectedType('cold')}
             >
-              <Text style={[styles.typeTitle, { color: colors.purple }]}>Soğuk Depo</Text>
+              <Text style={[styles.typeTitle, styles.coldLabel]}>Soğuk Depo</Text>
               <Text style={styles.typeMeta}>
                 Açılış {formatMoney(opportunity.coldOpenCost)} · Günlük{' '}
                 {formatMoney(opportunity.coldDailyCost)}
@@ -216,85 +227,109 @@ export default function WarehouseOpportunityCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
-    padding: 11,
-    marginBottom: 10,
+    borderRadius: 14,
+    padding: warehouseLayout.cardPadding,
+    marginBottom: warehouseLayout.cardGap,
     borderWidth: 1,
-    borderColor: 'rgba(35, 136, 255, 0.28)',
-    backgroundColor: '#0E1C34',
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accentBlue,
-    gap: 6,
+    borderColor: warehouseVisual.border,
+    backgroundColor: warehouseVisual.surfaceElevated,
+    gap: warehouseLayout.internalGap,
+    maxHeight: 150,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'space-between',
+    gap: 8,
   },
   city: {
     flex: 1,
     minWidth: 0,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
     color: colors.textPrimary,
   },
-  badgeWrap: {
-    flexShrink: 1,
-    minWidth: 0,
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  signalBadge: {
+    borderWidth: 1,
+    borderColor: 'rgba(255, 193, 7, 0.45)',
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(255, 193, 7, 0.08)',
+  },
+  signalText: {
+    ...typography.caption,
+    color: warehouseVisual.accentAmber,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  economicLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
+    maxWidth: 72,
   },
   modifier: {
     ...typography.caption,
     color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    flexShrink: 0,
+    fontSize: 10,
+    fontWeight: '600',
   },
   optionsRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
+    gap: warehouseLayout.internalGap,
   },
   optionsStacked: {
     flexDirection: 'column',
   },
-  optionChip: {
+  optionCol: {
     flex: 1,
     minWidth: 0,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface2,
+    borderRadius: 8,
+    backgroundColor: warehouseVisual.statTint,
     paddingHorizontal: 8,
     paddingVertical: 6,
+    gap: 1,
   },
   optionCold: {
-    borderColor: 'rgba(140, 107, 255, 0.35)',
+    backgroundColor: 'rgba(140, 107, 255, 0.08)',
   },
   optionLabel: {
     ...typography.caption,
     color: colors.accentBlue,
+    fontWeight: '700',
+    fontSize: 10,
+  },
+  coldLabel: {
+    color: colors.purple,
+  },
+  optionPrice: {
+    fontSize: 12,
     fontWeight: '800',
-    fontSize: 11,
+    color: colors.textPrimary,
   },
-  optionValue: {
+  optionDaily: {
     ...typography.caption,
-    color: colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2,
+    color: colors.textMuted,
+    fontSize: 10,
   },
-  selectRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    marginTop: 4,
-    minHeight: 44,
-    borderRadius: 12,
+  cta: {
+    minHeight: 36,
+    borderRadius: 10,
     backgroundColor: colors.accentBlueSoft,
     borderWidth: 1,
-    borderColor: 'rgba(35, 136, 255, 0.35)',
+    borderColor: 'rgba(35, 136, 255, 0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  selectLabel: {
+  ctaText: {
     ...typography.caption,
     color: colors.accentBlue,
     fontWeight: '800',

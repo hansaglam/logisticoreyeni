@@ -2,15 +2,16 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { LEADERBOARD_ENABLED } from '../../config/backendRoadmap';
-import { ActionButton } from '../ui';
 import { colors, typography } from '../../theme';
-import type { StatusBadgeVariant } from '../ui';
 import { formatCompanyScore } from '../../simulation/companyScore';
 import GameIcon from '../ui/GameIcon';
-import AccountInfoRow from './AccountInfoRow';
+import AccountActionRow from './AccountActionRow';
+import AccountMetric from './AccountMetric';
 import AccountSectionCard from './AccountSectionCard';
 import ProfileHeroCard from './ProfileHeroCard';
 import { ACCOUNT_SECTION_GAP } from './accountCenterTheme';
+
+import type { StatusBadgeVariant } from '../ui';
 
 export interface AccountProfileTabProps {
   isGuest: boolean;
@@ -35,6 +36,8 @@ export interface AccountProfileTabProps {
   companyLevel: number;
   companyScore: number;
   homeCityName: string;
+  truckCount: number;
+  warehouseCount: number;
   leaderboardLoading: boolean;
   leaderboardUnavailable: boolean;
   leaderboardRank: number | null;
@@ -59,11 +62,15 @@ export default function AccountProfileTab({
   companyLevel,
   companyScore,
   homeCityName,
+  truckCount,
+  warehouseCount,
   leaderboardLoading,
   leaderboardUnavailable,
   leaderboardRank,
   onOpenLeaderboard,
 }: AccountProfileTabProps) {
+  const identityPress = usernameSetupCompleted ? onEditUsername : onSetupUsername;
+
   return (
     <View style={styles.tab}>
       <ProfileHeroCard
@@ -77,92 +84,80 @@ export default function AccountProfileTab({
         stats={stats}
       />
 
-      <AccountSectionCard title="Oyuncu Kimliği">
-        {usernameSetupCompleted && usernameLabel ? (
-          <>
-            <Text style={styles.identityValue}>@{usernameLabel}</Text>
-            <Text style={styles.identityHint}>
-              Liderlik Tablosu ve Araç Pazarı&apos;nda görünür.
-            </Text>
-            {usernameChangeLocked ? (
-              <Text style={styles.identityHint}>
-                Kullanıcı adını daha sonra tekrar değiştirebilirsin.
+      <AccountSectionCard title="Oyuncu Kimliği" compact>
+        <Pressable
+          onPress={identityPress}
+          disabled={isGuest && !usernameSetupCompleted}
+          accessibilityRole="button"
+          accessibilityLabel="Oyuncu kimliği"
+          style={({ pressed }) => [styles.identityRow, pressed && styles.pressed]}
+        >
+          <View style={styles.identityCopy}>
+            {usernameSetupCompleted && usernameLabel ? (
+              <Text style={styles.username} numberOfLines={1}>
+                @{usernameLabel}
               </Text>
             ) : (
-              <ActionButton
-                label="Kullanıcı Adını Düzenle"
-                onPress={onEditUsername}
-                variant="secondary"
-                compact
-                style={styles.cardAction}
-              />
+              <Text style={styles.usernamePlaceholder} numberOfLines={1}>
+                Kullanıcı adı oluştur
+              </Text>
             )}
-          </>
-        ) : (
-          <>
-            <Text style={styles.identityHint}>
-              Liderlik Tablosu ve Araç Pazarı için görünen adını oluştur.
+            <Text style={styles.identityHint} numberOfLines={2}>
+              Liderlik ve Araç Pazarı için görünen ad
             </Text>
-            <ActionButton
-              label="Kullanıcı Adı Oluştur"
-              onPress={onSetupUsername}
-              variant="primary"
-              compact
-              style={styles.cardAction}
-              disabled={isGuest}
-            />
-            {isGuest ? (
-              <Text style={styles.identityHint}>Önce hesabını bağlaman gerekir.</Text>
-            ) : null}
-          </>
-        )}
+          </View>
+          <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
+        </Pressable>
+        {usernameChangeLocked ? (
+          <Text style={styles.helperText}>Adını daha sonra tekrar değiştirebilirsin.</Text>
+        ) : null}
+        {isGuest && !usernameSetupCompleted ? (
+          <Text style={styles.helperText}>Önce hesabını bağlaman gerekir.</Text>
+        ) : null}
       </AccountSectionCard>
 
-      <AccountSectionCard title="Şirket Kimliği">
-        <AccountInfoRow label="Şirket adı" value={companyName} />
-        <AccountInfoRow label="Seviye" value={`Seviye ${companyLevel}`} />
-        <AccountInfoRow label="Şirket puanı" value={formatCompanyScore(companyScore)} />
-        <AccountInfoRow label="Merkez şehir" value={homeCityName} />
+      <AccountSectionCard title="Şirket Özeti" compact>
+        <View style={styles.companyHeader}>
+          <View style={styles.hqIcon}>
+            <GameIcon name="city" size={16} color={colors.accentBlue} />
+          </View>
+          <View style={styles.companyCopy}>
+            <Text style={styles.companyName} numberOfLines={1}>
+              {companyName}
+            </Text>
+            <Text style={styles.companyMeta} numberOfLines={1}>
+              {homeCityName} · Seviye {companyLevel}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.metricGrid}>
+          <AccountMetric label="Şirket puanı" value={formatCompanyScore(companyScore)} />
+          <AccountMetric label="Merkez şehir" value={homeCityName} />
+          <AccountMetric label="Araç" value={String(truckCount)} />
+          <AccountMetric label="Depo" value={String(warehouseCount)} />
+        </View>
       </AccountSectionCard>
 
       {LEADERBOARD_ENABLED ? (
-        <Pressable
-          onPress={onOpenLeaderboard}
-          accessibilityRole="button"
-          accessibilityLabel="Liderlik Tablosu"
-          style={({ pressed }) => [pressed && styles.pressed]}
-        >
-          <AccountSectionCard>
-            <View style={styles.leaderboardRow}>
-              <View style={styles.leaderboardIcon}>
-                <GameIcon name="trophy" size={20} color={colors.accentAmber} />
-              </View>
-              <View style={styles.leaderboardCopy}>
-                <Text style={styles.leaderboardTitle}>Liderlik Tablosu</Text>
-                {leaderboardUnavailable ? (
-                  <Text style={styles.leaderboardSubtitle}>
-                    Liderlik servisine şu anda ulaşılamıyor.
-                  </Text>
-                ) : !usernameSetupCompleted ? (
-                  <Text style={styles.leaderboardSubtitle}>
-                    Katılmak için kullanıcı adını oluştur.
-                  </Text>
-                ) : leaderboardLoading ? (
-                  <Text style={styles.leaderboardSubtitle}>Sıralama yükleniyor…</Text>
-                ) : (
-                  <Text style={styles.leaderboardSubtitle}>
-                    {leaderboardRank != null
-                      ? `Haftalık sıra: #${leaderboardRank} · Puan: ${formatCompanyScore(companyScore)}`
-                      : `Şirket puanı: ${formatCompanyScore(companyScore)}`}
-                  </Text>
-                )}
-              </View>
-              {usernameSetupCompleted && !leaderboardUnavailable ? (
-                <Text style={styles.leaderboardCta}>Gör</Text>
-              ) : null}
-            </View>
-          </AccountSectionCard>
-        </Pressable>
+        <AccountSectionCard compact>
+          <AccountActionRow
+            title="Liderlik Tablosu"
+            subtitle={
+              leaderboardUnavailable
+                ? 'Liderlik servisine şu anda ulaşılamıyor.'
+                : !usernameSetupCompleted
+                  ? 'Katılmak için kullanıcı adını oluştur.'
+                  : leaderboardLoading
+                    ? 'Sıralama yükleniyor…'
+                    : leaderboardRank != null
+                      ? `Haftalık sıra: #${leaderboardRank}`
+                      : `Şirket puanı: ${formatCompanyScore(companyScore)}`
+            }
+            icon="trophy"
+            onPress={onOpenLeaderboard}
+            compact
+          />
+        </AccountSectionCard>
       ) : null}
     </View>
   );
@@ -171,62 +166,76 @@ export default function AccountProfileTab({
 const styles = StyleSheet.create({
   tab: {
     gap: ACCOUNT_SECTION_GAP,
-    paddingBottom: 8,
   },
   pressed: {
-    opacity: 0.94,
+    opacity: 0.92,
   },
-  identityValue: {
-    ...typography.cardTitle,
-    fontSize: 18,
-    color: colors.accentBlue,
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+  },
+  identityCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  username: {
+    fontSize: 16,
     fontWeight: '800',
+    color: colors.accentBlue,
+  },
+  usernamePlaceholder: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   identityHint: {
     ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  helperText: {
+    ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 17,
-    fontSize: 12,
+    fontSize: 11,
+    lineHeight: 14,
+    marginTop: -2,
   },
-  cardAction: {
-    marginTop: 4,
-    alignSelf: 'stretch',
-  },
-  leaderboardRow: {
+  companyHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    minHeight: 48,
+    gap: 10,
+    marginBottom: 4,
   },
-  leaderboardIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.amberSoft,
+  hqIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: 'rgba(35, 136, 255, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  leaderboardCopy: {
+  companyCopy: {
     flex: 1,
     minWidth: 0,
     gap: 2,
   },
-  leaderboardTitle: {
-    ...typography.bodySmall,
+  companyName: {
+    fontSize: 15,
     fontWeight: '800',
-    fontSize: 14,
+    color: colors.textPrimary,
   },
-  leaderboardSubtitle: {
+  companyMeta: {
     ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 16,
+    fontSize: 12,
   },
-  leaderboardCta: {
-    ...typography.caption,
-    color: colors.accentAmber,
-    fontWeight: '800',
-    fontSize: 13,
-    minWidth: 32,
-    textAlign: 'right',
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
 });

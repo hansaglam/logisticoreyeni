@@ -6,6 +6,7 @@ import { EmptyState } from '../ui';
 import { colors } from '../../theme';
 import type { OwnedWarehouseCardVm } from '../../utils/warehouseScreenViewModel';
 import OwnedWarehouseCard from './OwnedWarehouseCard';
+import { warehouseLayout } from './warehouseTheme';
 
 interface OwnedWarehousesSectionProps {
   warehouses: OwnedWarehouseCardVm[];
@@ -95,28 +96,23 @@ export default function OwnedWarehousesSection({
 
 const styles = StyleSheet.create({
   section: {
-    marginBottom: 12,
+    marginBottom: warehouseLayout.sectionGap,
   },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: warehouseLayout.internalGap,
     gap: 8,
   },
   title: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
     color: colors.textPrimary,
   },
   limit: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.accentBlue,
-    backgroundColor: colors.accentBlueSoft,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    overflow: 'hidden',
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textMuted,
   },
 });

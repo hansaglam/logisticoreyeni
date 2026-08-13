@@ -343,7 +343,10 @@ export default function WarehouseScreen() {
     );
   }
 
-  const limitLabel = `${viewModel.limits.currentCount} / ${viewModel.limits.maxCount} depo`;
+  const limitLabel =
+    viewModel.limits.maxCount > 0
+      ? `${viewModel.limits.currentCount} / ${viewModel.limits.maxCount} aktif depo`
+      : `${viewModel.limits.currentCount} depo`;
   const hasWarehouses = (player.warehouses ?? []).length > 0;
 
   const warehouseTutorial = useScreenAppTutorial({
@@ -517,23 +520,20 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 56,
-    maxHeight: 72,
-    marginBottom: 10,
-    gap: 10,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(35, 136, 255, 0.18)',
+    minHeight: 52,
+    marginBottom: 12,
+    gap: 8,
+    paddingBottom: 6,
   },
   headerText: {
     flex: 1,
     minWidth: 0,
   },
   pageTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '800',
     color: colors.textPrimary,
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
   },
   pageSubtitle: {
     fontSize: 12,

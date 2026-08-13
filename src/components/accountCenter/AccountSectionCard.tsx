@@ -9,6 +9,7 @@ export interface AccountSectionCardProps {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   headerRight?: React.ReactNode;
+  compact?: boolean;
 }
 
 export default function AccountSectionCard({
@@ -16,18 +17,21 @@ export default function AccountSectionCard({
   children,
   style,
   headerRight,
+  compact = false,
 }: AccountSectionCardProps) {
   return (
     <View style={[styles.card, style]}>
       {title ? (
-        <View style={styles.headerRow}>
+        <View style={[styles.headerRow, compact && styles.headerRowCompact]}>
           <Text style={styles.title} accessibilityRole="header">
             {title}
           </Text>
           {headerRight}
         </View>
       ) : null}
-      <View style={[styles.body, !title && styles.bodyStandalone]}>{children}</View>
+      <View style={[styles.body, !title && styles.bodyStandalone, compact && styles.bodyCompact]}>
+        {children}
+      </View>
     </View>
   );
 }
@@ -42,10 +46,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: 10,
     paddingHorizontal: ACCOUNT_CARD_PADDING,
     paddingTop: ACCOUNT_CARD_PADDING,
-    paddingBottom: 8,
+    paddingBottom: 6,
+  },
+  headerRowCompact: {
+    paddingBottom: 4,
   },
   title: {
     ...typography.body,
@@ -53,11 +60,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
     flex: 1,
+    minWidth: 0,
   },
   body: {
     paddingHorizontal: ACCOUNT_CARD_PADDING,
     paddingBottom: ACCOUNT_CARD_PADDING,
-    gap: 10,
+    gap: 8,
+  },
+  bodyCompact: {
+    gap: 4,
+    paddingBottom: 12,
   },
   bodyStandalone: {
     paddingTop: ACCOUNT_CARD_PADDING,

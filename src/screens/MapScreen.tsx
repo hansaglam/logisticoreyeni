@@ -34,8 +34,7 @@ import { GameIcon } from '../components/ui';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import OnboardingHintCard from '../components/onboarding/OnboardingHintCard';
-import { useActiveOnboardingHint, useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
+import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { getContractAvailability } from '../simulation/delivery';
 import { findMarketOpportunities } from '../simulation/contracts';
 import {
@@ -227,8 +226,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Map');
-  const onboardingHint = useActiveOnboardingHint(['track_delivery']);
-
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [selectedMapFilter, setSelectedMapFilter] = useState<NetworkFilterKey>('all');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -508,17 +505,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           onRefresh={handleRefreshMarket}
           helpAction={<AppTutorialHelpButton {...mapTutorial.helpButtonProps} />}
         />
-
-        {onboardingHint ? (
-          <OnboardingHintCard
-            title={onboardingHint.title}
-            description={onboardingHint.description}
-            icon={onboardingHint.icon}
-            badgeLabel={onboardingHint.badgeLabel}
-            accentVariant={onboardingHint.accentVariant}
-            onDismiss={onboardingHint.onDismiss}
-          />
-        ) : null}
 
         <AppTutorialTarget tutorialId="map" targetId="map-filters" layoutMode="stretch">
           <MapFilterTabs

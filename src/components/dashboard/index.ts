@@ -2,7 +2,6 @@ export { default as DashboardAlertBanner } from './DashboardAlertBanner';
 export { default as DashboardBackground } from './DashboardBackground';
 export { default as DashboardResourceBar } from './DashboardResourceBar';
 export { default as DashboardHeroCard } from './DashboardHeroCard';
-export { default as DashboardNextActionCard } from './DashboardNextActionCard';
 export { default as DashboardStatGrid, buildDashboardStatTiles } from './DashboardStatGrid';
 export { default as DashboardModuleGrid } from './DashboardModuleGrid';
 export { default as SmartGameTipBanner, navigateFromGameTip } from './SmartGameTipBanner';

@@ -417,3 +417,160 @@ test('leaderboard bootstraps default serverState when canonical state missing', 
   assert.equal(serverSnap.exists, true);
   assert.equal(Number(serverSnap.data()?.cash), 20_000);
 });
+
+test('cross-platform: Android and iOS users share one leaderboard (no platform filter)', async () => {
+  const androidUid = 'uid-android-cross';
+  const iosUid = 'uid-ios-cross';
+  const seasonKey = getLeaderboardSeasonKey();
+
+  await adminFirestore.doc(`users/${androidUid}`).set({
+    uid: androidUid,
+    username: 'androidtest',
+    usernameNormalized: 'androidtest',
+    usernameSetupCompleted: true,
+  });
+  await adminFirestore.doc(`users/${iosUid}`).set({
+    uid: iosUid,
+    username: 'iostest',
+    usernameNormalized: 'iostest',
+    usernameSetupCompleted: true,
+  });
+
+  await seedServerState(androidUid, {
+    cash: 120_000,
+    companyLevel: 6,
+    reputation: 55,
+    completedDeliveries: 15,
+  });
+  await seedServerState(iosUid, {
+    cash: 95_000,
+    companyLevel: 5,
+    reputation: 50,
+    completedDeliveries: 10,
+  });
+
+  await adminFirestore.doc(`users/${androidUid}`).set(
+    {
+      username: 'androidtest',
+      usernameNormalized: 'androidtest',
+      usernameSetupCompleted: true,
+    },
+    { merge: true },
+  );
+  await adminFirestore.doc(`users/${iosUid}`).set(
+    {
+      username: 'iostest',
+      usernameNormalized: 'iostest',
+      usernameSetupCompleted: true,
+    },
+    { merge: true },
+  );
+
+  const androidSubmit = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: androidUid, displayName: null },
+    { transactionId: 'tx-android', idempotencyKey: 'idem-android' },
+  );
+  const iosSubmit = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: iosUid, displayName: null },
+    { transactionId: 'tx-ios', idempotencyKey: 'idem-ios' },
+  );
+  assert.equal(androidSubmit.ok, true);
+  assert.equal(iosSubmit.ok, true);
+  if (!androidSubmit.ok || !iosSubmit.ok) return;
+  assert.equal(androidSubmit.seasonKey, seasonKey);
+  assert.equal(iosSubmit.seasonKey, seasonKey);
+  assert.ok((androidSubmit.score ?? 0) > (iosSubmit.score ?? 0));
+
+  const board = await getLeaderboardSnapshot(
+    adminFirestore,
+    { uid: androidUid, displayName: null },
+    { limit: 100 },
+  );
+  assert.equal(board.ok, true);
+  if (!board.ok) return;
+  assert.equal(board.seasonKey, seasonKey);
+  const uids = board.entries.map((entry) => entry.uid);
+  assert.ok(uids.includes(androidUid), 'Android user visible in shared table');
+  assert.ok(uids.includes(iosUid), 'iOS user visible in shared table');
+  assert.equal(board.entries[0]?.username, 'androidtest');
+  assert.equal(board.entries[0]?.uid, androidUid);
+  assert.equal(board.entries[1]?.username, 'iostest');
+  assert.ok(board.totalParticipants != null && board.totalParticipants >= 2);
+  for (const entry of board.entries) {
+    assert.equal('platform' in entry, false, 'platform must not be in public response');
+  }
+});
+
+test('same UID submit from Android then iOS metadata updates one entry (no duplicate)', async () => {
+  const uid = 'uid-same-account';
+  await adminFirestore.doc(`users/${uid}`).set({
+    uid,
+    username: 'crossdevice',
+    usernameNormalized: 'crossdevice',
+    usernameSetupCompleted: true,
+  });
+  await seedServerState(uid, { cash: 80_000, companyLevel: 4, reputation: 45 });
+
+  const first = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid, displayName: null },
+    { transactionId: 'tx-same-1', idempotencyKey: 'idem-same-1' },
+  );
+  await seedServerState(uid, { cash: 200_000, companyLevel: 7, reputation: 70 });
+  const second = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid, displayName: null },
+    { transactionId: 'tx-same-2', idempotencyKey: 'idem-same-2' },
+  );
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.ok((second.score ?? 0) >= (first.score ?? 0));
+
+  const seasonKey = first.seasonKey;
+  const snapshot = await adminFirestore.collection(`leaderboards/${seasonKey}/entries`).get();
+  const sameUidDocs = snapshot.docs.filter((doc) => doc.id === uid);
+  assert.equal(sameUidDocs.length, 1, 'exactly one entry per UID');
+});
+
+test('cross-platform pagination returns mixed entries without platform cursor', async () => {
+  for (let i = 0; i < 4; i += 1) {
+    const uid = `page-user-${i}`;
+    await seedServerState(uid, {
+      cash: 50_000 * (i + 1),
+      companyLevel: i + 1,
+      reputation: 40 + i,
+      completedDeliveries: i * 2,
+    });
+    await submitLeaderboardScoreTransaction(
+      adminFirestore,
+      { uid, displayName: null },
+      { transactionId: `tx-page-${i}`, idempotencyKey: `idem-page-${i}` },
+    );
+  }
+
+  const page1 = await getLeaderboardSnapshot(
+    adminFirestore,
+    { uid: 'page-user-0', displayName: null },
+    { limit: 2 },
+  );
+  assert.equal(page1.ok, true);
+  if (!page1.ok || !page1.nextCursor) return;
+
+  const page2 = await getLeaderboardSnapshot(
+    adminFirestore,
+    { uid: 'page-user-0', displayName: null },
+    { limit: 2, cursor: page1.nextCursor },
+  );
+  assert.equal(page2.ok, true);
+  if (!page2.ok) return;
+
+  const page1Uids = new Set(page1.entries.map((entry) => entry.uid));
+  const page2Uids = new Set(page2.entries.map((entry) => entry.uid));
+  for (const uid of page2Uids) {
+    assert.equal(page1Uids.has(uid), false, 'no duplicate across pages');
+  }
+  assert.equal(page1.entries.length + page2.entries.length, 4);
+});

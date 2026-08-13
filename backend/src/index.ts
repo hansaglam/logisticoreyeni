@@ -35,6 +35,13 @@ import {
   prepareMarketplaceAccountDeletion,
   purchaseVehicleListingTransaction,
 } from './vehicleMarketplace';
+import {
+  VEHICLE_MARKETPLACE_API_VERSION,
+  listingDtoToClientWire,
+  serializeMarketplaceListingsForClient,
+  serializeReconciliationVehicleForClient,
+  timestampToMillis,
+} from './vehicleMarketplaceSerialization';
 import type {
   CancelVehicleListingInput,
   CreateVehicleListingInput,
@@ -453,10 +460,12 @@ export const getVehicleMarketplaceListings = onCall(VEHICLE_MARKETPLACE_FUNCTION
   if (!identity) return unauthenticatedResult(request.data ?? {});
   const record = requestRecord(request.data);
   const cursor = requestRecord(record.cursor);
+  const limitRaw = record.limit === undefined ? 20 : Number(record.limit);
+  const limit = Math.min(50, Math.max(1, Math.floor(limitRaw)));
   if (
     !hasOnlyKeys(record, ['limit', 'cursor']) ||
     (record.limit !== undefined &&
-      (!Number.isInteger(record.limit) || Number(record.limit) < 1 || Number(record.limit) > 50)) ||
+      (!Number.isFinite(limitRaw) || limitRaw < 1 || limitRaw > 50)) ||
     (record.cursor !== undefined &&
       (!hasOnlyKeys(cursor, ['createdAt', 'id']) ||
         !Number.isFinite(cursor.createdAt) ||
@@ -466,7 +475,6 @@ export const getVehicleMarketplaceListings = onCall(VEHICLE_MARKETPLACE_FUNCTION
     return invalidRequestResult(record);
   }
   if (!(await consumeRateLimit(identity.uid, 'list'))) return rateLimitedResult(record);
-  const limit = record.limit === undefined ? 20 : Number(record.limit);
   const cursorCreatedAt = Number(cursor.createdAt);
   const cursorId = cursor.id;
   let query = getFirestore()
@@ -485,14 +493,25 @@ export const getVehicleMarketplaceListings = onCall(VEHICLE_MARKETPLACE_FUNCTION
   const snapshot = await query.limit(limit + 1).get();
   const visibleDocs = snapshot.docs.slice(0, limit);
   const lastDocument = visibleDocs.at(-1);
+  const serialized = serializeMarketplaceListingsForClient(visibleDocs);
+  if (serialized.rejectedCount > 0) {
+    logger.warn('[vehicle-marketplace-list-serialize]', {
+      rejectedCount: serialized.rejectedCount,
+      samples: serialized.rejected.slice(0, 3),
+    });
+  }
   return {
     ok: true,
-    listings: visibleDocs.map((document) => document.data()),
+    apiVersion: VEHICLE_MARKETPLACE_API_VERSION,
+    listings: serialized.listings.map((listing) => listingDtoToClientWire(listing)),
+    rejectedCount: serialized.rejectedCount,
     hasMore: snapshot.docs.length > limit,
     nextCursor: lastDocument
       ? {
           createdAt:
-            (lastDocument.data().createdAt as Timestamp | undefined)?.toMillis?.() ?? 0,
+            serialized.listings.at(-1)?.createdAtMs ??
+            timestampToMillis(lastDocument.data().createdAt) ??
+            0,
           id: lastDocument.id,
         }
       : null,
@@ -525,16 +544,32 @@ export const getMyVehicleListings = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
       .get(),
     firestore.doc(`users/${identity.uid}/marketplaceState/current`).get(),
   ]);
+  const serialized = serializeMarketplaceListingsForClient(listings.docs);
+  if (serialized.rejectedCount > 0) {
+    logger.warn('[vehicle-marketplace-my-listings-serialize]', {
+      uidHash: uidHash(identity.uid),
+      rejectedCount: serialized.rejectedCount,
+      samples: serialized.rejected.slice(0, 3),
+    });
+  }
+  const ownedSnapshots = Array.isArray(state.data()?.ownedTruckSnapshots)
+    ? (state.data()?.ownedTruckSnapshots as Record<string, unknown>[])
+    : [];
+  const vehicles = ownedSnapshots
+    .map((vehicle) => serializeReconciliationVehicleForClient(vehicle))
+    .filter((vehicle): vehicle is Record<string, unknown> => vehicle != null);
   const result = {
     ok: true,
-    listings: listings.docs.map((document) => document.data()),
+    apiVersion: VEHICLE_MARKETPLACE_API_VERSION,
+    listings: serialized.listings.map((listing) => listingDtoToClientWire(listing)),
+    rejectedCount: serialized.rejectedCount,
     reconciliation: state.exists
       ? {
           marketplaceStateVersion: state.data()?.stateVersion ?? 0,
           cash: state.data()?.canonicalCash ?? 0,
           fleetLimit: state.data()?.fleetLimit ?? 0,
           soldTruckIds: state.data()?.soldTruckTombstones ?? [],
-          vehicles: state.data()?.ownedTruckSnapshots ?? [],
+          vehicles,
         }
       : null,
   };

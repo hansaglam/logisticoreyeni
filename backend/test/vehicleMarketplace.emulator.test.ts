@@ -20,6 +20,10 @@ import {
   prepareMarketplaceAccountDeletion,
   purchaseVehicleListingTransaction,
 } from '../src/vehicleMarketplace';
+import {
+  listingDtoToClientWire,
+  serializeMarketplaceListingsForClient,
+} from '../src/vehicleMarketplaceSerialization';
 import type {
   MarketplacePlayerState,
   MarketplaceVehicleRecord,
@@ -649,4 +653,19 @@ test('Firestore allows public active reads but denies all direct marketplace wri
   await assertFails(
     publicDb.doc(`vehicleMarketplaceListings/${listingId}`).get(),
   );
+});
+
+test('marketplace listing serializer emits primitive client wire values', async () => {
+  const { listingId } = await createValidListing('seller-serialize', 'serialize');
+  const snap = await adminFirestore.doc(`vehicleMarketplaceListings/${listingId}`).get();
+  assert.equal(snap.exists, true);
+  const serialized = serializeMarketplaceListingsForClient([snap]);
+  assert.equal(serialized.rejectedCount, 0);
+  assert.equal(serialized.listings.length, 1);
+  const wire = listingDtoToClientWire(serialized.listings[0]!);
+  assert.equal(typeof wire.createdAt, 'number');
+  assert.equal(typeof wire.updatedAt, 'number');
+  assert.equal(typeof wire.expiresAt, 'number');
+  assert.equal(typeof (wire.truckSnapshot as Record<string, unknown>).condition, 'number');
+  assert.notEqual(typeof wire.createdAt, 'object');
 });

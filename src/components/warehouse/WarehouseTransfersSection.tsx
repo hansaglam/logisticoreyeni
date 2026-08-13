@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { getModalSheetPaddingBottom } from '../../constants/layout';
-import { AppCard, EmptyState, IconButton, StatusBadge } from '../ui';
+import { AppCard, EmptyState, GameIcon, IconButton } from '../ui';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { getWarehouseStockTransferReasonMessage } from '../../simulation/warehouseStockTransfer';
 import { colors, formatMoney, typography } from '../../theme';
@@ -10,7 +10,7 @@ import { getCityName, getProductName } from '../../utils/entityLookup';
 import type { WarehouseActionReason, WarehouseStockTransfer } from '../../types/game';
 import type { WarehouseTransferCardVm } from '../../utils/warehouseScreenViewModel';
 import { logWarehouseLayout } from './warehouseLayoutDebug';
-import WarehouseTransferCard from './WarehouseTransferCard';
+import { warehouseLayout, warehouseVisual } from './warehouseTheme';
 
 function formatHistoryReason(reason: WarehouseStockTransfer['failureReason']): string | null {
   if (!reason) return null;
@@ -19,6 +19,16 @@ function formatHistoryReason(reason: WarehouseStockTransfer['failureReason']): s
     return mapped;
   }
   return String(reason);
+}
+
+function formatTransferEta(remainingKm: number): string {
+  if (remainingKm <= 0) return 'varış yakın';
+  if (remainingKm < 50) return `${remainingKm} km`;
+  const hours = Math.floor(remainingKm / 80);
+  const minutes = Math.round(((remainingKm % 80) / 80) * 60);
+  if (hours <= 0) return `${minutes} dk`;
+  if (minutes <= 0) return `${hours}s`;
+  return `${hours}s ${minutes}dk`;
 }
 
 interface WarehouseTransfersSectionProps {
@@ -45,51 +55,73 @@ export default function WarehouseTransfersSection({
     [completedTransfers],
   );
 
+  const isEmpty = activeTransfers.length === 0;
+
   return (
     <View
       style={styles.section}
       onLayout={(event) => sectionRef?.(event.nativeEvent.layout.y)}
     >
-      {activeTransfers.length === 0 ? (
-        <View
-          style={styles.emptyRow}
-          onLayout={(event) => {
+      <View
+        style={styles.compactCard}
+        onLayout={(event) => {
+          if (isEmpty) {
             logWarehouseLayout({
               transferEmptyHeight: Math.round(event.nativeEvent.layout.height),
             });
-          }}
-        >
-          <View style={styles.emptyIcon}>
-            <StatusBadge label="0" variant="blue" size="sm" />
+          }
+        }}
+      >
+        <View style={styles.cardHeader}>
+          <View style={styles.titleRow}>
+            <GameIcon name="truck" size={14} color={warehouseVisual.accentBlue} />
+            <Text style={styles.cardTitle}>Yoldaki Transferler</Text>
           </View>
-          <View style={styles.emptyTextBlock}>
-            <Text style={styles.emptyTitle}>Yoldaki Transferler</Text>
-            <Text style={styles.emptyMeta} numberOfLines={1}>
-              Henüz transfer yok
-            </Text>
-          </View>
-          {onStartTransfer ? (
-            <Pressable
-              onPress={onStartTransfer}
-              style={styles.startChip}
-              accessibilityRole="button"
-              accessibilityLabel="Yeni stok transferi başlat"
-            >
-              <Text style={styles.startChipText}>Başlat</Text>
-            </Pressable>
-          ) : null}
+          <Text style={styles.countBadge}>{activeTransfers.length}</Text>
         </View>
-      ) : (
-        <>
-          <View style={styles.activeHeader}>
-            <Text style={styles.sectionTitle}>Yoldaki Transferler</Text>
-            <StatusBadge label={`${activeTransfers.length} aktif`} variant="blue" size="sm" />
+
+        {isEmpty ? (
+          <View style={styles.emptyBody}>
+            <Text style={styles.emptyMeta}>Henüz transfer yok</Text>
+            {onStartTransfer ? (
+              <Pressable
+                onPress={onStartTransfer}
+                style={styles.startBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Yeni transfer başlat"
+              >
+                <Text style={styles.startBtnText}>Yeni Transfer</Text>
+              </Pressable>
+            ) : (
+              <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
+            )}
           </View>
-          {activeTransfers.map((item) => (
-            <WarehouseTransferCard key={item.transfer.id} item={item} />
-          ))}
-        </>
-      )}
+        ) : (
+          <View style={styles.activeBody}>
+            {activeTransfers.slice(0, 3).map((item) => (
+              <Text key={item.transfer.id} style={styles.transferLine} numberOfLines={1}>
+                {item.sourceCityName} → {item.destinationCityName} ·{' '}
+                {formatTransferEta(item.remainingKm)}
+              </Text>
+            ))}
+            {activeTransfers.length > 3 ? (
+              <Text style={styles.moreTransfers}>
+                +{activeTransfers.length - 3} transfer daha
+              </Text>
+            ) : null}
+            {onStartTransfer ? (
+              <Pressable
+                onPress={onStartTransfer}
+                style={styles.startBtnInline}
+                accessibilityRole="button"
+                accessibilityLabel="Yeni transfer başlat"
+              >
+                <Text style={styles.startBtnText}>Yeni Transfer</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        )}
+      </View>
 
       {historyItems.length > 0 ? (
         <Pressable
@@ -125,11 +157,9 @@ export default function WarehouseTransfersSection({
                   return (
                     <AppCard key={transfer.id} style={styles.historyCard} padded={false}>
                       <View style={styles.historyTop}>
-                        <StatusBadge
-                          label={failed ? 'Başarısız' : 'Tamamlandı'}
-                          variant={failed ? 'danger' : 'success'}
-                          size="sm"
-                        />
+                        <Text style={styles.historyStatus}>
+                          {failed ? 'Başarısız' : 'Tamamlandı'}
+                        </Text>
                         <Text style={styles.historyProduct} numberOfLines={1}>
                           {getProductName(transfer.productId)} ·{' '}
                           {Math.round(transfer.quantityTons)} t
@@ -164,71 +194,98 @@ export default function WarehouseTransfersSection({
 
 const styles = StyleSheet.create({
   section: {
-    marginBottom: 12,
+    marginBottom: warehouseLayout.sectionGap,
   },
-  emptyRow: {
+  compactCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: warehouseVisual.border,
+    backgroundColor: warehouseVisual.surfaceElevated,
+    padding: warehouseLayout.cardPadding,
+    gap: warehouseLayout.internalGap,
+    minHeight: 64,
+  },
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 72,
-    maxHeight: 84,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(35, 136, 255, 0.28)',
-    backgroundColor: '#0E1C34',
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accentBlue,
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  emptyIcon: {
-    width: 28,
+  titleRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  emptyTextBlock: {
+    gap: 6,
     flex: 1,
     minWidth: 0,
-    gap: 2,
   },
-  emptyTitle: {
+  cardTitle: {
     fontSize: 14,
     fontWeight: '800',
     color: colors.textPrimary,
   },
+  countBadge: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: warehouseVisual.accentBlue,
+    minWidth: 20,
+    textAlign: 'right',
+  },
+  emptyBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    minHeight: 28,
+  },
   emptyMeta: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 12,
+    flex: 1,
+    minWidth: 0,
+  },
+  activeBody: {
+    gap: 4,
+  },
+  transferLine: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  moreTransfers: {
     ...typography.caption,
     color: colors.textMuted,
     fontSize: 11,
   },
-  startChip: {
-    minHeight: 36,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: colors.accentAmber,
+  startBtn: {
+    minHeight: 32,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: warehouseVisual.accentBlue,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  startChipText: {
-    ...typography.caption,
-    color: '#1A1200',
-    fontWeight: '800',
-    fontSize: 12,
-  },
-  activeHeader: {
-    flexDirection: 'row',
+  startBtnInline: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    minHeight: 32,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: warehouseVisual.accentBlue,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
+    justifyContent: 'center',
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
+  startBtnText: {
+    ...typography.caption,
     color: colors.textPrimary,
+    fontWeight: '800',
+    fontSize: 11,
   },
   historyLink: {
     alignSelf: 'flex-start',
-    paddingVertical: 8,
-    minHeight: 36,
+    paddingVertical: 6,
+    minHeight: 32,
     justifyContent: 'center',
   },
   historyText: {
@@ -270,13 +327,19 @@ const styles = StyleSheet.create({
   },
   historyCard: {
     padding: 12,
-    borderRadius: 16,
+    borderRadius: 14,
     gap: 4,
   },
   historyTop: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  historyStatus: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 11,
   },
   historyProduct: {
     ...typography.bodySmall,

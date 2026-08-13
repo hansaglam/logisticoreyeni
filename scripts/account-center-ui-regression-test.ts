@@ -35,6 +35,7 @@ const accountCenterDir = [
   'src/components/accountCenter/AccountSegmentedTabs.tsx',
   'src/components/accountCenter/ProfileHeroCard.tsx',
   'src/components/accountCenter/DangerZoneCard.tsx',
+  'src/components/accountCenter/AccountMetric.tsx',
   'src/components/accountCenter/constants.ts',
 ]
   .map((path) => readFileSync(path, 'utf8'))
@@ -51,7 +52,7 @@ console.log('\n=== Account Center UI Regression ===\n');
 console.log('Screen structure');
 {
   assert(screenBundle.includes('Hesap Merkezi'), 'header title');
-  assert(screenBundle.includes('Profil, bulut kaydı ve uygulama tercihleri'), 'header subtitle');
+  assert(screenBundle.includes('Profil, hesap ve uygulama tercihleri'), 'header subtitle');
   assert(screenBundle.includes("{ key: 'profile', label: 'Profil' }"), 'profile tab');
   assert(screenBundle.includes("{ key: 'account', label: 'Hesap' }"), 'account tab');
   assert(screenBundle.includes("{ key: 'preferences', label: 'Tercihler' }"), 'preferences tab');
@@ -61,18 +62,18 @@ console.log('Screen structure');
   assert(profileIdx < accountIdx && accountIdx < prefIdx, 'tab order profile → account → preferences');
   assert(screenBundle.includes('accessibilityRole="tablist"'), 'tablist accessibility');
   assert(screenBundle.includes('accessibilityRole="tab"'), 'tab accessibility');
+  assert(screen.includes('scrollBottomPadding'), 'tab bar bottom padding');
+  assert(screen.includes('useAccountPrivacyOptions'), 'privacy options wired');
 }
 
 console.log('\nProfile tab');
 {
   assert(screenBundle.includes('Oyuncu Kimliği'), 'player identity card');
-  assert(screenBundle.includes('Şirket Kimliği'), 'company identity card');
-  assert(screenBundle.includes('Liderlik Tablosu'), 'leaderboard card');
+  assert(screenBundle.includes('Şirket Özeti'), 'company summary card');
+  assert(screenBundle.includes('Liderlik Tablosu'), 'leaderboard row');
   assert(screenBundle.includes('providerBadge'), 'provider badge usage');
-  assert(
-    (screenBundle.match(/Kullanıcı Adı Oluştur/g) ?? []).length === 1,
-    'single username create CTA',
-  );
+  assert(screenBundle.includes('AccountMetric'), 'compact metric grid');
+  assert(screenBundle.includes('statRow'), 'inline hero stats');
   assert(screenBundle.includes('Katılmak için kullanıcı adını oluştur'), 'leaderboard no-username state');
   assert(
     screenBundle.includes('Liderlik servisine şu anda ulaşılamıyor'),
@@ -82,20 +83,19 @@ console.log('\nProfile tab');
 
 console.log('\nAccount tab');
 {
-  assert(screenBundle.includes('Hesap Bağlantısı'), 'account connection card');
-  assert(screenBundle.includes('Bulut Kaydı'), 'cloud save card');
-  assert(screenBundle.includes('Hesap İşlemleri'), 'account actions card');
+  assert(screenBundle.includes('Bağlı Hesap'), 'linked account card');
+  assert(screenBundle.includes('Bulut Koruması'), 'cloud protection card');
+  assert(screenBundle.includes('Hesap Yönetimi'), 'account management card');
+  assert(screenBundle.includes('İlerlemen güvende'), 'verified cloud secure message');
   assert(
     cloudStatusUtil.includes('Şimdi Senkronize Et'),
-    'single sync action label',
+    'canonical sync action label in cloud util',
   );
-  assert(
-    !screenBundle.includes('Bulut Kaydını Kontrol Et') || screenBundle.includes('Bulut Kaydını Görüntüle'),
-    'no duplicate generic check-cloud CTA in center screen',
-  );
+  assert(screenBundle.includes('Senkronize Et'), 'compact sync CTA label');
   assert(screenBundle.includes('Hesap Değiştir'), 'account switch action');
   assert(screenBundle.includes('Hesap geçişi sürüyor'), 'switch in-progress state');
   assert(screenBundle.includes('Kurtarma gerekli'), 'recovery required state');
+  assert(screenBundle.includes('Çıkış Yap'), 'logout in account tab');
 }
 
 console.log('\nPreferences tab');
@@ -103,13 +103,14 @@ console.log('\nPreferences tab');
   assert(screenBundle.includes('Bildirimler'), 'notification toggle');
   assert(screenBundle.includes('Titreşim'), 'vibration toggle');
   assert(screenBundle.includes('Ses'), 'sound toggle');
-  assert(screenBundle.includes('Gelir özeti penceresi'), 'income summary toggle');
+  assert(screenBundle.includes('Gelir özeti'), 'income summary toggle');
   assert(screenBundle.includes('Gizlilik Politikası'), 'privacy policy link');
   assert(screenBundle.includes('Gizlilik ve Çerez Ayarları'), 'privacy choices action');
-  assert(screenBundle.includes('useAdPrivacyAction'), 'UMP privacy options wired via canonical handler');
   assert(screenBundle.includes('Tehlikeli İşlemler'), 'danger zone');
   assert(screenBundle.includes('Hesabı Sil'), 'delete account action');
   assert(screenBundle.includes('Misafir Kaydını Sil'), 'guest delete label');
+  const dangerCard = readFileSync('src/components/accountCenter/DangerZoneCard.tsx', 'utf8');
+  assert(!dangerCard.includes('onSignOut'), 'logout removed from danger zone');
 }
 
 console.log('\nLegal links');
@@ -215,8 +216,8 @@ console.log('\nNavigation & platform');
   assert(screenBundle.includes('onBack'), 'back navigation support');
   assert(screenBundle.includes('Switch'), 'native preference switches');
   assert(screenBundle.includes('accessibilityLabel'), 'accessibility labels present');
-  assert(screenBundle.includes('minHeight: 44') || screenBundle.includes('minHeight: 48'), 'touch targets');
-  assert(screenBundle.includes('width: \'47%\''), 'responsive stat grid for 360px');
+  assert(screenBundle.includes('minHeight: 44') || screenBundle.includes('minHeight: 48') || screenBundle.includes('minHeight: 56') || screenBundle.includes('minHeight: 64'), 'touch targets');
+  assert(screenBundle.includes('ACCOUNT_SECTION_GAP'), 'canonical section spacing');
 }
 
 console.log('\nAccount switch B-002 preserved');

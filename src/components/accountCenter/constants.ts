@@ -8,5 +8,5 @@ export const ACCOUNT_CENTER_TABS: { key: AccountCenterTab; label: string }[] = [
 
 export const ACCOUNT_CENTER_HEADER = {
   title: 'Hesap Merkezi',
-  subtitle: 'Profil, bulut kaydı ve uygulama tercihleri',
+  subtitle: 'Profil, hesap ve uygulama tercihleri',
 } as const;

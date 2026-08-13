@@ -1,4 +1,6 @@
 import { MARKET_TUTORIAL_VERSION } from '../config/marketTutorial';
+import { hasTutorialBeenPresented } from './app/persistence';
+import type { TutorialProgressState } from './app/types';
 
 export type MarketTutorialMarketState = 'live' | 'cached' | 'unavailable';
 
@@ -22,11 +24,9 @@ export function normalizeMarketTutorialState(
 
 export function shouldAutoStartMarketTutorial(
   state: MarketTutorialPersistence,
+  progress?: TutorialProgressState,
 ): boolean {
-  if (state.marketTutorialCompleted !== true) {
-    return true;
-  }
-  return (state.marketTutorialVersion ?? 0) < MARKET_TUTORIAL_VERSION;
+  return !hasTutorialBeenPresented('market', progress, state);
 }
 
 export function createCompletedMarketTutorialState(): MarketTutorialPersistence {

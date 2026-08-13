@@ -1006,7 +1006,6 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
 
   const marketTutorialCompleted = useGameStore((state) => state.marketTutorialCompleted === true);
   const marketTutorialVersion = useGameStore((state) => state.marketTutorialVersion ?? 0);
-  const completeMarketTutorial = useGameStore((state) => state.completeMarketTutorial);
   const onboardingCompleted = useGameStore((state) => state.onboarding?.completed === true);
   const pendingOfflineProgressSummary = useGameStore(
     (state) => state.pendingOfflineProgressSummary,
@@ -1053,7 +1052,6 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     anchorProductId: tutorialAnchorProductId,
     scrollRef,
     scrollYRef,
-    onCompletePersistence: completeMarketTutorial,
   });
 
   marketTutorialActiveRef.current = marketTutorial.isActive;
@@ -1093,6 +1091,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
         void marketTutorial.requestStepChange(direction);
       },
       onSkip: marketTutorial.onSkip,
+      onDismiss: marketTutorial.onDismiss,
       onComplete: marketTutorial.onComplete,
       onLog: ({ action, stepId }: { action: string; stepId?: string }) =>
         marketTutorial.log(action as Parameters<typeof marketTutorial.log>[0], stepId),

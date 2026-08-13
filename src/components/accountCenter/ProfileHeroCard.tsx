@@ -1,9 +1,9 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '../../theme';
+import { colors, typography } from '../../theme';
 import GameIcon from '../ui/GameIcon';
-import { accountCardStyle } from './accountCenterTheme';
+import { ACCOUNT_CARD_PADDING, accountCardStyle } from './accountCenterTheme';
 import AccountStatusBadge from './AccountStatusBadge';
 
 import type { StatusBadgeVariant } from '../ui';
@@ -39,7 +39,7 @@ export default function ProfileHeroCard({
       <View style={styles.hero}>
         <View style={[styles.avatar, isGuest ? styles.avatarGuest : styles.avatarLinked]}>
           {isGuest ? (
-            <GameIcon name="account" size={24} color={colors.accentAmber} />
+            <GameIcon name="account" size={22} color={colors.accentAmber} />
           ) : (
             <Text style={styles.avatarLetter}>{avatarLetter}</Text>
           )}
@@ -54,7 +54,7 @@ export default function ProfileHeroCard({
           <View style={styles.badgeRow}>
             <AccountStatusBadge
               label={providerBadge}
-              variant={isGuest ? 'amber' : 'success'}
+              variant={isGuest ? 'amber' : 'blue'}
             />
             {!isGuest && cloudStatusLabel ? (
               <AccountStatusBadge label={cloudStatusLabel} variant={cloudStatusVariant} />
@@ -62,23 +62,26 @@ export default function ProfileHeroCard({
           </View>
         </View>
       </View>
-      <View style={styles.statGrid}>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Seviye</Text>
-          <Text style={styles.statValue}>{stats.level}</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Sözleşme</Text>
+
+      <View style={styles.statRow}>
+        <Text style={styles.statChip}>
+          <Text style={styles.statValue}>Sv.{stats.level}</Text>
+        </Text>
+        <Text style={styles.statDivider}>·</Text>
+        <Text style={styles.statChip} numberOfLines={1}>
           <Text style={styles.statValue}>{stats.contracts}</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Araç</Text>
+          <Text style={styles.statLabel}> sözleşme</Text>
+        </Text>
+        <Text style={styles.statDivider}>·</Text>
+        <Text style={styles.statChip} numberOfLines={1}>
           <Text style={styles.statValue}>{stats.trucks}</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Depo</Text>
+          <Text style={styles.statLabel}> araç</Text>
+        </Text>
+        <Text style={styles.statDivider}>·</Text>
+        <Text style={styles.statChip} numberOfLines={1}>
           <Text style={styles.statValue}>{stats.warehouses}</Text>
-        </View>
+          <Text style={styles.statLabel}> depo</Text>
+        </Text>
       </View>
     </View>
   );
@@ -89,37 +92,36 @@ const styles = StyleSheet.create({
     ...accountCardStyle,
     borderWidth: 1,
     overflow: 'hidden',
+    padding: ACCOUNT_CARD_PADDING,
+    gap: 10,
   },
   heroCard: {
-    borderColor: 'rgba(56, 189, 248, 0.28)',
+    borderColor: 'rgba(56, 189, 248, 0.22)',
     backgroundColor: '#0B1A30',
   },
   hero: {
     flexDirection: 'row',
-    gap: spacing.md,
+    gap: 10,
     alignItems: 'flex-start',
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
   },
   avatar: {
     width: 56,
     height: 56,
-    borderRadius: 16,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarGuest: {
     backgroundColor: colors.amberSoft,
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.28)',
+    borderColor: 'rgba(245, 158, 11, 0.22)',
   },
   avatarLinked: {
     backgroundColor: colors.successSoft,
     borderWidth: 1,
-    borderColor: 'rgba(52, 211, 153, 0.28)',
+    borderColor: 'rgba(52, 211, 153, 0.22)',
   },
   avatarLetter: {
-    ...typography.cardTitle,
     fontSize: 22,
     fontWeight: '800',
     color: colors.success,
@@ -127,55 +129,49 @@ const styles = StyleSheet.create({
   heroMain: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 3,
   },
   name: {
-    ...typography.cardTitle,
-    fontSize: 19,
+    fontSize: 17,
     fontWeight: '800',
     color: colors.textPrimary,
   },
   subtitle: {
-    ...typography.bodySmall,
+    ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 18,
+    lineHeight: 16,
     fontSize: 12,
   },
   badgeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginTop: 4,
+    gap: 6,
+    marginTop: 2,
   },
-  statGrid: {
+  statRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    paddingTop: spacing.sm,
+    alignItems: 'center',
+    gap: 4,
+    paddingTop: 2,
   },
-  statItem: {
-    width: '47%',
-    backgroundColor: 'rgba(8, 20, 38, 0.72)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(56, 129, 200, 0.16)',
-    paddingVertical: 10,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'flex-start',
-  },
-  statLabel: {
-    ...typography.caption,
-    fontSize: 10,
-    color: colors.textMuted,
-    fontWeight: '600',
+  statChip: {
+    flexShrink: 1,
+    minWidth: 0,
   },
   statValue: {
-    ...typography.bodySmall,
+    fontSize: 13,
     fontWeight: '800',
-    marginTop: 2,
     color: colors.textPrimary,
-    fontSize: 15,
+  },
+  statLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: colors.textMuted,
+  },
+  statDivider: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontWeight: '600',
   },
 });

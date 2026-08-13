@@ -90,6 +90,12 @@ export function getLastSaveBootstrapDiagnosticId(): string {
 }
 
 export function logSaveBootstrap(entry: SaveBootstrapLogEntry): void {
+  const isFailure = entry.success === false;
+  if (typeof __DEV__ === 'undefined' || !__DEV__) {
+    if (!isFailure) {
+      return;
+    }
+  }
   console.info('[save-bootstrap]', {
     diagnosticId: lastDiagnosticId,
     ...entry,

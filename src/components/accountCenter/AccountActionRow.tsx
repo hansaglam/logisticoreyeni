@@ -12,7 +12,8 @@ export interface AccountActionRowProps {
   onPress: () => void;
   disabled?: boolean;
   showChevron?: boolean;
-  tone?: 'default' | 'danger';
+  tone?: 'default' | 'warning' | 'danger';
+  compact?: boolean;
 }
 
 export default function AccountActionRow({
@@ -23,8 +24,10 @@ export default function AccountActionRow({
   disabled = false,
   showChevron = true,
   tone = 'default',
+  compact = false,
 }: AccountActionRowProps) {
-  const iconColor = tone === 'danger' ? colors.danger : colors.accentBlue;
+  const iconColor =
+    tone === 'danger' ? colors.danger : tone === 'warning' ? colors.accentAmber : colors.accentBlue;
 
   return (
     <Pressable
@@ -34,25 +37,33 @@ export default function AccountActionRow({
       accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       style={({ pressed }) => [
         styles.row,
+        compact && styles.rowCompact,
         pressed && !disabled && styles.rowPressed,
         disabled && styles.rowDisabled,
       ]}
     >
       <View style={[styles.iconWrap, tone === 'danger' && styles.iconWrapDanger]}>
-        <GameIcon name={icon} size={18} color={iconColor} />
+        <GameIcon name={icon} size={16} color={iconColor} />
       </View>
       <View style={styles.copy}>
-        <Text style={[styles.title, tone === 'danger' && styles.titleDanger]} numberOfLines={1}>
+        <Text
+          style={[
+            styles.title,
+            tone === 'danger' && styles.titleDanger,
+            tone === 'warning' && styles.titleWarning,
+          ]}
+          numberOfLines={1}
+        >
           {title}
         </Text>
         {subtitle ? (
-          <Text style={styles.subtitle} numberOfLines={2}>
+          <Text style={styles.subtitle} numberOfLines={compact ? 1 : 2}>
             {subtitle}
           </Text>
         ) : null}
       </View>
       {showChevron ? (
-        <GameIcon name="chevronRight" size={16} color={colors.textMuted} />
+        <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
       ) : null}
     </Pressable>
   );
@@ -62,9 +73,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
+    minHeight: 58,
+    paddingVertical: 6,
+  },
+  rowCompact: {
     minHeight: 48,
-    paddingVertical: 8,
+    paddingVertical: 4,
   },
   rowPressed: {
     opacity: 0.9,
@@ -73,9 +88,9 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: 'rgba(35, 136, 255, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -91,14 +106,19 @@ const styles = StyleSheet.create({
   title: {
     ...typography.bodySmall,
     fontWeight: '700',
+    fontSize: 14,
     color: colors.textPrimary,
   },
   titleDanger: {
     color: colors.danger,
   },
+  titleWarning: {
+    color: colors.accentAmber,
+  },
   subtitle: {
     ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 16,
+    fontSize: 11,
+    lineHeight: 14,
   },
 });

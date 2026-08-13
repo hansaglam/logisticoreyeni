@@ -3,17 +3,22 @@
  *
  * Sıra:
  * 1. UID al, cloud sync durdur
- * 2. Firestore sil
+ * 2. Firestore sil (trusted callable + client guard)
  * 3. Firebase Auth deleteUser (local silmeden önce — requires-recent-login koruması)
  * 4. Local save + game reset
  * 5. Yeni anonymous oturum
  */
 
 import {
+  createAccountDeleteDiagnosticId,
+  logAccountDelete,
+} from './accountLifecycleLog';
+import {
   deleteCurrentFirebaseUser,
   getAuthDeleteErrorCode,
   getCurrentUserId,
   initAnonymousAuth,
+  reauthenticateCurrentUser,
 } from '../services/authService';
 import {
   deleteUserCloudData,
@@ -32,12 +37,16 @@ export type AccountDeletionErrorCode =
   | 'network-error'
   | 'cloud-delete-failed'
   | 'auth-delete-failed'
-  | 'local-clear-failed';
+  | 'local-clear-failed'
+  | 'cancelled';
 
 export interface AccountDeletionResult {
   ok: boolean;
   error?: string;
   errorCode?: AccountDeletionErrorCode;
+  /** Cloud data already removed; retry may skip cloud delete after reauth. */
+  cloudAlreadyDeleted?: boolean;
+  diagnosticId?: string;
 }
 
 export function getAccountDeletionErrorMessage(
@@ -47,6 +56,8 @@ export function getAccountDeletionErrorMessage(
   switch (errorCode) {
     case 'requires-recent-login':
       return 'Hesabı silmek için tekrar giriş yapman gerekiyor.';
+    case 'cancelled':
+      return 'Hesap silme iptal edildi.';
     case 'permission-denied':
       return 'Bulut verileri silinemedi. İzin hatası — daha sonra tekrar dene.';
     case 'network-error':
@@ -58,23 +69,44 @@ export function getAccountDeletionErrorMessage(
     case 'local-clear-failed':
       return fallback ?? 'Yerel kayıt temizlenemedi.';
     default:
-      return fallback ?? 'İşlem tamamlanamadı. Lütfen tekrar deneyin.';
+      return fallback ?? 'Hesap silinemedi. Tekrar dene.';
   }
 }
 
 export async function deleteAccountAndCloudData(options: {
   clearLocalSave: () => Promise<void>;
+  skipCloudDelete?: boolean;
+  diagnosticId?: string;
 }): Promise<AccountDeletionResult> {
+  const diagnosticId = options.diagnosticId ?? createAccountDeleteDiagnosticId();
   const uid = getCurrentUserId();
-  if (__DEV__) {
-    console.log('[account-delete] started', { uid: uid ?? null });
-  }
+
+  logAccountDelete({
+    stage: 'started',
+    authUidPresent: Boolean(uid),
+    diagnosticId,
+    skipCloudDelete: Boolean(options.skipCloudDelete),
+  });
 
   beginAccountDeletion();
 
   try {
-    if (uid && isFirebaseEnabled()) {
+    let cloudAlreadyDeleted = Boolean(options.skipCloudDelete);
+
+    if (uid && isFirebaseEnabled() && !options.skipCloudDelete) {
       const cloudResult = await deleteUserCloudData(uid);
+      logAccountDelete({
+        stage: 'cloud-delete',
+        authUidPresent: true,
+        saveDeleted: cloudResult.ok,
+        marketplaceCleaned: cloudResult.ok,
+        usernameReleased: cloudResult.ok,
+        leaderboardDeleted: cloudResult.ok,
+        diagnosticId,
+        success: cloudResult.ok,
+        errorCode: cloudResult.errorCode,
+      });
+
       if (!cloudResult.ok) {
         const errorCode =
           cloudResult.errorCode === 'permission-denied'
@@ -84,53 +116,76 @@ export async function deleteAccountAndCloudData(options: {
               ? 'network-error'
               : 'cloud-delete-failed';
 
-        console.warn('[account-delete] cloud delete failed', cloudResult.error);
         return {
           ok: false,
           error: getAccountDeletionErrorMessage(errorCode, cloudResult.error),
           errorCode,
+          diagnosticId,
         };
       }
+      cloudAlreadyDeleted = true;
     }
 
     if (uid && isFirebaseEnabled()) {
       try {
         await deleteCurrentFirebaseUser();
-        if (__DEV__) {
-          console.log('[account-delete] firebase user deleted');
-        }
+        logAccountDelete({
+          stage: 'auth-delete',
+          authUidPresent: true,
+          authDeleted: true,
+          diagnosticId,
+          success: true,
+        });
       } catch (error) {
         const authCode = getAuthDeleteErrorCode(error);
+        logAccountDelete({
+          stage: 'auth-delete',
+          authUidPresent: true,
+          authDeleted: false,
+          reauthRequired: authCode === 'requires-recent-login',
+          diagnosticId,
+          success: false,
+          errorCode: authCode ?? 'auth-delete-failed',
+        });
+
         if (authCode === 'requires-recent-login') {
           return {
             ok: false,
             error: getAccountDeletionErrorMessage('requires-recent-login'),
             errorCode: 'requires-recent-login',
+            cloudAlreadyDeleted,
+            diagnosticId,
           };
         }
 
         const message = error instanceof Error ? error.message : 'Firebase kullanıcısı silinemedi.';
-        console.warn('[account-delete] auth delete failed', error);
         return {
           ok: false,
           error: getAccountDeletionErrorMessage('auth-delete-failed', message),
           errorCode: 'auth-delete-failed',
+          cloudAlreadyDeleted,
+          diagnosticId,
         };
       }
     }
 
     try {
       await options.clearLocalSave();
-      if (__DEV__) {
-        console.log('[account-delete] local save cleared');
-      }
+      logAccountDelete({
+        stage: 'local-cleanup',
+        authUidPresent: Boolean(getCurrentUserId()),
+        localCleanupDone: true,
+        diagnosticId,
+        success: true,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Local save temizlenemedi.';
-      console.warn('[account-delete] local clear failed', error);
       return {
         ok: false,
         error: getAccountDeletionErrorMessage('local-clear-failed', message),
         errorCode: 'local-clear-failed',
+        cloudAlreadyDeleted,
+        diagnosticId,
       };
     }
 
@@ -139,16 +194,48 @@ export async function deleteAccountAndCloudData(options: {
 
     if (isFirebaseEnabled()) {
       const newUser = await initAnonymousAuth();
-      if (__DEV__) {
-        console.log('[account-delete] new session ready', newUser?.uid ?? null);
-      }
+      logAccountDelete({
+        stage: 'anonymous-bootstrap',
+        authUidPresent: Boolean(newUser?.uid),
+        diagnosticId,
+        success: Boolean(newUser),
+      });
     }
 
-    if (__DEV__) {
-      console.log('[account-delete] success');
-    }
-    return { ok: true };
+    logAccountDelete({
+      stage: 'completed',
+      authUidPresent: Boolean(getCurrentUserId()),
+      diagnosticId,
+      success: true,
+    });
+    return { ok: true, diagnosticId };
   } finally {
     endAccountDeletion();
   }
+}
+
+/**
+ * Retry auth deletion after successful reauthentication (cloud may already be gone).
+ */
+export async function completeAccountDeletionAfterReauth(options: {
+  clearLocalSave: () => Promise<void>;
+  diagnosticId?: string;
+}): Promise<AccountDeletionResult> {
+  const reauth = await reauthenticateCurrentUser();
+  if (!reauth.ok) {
+    return {
+      ok: false,
+      error: getAccountDeletionErrorMessage(
+        reauth.cancelled ? 'cancelled' : 'requires-recent-login',
+      ),
+      errorCode: reauth.cancelled ? 'cancelled' : 'requires-recent-login',
+      diagnosticId: options.diagnosticId,
+    };
+  }
+
+  return deleteAccountAndCloudData({
+    clearLocalSave: options.clearLocalSave,
+    skipCloudDelete: true,
+    diagnosticId: options.diagnosticId,
+  });
 }

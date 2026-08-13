@@ -73,12 +73,12 @@ console.log('\nAuto-start rules');
     'dashboard completed does not auto-start',
   );
   assert(
-    shouldAutoStartTutorial(
+    !shouldAutoStartTutorial(
       'dashboard',
-      { dashboard: { completed: true, version: 0 } },
+      { dashboard: { completed: true, version: 0, hasBeenPresented: true, status: 'completed' } },
       undefined,
     ),
-    'dashboard old version auto-starts after bump',
+    'dashboard old version does not auto-start after bump',
   );
 }
 

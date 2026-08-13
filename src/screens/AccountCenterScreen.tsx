@@ -24,8 +24,10 @@ import {
   loadAppPreferences,
   subscribeAppPreferences,
 } from '../services/appPreferences';
-import { AD_PRIVACY_ERROR_MESSAGE } from '../domain/adPrivacyState';
-import { useAdPrivacyAction } from '../hooks/useAdPrivacyAction';
+import { shouldShowAccountPrivacyOptions } from '../domain/adPrivacyState';
+import { useAccountPrivacyOptions } from '../hooks/useRewardedAdRequest';
+import { useAdPrivacyAvailability } from '../hooks/useAdPrivacyAvailability';
+import { getAdsConsentSnapshot } from '../services/adsConsentService';
 import { getCurrentUserId } from '../services/authService';
 import { getFirebaseAuthSafe } from '../services/firebase';
 import { fetchWeeklyLeaderboard } from '../services/leaderboardService';
@@ -33,7 +35,7 @@ import { subscribeUsernameProfileChanged } from '../services/usernameProfileEven
 import { useAccountCenter, type AccountCenterTab } from '../hooks/useAccountCenter';
 import { useGameStore } from '../store/gameStore';
 import { calculateCompanyScore } from '../simulation/companyScore';
-import { spacing } from '../theme';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   formatRelativeSaveAgo,
   getProviderBadgeLabel,
@@ -70,6 +72,7 @@ export default function AccountCenterScreen({
   onOpenLeaderboard,
 }: AccountCenterScreenProps) {
   const vm = useAccountCenter({ onOpenLeaderboard });
+  const { scrollBottomPadding } = useTabBarLayout();
   const { alert: showAlert } = useAppDialog();
   const scrollRef = useRef<ScrollView>(null);
   const [activeTab, setActiveTab] = useState<AccountCenterTab>('profile');
@@ -79,9 +82,10 @@ export default function AccountCenterScreen({
   const [leaderboardRank, setLeaderboardRank] = useState<number | null>(null);
   const [leaderboardUnavailable, setLeaderboardUnavailable] = useState(false);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  const [deleteConfirmStep, setDeleteConfirmStep] = useState<0 | 1>(0);
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
-  const { runPrivacyAction } = useAdPrivacyAction();
+  const { openPrivacyOptions } = useAccountPrivacyOptions();
+  useAdPrivacyAvailability();
+  const showPrivacyOptions = shouldShowAccountPrivacyOptions(getAdsConsentSnapshot());
 
   const accountTutorial = useScreenAppTutorial({
     tutorialId: 'account',
@@ -120,7 +124,7 @@ export default function AccountCenterScreen({
 
   const heroSubtitle = vm.isGuest
     ? 'Hesabını bağlayarak ilerlemeni koru'
-    : `${vm.providerLabel} hesabı bağlı · Bulut kaydı aktif`;
+    : `${vm.providerLabel} hesabı bağlı`;
 
   const displayName =
     vm.usernameLabel ?? (vm.isGuest ? 'Misafir Oyuncu' : 'Hesap bağlı');
@@ -195,25 +199,10 @@ export default function AccountCenterScreen({
   };
 
   const handlePrivacyChoices = async () => {
-    const success = await runPrivacyAction();
-    if (!success) {
-      showAlert('Gizlilik Ayarları', AD_PRIVACY_ERROR_MESSAGE);
+    const result = await openPrivacyOptions();
+    if (!result.ok && result.userMessage) {
+      showAlert('Gizlilik Ayarları', result.userMessage);
     }
-  };
-
-  const handleDeleteAccountTwoStep = () => {
-    if (deleteConfirmStep === 0) {
-      setDeleteConfirmStep(1);
-      showAlert(
-        vm.isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Sil — Son Onay',
-        vm.isGuest
-          ? 'Yerel ilerlemen kalıcı olarak silinecek. Devam etmek istiyor musun?'
-          : 'Oyun verilerin, bulut kaydın ve hesap bağlantın kalıcı olarak silinecek. Bu işlem geri alınamaz.',
-      );
-      return;
-    }
-    setDeleteConfirmStep(0);
-    vm.handleDeleteAccount();
   };
 
   const handleOpenLeaderboard = () => {
@@ -240,6 +229,7 @@ export default function AccountCenterScreen({
         onScrollEndDrag={accountTutorial.handleScrollEnd}
         onMomentumScrollEnd={accountTutorial.handleScrollEnd}
         scrollEventThrottle={16}
+        scrollBottomPadding={scrollBottomPadding}
         contentContainerStyle={styles.content}
       >
         <View onLayout={markLayoutReady}>
@@ -247,7 +237,6 @@ export default function AccountCenterScreen({
         title={ACCOUNT_CENTER_HEADER.title}
         subtitle={ACCOUNT_CENTER_HEADER.subtitle}
         onBack={onBack}
-        titleIcon="account"
         compact
         rightAction={<AppTutorialHelpButton {...accountTutorial.helpButtonProps} />}
       />
@@ -279,6 +268,8 @@ export default function AccountCenterScreen({
           companyLevel={level}
           companyScore={companyScore}
           homeCityName={homeCityName}
+          truckCount={trucks.length}
+          warehouseCount={warehouses.length}
           leaderboardLoading={leaderboardLoading}
           leaderboardUnavailable={leaderboardUnavailable}
           leaderboardRank={leaderboardRank}
@@ -328,16 +319,14 @@ export default function AccountCenterScreen({
           )}
           dangerExpanded={dangerExpanded}
           onToggleDanger={() => setDangerExpanded((open) => !open)}
-          isSigningOut={vm.isSigningOut}
           isDeleting={vm.isDeleting}
           isSwitchingAccount={vm.isSwitchingAccount}
           isGuest={vm.isGuest}
           isReady={vm.safeAccountStatus.isReady}
-          deleteConfirmStep={deleteConfirmStep}
-          onSignOut={vm.handleGoogleSignOut}
-          onDeleteAccount={handleDeleteAccountTwoStep}
+          onDeleteAccount={vm.handleDeleteAccount}
           onLanguagePress={() => showAlert('Dil', 'Şu an yalnızca Türkçe destekleniyor.')}
           onPrivacyPolicy={() => void handleOpenLegal('privacyPolicy', 'Gizlilik Politikası')}
+          showPrivacyOptions={showPrivacyOptions}
           onPrivacyChoices={() => void handlePrivacyChoices()}
           onAccountDeletionInfo={() => void handleOpenLegal('accountDeletion', 'Hesap Silme')}
           onSupport={() => void handleOpenLegal('support', 'Destek')}
@@ -371,7 +360,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingBottom: spacing.xl,
+    paddingBottom: 0,
     gap: 0,
   },
 });

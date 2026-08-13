@@ -142,7 +142,7 @@ export function getMarketplaceKindMessage(kind: MarketplaceErrorKind): string {
     case 'server-error':
       return 'Araç Pazarı şu anda yanıt veremiyor.';
     case 'invalid-response':
-      return 'Sunucudan geçersiz veri alındı.';
+      return 'İlanlar şu anda yüklenemiyor. Tekrar dene.';
     case 'not-found':
       return 'Araç Pazarı servisi bu sürüm için deploy edilmemiş.';
     case 'conflict':

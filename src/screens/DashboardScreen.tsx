@@ -2,7 +2,7 @@
  * LogistiCore - Ana Dashboard (Oyun Hub)
  *
  * Premium mobil tycoon ana sayfa — kaynaklar, hero kart, olaylar/ödüller,
- * başlangıç rehberi, modül grid ve günlük destek.
+ * modül grid ve günlük destek.
  */
 
 import React, { useMemo, useRef, useState } from 'react';
@@ -20,7 +20,6 @@ import {
   DashboardBackground,
   DashboardHeroCard,
   DashboardModuleGrid,
-  DashboardNextActionCard,
   DashboardRetentionCard,
   DashboardResourceBar,
   DashboardWorldEventsCard,
@@ -51,12 +50,6 @@ import {
   selectReputationHistory,
 } from '../store/selectors/stableCollections';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
-import {
-  buildOnboardingEvaluationState,
-  dispatchOnboardingNavigation,
-  isOnboardingActive,
-  resolveOnboardingDashboardAction,
-} from '../onboarding/onboardingProgress';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import type { Player } from '../types/game';
 import { navigateFromGameTip } from '../components/dashboard/SmartGameTipBanner';
@@ -97,7 +90,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
   const syncRetentionProgress = useGameStore((state) => state.syncRetentionProgress);
   const getRetentionSummaryValue = useGameStore((state) => state.getRetentionSummaryValue);
-  const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
   const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const activeDeliveries = useGameStore(selectActiveDeliveries);
@@ -221,24 +213,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     onboarding?.visitedScreens?.length,
   ]);
 
-  const onboardingAction = useMemo(() => {
-    if (!player || !onboarding || !isOnboardingActive(onboarding)) {
-      return null;
-    }
-    return resolveOnboardingDashboardAction(
-      buildOnboardingEvaluationState({
-        onboarding,
-        activeDeliveries,
-        missions,
-        player,
-        currentTime,
-        getMissionProgress: getMissionProgressValue,
-      }),
-    );
-  }, [player, onboarding, activeDeliveries, missions, currentTime, getMissionProgressValue]);
-
-  const showOnboardingCard = onboardingAction != null;
-
   if (!player) {
     return (
       <View style={styles.screenRoot}>
@@ -310,15 +284,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   const handleOpenMarket = () => {
     handleNavigate('market');
-  };
-
-  const handleOnboardingPress = () => {
-    if (!onboardingAction) return;
-    dispatchOnboardingNavigation(onboardingAction.action, {
-      navigate: handleNavigate,
-      openMissions: handleOpenMissions,
-      openWarehouse: handleOpenWarehouse,
-    });
   };
 
   return (
@@ -409,21 +374,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
           />
         </View>
       </View>
-
-      {showOnboardingCard && onboardingAction ? (
-        <DashboardNextActionCard
-          stepId={onboardingAction.stepId}
-          title={onboardingAction.title}
-          description={onboardingAction.description}
-          ctaLabel={onboardingAction.ctaLabel}
-          variant={onboardingAction.variant}
-          icon={onboardingAction.icon}
-          progressLabel={onboardingAction.progressLabel}
-          stepIndex={onboardingAction.stepIndex}
-          totalSteps={onboardingAction.totalSteps}
-          onPress={handleOnboardingPress}
-        />
-      ) : null}
 
       <View style={dashboardStyles.lowerSection}>
       <AppTutorialTarget tutorialId="dashboard" targetId="management-tools" layoutMode="stretch">

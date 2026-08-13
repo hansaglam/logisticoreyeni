@@ -3,6 +3,7 @@ import { LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native
 
 import { GameIcon } from '../ui';
 import { colors, typography } from '../../theme';
+import { warehouseLayout, warehouseVisual } from './warehouseTheme';
 
 const TIPS = [
   'Stok fazlası olan şehirlerde ürünler daha ucuz olabilir.',
@@ -32,11 +33,11 @@ export default function WarehouseStrategyTips({ onMore }: WarehouseStrategyTipsP
       >
         <View style={styles.headerText}>
           <Text style={styles.title}>Depo Stratejisi</Text>
-          <Text style={styles.meta}>3 ipucu</Text>
+          <Text style={styles.meta}>3 kısa ipucu</Text>
         </View>
         <GameIcon
           name={expanded ? 'chevronUp' : 'chevronDown'}
-          size={16}
+          size={14}
           color={colors.textMuted}
         />
       </Pressable>
@@ -62,41 +63,41 @@ export default function WarehouseStrategyTips({ onMore }: WarehouseStrategyTipsP
 
 const styles = StyleSheet.create({
   section: {
-    marginBottom: 8,
-    borderRadius: 16,
+    marginBottom: warehouseLayout.sectionGap,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(35, 136, 255, 0.28)',
-    backgroundColor: '#0E1C34',
+    borderColor: warehouseVisual.border,
+    backgroundColor: warehouseVisual.surfaceElevated,
     overflow: 'hidden',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 48,
-    paddingHorizontal: 12,
+    minHeight: 56,
+    paddingHorizontal: warehouseLayout.cardPadding,
     paddingVertical: 10,
-    gap: 8,
+    gap: warehouseLayout.internalGap,
   },
   headerText: {
     flex: 1,
     minWidth: 0,
   },
   title: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
     color: colors.textPrimary,
   },
   meta: {
     ...typography.caption,
-    color: colors.accentAmber,
+    color: colors.textMuted,
     fontSize: 11,
-    marginTop: 1,
-    fontWeight: '700',
+    marginTop: 2,
+    fontWeight: '600',
   },
   body: {
     borderTopWidth: 1,
     borderTopColor: colors.divider,
-    paddingHorizontal: 12,
+    paddingHorizontal: warehouseLayout.cardPadding,
     paddingVertical: 10,
     gap: 6,
   },

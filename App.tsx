@@ -328,7 +328,10 @@ export default function App() {
 
   const handleRecoveryComplete = useCallback(() => {
     void (async () => {
-      const probe = await probeSaveRecoveryWithCloudAttempt();
+      const { invalidateSaveRecoveryColdStartProbe, probeSaveRecoveryWithCloudAttempt } =
+        await import('./src/services/saveRecoveryService');
+      invalidateSaveRecoveryColdStartProbe();
+      const probe = await probeSaveRecoveryWithCloudAttempt({ force: true });
       if (probe.required && !probe.quarantine?.userChoseNewGame) {
         setRecoveryProbe(probe);
         setBootPhase('recovery');
@@ -341,14 +344,18 @@ export default function App() {
   useEffect(() => {
     void enableImmersiveGameMode();
     const unsubscribeImmersive = subscribeImmersiveModeRefresh();
-    void (async () => {
-      await gatherAdsConsentIfNeeded();
-      await initializeAdProvider();
-    })();
     return () => {
       unsubscribeImmersive();
     };
   }, []);
+
+  useEffect(() => {
+    if (bootPhase !== 'ready') return;
+    void (async () => {
+      await gatherAdsConsentIfNeeded();
+      await initializeAdProvider();
+    })();
+  }, [bootPhase]);
 
   useEffect(() => {
     // Auth sırası (paralel değil):

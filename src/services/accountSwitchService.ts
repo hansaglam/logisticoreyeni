@@ -287,6 +287,7 @@ export async function commitAccountSwitch(input: {
     if (input.bindLocalProgress || input.newGame) {
       const synced = await syncLocalSaveToCloud('manual', {
         force: true,
+        bypassAccountConflictLock: true,
         state,
         ownerUid: input.targetUid,
       });

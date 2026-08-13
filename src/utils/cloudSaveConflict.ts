@@ -3,6 +3,8 @@ export type CloudSaveConflictReason =
   | 'owner-mismatch'
   | 'cloud-save-not-found'
   | 'cloud-save-corrupted'
+  | 'cloud-save-fetch-failed'
+  | 'cloud-save-invalid'
   | 'unsupported-save-version'
   | 'restore-migration-failed'
   | 'migration-failed'
@@ -15,6 +17,11 @@ export type CloudSaveConflictReason =
   | 'save-conflict'
   | 'account-transition-cancelled'
   | 'missing-conflict'
+  | 'conflict-stale'
+  | 'local-save-invalid'
+  | 'cloud-restore-failed'
+  | 'cloud-upload-failed'
+  | 'transition-busy'
   | 'unknown';
 
 export function getCloudSaveConflictErrorMessage(
@@ -26,9 +33,12 @@ export function getCloudSaveConflictErrorMessage(
     case 'owner-mismatch':
       return 'Bu bulut kaydı seçili hesaba ait değil.';
     case 'cloud-save-not-found':
-      return 'Bulut kaydı bulunamadı.';
+      return 'Bu hesapta kullanılabilir bir bulut kaydı bulunamadı.';
     case 'cloud-save-corrupted':
-      return 'Bulut kaydı bozuk veya eksik.';
+    case 'cloud-save-invalid':
+      return 'Bulut kaydı doğrulanamadı.';
+    case 'cloud-save-fetch-failed':
+      return 'Bulut kaydı şu anda yüklenemedi. Tekrar dene.';
     case 'unsupported-save-version':
       return 'Bu kayıt uygulamanın desteklemediği daha yeni bir sürümle oluşturulmuş.';
     case 'restore-migration-failed':
@@ -43,7 +53,8 @@ export function getCloudSaveConflictErrorMessage(
     case 'permission-denied':
       return 'Bu bulut kaydına erişim iznin bulunmuyor.';
     case 'already-resolving':
-      return 'Kayıt işlemi zaten devam ediyor.';
+    case 'transition-busy':
+      return 'İşlem devam ediyor.';
     case 'restore-already-applied':
       return 'Bu bulut kaydı daha önce güvenli şekilde uygulandı.';
     case 'save-conflict':
@@ -51,10 +62,31 @@ export function getCloudSaveConflictErrorMessage(
     case 'account-transition-cancelled':
       return 'Hesap geçişi iptal edildi.';
     case 'missing-conflict':
+    case 'conflict-stale':
       return 'Seçilen kayıt artık kullanılamıyor.';
+    case 'local-save-invalid':
+      return 'Bu cihazdaki kayıt doğrulanamadı.';
+    case 'cloud-restore-failed':
+      return 'Bulut kaydı yüklenemedi. Tekrar dene.';
+    case 'cloud-upload-failed':
+      return 'Bu cihazdaki kayıt buluta yazılamadı. Tekrar dene.';
     default:
       return 'Bir hata oluştu. Lütfen tekrar dene.';
   }
+}
+
+export function isRetryableCloudSaveConflictReason(
+  reason: CloudSaveConflictReason,
+): boolean {
+  return (
+    reason === 'network-error' ||
+    reason === 'timeout' ||
+    reason === 'cloud-save-fetch-failed' ||
+    reason === 'cloud-restore-failed' ||
+    reason === 'cloud-upload-failed' ||
+    reason === 'already-resolving' ||
+    reason === 'transition-busy'
+  );
 }
 
 export function validateCloudSaveRestorePayload(

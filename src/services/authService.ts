@@ -155,7 +155,7 @@ export type AccountSwitchResult =
   | { ok: true; selectedAccountUid?: string }
   | {
       ok: false;
-      error: string;
+      error: CloudSaveConflictReason;
       revertedToGuest?: boolean;
       selectedAccountUid?: string;
       appleFailure?: AppleAuthFailure;
@@ -1667,24 +1667,63 @@ function mapAccountSwitchFailure(error: unknown): CloudSaveConflictReason {
   return 'unknown';
 }
 
+function mapCloudLoadFailure(
+  reason: CloudSaveConflictReason,
+): CloudSaveConflictReason {
+  if (reason === 'network-error' || reason === 'timeout' || reason === 'permission-denied') {
+    return reason === 'permission-denied' ? reason : 'cloud-save-fetch-failed';
+  }
+  if (reason === 'unknown') return 'cloud-save-fetch-failed';
+  return reason;
+}
+
 export async function switchToLinkedProviderAccount(
   credential: AuthCredential | null,
   provider: 'google' | 'apple',
-  options: { expectedAccountUid?: string } = {},
+  options: {
+    expectedAccountUid?: string;
+    choice?: 'cloud' | 'local';
+  } = {},
 ): Promise<AccountSwitchResult> {
   const ready = await ensureFirebaseAuthReady();
   if (!ready.ok) {
     return {
       ok: false,
-      error: ready.failure.code,
+      error: 'network-error',
       appleFailure: ready.failure,
       diagnosticCode: getAppleAuthDiagnosticCode(ready.failure),
     };
   }
 
+  const auth = getFirebaseAuthSafe();
+  if (!auth) {
+    return { ok: false, error: 'network-error' };
+  }
+
+  const choice = options.choice ?? 'cloud';
+  const deadlineMs = Date.now() + ACCOUNT_SWITCH_TIMEOUT_MS;
+  let selectedAccountUid: string | undefined;
+  let guestState: import('../store/gameStore').GameStore | undefined;
+  let localCommitted = false;
   let signedIn = false;
 
+  const { logAccountConflictResolve } = await import('./accountSaveConflictSession');
+  const { setCloudSaveAccountConflictPending } = await import('./cloudSaveConflictState');
+
+  logAccountConflictResolve({
+    stage: 'start',
+    selectedSource: choice,
+    candidateIdPresent: Boolean(credential),
+    authUidPresent: Boolean(auth.currentUser?.uid),
+  });
+
   try {
+    const { useGameStore } = await import('../store/gameStore');
+    guestState = useGameStore.getState();
+    if (choice === 'local' && !isLocalSaveSafeForAccountTransition(guestState)) {
+      throw new CloudSaveConflictError('local-save-invalid');
+    }
+
     let activeCredential = credential;
 
     if (provider === 'apple') {
@@ -1698,7 +1737,10 @@ export async function switchToLinkedProviderAccount(
       if (!freshResult.ok) {
         return {
           ok: false,
-          error: freshResult.error,
+          error:
+            freshResult.error === 'cancelled'
+              ? 'account-transition-cancelled'
+              : 'unknown',
           revertedToGuest: false,
           appleFailure: freshResult.failure,
           diagnosticCode: getAppleAuthDiagnosticCode(freshResult.failure),
@@ -1708,12 +1750,15 @@ export async function switchToLinkedProviderAccount(
     }
 
     if (!activeCredential) {
-      return { ok: false, error: 'missing-credential', revertedToGuest: false };
+      return { ok: false, error: 'missing-conflict', revertedToGuest: false };
     }
 
-    const user = await signInWithProviderCredential(activeCredential, provider);
+    const user = await awaitBeforeDeadline(
+      signInWithProviderCredential(activeCredential, provider),
+      deadlineMs,
+    );
     signedIn = true;
-    const selectedAccountUid = user.uid;
+    selectedAccountUid = user.uid;
     if (provider === 'apple') {
       logAppleAuthFlow({
         stage: 'existing-account-signin-success',
@@ -1723,109 +1768,196 @@ export async function switchToLinkedProviderAccount(
         firebaseProjectId: getFirebaseAppSafe()?.options.projectId ?? null,
       });
     }
+    if (
+      (options.expectedAccountUid && options.expectedAccountUid !== user.uid) ||
+      auth.currentUser?.uid !== user.uid
+    ) {
+      throw new CloudSaveConflictError('auth-user-mismatch');
+    }
     initPromise = Promise.resolve(user);
     authSessionReady = true;
 
     if (__DEV__) {
-      devLog('[auth] switched to linked account', user.uid, provider);
+      devLog('[auth] switched to linked account', provider, {
+        authUidPresent: true,
+        choice,
+      });
     }
 
     const { payloadToStoreState, saveGameState } = await import('../storage/saveGame');
-    await executeAtomicCloudSaveRestore({
-      selectedAccountUid,
-      expectedAccountUid: options.expectedAccountUid,
-      readMetadata: async () => {
-        const result = await awaitBeforeDeadline(
-          loadGameFromCloudDetailed(user.uid),
-          deadlineMs,
-        );
-        if (!result.ok) throw new CloudSaveConflictError(result.reason);
-        return result.payload;
-      },
-      readPayload: async () => {
-        const result = await awaitBeforeDeadline(
-          loadGameFromCloudDetailed(user.uid),
-          deadlineMs,
-        );
-        if (!result.ok) throw new CloudSaveConflictError(result.reason);
-        if (auth.currentUser?.uid !== selectedAccountUid) {
-          throw new CloudSaveConflictError('auth-user-mismatch');
-        }
-        return result.payload;
-      },
-      validate: (payload) => {
-        if (auth.currentUser?.uid !== selectedAccountUid) return 'auth-user-mismatch';
-        if (payload.ownerUid !== selectedAccountUid) return 'owner-mismatch';
-        return validateCloudSaveRestorePayload(payload, SAVE_GAME_VERSION);
-      },
-      migrate: (payload) => {
-        const safePayload = {
-          ...payload.gameState,
-          // Player save içindeki global snapshot hiçbir zaman canonical değildir.
-          cachedGlobalEconomySnapshotTrusted: false,
-        };
-        return payloadToStoreState(safePayload);
-      },
-      reconcileMarketplace: async (pendingCloudRestore) => {
-        const [{ getMyVehicleListings }, { reconcileFleetWithVehicleMarketplace }] =
-          await Promise.all([
-            import('./vehicleMarketplaceService'),
-            import('../domain/vehicleMarketplaceReconciliation'),
-          ]);
-        const marketplace = await awaitBeforeDeadline(
-          getMyVehicleListings(),
-          deadlineMs,
-        );
-        if (!marketplace.ok || !marketplace.reconciliation) {
-          throw new CloudSaveConflictError('marketplace-reconciliation-failed');
-        }
-        const reconciled = reconcileFleetWithVehicleMarketplace(
-          pendingCloudRestore.player.trucks,
-          marketplace.reconciliation,
-        );
-        return {
-          ...pendingCloudRestore,
-          player: {
-            ...pendingCloudRestore.player,
-            trucks: reconciled.trucks,
-            money:
-              reconciled.authoritativeCash ??
-              pendingCloudRestore.player.money,
-          },
-          vehicleMarketplace: reconciled.cache,
-        };
-      },
-      persistLocal: (pendingCloudRestore) => {
-        if (auth.currentUser?.uid !== selectedAccountUid) {
-          throw new CloudSaveConflictError('auth-user-mismatch');
-        }
-        return awaitBeforeDeadline(
-          saveGameState(pendingCloudRestore),
-          deadlineMs,
-        );
-      },
-      commitState: (pendingCloudRestore) => {
-        useGameStore.setState(pendingCloudRestore);
-      },
-      getOwnerUid: (payload) => payload.ownerUid,
-      getRestoreId: (payload) =>
-        `${payload.ownerUid}:${payload.saveVersion}:${payload.updatedAt}:${payload.payloadChecksum ?? 'legacy'}`,
-      isRestoreApplied: hasCloudRestoreReceipt,
-      beginRestore: (restoreId, ownerUid) =>
-        beginCloudRestoreJournal({ restoreId, ownerUid, startedAt: Date.now() }),
-      completeRestore: (restoreId, ownerUid) =>
-        completeCloudRestoreJournal({ restoreId, ownerUid, startedAt: Date.now() }),
-      validateState: isLocalSaveSafeForAccountTransition,
-    });
-    localCommitted = true;
 
-    // Global piyasa player save'den değil authoritative repository'den yenilenir.
+    if (choice === 'local') {
+      const rebound = await awaitBeforeDeadline(
+        saveGameState(guestState, { ownerUid: selectedAccountUid }),
+        deadlineMs,
+      );
+      if (!rebound) {
+        throw new CloudSaveConflictError('local-save-invalid');
+      }
+      useGameStore.setState(guestState);
+      localCommitted = true;
+
+      const { syncLocalSaveToCloud } = await import('../storage/cloudSaveSync');
+      const uploaded = await awaitBeforeDeadline(
+        syncLocalSaveToCloud('manual', {
+          force: true,
+          bypassAccountConflictLock: true,
+          state: useGameStore.getState(),
+          ownerUid: selectedAccountUid,
+        }),
+        deadlineMs,
+      );
+      if (!uploaded) {
+        throw new CloudSaveConflictError('cloud-upload-failed');
+      }
+      const verify = await awaitBeforeDeadline(
+        loadGameFromCloudDetailed(user.uid),
+        deadlineMs,
+      );
+      if (!verify.ok) {
+        throw new CloudSaveConflictError(
+          verify.reason === 'network-error' || verify.reason === 'unknown'
+            ? 'cloud-upload-failed'
+            : mapCloudLoadFailure(verify.reason),
+        );
+      }
+    } else {
+      await executeAtomicCloudSaveRestore({
+        selectedAccountUid,
+        expectedAccountUid: options.expectedAccountUid,
+        readMetadata: async () => {
+          const result = await awaitBeforeDeadline(
+            loadGameFromCloudDetailed(user.uid),
+            deadlineMs,
+          );
+          if (!result.ok) {
+            throw new CloudSaveConflictError(mapCloudLoadFailure(result.reason));
+          }
+          logAccountConflictResolve({
+            stage: 'cloud-metadata',
+            authUidPresent: true,
+            cloudMetaPresent: true,
+            cloudSavePresent: true,
+            cloudOwnerUidPresent: Boolean(result.payload.ownerUid),
+            checksumValid: Boolean(result.payload.payloadChecksum),
+            saveVersion: result.payload.saveVersion,
+            selectedSource: 'cloud',
+          });
+          return result.payload;
+        },
+        readPayload: async () => {
+          const result = await awaitBeforeDeadline(
+            loadGameFromCloudDetailed(user.uid),
+            deadlineMs,
+          );
+          if (!result.ok) {
+            throw new CloudSaveConflictError(mapCloudLoadFailure(result.reason));
+          }
+          if (auth.currentUser?.uid !== selectedAccountUid) {
+            throw new CloudSaveConflictError('auth-user-mismatch');
+          }
+          logAccountConflictResolve({
+            stage: 'cloud-body',
+            authUidPresent: true,
+            cloudSavePresent: true,
+            cloudOwnerUidPresent: Boolean(result.payload.ownerUid),
+            checksumValid: Boolean(result.payload.payloadChecksum),
+            saveVersion: result.payload.saveVersion,
+            selectedSource: 'cloud',
+          });
+          return result.payload;
+        },
+        validate: (payload) => {
+          if (auth.currentUser?.uid !== selectedAccountUid) return 'auth-user-mismatch';
+          if (
+            typeof payload.ownerUid === 'string' &&
+            payload.ownerUid.length > 0 &&
+            payload.ownerUid !== selectedAccountUid
+          ) {
+            return 'owner-mismatch';
+          }
+          return validateCloudSaveRestorePayload(payload, SAVE_GAME_VERSION);
+        },
+        migrate: (payload) => {
+          const safePayload = {
+            ...payload.gameState,
+            cachedGlobalEconomySnapshotTrusted: false,
+          };
+          return payloadToStoreState(safePayload);
+        },
+        reconcileMarketplace: async (pendingCloudRestore) => {
+          const [{ getMyVehicleListings }, { reconcileFleetWithVehicleMarketplace }] =
+            await Promise.all([
+              import('./vehicleMarketplaceService'),
+              import('../domain/vehicleMarketplaceReconciliation'),
+            ]);
+          const marketplace = await awaitBeforeDeadline(
+            getMyVehicleListings(),
+            deadlineMs,
+          );
+          if (!marketplace.ok || !marketplace.reconciliation) {
+            throw new CloudSaveConflictError('marketplace-reconciliation-failed');
+          }
+          const reconciled = reconcileFleetWithVehicleMarketplace(
+            pendingCloudRestore.player.trucks,
+            marketplace.reconciliation,
+          );
+          return {
+            ...pendingCloudRestore,
+            player: {
+              ...pendingCloudRestore.player,
+              trucks: reconciled.trucks,
+              money:
+                reconciled.authoritativeCash ??
+                pendingCloudRestore.player.money,
+            },
+            vehicleMarketplace: reconciled.cache,
+          };
+        },
+        persistLocal: (pendingCloudRestore) => {
+          if (auth.currentUser?.uid !== selectedAccountUid) {
+            throw new CloudSaveConflictError('auth-user-mismatch');
+          }
+          return awaitBeforeDeadline(
+            saveGameState(pendingCloudRestore, { ownerUid: selectedAccountUid }),
+            deadlineMs,
+          );
+        },
+        commitState: (pendingCloudRestore) => {
+          useGameStore.setState(pendingCloudRestore);
+        },
+        getOwnerUid: (payload) =>
+          typeof payload.ownerUid === 'string' && payload.ownerUid.length > 0
+            ? payload.ownerUid
+            : undefined,
+        getRestoreId: (payload) =>
+          `${selectedAccountUid}:${payload.saveVersion}:${payload.updatedAt}:${payload.payloadChecksum ?? 'legacy'}`,
+        isRestoreApplied: hasCloudRestoreReceipt,
+        beginRestore: (restoreId, ownerUid) =>
+          beginCloudRestoreJournal({ restoreId, ownerUid, startedAt: Date.now() }),
+        completeRestore: (restoreId, ownerUid) =>
+          completeCloudRestoreJournal({ restoreId, ownerUid, startedAt: Date.now() }),
+        validateState: isLocalSaveSafeForAccountTransition,
+      });
+      localCommitted = true;
+    }
+
     void useGameStore.getState().refreshMarketSnapshot();
 
     try {
       await markUserProviderLinked(user.uid, provider);
     } catch (error) {
       console.warn('[auth] markUserProviderLinked after account switch failed', error);
+    }
+
+    setCloudSaveAccountConflictPending(false);
+    try {
+      const { invalidateSaveRecoveryColdStartProbe } = await import(
+        './saveRecoveryService'
+      );
+      invalidateSaveRecoveryColdStartProbe();
+    } catch {
+      // Probe cache is best-effort.
     }
 
     try {
@@ -1835,22 +1967,45 @@ export async function switchToLinkedProviderAccount(
       console.warn('[auth] cloud sync refresh after account switch failed', error);
     }
 
+    logAccountConflictResolve({
+      stage: 'complete',
+      authUidPresent: true,
+      selectedSource: choice,
+      candidateStillValid: true,
+    });
     return { ok: true, selectedAccountUid };
   } catch (error) {
-    const mapped = mapLinkError(error);
+    const mapped = mapAccountSwitchFailure(error);
     const appleFailure =
       provider === 'apple'
         ? normalizeAppleAuthFailure(error, 'firebase-signin', {
             firebaseCode: getAuthErrorCode(error),
           })
         : undefined;
+    logAccountConflictResolve({
+      stage: 'failed',
+      authUidPresent: Boolean(auth.currentUser?.uid),
+      selectedSource: choice,
+      errorCode: mapped,
+    });
     console.warn('[auth] switchToLinkedProviderAccount failed', mapped);
+    if (localCommitted && guestState) {
+      try {
+        const { saveGameState } = await import('../storage/saveGame');
+        await saveGameState(guestState);
+        const { useGameStore } = await import('../store/gameStore');
+        useGameStore.setState(guestState);
+      } catch (rollbackError) {
+        console.warn('[auth] guest state rollback failed', rollbackError);
+      }
+    }
     if (signedIn) {
       await restoreGuestAnonymousSession();
       return {
         ok: false,
         error: mapped,
         revertedToGuest: true,
+        selectedAccountUid,
         appleFailure,
         diagnosticCode: appleFailure ? getAppleAuthDiagnosticCode(appleFailure) : undefined,
       };
@@ -1859,6 +2014,7 @@ export async function switchToLinkedProviderAccount(
       ok: false,
       error: mapped,
       revertedToGuest: false,
+      selectedAccountUid,
       appleFailure,
       diagnosticCode: appleFailure ? getAppleAuthDiagnosticCode(appleFailure) : undefined,
     };

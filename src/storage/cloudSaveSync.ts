@@ -22,6 +22,11 @@ import {
   type CloudSavePayload,
 } from '../services/cloudSaveService';
 import { submitCurrentLeaderboardScore } from '../services/leaderboardService';
+import {
+  getLeaderboardSubmitEligibility,
+  isExpectedLeaderboardSubmitSkip,
+} from '../domain/leaderboardSubmitEligibility';
+import { isCloudSaveAccountConflictPending } from '../services/cloudSaveConflictState';
 import { isFirebaseEnabled } from '../services/firebase';
 import { SAVE_GAME_VERSION, serializeGameState, analyzeSavePayloadSize, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
@@ -380,8 +385,17 @@ export async function syncLocalSaveToCloud(
     previousUid?: string | null;
     localOwnerUid?: string | null;
     ownerUid?: string;
+    bypassAccountConflictLock?: boolean;
   },
 ): Promise<boolean> {
+  if (!options?.bypassAccountConflictLock && isCloudSaveAccountConflictPending()) {
+    if (__DEV__) {
+      console.warn('[cloud-save] sync blocked — account save conflict pending');
+    }
+    setCloudSaveStatus('pending');
+    return false;
+  }
+
   if (syncInFlight) {
     return syncInFlight;
   }
@@ -815,12 +829,23 @@ export function buildCloudSaveSummaryForState(state: StoreGameState): CloudSaveS
 }
 
 async function syncLeaderboardFromGameState(_state: StoreGameState): Promise<void> {
-  if (!getCurrentUserId()) {
+  if (isCloudSaveAccountConflictPending()) {
+    return;
+  }
+  const eligibility = getLeaderboardSubmitEligibility();
+  if (!eligibility.eligible) {
     return;
   }
 
   const result = await submitCurrentLeaderboardScore({ force: false });
-  if (!result.ok && typeof __DEV__ !== 'undefined' && __DEV__) {
+  if (
+    !result.ok &&
+    typeof __DEV__ !== 'undefined' &&
+    __DEV__ &&
+    !isExpectedLeaderboardSubmitSkip(
+      typeof result.errorCode === 'string' ? result.errorCode : undefined,
+    )
+  ) {
     console.warn('[leaderboard] trusted submit failed', {
       errorCode: result.errorCode,
       error: result.error,

@@ -27,22 +27,18 @@ export function isAccountLinkConflictError(
   );
 }
 
-export function getAccountLinkConflictTitle(provider: 'google' | 'apple'): string {
-  return provider === 'google'
-    ? 'Bu Google hesabında kayıt var'
-    : 'Bu Apple hesabında kayıt var';
+export function getAccountLinkConflictTitle(_provider: 'google' | 'apple'): string {
+  return 'İki farklı kayıt bulundu.';
 }
 
 export function getAccountLinkConflictMessage(provider: 'google' | 'apple'): string {
-  if (provider === 'apple') {
-    return 'Bu Apple hesabı daha önce başka bir oyun hesabına bağlanmış.';
-  }
-  return 'Seçtiğin Google hesabı zaten başka bir oyun kaydına bağlı. Mevcut misafir kaydınla bu hesabı birleştiremiyoruz.';
+  // UID-based post-sign-in save conflict (local vs cloud), not credential-merge messaging.
+  const providerLabel = provider === 'google' ? 'Google' : 'Apple';
+  return `Bu cihazdaki kayıt ile ${providerLabel} hesabındaki bulut kaydı farklı. Hangisini kullanmak istediğini seç.`;
 }
 
-export function getAccountLinkConflictFooter(provider: 'google' | 'apple'): string {
-  const providerLabel = provider === 'google' ? 'Google' : 'Apple';
-  return `${providerLabel} hesabındaki kayda geçebilir veya mevcut misafir kaydınla devam edebilirsin. Kayıt birleştirme şu an desteklenmiyor.`;
+export function getAccountLinkConflictFooter(_provider: 'google' | 'apple'): string {
+  return 'Seçim yapmadan buluta otomatik yazım yapılmaz.';
 }
 
 export function getAccountLinkGeneralErrorMessage(): string {

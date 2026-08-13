@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, type ScrollView } from 'react-native';
+import { InteractionManager, StyleSheet, View, type ScrollView } from 'react-native';
 import Constants from 'expo-constants';
 
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
@@ -32,6 +32,7 @@ import { getCurrentUserId } from '../services/authService';
 import { getFirebaseAuthSafe } from '../services/firebase';
 import { fetchWeeklyLeaderboard } from '../services/leaderboardService';
 import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
+import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useAccountCenter, type AccountCenterTab } from '../hooks/useAccountCenter';
 import { useGameStore } from '../store/gameStore';
 import { calculateCompanyScore } from '../simulation/companyScore';
@@ -71,6 +72,7 @@ export default function AccountCenterScreen({
   onBack,
   onOpenLeaderboard,
 }: AccountCenterScreenProps) {
+  useScreenRenderProfiler('Account');
   const vm = useAccountCenter({ onOpenLeaderboard });
   const { scrollBottomPadding } = useTabBarLayout();
   const { alert: showAlert } = useAppDialog();
@@ -95,7 +97,10 @@ export default function AccountCenterScreen({
   });
 
   const player = useGameStore((state) => state.player);
-  const gameState = useGameStore();
+  const cities = useGameStore((state) => state.cities);
+  const products = useGameStore((state) => state.products);
+  const financeLedger = useGameStore((state) => state.financeLedger);
+  const currentTime = useGameStore((state) => Math.floor(state.currentTime));
 
   const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
   const trucks = player?.trucks ?? [];
@@ -103,7 +108,10 @@ export default function AccountCenterScreen({
   const completedContracts = player?.completedContracts ?? 0;
   const companyName = player?.companyName ?? 'LogistiCore Lojistik';
   const homeCityName = CITIES_BY_ID[player?.homeCityId ?? '']?.name ?? '—';
-  const companyScore = useMemo(() => calculateCompanyScore(gameState), [gameState]);
+  const companyScore = useMemo(
+    () => calculateCompanyScore({ player, cities, products, financeLedger, currentTime }),
+    [player, cities, products, financeLedger, currentTime],
+  );
 
   const cloudDisplay = useMemo(
     () =>
@@ -169,10 +177,16 @@ export default function AccountCenterScreen({
   }, []);
 
   useEffect(() => {
-    void refreshLeaderboardRank();
-    return subscribeUsernameProfileChanged(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
       void refreshLeaderboardRank();
     });
+    const unsub = subscribeUsernameProfileChanged(() => {
+      void refreshLeaderboardRank();
+    });
+    return () => {
+      task.cancel();
+      unsub();
+    };
   }, [refreshLeaderboardRank]);
 
   useEffect(() => {

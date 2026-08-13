@@ -70,6 +70,14 @@ import {
   normalizeMonetizationState,
 } from '../simulation/adRewardGrants';
 import { migratePlayerTruckNames } from '../utils/truckDisplayNames';
+import type { StoreGameState } from '../types/game';
+import {
+  isNavigationInteractionActive,
+  logPerfCollision,
+  logPerfSave,
+  measureSyncTask,
+  readPerfNow,
+} from '../utils/performanceDiagnostics';
 import type {
   City,
   Contract,
@@ -91,7 +99,6 @@ import type {
   Product,
   Route,
   SpotlightTutorialPersistence,
-  StoreGameState,
   TutorialState,
   TruckTransfer,
   Warehouse,
@@ -1022,12 +1029,24 @@ export function migrateSavePayload(rawPayload: unknown): SaveGamePayload | null 
 export async function computeLocalSaveIntegrityChecksum(
   payload: SaveGamePayload,
 ): Promise<string> {
-  return computeSaveChecksum(payload, CURRENT_CHECKSUM_VERSION);
+  return computeSaveChecksum(payload, CURRENT_CHECKSUM_VERSION, { shallow: true });
 }
 
 export async function sealSavePayloadIntegrity(payload: SaveGamePayload): Promise<SaveGamePayload> {
+  const {
+    getSaveContentRevision,
+    getCachedIntegrityChecksum,
+    setCachedIntegrityChecksum,
+  } = await import('./saveRevision');
+  const revision = getSaveContentRevision();
+  const cached = getCachedIntegrityChecksum(revision);
   payload.meta.checksumVersion = CURRENT_CHECKSUM_VERSION;
+  if (cached) {
+    payload.meta.integrityChecksum = cached;
+    return payload;
+  }
   payload.meta.integrityChecksum = await computeLocalSaveIntegrityChecksum(payload);
+  setCachedIntegrityChecksum(revision, payload.meta.integrityChecksum);
   return payload;
 }
 
@@ -1924,11 +1943,45 @@ export async function loadGameStateWithMeta(): Promise<SaveLoadResult> {
   };
 }
 
+let inFlightSaveWrite: Promise<boolean> | null = null;
+let pendingCoalescedSave: {
+  state: StoreGameState;
+  options?: { ownerUid?: string | null };
+} | null = null;
+
 export async function saveGameState(
   state: StoreGameState,
   options?: { ownerUid?: string | null },
 ): Promise<boolean> {
+  if (inFlightSaveWrite) {
+    pendingCoalescedSave = { state, options };
+    return inFlightSaveWrite;
+  }
+
+  inFlightSaveWrite = writeGameStateOnce(state, options).finally(() => {
+    inFlightSaveWrite = null;
+    if (pendingCoalescedSave) {
+      const next = pendingCoalescedSave;
+      pendingCoalescedSave = null;
+      void saveGameState(next.state, next.options);
+    }
+  });
+  return inFlightSaveWrite;
+}
+
+async function writeGameStateOnce(
+  state: StoreGameState,
+  options?: { ownerUid?: string | null },
+): Promise<boolean> {
+  const totalStarted = readPerfNow();
+  let serializeMs = 0;
+  let checksumMs = 0;
+  let storageWriteMs = 0;
+  let payloadBytes: number | undefined;
   try {
+    if (isNavigationInteractionActive()) {
+      logPerfCollision('save-during-navigation');
+    }
     const { getSaveRecoveryQuarantine, isSaveRecoveryFatal } = await import('./saveRecoveryQuarantine');
     if (await isSaveRecoveryFatal()) {
       return false;
@@ -1943,12 +1996,33 @@ export async function saveGameState(
       const { getCurrentUserId } = await import('../services/authService');
       ownerUid = getCurrentUserId();
     }
-    const payload = serializeGameState(state, { ownerUid });
+    const serializeStarted = readPerfNow();
+    const payload = measureSyncTask('save-serialize', () =>
+      serializeGameState(state, { ownerUid }),
+    );
+    serializeMs = readPerfNow() - serializeStarted;
     if (ownerUid) {
       payload.ownerUid = ownerUid;
     }
+    const checksumStarted = readPerfNow();
     await sealSavePayloadIntegrity(payload);
+    checksumMs = readPerfNow() - checksumStarted;
+    try {
+      payloadBytes = JSON.stringify(payload).length;
+    } catch {
+      payloadBytes = undefined;
+    }
+    const writeStarted = readPerfNow();
     await activeSaveProvider.save(payload);
+    storageWriteMs = readPerfNow() - writeStarted;
+    logPerfSave({
+      reason: 'saveGameState',
+      serializeMs: Math.round(serializeMs * 10) / 10,
+      checksumMs: Math.round(checksumMs * 10) / 10,
+      storageWriteMs: Math.round(storageWriteMs * 10) / 10,
+      totalMs: Math.round((readPerfNow() - totalStarted) * 10) / 10,
+      payloadBytes,
+    });
     return true;
   } catch (error) {
     console.warn('[saveGame] saveGameState failed:', error);

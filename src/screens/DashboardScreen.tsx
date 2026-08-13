@@ -41,6 +41,7 @@ import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { getLevelProgress } from '../simulation/leveling';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import {
   selectActiveDeliveries,
@@ -75,6 +76,7 @@ function getWarehouseFillRatio(player: Player, currentTime: number): number {
 }
 
 export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
+  useScreenRenderProfiler('Dashboard');
   const player = useGameStore((state) => state.player);
   const products = useGameStore(selectProducts);
   const globalEconomy = useGameStore((state) => state.globalEconomy);

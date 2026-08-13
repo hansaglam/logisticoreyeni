@@ -61,10 +61,10 @@ const firebaseSource = readFileSync(
 assert.match(accountSource, /Hesap Değiştir/);
 assert.match(accountSource, /Çıkış Yap/);
 assert.match(accountSource, /Kaydet ve Hesap Değiştir/);
-assert.match(accountSource, /Farklı Hesap Seç/);
-assert.match(accountSource, /handleCancelGoogleLinkConflict/);
-assert.match(accountSource, /handleSelectDifferentGoogleAccount/);
-assert.match(accountSource, /forceInteractivePicker:\s*true/);
+assert.match(accountSource, /resolveSaveConflict/);
+assert.match(accountSource, /runPostSignInSaveFlow|applyProviderSaveOutcome/);
+assert.match(accountSource, /İki farklı kayıt bulundu|getAccountLinkConflictTitle/);
+assert.match(accountSource, /retryPostSignInSaveFlow/);
 assert.match(accountSource, /if \(isSwitchingAccount\) return/);
 assert.match(accountSource, /isVehicleMarketplaceOperationActive/);
 assert.match(accountSource, /activeMarketplaceListingIds: \[\]/);
@@ -82,7 +82,10 @@ assert.match(authSource, /clearGoogleSignInSessionStrict/);
 assert.match(authSource, /cancelPendingGoogleLinkConflict/);
 assert.match(authSource, /signOutGoogleAccountToGuest/);
 assert.match(authSource, /forceInteractivePicker/);
-assert.match(authSource, /switchToLinkedProviderAccount/);
+assert.match(authSource, /runPostSignInSaveFlowForAccountSwitch/);
+assert.match(authSource, /saveOutcome/);
+assert.match(authSource, /completeExistingProviderAccountLogin/);
+assert.match(authSource, /resolveSaveConflict/);
 assert.match(authSource, /linkAnonymousAccountWithApple/);
 assert.match(googleSource, /GoogleSignin\.signIn\(\)/);
 assert.match(googleSource, /forceInteractivePicker/);
@@ -113,20 +116,28 @@ assert.match(authSource, /'opening-account-picker'/);
 assert.match(authSource, /'authenticating-new-account'/);
 assert.match(authSource, /'checking-cloud-save'/);
 
-const cancelBlock = accountSource.slice(
-  accountSource.indexOf('const handleCancelGoogleLinkConflict'),
-  accountSource.indexOf('const handleSelectDifferentGoogleAccount'),
+const loginSource = readFileSync(
+  resolve(process.cwd(), 'src/services/accountCloudLogin.ts'),
+  'utf8',
 );
-assert.match(cancelBlock, /cancelPendingGoogleLinkConflict/);
+assert.match(loginSource, /runPostSignInSaveFlow/);
+assert.match(loginSource, /areLocalAndCloudSavesDifferent/);
+assert.doesNotMatch(loginSource, /awaitBeforeDeadline/);
+assert.doesNotMatch(loginSource, /restoreGuestAnonymousSession/);
+
+const cancelBlock = accountSource.slice(
+  accountSource.indexOf('showAccountConflictDialog'),
+  accountSource.indexOf('const applyProviderSaveOutcome'),
+);
+assert.doesNotMatch(cancelBlock, /cancelPendingGoogleLinkConflict/);
 
 console.log('[account-switch-flow-test] PASS', {
   firebaseSingleton: true,
   noAuthReinitialize: true,
   safeSyncBeforeSwitch: true,
   interactivePicker: true,
-  conflictCancelClearsProvider: true,
-  selectDifferentAccount: true,
-  providerNeutralSignOutLabel: true,
+  uidBasedSaveFlow: true,
+  postSignInAutoRestore: true,
   rollbackAndCommitSwitchService: true,
   ownerUidIsolationHooks: true,
   noRevokeAccess: true,

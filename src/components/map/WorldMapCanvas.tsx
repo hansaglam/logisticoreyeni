@@ -20,7 +20,8 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { Asset } from 'expo-asset';
+import { preloadMapAssets } from '../../utils/mapAssetPreload';
+import { logPerfMapAsset, readPerfNow } from '../../utils/performanceDiagnostics';
 import Svg, { Path } from 'react-native-svg';
 
 import AnimatedDeliveryTruckMarker from './AnimatedDeliveryTruckMarker';
@@ -255,19 +256,22 @@ function WorldMapCanvasInner(
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const asset = Asset.fromModule(getTurkeyLogisticsNetworkMapModule());
-        await asset.downloadAsync();
-        if (!cancelled && __DEV__) {
-          console.log('[map] logistics network asset preloaded');
+    const started = readPerfNow();
+    void preloadMapAssets()
+      .then(() => {
+        if (!cancelled) {
+          logPerfMapAsset({
+            phase: 'mount',
+            durationMs: Math.round((readPerfNow() - started) * 10) / 10,
+            cached: true,
+          });
         }
-      } catch (error) {
+      })
+      .catch((error) => {
         if (!cancelled && __DEV__) {
           console.warn('[map] logistics network asset preload failed', error);
         }
-      }
-    })();
+      });
     return () => {
       cancelled = true;
     };

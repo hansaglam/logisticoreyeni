@@ -25,6 +25,8 @@ for (const route of ['dashboard', 'map', 'contracts', 'fleet', 'shop', 'market',
   assert(app.includes(`case '${route}'`), `${route} navigation route’u bağlı`);
 }
 assert(app.includes('[tab-transition-performance]'), 'tab transition instrumentation mevcut');
+assert(app.includes('[perf-navigation]') || app.includes('beginPerfNavigation'), 'perf-navigation instrumentation mevcut');
+assert(app.includes('startTransition'), 'tab switch concurrent transition kullanır');
 assert(app.includes('ScreenErrorBoundary'), 'ağır ekranlar screen-level error boundary ile korunur');
 assert(app.includes("applyOfflineProgressionIfNeeded('foreground')"), 'foreground catch-up route’u bağlı');
 assert(app.includes('wasActive && !isActive'), 'active → inactive tek lifecycle geçişi işlenir');

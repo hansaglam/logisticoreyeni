@@ -4,8 +4,8 @@
  * Internal test: StartScreen yok — kayıt varsa yükle, yoksa yeni oyun, Dashboard açılır.
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, startTransition } from 'react';
+import { ActivityIndicator, AppState, InteractionManager, Platform, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 
@@ -63,6 +63,20 @@ import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 import { selectHasPendingDeliveryIncident } from './src/tutorial/app/selectors';
 import DeliveryIncidentModal from './src/components/delivery/DeliveryIncidentModal';
 import { UI } from './src/theme/ui';
+import {
+  beginNavigationInteraction,
+  beginPerfNavigation,
+  markPerfNavigationDispatch,
+  markPerfNavigationLayout,
+  markPerfNavigationMount,
+  readPerfNow,
+  setPerfActiveScreen,
+} from './src/utils/performanceDiagnostics';
+import { preloadMapAssets } from './src/utils/mapAssetPreload';
+
+const TAB_PERFORMANCE_LOG_ENABLED =
+  (typeof __DEV__ !== 'undefined' && __DEV__) ||
+  process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true';
 
 const MAIN_TABS: TabDefinition[] = [
   { key: 'dashboard', label: 'Ana', icon: 'dashboard' },
@@ -71,11 +85,15 @@ const MAIN_TABS: TabDefinition[] = [
   { key: 'market', label: 'Piyasa', icon: 'market' },
 ];
 
+const TAB_KEEP_ALIVE: ReadonlySet<TabKey> = new Set(['more']);
+
 function renderActiveScreen(
   tab: TabKey,
   onNavigate: (tab: TabKey) => void,
   onOpenWarehouse: () => void,
+  options?: { isActive?: boolean },
 ): React.ReactElement {
+  const isActive = options?.isActive ?? true;
   switch (tab) {
     case 'dashboard':
       return <DashboardScreen onNavigate={onNavigate} onOpenWarehouse={onOpenWarehouse} />;
@@ -96,20 +114,10 @@ function renderActiveScreen(
         />
       );
     case 'more':
-      return <MoreScreen />;
+      return <MoreScreen isActive={isActive} />;
     default:
       return <DashboardScreen onNavigate={onNavigate} onOpenWarehouse={onOpenWarehouse} />;
   }
-}
-
-const TAB_PERFORMANCE_LOG_ENABLED =
-  (typeof __DEV__ !== 'undefined' && __DEV__) ||
-  process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true';
-
-function readPerformanceNow(): number {
-  return typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now();
 }
 
 function ActiveScreenFrame({
@@ -124,10 +132,19 @@ function ActiveScreenFrame({
   const renderCount = useRef(0);
   renderCount.current += 1;
 
+  useEffect(() => {
+    setPerfActiveScreen(tab);
+    markPerfNavigationMount(tab);
+    return () => {
+      setPerfActiveScreen(null);
+    };
+  }, [tab]);
+
   useLayoutEffect(() => {
+    markPerfNavigationLayout(tab);
     const pending = transition.current;
     if (!pending || pending.to !== tab) return;
-    const transitionMs = Math.max(0, readPerformanceNow() - pending.startedAt);
+    const transitionMs = Math.max(0, readPerfNow() - pending.startedAt);
     if (TAB_PERFORMANCE_LOG_ENABLED) {
       console.log('[tab-transition-performance]', {
         from: pending.from,
@@ -148,6 +165,7 @@ function ActiveScreenFrame({
 function AppShell({ isAppActive }: { isAppActive: boolean }) {
   useGameLoop(isAppActive);
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set(['dashboard']));
   const [screenRetryKeys, setScreenRetryKeys] = useState<Partial<Record<TabKey, number>>>({});
   const transitionRef = useRef<{ from: TabKey; to: TabKey; startedAt: number } | null>(null);
   const isGameReady = useGameStore((state) => state.isGameReady);
@@ -176,10 +194,27 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
     };
   }, []);
 
+  useEffect(() => {
+    setVisitedTabs((current) => {
+      if (current.has(activeTab)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab]);
+
   const handleTabPress = useCallback((nextTab: TabKey) => {
     if (nextTab === activeTab) return;
-    transitionRef.current = { from: activeTab, to: nextTab, startedAt: readPerformanceNow() };
-    setActiveTab(nextTab);
+    const pressAt = readPerfNow();
+    beginNavigationInteraction();
+    beginPerfNavigation(activeTab, nextTab, pressAt);
+    transitionRef.current = { from: activeTab, to: nextTab, startedAt: pressAt };
+    markPerfNavigationDispatch();
+    startTransition(() => {
+      setActiveTab(nextTab);
+    });
   }, [activeTab]);
 
   const handleOpenWarehouse = useCallback(() => {
@@ -261,9 +296,22 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
 
   useEffect(() => {
     if (!navigationRequest) return;
-    handleTabPress(navigationRequest.tab);
+    startTransition(() => {
+      handleTabPress(navigationRequest.tab);
+    });
     clearNavigationRequest();
   }, [navigationRequest, clearNavigationRequest, handleTabPress]);
+
+  const keepAliveTabs = [...TAB_KEEP_ALIVE].filter((tab) => visitedTabs.has(tab));
+  const renderScreen = (tab: TabKey, isVisible: boolean) => (
+    <ScreenErrorBoundary
+      key={`${tab}-${screenRetryKeys[tab] ?? 0}`}
+      screenName={tab}
+      onRetry={() => handleScreenRetry(tab)}
+    >
+      {renderActiveScreen(tab, handleTabPress, handleOpenWarehouse, { isActive: isVisible })}
+    </ScreenErrorBoundary>
+  );
 
   return (
     <View
@@ -276,13 +324,19 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
     >
       <StatusBar hidden />
       <ActiveScreenFrame tab={activeTab} transition={transitionRef}>
-        <ScreenErrorBoundary
-          key={`${activeTab}-${screenRetryKeys[activeTab] ?? 0}`}
-          screenName={activeTab}
-          onRetry={() => handleScreenRetry(activeTab)}
-        >
-          {renderActiveScreen(activeTab, handleTabPress, handleOpenWarehouse)}
-        </ScreenErrorBoundary>
+        {keepAliveTabs.map((tab) => (
+          <View
+            key={`keep-alive-${tab}`}
+            style={[styles.screenContainer, tab !== activeTab && styles.hiddenScreen]}
+            pointerEvents={tab === activeTab ? 'auto' : 'none'}
+            collapsable={false}
+          >
+            {renderScreen(tab, tab === activeTab)}
+          </View>
+        ))}
+        {!TAB_KEEP_ALIVE.has(activeTab) ? (
+          <View style={styles.screenContainer}>{renderScreen(activeTab, true)}</View>
+        ) : null}
       </ActiveScreenFrame>
       <GameToast />
       <OfflineProgressSummaryModal
@@ -412,8 +466,11 @@ export default function App() {
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {
         useGameStore.getState().recordLastSeenRealTimeMs();
+        // Persist only on true background; defer via InteractionManager for nav/perf.
         if (nextState === 'background') {
-          void useGameStore.getState().saveGame();
+          InteractionManager.runAfterInteractions(() => {
+            void useGameStore.getState().saveGame();
+          });
         }
       }
     });
@@ -430,6 +487,7 @@ export default function App() {
       return;
     }
 
+    void preloadMapAssets();
     void initCloudSaveSync(() => useGameStore.getState());
   }, [bootPhase, isGameReady]);
 
@@ -457,6 +515,9 @@ const styles = StyleSheet.create({
   },
   screenContainer: {
     flex: 1,
+  },
+  hiddenScreen: {
+    display: 'none',
   },
   loadingRoot: {
     flex: 1,

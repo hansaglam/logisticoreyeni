@@ -43,6 +43,7 @@ import {
   getCompanyScoreBreakdown,
 } from '../simulation/companyScore';
 import { calculateDeliverySettlement } from '../simulation/delivery';
+import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type {
@@ -298,6 +299,7 @@ function FinanceMetricStrip({
 }
 
 export default function FinanceScreen() {
+  useScreenRenderProfiler('Finance');
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
 

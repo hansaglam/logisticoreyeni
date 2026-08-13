@@ -5,6 +5,11 @@ export type CloudSaveConflictReason =
   | 'cloud-save-corrupted'
   | 'cloud-save-fetch-failed'
   | 'cloud-save-invalid'
+  | 'metadata-missing'
+  | 'body-missing'
+  | 'checksum-invalid'
+  | 'deserialize-failed'
+  | 'network-failed'
   | 'unsupported-save-version'
   | 'restore-migration-failed'
   | 'migration-failed'
@@ -33,12 +38,19 @@ export function getCloudSaveConflictErrorMessage(
     case 'owner-mismatch':
       return 'Bu bulut kaydı seçili hesaba ait değil.';
     case 'cloud-save-not-found':
+    case 'metadata-missing':
+    case 'body-missing':
       return 'Bu hesapta kullanılabilir bir bulut kaydı bulunamadı.';
     case 'cloud-save-corrupted':
     case 'cloud-save-invalid':
+    case 'deserialize-failed':
       return 'Bulut kaydı doğrulanamadı.';
+    case 'checksum-invalid':
+      return 'Bulut kaydı bütünlük doğrulamasından geçemedi.';
     case 'cloud-save-fetch-failed':
-      return 'Bulut kaydı şu anda yüklenemedi. Tekrar dene.';
+    case 'network-failed':
+    case 'cloud-restore-failed':
+      return 'Bulut kaydı şu anda yüklenemedi.';
     case 'unsupported-save-version':
       return 'Bu kayıt uygulamanın desteklemediği daha yeni bir sürümle oluşturulmuş.';
     case 'restore-migration-failed':
@@ -66,8 +78,6 @@ export function getCloudSaveConflictErrorMessage(
       return 'Seçilen kayıt artık kullanılamıyor.';
     case 'local-save-invalid':
       return 'Bu cihazdaki kayıt doğrulanamadı.';
-    case 'cloud-restore-failed':
-      return 'Bulut kaydı yüklenemedi. Tekrar dene.';
     case 'cloud-upload-failed':
       return 'Bu cihazdaki kayıt buluta yazılamadı. Tekrar dene.';
     default:
@@ -81,6 +91,7 @@ export function isRetryableCloudSaveConflictReason(
   return (
     reason === 'network-error' ||
     reason === 'timeout' ||
+    reason === 'network-failed' ||
     reason === 'cloud-save-fetch-failed' ||
     reason === 'cloud-restore-failed' ||
     reason === 'cloud-upload-failed' ||
@@ -89,32 +100,46 @@ export function isRetryableCloudSaveConflictReason(
   );
 }
 
+export function isPermanentCloudSaveConflictReason(
+  reason: CloudSaveConflictReason,
+): boolean {
+  return !isRetryableCloudSaveConflictReason(reason) && reason !== 'unknown';
+}
+
 export function validateCloudSaveRestorePayload(
   payload: unknown,
   supportedSaveVersion: number,
 ): CloudSaveConflictReason | null {
-  if (!payload || typeof payload !== 'object') return 'cloud-save-corrupted';
+  if (!payload || typeof payload !== 'object') return 'deserialize-failed';
   const record = payload as Record<string, unknown>;
-  if (record.schemaVersion !== 1) return 'unsupported-save-version';
-  const saveVersion = Number(record.saveVersion);
-  if (!Number.isFinite(saveVersion) || saveVersion < 0) return 'cloud-save-corrupted';
-  if (saveVersion > supportedSaveVersion) return 'unsupported-save-version';
-  const gameState = record.gameState;
-  if (!gameState || typeof gameState !== 'object' || Array.isArray(gameState)) {
-    return 'cloud-save-corrupted';
+  if (record.schemaVersion != null && record.schemaVersion !== 1) {
+    return 'unsupported-save-version';
   }
-  const player = (gameState as Record<string, unknown>).player;
+  const gameState = record.gameState;
+  const gameStateRecord =
+    gameState && typeof gameState === 'object' && !Array.isArray(gameState)
+      ? (gameState as Record<string, unknown>)
+      : null;
+  const saveVersion = Number(
+    record.saveVersion ??
+      gameStateRecord?.version ??
+      (gameStateRecord?.meta as Record<string, unknown> | undefined)?.saveVersion,
+  );
+  if (!Number.isFinite(saveVersion) || saveVersion < 0) return 'deserialize-failed';
+  if (saveVersion > supportedSaveVersion) return 'unsupported-save-version';
+  if (!gameStateRecord) return 'body-missing';
+  const player = gameStateRecord.player;
   if (!player || typeof player !== 'object' || Array.isArray(player)) {
-    return 'cloud-save-corrupted';
+    return 'deserialize-failed';
   }
   const money = Number(
     (player as Record<string, unknown>).money ??
       (player as Record<string, unknown>).cash,
   );
-  if (!Number.isFinite(money)) return 'cloud-save-corrupted';
+  if (!Number.isFinite(money)) return 'deserialize-failed';
   for (const key of ['trucks', 'drivers', 'trailers', 'warehouses']) {
     const value = (player as Record<string, unknown>)[key];
-    if (value != null && !Array.isArray(value)) return 'cloud-save-corrupted';
+    if (value != null && !Array.isArray(value)) return 'deserialize-failed';
   }
   return null;
 }
@@ -189,11 +214,11 @@ export async function executeAtomicCloudSaveRestore<TPayload, TState>(input: {
   try {
     pendingCloudRestore = input.migrate(payload);
   } catch {
-    throw new CloudSaveConflictError('restore-migration-failed');
+    throw new CloudSaveConflictError('migration-failed');
   }
 
   if (input.validateState && !input.validateState(pendingCloudRestore)) {
-    throw new CloudSaveConflictError('cloud-save-corrupted');
+    throw new CloudSaveConflictError('deserialize-failed');
   }
 
   try {
@@ -205,7 +230,7 @@ export async function executeAtomicCloudSaveRestore<TPayload, TState>(input: {
 
   const persisted = await input.persistLocal(pendingCloudRestore);
   if (!persisted) {
-    throw new CloudSaveConflictError('restore-migration-failed');
+    throw new CloudSaveConflictError('migration-failed');
   }
   input.commitState(pendingCloudRestore);
   if (restoreId) await input.completeRestore?.(restoreId, input.selectedAccountUid);

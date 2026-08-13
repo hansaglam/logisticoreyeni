@@ -7,8 +7,19 @@
  * Kurulum: npm install zustand
  */
 
+import { InteractionManager } from 'react-native';
 import { create } from 'zustand';
 import type { PendingMoreSubRoute } from '../navigation/managementNavigation';
+import {
+  isNavigationInteractionActive,
+  logPerfAdvanceTimeStage,
+  markAdvanceTimeCleanupDeferred,
+  measureSyncTask,
+  readPerfNow,
+  shouldDeferAdvanceTimeMaintenance,
+  takeDeferredAdvanceTimeCleanup,
+} from '../utils/performanceDiagnostics';
+import { bumpSaveContentRevision, resetSaveRevisionState } from '../storage/saveRevision';
 import type { ShopCategory } from '../navigation/tabTypes';
 import { VEHICLE_MARKETPLACE_ENABLED } from '../config/backendRoadmap';
 import type {
@@ -554,6 +565,8 @@ let lastSavedGameTime = 0;
 let saveDirty = false;
 let autoSaveEnabled = true;
 let isSavingGame = false;
+let pendingAutoSaveReason: AutoSaveReason | null = null;
+let timeTickSaveScheduled = false;
 let lastSaveReason: AutoSaveReason | null = null;
 let isLoadingSave = false;
 let hasHydratedGame = false;
@@ -760,6 +773,9 @@ function resetAutoSaveTracking(gameTime = 0): void {
   lastAutoSaveAt = Date.now();
   lastSavedGameTime = gameTime;
   saveDirty = false;
+  pendingAutoSaveReason = null;
+  timeTickSaveScheduled = false;
+  resetSaveRevisionState();
 }
 
 export interface SaveStatusSnapshot {
@@ -3615,11 +3631,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const state = get();
     if (!state.isGameReady || isSavingGame) {
+      if (reason) {
+        pendingAutoSaveReason = reason;
+      }
       return;
     }
 
     const now = Date.now();
     const isImmediate = reason !== undefined && IMMEDIATE_SAVE_REASONS.has(reason);
+
+    if (
+      reason === 'time_tick' &&
+      isNavigationInteractionActive() &&
+      !timeTickSaveScheduled
+    ) {
+      timeTickSaveScheduled = true;
+      InteractionManager.runAfterInteractions(() => {
+        timeTickSaveScheduled = false;
+        if (saveDirty) {
+          get().autoSave('time_tick');
+        }
+      });
+      return;
+    }
 
     if (!isImmediate) {
       if (lastAutoSaveAt > 0 && now - lastAutoSaveAt < AUTO_SAVE_MIN_INTERVAL_MS) {
@@ -3645,11 +3679,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
           isSaving: false,
           lastSaveReason: reason ?? null,
         });
+        if (pendingAutoSaveReason) {
+          const nextReason = pendingAutoSaveReason;
+          pendingAutoSaveReason = null;
+          get().autoSave(nextReason);
+        }
       });
   },
 
   markSaveDirty: () => {
+    if (saveDirty) {
+      return;
+    }
     saveDirty = true;
+    bumpSaveContentRevision();
     patchSaveStatus(set, { isDirty: true });
   },
 
@@ -4058,12 +4101,25 @@ const simulation = plan.simulation;
   },
 
   advanceTime: (hours: number) => {
+    measureSyncTask('advanceTime', () => {
     const state = get();
     if (hours <= 0) {
       return;
     }
     if (state.isPaused && !offlineProgressionActive) {
       return;
+    }
+
+    let stageStart = readPerfNow();
+    const finishStage = (stage: string) => {
+      logPerfAdvanceTimeStage(stage, stageStart);
+      stageStart = readPerfNow();
+    };
+
+    if (takeDeferredAdvanceTimeCleanup()) {
+      get().clearOldMarketNews();
+      get().clearOldGameEvents();
+      finishStage('deferred-cleanup');
     }
 
     const simulationGameSpeed = getEffectiveOfflineGameSpeed(state);
@@ -4076,12 +4132,15 @@ const simulation = plan.simulation;
     }
 
     const newTime = state.currentTime + hours;
-
     set({ currentTime: newTime });
+    finishStage('time-advance');
 
     get().updateDeliveries(hours);
+    finishStage('delivery');
     get().updateTransfers(hours);
+    finishStage('transfers');
     get().updateWarehouseStockTransfers(hours);
+    finishStage('warehouse-transfers');
 
     const stateAfterDelivery = get();
     const qualityResult = processWarehouseQualityDegradation(
@@ -4109,6 +4168,7 @@ const simulation = plan.simulation;
           : {}),
       });
     }
+    finishStage('warehouse-quality');
 
     // Maaş/depo/operasyon giderleri hızlandırılmış oyun gününden değil,
     // trusted gerçek zaman cursor'ından işlenir. Offline catch-up kendi
@@ -4152,16 +4212,18 @@ const simulation = plan.simulation;
         ),
       });
     }
+    finishStage('finance-periodic');
 
     get().processExpiredLeases();
+    finishStage('leases');
 
-    // Her 24 oyun saatinde bir ekonomi tick'i
     let { lastEconomyTickTime } = get();
     while (lastEconomyTickTime + ECONOMY_TICK_INTERVAL_HOURS <= newTime) {
       lastEconomyTickTime += ECONOMY_TICK_INTERVAL_HOURS;
       set({ lastEconomyTickTime });
       get().runEconomyTick();
     }
+    finishStage('economy');
 
     const stateBeforeContracts = get();
     const scheduleParams = buildContractRefreshParams(stateBeforeContracts);
@@ -4214,17 +4276,22 @@ const simulation = plan.simulation;
       ...contractPatch,
       contractGenerationDebug: scheduleResult.debug,
     });
+    finishStage('contract-schedule');
 
-    if (scheduleResult.newContracts.length > 0) {
-      get().markSaveDirty();
+    if (shouldDeferAdvanceTimeMaintenance()) {
+      markAdvanceTimeCleanupDeferred();
+    } else {
+      get().clearOldMarketNews();
+      get().clearOldGameEvents();
+      finishStage('cleanup');
     }
 
-    get().clearOldMarketNews();
-    get().clearOldGameEvents();
     get().markSaveDirty();
     if (!offlineProgressionActive) {
       get().autoSave('time_tick');
     }
+    finishStage('total');
+    }, 'game-loop-tick');
   },
 
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => {
@@ -9758,9 +9825,11 @@ const simulation = plan.simulation;
   clearOldMarketNews: () => {
     const state = get();
     const cutoff = state.currentTime - MARKET_NEWS_MAX_AGE_HOURS;
-    set({
-      marketNews: state.marketNews.filter((news) => news.time >= cutoff),
-    });
+    const filtered = state.marketNews.filter((news) => news.time >= cutoff);
+    if (filtered.length === state.marketNews.length) {
+      return;
+    }
+    set({ marketNews: filtered });
   },
 
   addGameEvent: (event) => {
@@ -9773,9 +9842,11 @@ const simulation = plan.simulation;
   clearOldGameEvents: () => {
     const state = get();
     const cutoff = state.currentTime - EVENT_LOG_MAX_AGE_HOURS;
-    set({
-      eventLog: state.eventLog.filter((event) => event.time >= cutoff),
-    });
+    const filtered = state.eventLog.filter((event) => event.time >= cutoff);
+    if (filtered.length === state.eventLog.length) {
+      return;
+    }
+    set({ eventLog: filtered });
   },
 }));
 

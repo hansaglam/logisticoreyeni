@@ -57,6 +57,7 @@ import {
   isMarketOpportunityFilter,
   isRouteContractFilter,
 } from '../utils/contractSorting';
+import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
@@ -745,13 +746,14 @@ function CompletedContractCard({
 }
 
 export default function ContractsScreen() {
+  useScreenRenderProfiler('Contracts');
   const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const monetization = useGameStore((state) => state.monetization);
   const contracts = useGameStore((state) => state.contracts) ?? [];
   const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
   const globalEconomy = useGameStore((state) => state.globalEconomy);
-  const currentTime = useGameStore((state) => state.currentTime);
+  const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
   const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
 

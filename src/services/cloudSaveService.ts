@@ -38,6 +38,7 @@ import {
 import { findUnexpectedUndefinedPaths, sanitizeForFirestore } from '../utils/sanitizeForFirestore';
 import { sha256 } from '../utils/authNonce';
 import { canonicalJsonStringify } from '../utils/canonicalJson';
+import { verifyRawSaveChecksum } from '../utils/saveIntegrity';
 import { getWeeklySeasonDocId } from '../utils/leaderboardSeason';
 import {
   getFirebaseAuthSafe,
@@ -173,8 +174,14 @@ export async function verifyCloudSaveReadBack(
 export type CloudSaveLoadFailureReason =
   | 'cloud-save-not-found'
   | 'cloud-save-corrupted'
+  | 'metadata-missing'
+  | 'body-missing'
+  | 'checksum-invalid'
+  | 'deserialize-failed'
+  | 'unsupported-save-version'
   | 'owner-mismatch'
   | 'network-error'
+  | 'network-failed'
   | 'permission-denied'
   | 'unknown';
 
@@ -235,13 +242,35 @@ function getFirestoreErrorInfo(error: unknown): { code: string | null; message: 
   };
 }
 
+type CloudSaveParseResult =
+  | { ok: true; payload: CloudSavePayload }
+  | { ok: false; reason: CloudSaveLoadFailureReason };
+
+async function verifyCloudPersistedGameStateChecksum(
+  gameState: unknown,
+  documentChecksum?: string,
+): Promise<{ valid: boolean; rawStatus: 'missing' | 'valid' | 'mismatch' | 'not-checked' }> {
+  const rawStatus = await verifyRawSaveChecksum(gameState);
+  if (rawStatus === 'valid' || rawStatus === 'missing') {
+    return { valid: true, rawStatus };
+  }
+  if (!documentChecksum) {
+    return { valid: false, rawStatus };
+  }
+  const calculated = await sha256(canonicalJsonStringify(gameState));
+  if (calculated.ok && calculated.hash === documentChecksum) {
+    return { valid: true, rawStatus: 'not-checked' };
+  }
+  return { valid: false, rawStatus };
+}
+
 async function parseCloudSaveDocument(
   data: Record<string, unknown>,
   expectedOwnerUid: string,
-): Promise<CloudSavePayload | null> {
+): Promise<CloudSaveParseResult> {
   const gameState = data.gameState;
   if (!gameState || typeof gameState !== 'object') {
-    return null;
+    return { ok: false, reason: 'body-missing' };
   }
 
   const summaryRaw = data.summary;
@@ -281,14 +310,18 @@ async function parseCloudSaveDocument(
     typeof data.ownerUid === 'string' && data.ownerUid.length > 0
       ? data.ownerUid
       : expectedOwnerUid;
-  if (ownerUid !== expectedOwnerUid) return null;
+  if (ownerUid !== expectedOwnerUid) {
+    return { ok: false, reason: 'owner-mismatch' };
+  }
   const checksum = typeof data.payloadChecksum === 'string' ? data.payloadChecksum : undefined;
-  if (checksum) {
-    const calculated = await sha256(canonicalJsonStringify(gameState));
-    if (!calculated.ok || calculated.hash !== checksum) return null;
+  const checksumResult = await verifyCloudPersistedGameStateChecksum(gameState, checksum);
+  if (!checksumResult.valid) {
+    return { ok: false, reason: 'checksum-invalid' };
   }
 
   return {
+    ok: true,
+    payload: {
     ownerUid,
     authProvider:
       typeof data.authProvider === 'string' ? data.authProvider : 'legacy',
@@ -304,6 +337,7 @@ async function parseCloudSaveDocument(
     summary,
     payloadChecksum: checksum,
     syncId: typeof data.syncId === 'string' ? data.syncId : undefined,
+    },
   };
 }
 
@@ -662,16 +696,17 @@ export async function loadGameFromCloudDetailed(uid: string): Promise<CloudSaveL
 
     const data = snapshot.data();
     if (!data || typeof data !== 'object') {
-      return { ok: false, reason: 'cloud-save-corrupted' };
+      return { ok: false, reason: 'metadata-missing' };
     }
 
     if (typeof data.ownerUid === 'string' && data.ownerUid !== uid) {
       return { ok: false, reason: 'owner-mismatch' };
     }
-    const payload = await parseCloudSaveDocument(data as Record<string, unknown>, uid);
-    return payload
-      ? { ok: true, payload }
-      : { ok: false, reason: 'cloud-save-corrupted' };
+    const parsed = await parseCloudSaveDocument(data as Record<string, unknown>, uid);
+    if (!parsed.ok) {
+      return { ok: false, reason: parsed.reason };
+    }
+    return { ok: true, payload: parsed.payload };
   } catch (error) {
     console.warn('[cloud-save] loadGameFromCloud failed:', error);
     const info = getFirestoreErrorInfo(error);

@@ -38,7 +38,7 @@ import {
 } from 'firebase/auth';
 import { Platform } from 'react-native';
 
-import { loadGameFromCloud, loadGameFromCloudDetailed, markUserProviderLinked } from './cloudSaveService';
+import { markUserProviderLinked } from './cloudSaveService';
 import {
   recordAnonymousSignInResult,
   recordGoogleSignInResult,
@@ -95,17 +95,8 @@ import { devLog, devWarn } from '../utils/devLog';
 import type { AccountLinkErrorKind } from '../utils/accountLinkErrors';
 import {
   CloudSaveConflictError,
-  executeAtomicCloudSaveRestore,
-  validateCloudSaveRestorePayload,
   type CloudSaveConflictReason,
 } from '../utils/cloudSaveConflict';
-import { SAVE_GAME_VERSION } from '../storage/saveGame';
-import {
-  beginCloudRestoreJournal,
-  completeCloudRestoreJournal,
-  hasCloudRestoreReceipt,
-} from '../storage/cloudRestoreJournal';
-import { isLocalSaveSafeForAccountTransition } from '../utils/accountTransition';
 import {
   abortAccountSwitchBeforeAuth,
   markAccountSwitchAwaitingUserChoice,
@@ -142,6 +133,7 @@ export interface AccountLinkResult {
   error?: string;
   errorKind?: AccountLinkErrorKind;
   provider?: 'google' | 'apple';
+  /** @deprecated Conflict resolver uses authenticated UID; credential not required. */
   pendingCredential?: AuthCredential;
   appleFailure?: AppleAuthFailure;
   diagnosticCode?: string;
@@ -149,6 +141,7 @@ export interface AccountLinkResult {
   uidPreserved?: boolean;
   resolution?: AccountLinkResolution;
   diagnosticId?: string;
+  saveOutcome?: import('./accountCloudLogin').ProviderAccountSaveOutcome;
 }
 
 export type AccountSwitchResult =
@@ -177,7 +170,7 @@ export type GoogleAccountSelectionResult =
       ok: true;
       credential: AuthCredential;
       selectedAccountUid: string;
-      hasCloudSave: boolean;
+      saveOutcome: import('./accountCloudLogin').ProviderAccountSaveOutcome;
     }
   | { ok: false; error: AccountTransitionError };
 
@@ -219,7 +212,6 @@ type AuthListenerGlobal = typeof globalThis & {
 };
 
 const AUTH_RESTORE_TIMEOUT_MS = 8_000;
-const ACCOUNT_SWITCH_TIMEOUT_MS = 15_000;
 
 let initPromise: Promise<User | null> | null = null;
 let initialAuthStatePromise: Promise<User | null> | null = null;
@@ -458,18 +450,20 @@ function logAnonymousAuthResult(input: {
   syncAuthDiagnostics(currentUser);
 }
 
-function isAppleCredentialReuseError(error: unknown): boolean {
+function isProviderCredentialReuseError(error: unknown): boolean {
   const code = getAuthErrorCode(error);
   return (
     code === 'auth/invalid-credential' ||
     code === 'auth/user-token-expired' ||
-    code === 'auth/invalid-custom-token'
+    code === 'auth/invalid-custom-token' ||
+    code === 'auth/credential-already-in-use'
   );
 }
 
 async function signInWithProviderCredential(
   credential: AuthCredential,
   provider: 'google' | 'apple',
+  options: { linkedAccountUid?: string } = {},
 ): Promise<User> {
   const auth = getFirebaseAuthSafe();
   if (!auth) {
@@ -478,11 +472,34 @@ async function signInWithProviderCredential(
     throw error;
   }
 
+  const currentUser = auth.currentUser;
+  if (
+    options.linkedAccountUid &&
+    currentUser?.uid === options.linkedAccountUid &&
+    !currentUser.isAnonymous
+  ) {
+    return currentUser;
+  }
+
   try {
     const result = await signInWithCredential(auth, credential);
     return result.user;
   } catch (error) {
-    if (provider !== 'apple' || !isAppleCredentialReuseError(error)) {
+    if (provider === 'google' && isProviderCredentialReuseError(error)) {
+      if (__DEV__) {
+        devWarn('[auth] Google pending credential invalid — requesting fresh sign-in');
+      }
+      const { createGoogleFirebaseCredential } = await import('./googleAuthService');
+      const freshResult = await createGoogleFirebaseCredential({
+        forceInteractivePicker: false,
+      });
+      if (freshResult.ok) {
+        const retryResult = await signInWithCredential(auth, freshResult.credential);
+        return retryResult.user;
+      }
+    }
+
+    if (provider !== 'apple' || !isProviderCredentialReuseError(error)) {
       throw error;
     }
 
@@ -1196,6 +1213,13 @@ export function getCurrentUserId(): string | null {
   }
 }
 
+/** After sign-in to an existing provider account, keep auth session in sync. */
+export function commitAuthenticatedSession(user: User): void {
+  initPromise = Promise.resolve(user);
+  authSessionReady = true;
+  setSaveBootstrapAuthUid(user.uid);
+}
+
 export function subscribeAuthState(callback: AuthStateCallback): () => void {
   try {
     const hub = getOrCreateAuthListenerHub();
@@ -1367,18 +1391,22 @@ export async function linkAnonymousAccountWithGoogle(
     const uidBefore = getCurrentUserId();
     const linkResult = await applyCredentialToCurrentUser(googleResult.credential, 'google');
     if (!linkResult.ok) {
-      const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
       const conflictDetected =
         linkResult.errorKind === 'credential-already-in-use' ||
         linkResult.errorKind === 'account-exists-with-different-credential';
-      console.info('[google-account-picker]', {
-        action: conflictDetected ? 'conflict-detected' : 'link-failed',
-        providerSessionCleared: forceInteractivePicker,
-        pickerOpened: true,
-        pickerCancelled: false,
-        credentialReceived: true,
-        conflictDetected,
-      });
+      if (conflictDetected && linkResult.pendingCredential) {
+        console.info('[google-account-picker]', {
+          action: 'existing-account-sign-in',
+          providerSessionCleared: forceInteractivePicker,
+          pickerOpened: true,
+          pickerCancelled: false,
+          credentialReceived: true,
+          conflictDetected: false,
+        });
+        const { completeExistingProviderAccountLogin } = await import('./accountCloudLogin');
+        return completeExistingProviderAccountLogin(linkResult.pendingCredential, 'google');
+      }
+      const preserved = getFirebaseAuthSafe()?.currentUser ?? authBefore;
       console.warn('[google-auth-failed]', {
         nativeCode: null,
         firebaseCode: linkResult.error,
@@ -1398,7 +1426,6 @@ export async function linkAnonymousAccountWithGoogle(
         ok: false,
         error: linkResult.error,
         errorKind: linkResult.errorKind,
-        pendingCredential: linkResult.pendingCredential,
       };
     }
 
@@ -1543,6 +1570,13 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
         nativeErrorCode: appleFailure.nativeCode ?? null,
         diagnosticId,
       });
+      const conflictDetected =
+        linkResult.errorKind === 'credential-already-in-use' ||
+        linkResult.errorKind === 'account-exists-with-different-credential';
+      if (conflictDetected && linkResult.pendingCredential) {
+        const { completeExistingProviderAccountLogin } = await import('./accountCloudLogin');
+        return completeExistingProviderAccountLogin(linkResult.pendingCredential, 'apple');
+      }
       return {
         ok: false,
         error: linkResult.error,
@@ -1631,32 +1665,6 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
   }
 }
 
-/**
- * Misafir kaydı birleştirmeden mevcut Google/Apple hesabına geçiş.
- * Onay sonrası çağrılır; bulut kaydı yoksa misafir oturumuna geri döner.
- */
-async function awaitBeforeDeadline<T>(
-  promise: Promise<T>,
-  deadlineMs: number,
-): Promise<T> {
-  const remainingMs = deadlineMs - Date.now();
-  if (remainingMs <= 0) throw new CloudSaveConflictError('timeout');
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(
-          () => reject(new CloudSaveConflictError('timeout')),
-          remainingMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
-}
-
 function mapAccountSwitchFailure(error: unknown): CloudSaveConflictReason {
   if (error instanceof CloudSaveConflictError) return error.reason;
   const code = getAuthErrorCode(error);
@@ -1667,16 +1675,10 @@ function mapAccountSwitchFailure(error: unknown): CloudSaveConflictReason {
   return 'unknown';
 }
 
-function mapCloudLoadFailure(
-  reason: CloudSaveConflictReason,
-): CloudSaveConflictReason {
-  if (reason === 'network-error' || reason === 'timeout' || reason === 'permission-denied') {
-    return reason === 'permission-denied' ? reason : 'cloud-save-fetch-failed';
-  }
-  if (reason === 'unknown') return 'cloud-save-fetch-failed';
-  return reason;
-}
-
+/**
+ * Misafir kaydı birleştirmeden mevcut Google/Apple hesabına geçiş.
+ * Auth tamamlanır (Apple için taze credential), ardından UID tabanlı save conflict resolve edilir.
+ */
 export async function switchToLinkedProviderAccount(
   credential: AuthCredential | null,
   provider: 'google' | 'apple',
@@ -1700,32 +1702,12 @@ export async function switchToLinkedProviderAccount(
     return { ok: false, error: 'network-error' };
   }
 
-  const choice = options.choice ?? 'cloud';
-  const deadlineMs = Date.now() + ACCOUNT_SWITCH_TIMEOUT_MS;
-  let selectedAccountUid: string | undefined;
-  let guestState: import('../store/gameStore').GameStore | undefined;
-  let localCommitted = false;
-  let signedIn = false;
-
-  const { logAccountConflictResolve } = await import('./accountSaveConflictSession');
-  const { setCloudSaveAccountConflictPending } = await import('./cloudSaveConflictState');
-
-  logAccountConflictResolve({
-    stage: 'start',
-    selectedSource: choice,
-    candidateIdPresent: Boolean(credential),
-    authUidPresent: Boolean(auth.currentUser?.uid),
-  });
-
-  try {
-    const { useGameStore } = await import('../store/gameStore');
-    guestState = useGameStore.getState();
-    if (choice === 'local' && !isLocalSaveSafeForAccountTransition(guestState)) {
-      throw new CloudSaveConflictError('local-save-invalid');
-    }
-
+  let uid = options.expectedAccountUid ?? auth.currentUser?.uid ?? null;
+  if (!uid || auth.currentUser?.isAnonymous) {
     let activeCredential = credential;
 
+    // Apple hardening (8d97011): always mint a fresh nonce-backed credential
+    // before existing-account sign-in; stale pending tokens fail on iOS.
     if (provider === 'apple') {
       logAppleAuthFlow({
         stage: 'existing-account-signin-start',
@@ -1753,272 +1735,49 @@ export async function switchToLinkedProviderAccount(
       return { ok: false, error: 'missing-conflict', revertedToGuest: false };
     }
 
-    const user = await awaitBeforeDeadline(
-      signInWithProviderCredential(activeCredential, provider),
-      deadlineMs,
-    );
-    signedIn = true;
-    selectedAccountUid = user.uid;
-    if (provider === 'apple') {
-      logAppleAuthFlow({
-        stage: 'existing-account-signin-success',
-        result: 'success',
-        isAnonymous: false,
-        providerIds: (user.providerData ?? []).map((entry) => entry.providerId),
-        firebaseProjectId: getFirebaseAppSafe()?.options.projectId ?? null,
-      });
-    }
-    if (
-      (options.expectedAccountUid && options.expectedAccountUid !== user.uid) ||
-      auth.currentUser?.uid !== user.uid
-    ) {
-      throw new CloudSaveConflictError('auth-user-mismatch');
-    }
-    initPromise = Promise.resolve(user);
-    authSessionReady = true;
-
-    if (__DEV__) {
-      devLog('[auth] switched to linked account', provider, {
-        authUidPresent: true,
-        choice,
-      });
-    }
-
-    const { payloadToStoreState, saveGameState } = await import('../storage/saveGame');
-
-    if (choice === 'local') {
-      const rebound = await awaitBeforeDeadline(
-        saveGameState(guestState, { ownerUid: selectedAccountUid }),
-        deadlineMs,
-      );
-      if (!rebound) {
-        throw new CloudSaveConflictError('local-save-invalid');
-      }
-      useGameStore.setState(guestState);
-      localCommitted = true;
-
-      const { syncLocalSaveToCloud } = await import('../storage/cloudSaveSync');
-      const uploaded = await awaitBeforeDeadline(
-        syncLocalSaveToCloud('manual', {
-          force: true,
-          bypassAccountConflictLock: true,
-          state: useGameStore.getState(),
-          ownerUid: selectedAccountUid,
-        }),
-        deadlineMs,
-      );
-      if (!uploaded) {
-        throw new CloudSaveConflictError('cloud-upload-failed');
-      }
-      const verify = await awaitBeforeDeadline(
-        loadGameFromCloudDetailed(user.uid),
-        deadlineMs,
-      );
-      if (!verify.ok) {
-        throw new CloudSaveConflictError(
-          verify.reason === 'network-error' || verify.reason === 'unknown'
-            ? 'cloud-upload-failed'
-            : mapCloudLoadFailure(verify.reason),
-        );
-      }
-    } else {
-      await executeAtomicCloudSaveRestore({
-        selectedAccountUid,
-        expectedAccountUid: options.expectedAccountUid,
-        readMetadata: async () => {
-          const result = await awaitBeforeDeadline(
-            loadGameFromCloudDetailed(user.uid),
-            deadlineMs,
-          );
-          if (!result.ok) {
-            throw new CloudSaveConflictError(mapCloudLoadFailure(result.reason));
-          }
-          logAccountConflictResolve({
-            stage: 'cloud-metadata',
-            authUidPresent: true,
-            cloudMetaPresent: true,
-            cloudSavePresent: true,
-            cloudOwnerUidPresent: Boolean(result.payload.ownerUid),
-            checksumValid: Boolean(result.payload.payloadChecksum),
-            saveVersion: result.payload.saveVersion,
-            selectedSource: 'cloud',
-          });
-          return result.payload;
-        },
-        readPayload: async () => {
-          const result = await awaitBeforeDeadline(
-            loadGameFromCloudDetailed(user.uid),
-            deadlineMs,
-          );
-          if (!result.ok) {
-            throw new CloudSaveConflictError(mapCloudLoadFailure(result.reason));
-          }
-          if (auth.currentUser?.uid !== selectedAccountUid) {
-            throw new CloudSaveConflictError('auth-user-mismatch');
-          }
-          logAccountConflictResolve({
-            stage: 'cloud-body',
-            authUidPresent: true,
-            cloudSavePresent: true,
-            cloudOwnerUidPresent: Boolean(result.payload.ownerUid),
-            checksumValid: Boolean(result.payload.payloadChecksum),
-            saveVersion: result.payload.saveVersion,
-            selectedSource: 'cloud',
-          });
-          return result.payload;
-        },
-        validate: (payload) => {
-          if (auth.currentUser?.uid !== selectedAccountUid) return 'auth-user-mismatch';
-          if (
-            typeof payload.ownerUid === 'string' &&
-            payload.ownerUid.length > 0 &&
-            payload.ownerUid !== selectedAccountUid
-          ) {
-            return 'owner-mismatch';
-          }
-          return validateCloudSaveRestorePayload(payload, SAVE_GAME_VERSION);
-        },
-        migrate: (payload) => {
-          const safePayload = {
-            ...payload.gameState,
-            cachedGlobalEconomySnapshotTrusted: false,
-          };
-          return payloadToStoreState(safePayload);
-        },
-        reconcileMarketplace: async (pendingCloudRestore) => {
-          const [{ getMyVehicleListings }, { reconcileFleetWithVehicleMarketplace }] =
-            await Promise.all([
-              import('./vehicleMarketplaceService'),
-              import('../domain/vehicleMarketplaceReconciliation'),
-            ]);
-          const marketplace = await awaitBeforeDeadline(
-            getMyVehicleListings(),
-            deadlineMs,
-          );
-          if (!marketplace.ok || !marketplace.reconciliation) {
-            throw new CloudSaveConflictError('marketplace-reconciliation-failed');
-          }
-          const reconciled = reconcileFleetWithVehicleMarketplace(
-            pendingCloudRestore.player.trucks,
-            marketplace.reconciliation,
-          );
-          return {
-            ...pendingCloudRestore,
-            player: {
-              ...pendingCloudRestore.player,
-              trucks: reconciled.trucks,
-              money:
-                reconciled.authoritativeCash ??
-                pendingCloudRestore.player.money,
-            },
-            vehicleMarketplace: reconciled.cache,
-          };
-        },
-        persistLocal: (pendingCloudRestore) => {
-          if (auth.currentUser?.uid !== selectedAccountUid) {
-            throw new CloudSaveConflictError('auth-user-mismatch');
-          }
-          return awaitBeforeDeadline(
-            saveGameState(pendingCloudRestore, { ownerUid: selectedAccountUid }),
-            deadlineMs,
-          );
-        },
-        commitState: (pendingCloudRestore) => {
-          useGameStore.setState(pendingCloudRestore);
-        },
-        getOwnerUid: (payload) =>
-          typeof payload.ownerUid === 'string' && payload.ownerUid.length > 0
-            ? payload.ownerUid
-            : undefined,
-        getRestoreId: (payload) =>
-          `${selectedAccountUid}:${payload.saveVersion}:${payload.updatedAt}:${payload.payloadChecksum ?? 'legacy'}`,
-        isRestoreApplied: hasCloudRestoreReceipt,
-        beginRestore: (restoreId, ownerUid) =>
-          beginCloudRestoreJournal({ restoreId, ownerUid, startedAt: Date.now() }),
-        completeRestore: (restoreId, ownerUid) =>
-          completeCloudRestoreJournal({ restoreId, ownerUid, startedAt: Date.now() }),
-        validateState: isLocalSaveSafeForAccountTransition,
-      });
-      localCommitted = true;
-    }
-
-    void useGameStore.getState().refreshMarketSnapshot();
-
     try {
-      await markUserProviderLinked(user.uid, provider);
+      const user = await signInWithProviderCredential(activeCredential, provider, {});
+      uid = user.uid;
+      commitAuthenticatedSession(user);
+      if (provider === 'apple') {
+        logAppleAuthFlow({
+          stage: 'existing-account-signin-success',
+          result: 'success',
+          isAnonymous: false,
+          providerIds: (user.providerData ?? []).map((entry) => entry.providerId),
+          firebaseProjectId: getFirebaseAppSafe()?.options.projectId ?? null,
+        });
+      }
+      if (
+        (options.expectedAccountUid && options.expectedAccountUid !== user.uid) ||
+        auth.currentUser?.uid !== user.uid
+      ) {
+        return { ok: false, error: 'auth-user-mismatch', revertedToGuest: false };
+      }
     } catch (error) {
-      console.warn('[auth] markUserProviderLinked after account switch failed', error);
-    }
-
-    setCloudSaveAccountConflictPending(false);
-    try {
-      const { invalidateSaveRecoveryColdStartProbe } = await import(
-        './saveRecoveryService'
-      );
-      invalidateSaveRecoveryColdStartProbe();
-    } catch {
-      // Probe cache is best-effort.
-    }
-
-    try {
-      const { initCloudSaveSync } = await import('../storage/cloudSaveSync');
-      await initCloudSaveSync(() => useGameStore.getState());
-    } catch (error) {
-      console.warn('[auth] cloud sync refresh after account switch failed', error);
-    }
-
-    logAccountConflictResolve({
-      stage: 'complete',
-      authUidPresent: true,
-      selectedSource: choice,
-      candidateStillValid: true,
-    });
-    return { ok: true, selectedAccountUid };
-  } catch (error) {
-    const mapped = mapAccountSwitchFailure(error);
-    const appleFailure =
-      provider === 'apple'
-        ? normalizeAppleAuthFailure(error, 'firebase-signin', {
-            firebaseCode: getAuthErrorCode(error),
-          })
-        : undefined;
-    logAccountConflictResolve({
-      stage: 'failed',
-      authUidPresent: Boolean(auth.currentUser?.uid),
-      selectedSource: choice,
-      errorCode: mapped,
-    });
-    console.warn('[auth] switchToLinkedProviderAccount failed', mapped);
-    if (localCommitted && guestState) {
-      try {
-        const { saveGameState } = await import('../storage/saveGame');
-        await saveGameState(guestState);
-        const { useGameStore } = await import('../store/gameStore');
-        useGameStore.setState(guestState);
-      } catch (rollbackError) {
-        console.warn('[auth] guest state rollback failed', rollbackError);
-      }
-    }
-    if (signedIn) {
-      await restoreGuestAnonymousSession();
+      const appleFailure =
+        provider === 'apple'
+          ? normalizeAppleAuthFailure(error, 'firebase-signin', {
+              firebaseCode: getAuthErrorCode(error),
+            })
+          : undefined;
       return {
         ok: false,
-        error: mapped,
-        revertedToGuest: true,
-        selectedAccountUid,
+        error: mapAccountSwitchFailure(error),
+        revertedToGuest: false,
         appleFailure,
         diagnosticCode: appleFailure ? getAppleAuthDiagnosticCode(appleFailure) : undefined,
       };
     }
-    return {
-      ok: false,
-      error: mapped,
-      revertedToGuest: false,
-      selectedAccountUid,
-      appleFailure,
-      diagnosticCode: appleFailure ? getAppleAuthDiagnosticCode(appleFailure) : undefined,
-    };
   }
+
+  // Incoming: UID-based save conflict resolution (no credential-based restore body).
+  const { resolveSaveConflict } = await import('./accountCloudLogin');
+  return resolveSaveConflict({
+    authenticatedUid: uid,
+    choice: options.choice ?? 'cloud',
+    provider,
+  });
 }
 
 export async function retryProviderAccountLink(
@@ -2088,43 +1847,34 @@ export async function beginGoogleAccountSwitchSelection(): Promise<GoogleAccount
 
     setAccountSwitchTransitionState('authenticating-new-account', 'google-credential');
     const selected = await signInWithCredential(auth, google.credential);
-    authSessionReady = true;
-    initPromise = Promise.resolve(selected.user);
+    commitAuthenticatedSession(selected.user);
     await markAccountSwitchTargetAuthenticated(selected.user.uid, google.credential);
     setAccountSwitchTransitionState('checking-cloud-save', 'selected-account-authenticated');
     setAuthLifecycleState('checking-cloud-save', 'selected-account-authenticated');
-    const cloud = await loadGameFromCloudDetailed(selected.user.uid);
-    if (!cloud.ok && cloud.reason !== 'cloud-save-not-found') {
-      const rollback = await rollbackAccountSwitch(cloud.reason);
-      setAccountSwitchTransitionState('failed', cloud.reason);
-      if (!rollback.ok) {
-        setAuthLifecycleState('failed', 'account-switch-recovery-required');
-      }
-      return {
-        ok: false,
-        error: cloud.reason === 'network-error' ? 'network-error' : 'unknown',
-      };
-    }
-    if (cloud.ok) {
-      const [{ setCloudRestoreCandidateForConflict }] = await Promise.all([
-        import('../storage/cloudSaveSync'),
-      ]);
-      setCloudRestoreCandidateForConflict(useGameStore.getState(), cloud.payload);
-    }
-    await markAccountSwitchAwaitingUserChoice();
-    setAccountSwitchTransitionState(
-      cloud.ok ? 'resolving-conflict' : 'completed',
-      cloud.ok ? 'cloud-save-found' : 'new-account',
+
+    const { runPostSignInSaveFlowForAccountSwitch } = await import('./accountCloudLogin');
+    const saveOutcome = await runPostSignInSaveFlowForAccountSwitch(
+      'google',
+      selected.user.uid,
     );
-    setAuthLifecycleState(
-      cloud.ok ? 'resolving-conflict' : 'authenticated',
-      cloud.ok ? 'cloud-save-found' : 'new-account',
-    );
+
+    if (saveOutcome.type === 'conflict') {
+      await markAccountSwitchAwaitingUserChoice();
+      setAccountSwitchTransitionState('resolving-conflict', 'cloud-save-found');
+      setAuthLifecycleState('resolving-conflict', 'cloud-save-found');
+    } else if (saveOutcome.type === 'completed') {
+      setAccountSwitchTransitionState('completed', 'save-flow-completed');
+      setAuthLifecycleState('authenticated', 'save-flow-completed');
+    } else {
+      setAccountSwitchTransitionState('failed', saveOutcome.reason);
+      setAuthLifecycleState('authenticated', 'save-flow-error');
+    }
+
     return {
       ok: true,
       credential: google.credential,
       selectedAccountUid: selected.user.uid,
-      hasCloudSave: cloud.ok,
+      saveOutcome,
     };
   } catch (error) {
     console.warn('[auth] Google account selection failed', error);

@@ -41,6 +41,7 @@ import {
   getRecommendedContractById,
   getRecommendedMapAction,
 } from '../simulation/mapRecommendations';
+import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import {
   selectActiveDeliveries,
@@ -212,6 +213,7 @@ function CompactRecommendedActionRow({ subtitle, onPress }: CompactRecommendedAc
 }
 
 export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () => void }) {
+  useScreenRenderProfiler('Map');
   const player = useGameStore((state) => state.player);
   const cities = useGameStore(selectCities);
   const routes = useGameStore(selectRoutes);

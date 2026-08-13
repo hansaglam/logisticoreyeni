@@ -27,6 +27,7 @@ import {
   isExpectedLeaderboardSubmitSkip,
 } from '../domain/leaderboardSubmitEligibility';
 import { isCloudSaveAccountConflictPending } from '../services/cloudSaveConflictState';
+import { isAutomaticCloudUploadBlockedBySaveFlow } from '../services/accountSaveFlowState';
 import { isFirebaseEnabled } from '../services/firebase';
 import { SAVE_GAME_VERSION, serializeGameState, analyzeSavePayloadSize, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
@@ -388,9 +389,12 @@ export async function syncLocalSaveToCloud(
     bypassAccountConflictLock?: boolean;
   },
 ): Promise<boolean> {
-  if (!options?.bypassAccountConflictLock && isCloudSaveAccountConflictPending()) {
+  if (
+    !options?.bypassAccountConflictLock &&
+    (isCloudSaveAccountConflictPending() || isAutomaticCloudUploadBlockedBySaveFlow())
+  ) {
     if (__DEV__) {
-      console.warn('[cloud-save] sync blocked — account save conflict pending');
+      console.warn('[cloud-save] sync blocked — account save flow in progress');
     }
     setCloudSaveStatus('pending');
     return false;

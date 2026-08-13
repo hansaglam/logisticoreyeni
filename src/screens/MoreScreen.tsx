@@ -4,8 +4,9 @@
  * Premium şirket yönetim merkezi — finans, depolar ve yönetim araçları.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   InteractionManager,
   StyleSheet,
   Text,
@@ -37,19 +38,28 @@ import { colors, formatMoney, spacing, typography } from '../theme';
 import { restartSpotlightTutorial } from '../hooks/useSpotlightTutorialTriggers';
 import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
-import DebugSimulationScreen from './DebugSimulationScreen';
-import FinanceScreen from './FinanceScreen';
-import LeaderboardScreen from './LeaderboardScreen';
-import MissionsScreen from './MissionsScreen';
-import WarehouseScreen from './WarehouseScreen';
-import UpgradesScreen from './UpgradesScreen';
 import AccountSection from '../components/AccountSection';
-import AccountCenterScreen from './AccountCenterScreen';
 import {
   resolveMoreScreenRoute,
   shouldFocusAccountSection,
 } from '../navigation/managementNavigation';
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
+
+const WarehouseScreen = lazy(() => import('./WarehouseScreen'));
+const FinanceScreen = lazy(() => import('./FinanceScreen'));
+const MissionsScreen = lazy(() => import('./MissionsScreen'));
+const LeaderboardScreen = lazy(() => import('./LeaderboardScreen'));
+const UpgradesScreen = lazy(() => import('./UpgradesScreen'));
+const AccountCenterScreen = lazy(() => import('./AccountCenterScreen'));
+const DebugSimulationScreen = lazy(() => import('./DebugSimulationScreen'));
+
+function EmbeddedScreenFallback() {
+  return (
+    <View style={styles.embeddedFallback}>
+      <ActivityIndicator size="small" color={colors.accentAmber} />
+    </View>
+  );
+}
 
 type MoreRoute =
   | 'menu'
@@ -210,7 +220,7 @@ function ModuleChevron() {
   return <Text style={styles.chevron}>›</Text>;
 }
 
-export default function MoreScreen() {
+export default function MoreScreen({ isActive = true }: { isActive?: boolean }) {
   const { alert: showAlert } = useAppDialog();
   const [route, setRoute] = useState<MoreRoute>('menu');
   const [focusAccountSection, setFocusAccountSection] = useState(false);
@@ -224,7 +234,7 @@ export default function MoreScreen() {
   const clearPendingUpgradeTruckId = useGameStore((state) => state.clearPendingUpgradeTruckId);
 
   useEffect(() => {
-    if (!pendingMoreSubRoute) return;
+    if (!isActive || !pendingMoreSubRoute) return;
     if (pendingMoreSubRoute === 'account') {
       setRoute('account');
       setFocusAccountSection(false);
@@ -237,7 +247,7 @@ export default function MoreScreen() {
       setFocusAccountSection(focusAccount);
     }
     clearPendingMoreSubRoute();
-  }, [pendingMoreSubRoute, clearPendingMoreSubRoute]);
+  }, [isActive, pendingMoreSubRoute, clearPendingMoreSubRoute]);
 
   useEffect(() => {
     if (!focusAccountSection || route !== 'menu') {
@@ -274,7 +284,9 @@ export default function MoreScreen() {
     return (
       <EmbeddedModule>
         <SubNavBar title="Depolar" onBack={() => setRoute('menu')} />
-        <WarehouseScreen />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <WarehouseScreen />
+        </Suspense>
       </EmbeddedModule>
     );
   }
@@ -283,7 +295,9 @@ export default function MoreScreen() {
     return (
       <EmbeddedModule>
         <SubNavBar title="Finans" onBack={() => setRoute('menu')} />
-        <FinanceScreen />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <FinanceScreen />
+        </Suspense>
       </EmbeddedModule>
     );
   }
@@ -291,7 +305,9 @@ export default function MoreScreen() {
   if (route === 'missions') {
     return (
       <View style={styles.embeddedRoot}>
-        <MissionsScreen onBack={() => setRoute('menu')} />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <MissionsScreen onBack={() => setRoute('menu')} />
+        </Suspense>
       </View>
     );
   }
@@ -299,10 +315,12 @@ export default function MoreScreen() {
   if (route === 'leaderboard') {
     return (
       <View style={styles.embeddedRoot}>
-        <LeaderboardScreen
-          onBack={() => setRoute('menu')}
-          onOpenAccountSettings={() => setRoute('account')}
-        />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <LeaderboardScreen
+            onBack={() => setRoute('menu')}
+            onOpenAccountSettings={() => setRoute('account')}
+          />
+        </Suspense>
       </View>
     );
   }
@@ -310,10 +328,12 @@ export default function MoreScreen() {
   if (route === 'account') {
     return (
       <View style={styles.embeddedRoot}>
-        <AccountCenterScreen
-          onBack={() => setRoute('menu')}
-          onOpenLeaderboard={LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined}
-        />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <AccountCenterScreen
+            onBack={() => setRoute('menu')}
+            onOpenLeaderboard={LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined}
+          />
+        </Suspense>
       </View>
     );
   }
@@ -321,14 +341,16 @@ export default function MoreScreen() {
   if (route === 'upgrades') {
     return (
       <View style={styles.embeddedRoot}>
-        <UpgradesScreen
-          truckId={pendingUpgradeTruckId}
-          onBack={() => {
-            clearPendingUpgradeTruckId();
-            setRoute('menu');
-          }}
-          backLabel="‹ Şirket"
-        />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <UpgradesScreen
+            truckId={pendingUpgradeTruckId}
+            onBack={() => {
+              clearPendingUpgradeTruckId();
+              setRoute('menu');
+            }}
+            backLabel="‹ Şirket"
+          />
+        </Suspense>
       </View>
     );
   }
@@ -337,7 +359,9 @@ export default function MoreScreen() {
     return (
       <EmbeddedModule>
         <SubNavBar title="Simülasyon Testi" onBack={() => setRoute('menu')} />
-        <DebugSimulationScreen />
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <DebugSimulationScreen />
+        </Suspense>
       </EmbeddedModule>
     );
   }
@@ -507,6 +531,12 @@ function SubNavBar({ title, onBack }: { title: string; onBack: () => void }) {
 const styles = StyleSheet.create({
   embeddedRoot: {
     flex: 1,
+    backgroundColor: colors.background,
+  },
+  embeddedFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: colors.background,
   },
   subNav: {

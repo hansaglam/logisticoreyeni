@@ -127,6 +127,7 @@ import {
   getWarehouseTypeLabel,
   resolveWarehouseType,
 } from '../simulation/warehouseStorage';
+import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import {
   colors,
@@ -942,6 +943,7 @@ interface MarketScreenProps {
 }
 
 export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
+  useScreenRenderProfiler('Market');
   const { alert: showAlert } = useAppDialog();
   const { width: screenWidth } = useWindowDimensions();
   const { contentBottomPadding } = useTabBarLayout();

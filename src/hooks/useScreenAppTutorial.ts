@@ -32,7 +32,15 @@ export interface UseScreenAppTutorialOptions {
   scrollYRef?: React.MutableRefObject<number>;
 }
 
-export function useScreenAppTutorial({
+export function useScreenAppTutorial(options: UseScreenAppTutorialOptions) {
+  if (!APP_TUTORIALS_ENABLED) {
+    const scrollRef = options.scrollRef ?? { current: null };
+    return createDisabledScreenTutorialResult(scrollRef, options.tutorialId);
+  }
+  return useScreenAppTutorialEnabled(options);
+}
+
+function useScreenAppTutorialEnabled({
   tutorialId,
   layoutReady,
   blockingModals = false,

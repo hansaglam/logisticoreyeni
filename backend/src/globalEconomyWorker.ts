@@ -7,6 +7,10 @@ import {
   resolveWorkerConfigVersion,
   type WorkerGlobalEconomySnapshot,
 } from './globalEconomyGenerator';
+import {
+  DEFAULT_OUTER_TRANSACTION_ATTEMPTS,
+  runFirestoreTransactionWithRetry,
+} from './firestoreTransactionUtils';
 
 export const HISTORY_RETENTION_EPOCHS = 30 * 48;
 const TRANSACTION_MAX_ATTEMPTS = 5;
@@ -52,65 +56,76 @@ export async function runGlobalEconomyEpoch(
   const currentRef = firestore.collection('globalEconomy').doc('current');
   let transactionAttempts = 0;
 
-  return firestore.runTransaction(async (transaction) => {
-    transactionAttempts += 1;
-    const existing = await transaction.get(snapshotRef);
-    if (existing.exists) {
+  const { result, outerRetryCount } = await runFirestoreTransactionWithRetry(
+    firestore,
+    async (transaction) => {
+      transactionAttempts += 1;
+      const existing = await transaction.get(snapshotRef);
+      if (existing.exists) {
+        return {
+          epoch,
+          configVersion,
+          snapshotCreated: false,
+          historyRecordsWritten: 0,
+          historyRecordsDeleted: 0,
+          retryCount: Math.max(0, transactionAttempts - 1),
+          snapshot: existing.data() as WorkerGlobalEconomySnapshot,
+        };
+      }
+
+      const expiredEpoch = epoch - HISTORY_RETENTION_EPOCHS - 1;
+      const expiredQuery = firestore
+        .collection('globalMarketHistory')
+        .where('epoch', '<=', expiredEpoch)
+        .limit(350);
+      const expiredDocuments = await transaction.get(expiredQuery);
+      await options.beforeTransactionWritesForTest?.(transactionAttempts);
+      const snapshot = buildCanonicalSnapshot(epoch, configVersion);
+      const historyEntries = buildHistoryEntries(snapshot);
+
+      transaction.create(snapshotRef, snapshot);
+      for (const entry of historyEntries) {
+        transaction.create(
+          firestore
+            .collection('globalMarketHistory')
+            .doc(historyDocumentId(entry.epoch, entry.cityId, entry.productId)),
+          entry,
+        );
+      }
+      for (const expired of expiredDocuments.docs) {
+        transaction.delete(expired.ref);
+      }
+      transaction.set(currentRef, {
+        epoch,
+        configVersion,
+        snapshotVersion: snapshot.version,
+        generatedAt: snapshot.generatedAt,
+        validUntil: snapshot.validUntil,
+        serverTimeMs: nowMs,
+        snapshot,
+      });
+
+      if (options.failAfterWritesForTest) {
+        throw new Error('TEST_FAIL_AFTER_WRITES');
+      }
+
       return {
         epoch,
         configVersion,
-        snapshotCreated: false,
-        historyRecordsWritten: 0,
-        historyRecordsDeleted: 0,
+        snapshotCreated: true,
+        historyRecordsWritten: historyEntries.length,
+        historyRecordsDeleted: expiredDocuments.size,
         retryCount: Math.max(0, transactionAttempts - 1),
-        snapshot: existing.data() as WorkerGlobalEconomySnapshot,
+        snapshot,
       };
-    }
-
-    const expiredEpoch = epoch - HISTORY_RETENTION_EPOCHS - 1;
-    const expiredQuery = firestore
-      .collection('globalMarketHistory')
-      .where('epoch', '<=', expiredEpoch)
-      .limit(350);
-    const expiredDocuments = await transaction.get(expiredQuery);
-    await options.beforeTransactionWritesForTest?.(transactionAttempts);
-    const snapshot = buildCanonicalSnapshot(epoch, configVersion);
-    const historyEntries = buildHistoryEntries(snapshot);
-
-    transaction.create(snapshotRef, snapshot);
-    for (const entry of historyEntries) {
-      transaction.create(
-        firestore
-          .collection('globalMarketHistory')
-          .doc(historyDocumentId(entry.epoch, entry.cityId, entry.productId)),
-        entry,
-      );
-    }
-    for (const expired of expiredDocuments.docs) {
-      transaction.delete(expired.ref);
-    }
-    transaction.set(currentRef, {
-      epoch,
-      configVersion,
-      snapshotVersion: snapshot.version,
-      generatedAt: snapshot.generatedAt,
-      validUntil: snapshot.validUntil,
-      serverTimeMs: nowMs,
-      snapshot,
-    });
-
-    if (options.failAfterWritesForTest) {
-      throw new Error('TEST_FAIL_AFTER_WRITES');
-    }
-
-    return {
-      epoch,
-      configVersion,
-      snapshotCreated: true,
-      historyRecordsWritten: historyEntries.length,
-      historyRecordsDeleted: expiredDocuments.size,
-      retryCount: Math.max(0, transactionAttempts - 1),
-      snapshot,
-    };
-  }, { maxAttempts: TRANSACTION_MAX_ATTEMPTS });
+    },
+    {
+      maxAttempts: DEFAULT_OUTER_TRANSACTION_ATTEMPTS,
+      innerMaxAttempts: TRANSACTION_MAX_ATTEMPTS,
+    },
+  );
+  return {
+    ...result,
+    retryCount: result.retryCount + outerRetryCount,
+  };
 }

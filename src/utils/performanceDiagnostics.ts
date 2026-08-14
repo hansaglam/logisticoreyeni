@@ -210,6 +210,39 @@ export function logPerfAdvanceTimeStage(stage: string, startedMs: number): void 
   }
 }
 
+/** Sub-stage profiler for contract-schedule refresh spikes (diagnostics or ≥20ms only). */
+const CONTRACT_SCHEDULE_SPIKE_MS = 20;
+
+export function logContractScheduleStage(
+  stage: string,
+  startedMs: number,
+  detail?: Record<string, unknown>,
+): void {
+  const durationMs = Math.max(0, readPerfNow() - startedMs);
+  if (!PERF_DIAGNOSTICS_ENABLED && durationMs < CONTRACT_SCHEDULE_SPIKE_MS) {
+    return;
+  }
+  console.info('[perf-contract-schedule]', {
+    stage,
+    durationMs: Math.round(durationMs * 10) / 10,
+    screen: activeScreen,
+    ...detail,
+  });
+}
+
+export function measureContractScheduleStage<T>(
+  stage: string,
+  fn: () => T,
+  detail?: Record<string, unknown>,
+): T {
+  const started = readPerfNow();
+  try {
+    return fn();
+  } finally {
+    logContractScheduleStage(stage, started, detail);
+  }
+}
+
 export function shouldDeferAdvanceTimeMaintenance(): boolean {
   return isNavigationInteractionActive();
 }

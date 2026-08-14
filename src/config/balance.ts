@@ -91,6 +91,7 @@ export const operatingCostBalance = {
   /**
    * Offline sabit işletme gideri kapalı (0 = cold start / background dönüşünde kesim yok).
    * Uygulama açıkken günlük gider advanceTime üzerinden çalışmaya devam eder.
+   * Catch-up uses OFFLINE_CATCHUP_MAX_COST_PERIODS (= 0) in periodicCosts.ts.
    */
   maxOfflineChargeDays: 0,
   /** advanceTime başına en fazla ledger kaydı */

@@ -44,6 +44,14 @@ export const TRUCK_UPGRADE_TYPES: TruckUpgradeType[] = [
   'durability',
 ];
 
+export function getEngineSpeedMultiplier(truck: Truck): number {
+  const reduction = getEngineDurationReduction(normalizeTruckUpgrades(truck));
+  if (reduction <= 0) {
+    return 1;
+  }
+  return 1 / (1 - reduction);
+}
+
 export function formatTruckUpgradeCurrentEffect(
   truck: Truck,
   upgradeType: TruckUpgradeType,
@@ -63,6 +71,38 @@ export function formatTruckUpgradeCurrentEffect(
       return `+${getCargoCapacityBonus(normalized).toFixed(1)} t kapasite`;
     case 'durability':
       return `Kondisyon kaybı -%${Math.round(getDurabilityConditionLossReduction(normalized) * 100)}`;
+    default:
+      return '—';
+  }
+}
+
+export function formatTruckUpgradeNextEffect(
+  truck: Truck,
+  upgradeType: TruckUpgradeType,
+): string {
+  const normalized = normalizeTruckUpgrades(truck);
+  const currentLevel = normalized.upgrades?.[upgradeType] ?? 0;
+  if (currentLevel >= MAX_UPGRADE_LEVEL) {
+    return '—';
+  }
+  const preview = normalizeTruckUpgrades({
+    ...normalized,
+    upgrades: {
+      ...normalized.upgrades!,
+      [upgradeType]: currentLevel + 1,
+    },
+  });
+  switch (upgradeType) {
+    case 'engine':
+      return `Süre -%${Math.round(getEngineDurationReduction(preview) * 100)}`;
+    case 'fuelEfficiency':
+      return `Yakıt -%${Math.round(getFuelEfficiencyReduction(preview) * 100)}`;
+    case 'cargo':
+      return `+${getCargoCapacityBonus(preview).toFixed(1)} t kapasite`;
+    case 'durability':
+      return `Kondisyon kaybı -%${Math.round(
+        getDurabilityConditionLossReduction(preview) * 100,
+      )}`;
     default:
       return '—';
   }

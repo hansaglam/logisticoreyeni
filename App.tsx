@@ -467,9 +467,10 @@ export default function App() {
       if (nextState === 'background' || nextState === 'inactive') {
         useGameStore.getState().recordLastSeenRealTimeMs();
         // Persist only on true background; defer via InteractionManager for nav/perf.
+        // flushLifecycleSave clears deferred autosave + coalesces in-flight saves.
         if (nextState === 'background') {
           InteractionManager.runAfterInteractions(() => {
-            void useGameStore.getState().saveGame();
+            void useGameStore.getState().flushLifecycleSave('background');
           });
         }
       }

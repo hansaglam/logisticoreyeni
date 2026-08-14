@@ -37,6 +37,10 @@ import {
   buildMarketplaceStateFromServerState,
   validateMarketplaceState,
 } from './vehicleMarketplaceState';
+import {
+  DEFAULT_OUTER_TRANSACTION_ATTEMPTS,
+  runFirestoreTransactionWithRetry,
+} from './firestoreTransactionUtils';
 
 const ACTIVE_JOB_STATUSES = new Set([
   'on_route',
@@ -78,6 +82,343 @@ function actionReceiptRef(
   return firestore.doc(
     `vehicleMarketplaceActionReceipts/${actionKey(uid, transactionId)}`,
   );
+}
+
+/** Exactly-one-winner claim for concurrent purchase contention. */
+function listingPurchaseLockRef(firestore: Firestore, listingId: string) {
+  return firestore.doc(`vehicleMarketplaceListingLocks/${listingId}`);
+}
+
+type PurchaseActionData = {
+  listingId: string;
+  grossPrice: number;
+  marketplaceFee: number;
+  sellerNet: number;
+};
+
+function buildPurchaseSuccessResult(
+  input: PurchaseVehicleListingInput,
+  listing: MarketplaceListingDocument,
+): MarketplaceActionResult<PurchaseActionData> {
+  const marketplaceFee = normalizeMoney(
+    listing.askingPrice * listing.marketplaceFeeRate,
+  );
+  const sellerNet = normalizeMoney(listing.askingPrice - marketplaceFee);
+  return {
+    ok: true,
+    transactionId: input.transactionId,
+    idempotencyKey: input.idempotencyKey,
+    data: {
+      listingId: listing.id,
+      grossPrice: listing.askingPrice,
+      marketplaceFee,
+      sellerNet,
+    },
+  };
+}
+
+interface PurchaseWriteContext {
+  listing: MarketplaceListingDocument;
+  buyer: MarketplacePlayerState;
+  seller: MarketplacePlayerState;
+  sellerVehicle: MarketplaceVehicleRecord;
+  buyerServer: ServerStateDocument | null;
+  sellerServer: ServerStateDocument | null;
+  listingLockExists: boolean;
+}
+
+async function readPurchaseTransactionContext(
+  transaction: Transaction,
+  firestore: Firestore,
+  identity: MarketplaceActionIdentity,
+  input: PurchaseVehicleListingInput,
+  nowMs: number,
+): Promise<
+  | { kind: 'return'; result: MarketplaceActionResult<PurchaseActionData> }
+  | { kind: 'continue'; ctx: PurchaseWriteContext }
+> {
+  const replay = await readIdempotent<PurchaseActionData>(
+    transaction,
+    firestore,
+    identity.uid,
+    input,
+  );
+  if (replay) {
+    return { kind: 'return', result: replay };
+  }
+  if (await hasTransactionReceipt(transaction, firestore, identity.uid, input)) {
+    return { kind: 'return', result: failure(input, 'already-completed') };
+  }
+
+  const listingRef = firestore.doc(
+    `vehicleMarketplaceListings/${input.listingId}`,
+  );
+  const saleTransactionRef = firestore.doc(
+    `vehicleMarketplaceTransactions/${input.transactionId}`,
+  );
+  const listingLockRef = listingPurchaseLockRef(firestore, input.listingId);
+
+  const listingLockSnapshot = await transaction.get(listingLockRef);
+  const listingSnapshot = await transaction.get(listingRef);
+  const saleTransactionSnapshot = await transaction.get(saleTransactionRef);
+
+  if (saleTransactionSnapshot.exists) {
+    return { kind: 'return', result: failure(input, 'already-completed') };
+  }
+  if (!listingSnapshot.exists) {
+    return { kind: 'return', result: failure(input, 'listing-not-found') };
+  }
+
+  const listing = listingSnapshot.data() as MarketplaceListingDocument;
+  if (listingLockSnapshot.exists) {
+    const lock = listingLockSnapshot.data() as {
+      buyerUid?: string;
+      transactionId?: string;
+    };
+    if (
+      lock.buyerUid !== identity.uid ||
+      lock.transactionId !== input.transactionId
+    ) {
+      return { kind: 'return', result: failure(input, 'listing-not-active') };
+    }
+    if (
+      listing.status === 'sold' &&
+      listing.buyerUid === identity.uid &&
+      listing.transactionId === input.transactionId
+    ) {
+      return {
+        kind: 'return',
+        result: buildPurchaseSuccessResult(input, listing),
+      };
+    }
+  }
+
+  if (listing.sellerUid === identity.uid) {
+    return { kind: 'return', result: failure(input, 'self-purchase') };
+  }
+  if (listing.status !== 'active') {
+    return { kind: 'return', result: failure(input, 'listing-not-active') };
+  }
+  if (listing.expiresAt.toMillis() <= nowMs) {
+    return { kind: 'return', result: failure(input, 'listing-not-active') };
+  }
+  if (listing.version !== input.listingVersion) {
+    return { kind: 'return', result: failure(input, 'stale-listing-version') };
+  }
+  if (listing.askingPrice !== input.quotedPrice) {
+    return { kind: 'return', result: failure(input, 'invalid-price') };
+  }
+
+  const sellerRef = stateRef(firestore, listing.sellerUid);
+  const buyerRef = stateRef(firestore, identity.uid);
+  const buyerSnapshot = await transaction.get(buyerRef);
+  const sellerSnapshot = await transaction.get(sellerRef);
+  const buyerServerSnapshot = await transaction.get(
+    serverStateRef(firestore, identity.uid),
+  );
+  const sellerServerSnapshot = await transaction.get(
+    serverStateRef(firestore, listing.sellerUid),
+  );
+
+  if (!buyerSnapshot.exists || !sellerSnapshot.exists) {
+    return { kind: 'return', result: failure(input, 'save-conflict') };
+  }
+
+  const buyer = buyerSnapshot.data() as MarketplacePlayerState;
+  const seller = sellerSnapshot.data() as MarketplacePlayerState;
+  if (
+    input.clientSaveVersion != null &&
+    buyer.sourceSaveVersion !== input.clientSaveVersion
+  ) {
+    return { kind: 'return', result: failure(input, 'save-conflict') };
+  }
+  if (buyer.syncConflict || seller.syncConflict) {
+    return { kind: 'return', result: failure(input, 'save-conflict') };
+  }
+  if (buyer.canonicalCash < listing.askingPrice) {
+    return { kind: 'return', result: failure(input, 'insufficient-funds') };
+  }
+  if (buyer.ownedTruckSnapshots.length >= buyer.fleetLimit) {
+    return { kind: 'return', result: failure(input, 'fleet-limit') };
+  }
+
+  const sellerVehicle = seller.ownedTruckSnapshots.find(
+    (item) => item.truckId === listing.truckSnapshot.truckId,
+  );
+  if (
+    !sellerVehicle ||
+    sellerVehicle.status !== 'marketplace_locked' ||
+    sellerVehicle.marketplaceListingId !== listing.id
+  ) {
+    return { kind: 'return', result: failure(input, 'not-owner') };
+  }
+
+  return {
+    kind: 'continue',
+    ctx: {
+      listing,
+      buyer,
+      seller,
+      sellerVehicle,
+      buyerServer: buyerServerSnapshot.exists
+        ? (buyerServerSnapshot.data() as ServerStateDocument)
+        : null,
+      sellerServer: sellerServerSnapshot.exists
+        ? (sellerServerSnapshot.data() as ServerStateDocument)
+        : null,
+      listingLockExists: listingLockSnapshot.exists,
+    },
+  };
+}
+
+function writePurchaseTransactionOutcome(
+  transaction: Transaction,
+  firestore: Firestore,
+  identity: MarketplaceActionIdentity,
+  input: PurchaseVehicleListingInput,
+  ctx: PurchaseWriteContext,
+  nowMs: number,
+): MarketplaceActionResult<PurchaseActionData> {
+  const { listing, buyer, seller, sellerVehicle } = ctx;
+  const listingRef = firestore.doc(
+    `vehicleMarketplaceListings/${input.listingId}`,
+  );
+  const saleTransactionRef = firestore.doc(
+    `vehicleMarketplaceTransactions/${input.transactionId}`,
+  );
+  const buyerRef = stateRef(firestore, identity.uid);
+  const sellerRef = stateRef(firestore, listing.sellerUid);
+  const listingLockRef = listingPurchaseLockRef(firestore, listing.id);
+  const now = Timestamp.fromMillis(nowMs);
+  const marketplaceFee = normalizeMoney(
+    listing.askingPrice * listing.marketplaceFeeRate,
+  );
+  const sellerNet = normalizeMoney(listing.askingPrice - marketplaceFee);
+  const buyerVehicle: MarketplaceVehicleRecord = {
+    ...sellerVehicle,
+    ...listing.truckSnapshot,
+    ownershipType: 'owned',
+    status: 'idle',
+    assignedDriverId: null,
+    attachedTrailerId: null,
+    activeJobIds: [],
+    marketplaceListingId: null,
+    acquiredAt: nowMs,
+  };
+  const transactionData = {
+    id: input.transactionId,
+    listingId: listing.id,
+    sellerUid: listing.sellerUid,
+    buyerUid: identity.uid,
+    vehicleType: 'truck',
+    truckSnapshot: listing.truckSnapshot,
+    grossPrice: listing.askingPrice,
+    marketplaceFee,
+    sellerNet,
+    createdAt: now,
+    version: 1,
+  };
+  const result = buildPurchaseSuccessResult(input, listing);
+
+  if (!ctx.listingLockExists) {
+    transaction.create(listingLockRef, {
+      listingId: listing.id,
+      buyerUid: identity.uid,
+      transactionId: input.transactionId,
+      createdAt: now,
+    });
+  }
+  transaction.update(buyerRef, {
+    canonicalCash: normalizeMoney(buyer.canonicalCash - listing.askingPrice),
+    ownedTruckSnapshots: [...buyer.ownedTruckSnapshots, buyerVehicle],
+    stateVersion: buyer.stateVersion + 1,
+    updatedAt: now,
+  });
+  transaction.update(sellerRef, {
+    canonicalCash: normalizeMoney(seller.canonicalCash + sellerNet),
+    ownedTruckSnapshots: seller.ownedTruckSnapshots.filter(
+      (item) => item.truckId !== sellerVehicle.truckId,
+    ),
+    activeListingIds: FieldValue.arrayRemove(listing.id),
+    soldTruckTombstones: FieldValue.arrayUnion(sellerVehicle.truckId),
+    stateVersion: seller.stateVersion + 1,
+    updatedAt: now,
+  });
+  syncServerStateMirror(
+    transaction,
+    firestore,
+    identity.uid,
+    {
+      ...buyer,
+      canonicalCash: normalizeMoney(buyer.canonicalCash - listing.askingPrice),
+      ownedTruckSnapshots: [...buyer.ownedTruckSnapshots, buyerVehicle],
+      stateVersion: buyer.stateVersion + 1,
+      updatedAt: now,
+    },
+    ctx.buyerServer,
+    now,
+  );
+  syncServerStateMirror(
+    transaction,
+    firestore,
+    listing.sellerUid,
+    {
+      ...seller,
+      canonicalCash: normalizeMoney(seller.canonicalCash + sellerNet),
+      ownedTruckSnapshots: seller.ownedTruckSnapshots.filter(
+        (item) => item.truckId !== sellerVehicle.truckId,
+      ),
+      activeListingIds: seller.activeListingIds.filter((id) => id !== listing.id),
+      soldTruckTombstones: [...seller.soldTruckTombstones, sellerVehicle.truckId],
+      stateVersion: seller.stateVersion + 1,
+      updatedAt: now,
+    },
+    ctx.sellerServer,
+    now,
+  );
+  transaction.update(listingRef, {
+    status: 'sold',
+    soldAt: now,
+    updatedAt: now,
+    buyerUid: identity.uid,
+    transactionId: input.transactionId,
+    version: listing.version + 1,
+  });
+  transaction.create(saleTransactionRef, transactionData);
+  for (const uid of [identity.uid, listing.sellerUid]) {
+    transaction.create(
+      firestore.doc(`users/${uid}/marketplaceHistory/${input.transactionId}`),
+      transactionData,
+    );
+  }
+  transaction.create(
+    firestore.doc(`users/${identity.uid}/marketplaceLedger/${input.transactionId}`),
+    {
+      type: 'expense',
+      category: 'vehicle_purchase',
+      amount: listing.askingPrice,
+      transactionId: input.transactionId,
+      referenceId: listing.id,
+      createdAt: now,
+    },
+  );
+  transaction.create(
+    firestore.doc(
+      `users/${listing.sellerUid}/marketplaceLedger/${input.transactionId}`,
+    ),
+    {
+      type: 'income',
+      category: 'vehicle_sale',
+      amount: sellerNet,
+      grossAmount: listing.askingPrice,
+      marketplaceFee,
+      transactionId: input.transactionId,
+      referenceId: listing.id,
+      createdAt: now,
+    },
+  );
+  saveIdempotent(transaction, firestore, identity.uid, input, result, now);
+  return result;
 }
 
 function normalizeMoney(value: number): number {
@@ -630,247 +971,32 @@ export async function purchaseVehicleListingTransaction(
   identity: MarketplaceActionIdentity,
   input: PurchaseVehicleListingInput,
   nowMs = Date.now(),
-): Promise<MarketplaceActionResult<{
-  listingId: string;
-  grossPrice: number;
-  marketplaceFee: number;
-  sellerNet: number;
-}>> {
-  let transactionAttempts = 0;
-  const result: MarketplaceActionResult<{
-    listingId: string;
-    grossPrice: number;
-    marketplaceFee: number;
-    sellerNet: number;
-  }> = await firestore.runTransaction(async (transaction) => {
-    transactionAttempts += 1;
-    const replay = await readIdempotent<{
-      listingId: string;
-      grossPrice: number;
-      marketplaceFee: number;
-      sellerNet: number;
-    }>(transaction, firestore, identity.uid, input);
-    if (replay) return replay;
-    if (await hasTransactionReceipt(transaction, firestore, identity.uid, input)) {
-      return failure(input, 'already-completed');
-    }
-    const listingRef = firestore.doc(
-      `vehicleMarketplaceListings/${input.listingId}`,
-    );
-    const saleTransactionRef = firestore.doc(
-      `vehicleMarketplaceTransactions/${input.transactionId}`,
-    );
-    const [listingSnapshot, saleTransactionSnapshot] = await Promise.all([
-      transaction.get(listingRef),
-      transaction.get(saleTransactionRef),
-    ]);
-    if (saleTransactionSnapshot.exists) {
-      return failure(input, 'already-completed');
-    }
-    if (!listingSnapshot.exists) return failure(input, 'listing-not-found');
-    const listing = listingSnapshot.data() as MarketplaceListingDocument;
-    if (listing.sellerUid === identity.uid) return failure(input, 'self-purchase');
-    if (listing.status !== 'active') return failure(input, 'listing-not-active');
-    if (listing.expiresAt.toMillis() <= nowMs) {
-      return failure(input, 'listing-not-active');
-    }
-    if (listing.version !== input.listingVersion) {
-      return failure(input, 'stale-listing-version');
-    }
-    if (listing.askingPrice !== input.quotedPrice) {
-      return failure(input, 'invalid-price');
-    }
-    const buyerRef = stateRef(firestore, identity.uid);
-    const sellerRef = stateRef(firestore, listing.sellerUid);
-    const [buyerSnapshot, sellerSnapshot, buyerServerSnap, sellerServerSnap] =
-      await Promise.all([
-        transaction.get(buyerRef),
-        transaction.get(sellerRef),
-        transaction.get(serverStateRef(firestore, identity.uid)),
-        transaction.get(serverStateRef(firestore, listing.sellerUid)),
-      ]);
-    if (!buyerSnapshot.exists || !sellerSnapshot.exists) {
-      return failure(input, 'save-conflict');
-    }
-    const buyer = buyerSnapshot.data() as MarketplacePlayerState;
-    const seller = sellerSnapshot.data() as MarketplacePlayerState;
-    if (
-      input.clientSaveVersion != null &&
-      buyer.sourceSaveVersion !== input.clientSaveVersion
-    ) {
-      return failure(input, 'save-conflict');
-    }
-    if (buyer.syncConflict || seller.syncConflict) {
-      return failure(input, 'save-conflict');
-    }
-    if (buyer.canonicalCash < listing.askingPrice) {
-      return failure(input, 'insufficient-funds');
-    }
-    if (buyer.ownedTruckSnapshots.length >= buyer.fleetLimit) {
-      return failure(input, 'fleet-limit');
-    }
-    const sellerVehicle = seller.ownedTruckSnapshots.find(
-      (item) => item.truckId === listing.truckSnapshot.truckId,
-    );
-    if (
-      !sellerVehicle ||
-      sellerVehicle.status !== 'marketplace_locked' ||
-      sellerVehicle.marketplaceListingId !== listing.id
-    ) {
-      return failure(input, 'not-owner');
-    }
-
-    const now = Timestamp.fromMillis(nowMs);
-    const marketplaceFee = normalizeMoney(
-      listing.askingPrice * listing.marketplaceFeeRate,
-    );
-    const sellerNet = normalizeMoney(listing.askingPrice - marketplaceFee);
-    const buyerVehicle: MarketplaceVehicleRecord = {
-      ...sellerVehicle,
-      ...listing.truckSnapshot,
-      ownershipType: 'owned',
-      status: 'idle',
-      assignedDriverId: null,
-      attachedTrailerId: null,
-      activeJobIds: [],
-      marketplaceListingId: null,
-      acquiredAt: nowMs,
-    };
-    const transactionData = {
-      id: input.transactionId,
-      listingId: listing.id,
-      sellerUid: listing.sellerUid,
-      buyerUid: identity.uid,
-      vehicleType: 'truck',
-      truckSnapshot: listing.truckSnapshot,
-      grossPrice: listing.askingPrice,
-      marketplaceFee,
-      sellerNet,
-      createdAt: now,
-      version: 1,
-    };
-    const result: MarketplaceActionResult<{
-      listingId: string;
-      grossPrice: number;
-      marketplaceFee: number;
-      sellerNet: number;
-    }> = {
-      ok: true,
-      transactionId: input.transactionId,
-      idempotencyKey: input.idempotencyKey,
-      data: {
-        listingId: listing.id,
-        grossPrice: listing.askingPrice,
-        marketplaceFee,
-        sellerNet,
-      },
-    };
-    transaction.update(buyerRef, {
-      canonicalCash: normalizeMoney(
-        buyer.canonicalCash - listing.askingPrice,
-      ),
-      ownedTruckSnapshots: [...buyer.ownedTruckSnapshots, buyerVehicle],
-      stateVersion: buyer.stateVersion + 1,
-      updatedAt: now,
-    });
-    transaction.update(sellerRef, {
-      canonicalCash: normalizeMoney(seller.canonicalCash + sellerNet),
-      ownedTruckSnapshots: seller.ownedTruckSnapshots.filter(
-        (item) => item.truckId !== sellerVehicle.truckId,
-      ),
-      activeListingIds: FieldValue.arrayRemove(listing.id),
-      soldTruckTombstones: FieldValue.arrayUnion(sellerVehicle.truckId),
-      stateVersion: seller.stateVersion + 1,
-      updatedAt: now,
-    });
-    syncServerStateMirror(
-      transaction,
-      firestore,
-      identity.uid,
-      {
-        ...buyer,
-        canonicalCash: normalizeMoney(buyer.canonicalCash - listing.askingPrice),
-        ownedTruckSnapshots: [...buyer.ownedTruckSnapshots, buyerVehicle],
-        stateVersion: buyer.stateVersion + 1,
-        updatedAt: now,
-      },
-      buyerServerSnap.exists
-        ? (buyerServerSnap.data() as ServerStateDocument)
-        : null,
-      now,
-    );
-    syncServerStateMirror(
-      transaction,
-      firestore,
-      listing.sellerUid,
-      {
-        ...seller,
-        canonicalCash: normalizeMoney(seller.canonicalCash + sellerNet),
-        ownedTruckSnapshots: seller.ownedTruckSnapshots.filter(
-          (item) => item.truckId !== sellerVehicle.truckId,
-        ),
-        activeListingIds: seller.activeListingIds.filter((id) => id !== listing.id),
-        soldTruckTombstones: [...seller.soldTruckTombstones, sellerVehicle.truckId],
-        stateVersion: seller.stateVersion + 1,
-        updatedAt: now,
-      },
-      sellerServerSnap.exists
-        ? (sellerServerSnap.data() as ServerStateDocument)
-        : null,
-      now,
-    );
-    transaction.update(listingRef, {
-      status: 'sold',
-      soldAt: now,
-      updatedAt: now,
-      buyerUid: identity.uid,
-      transactionId: input.transactionId,
-      version: listing.version + 1,
-    });
-    transaction.create(
-      saleTransactionRef,
-      transactionData,
-    );
-    for (const uid of [identity.uid, listing.sellerUid]) {
-      transaction.create(
-        firestore.doc(
-          `users/${uid}/marketplaceHistory/${input.transactionId}`,
-        ),
-        transactionData,
+): Promise<MarketplaceActionResult<PurchaseActionData>> {
+  const { result, outerRetryCount } = await runFirestoreTransactionWithRetry(
+    firestore,
+    async (transaction): Promise<MarketplaceActionResult<PurchaseActionData>> => {
+      const readPhase = await readPurchaseTransactionContext(
+        transaction,
+        firestore,
+        identity,
+        input,
+        nowMs,
       );
-    }
-    transaction.create(
-      firestore.doc(
-        `users/${identity.uid}/marketplaceLedger/${input.transactionId}`,
-      ),
-      {
-        type: 'expense',
-        category: 'vehicle_purchase',
-        amount: listing.askingPrice,
-        transactionId: input.transactionId,
-        referenceId: listing.id,
-        createdAt: now,
-      },
-    );
-    transaction.create(
-      firestore.doc(
-        `users/${listing.sellerUid}/marketplaceLedger/${input.transactionId}`,
-      ),
-      {
-        type: 'income',
-        category: 'vehicle_sale',
-        amount: sellerNet,
-        grossAmount: listing.askingPrice,
-        marketplaceFee,
-        transactionId: input.transactionId,
-        referenceId: listing.id,
-        createdAt: now,
-      },
-    );
-    saveIdempotent(transaction, firestore, identity.uid, input, result, now);
-    return result;
-  });
-  return { ...result, retryCount: Math.max(0, transactionAttempts - 1) };
+      if (readPhase.kind === 'return') {
+        return readPhase.result;
+      }
+      return writePurchaseTransactionOutcome(
+        transaction,
+        firestore,
+        identity,
+        input,
+        readPhase.ctx,
+        nowMs,
+      );
+    },
+    { maxAttempts: DEFAULT_OUTER_TRANSACTION_ATTEMPTS },
+  );
+  return { ...result, retryCount: outerRetryCount };
 }
 
 export async function expireVehicleMarketplaceListings(

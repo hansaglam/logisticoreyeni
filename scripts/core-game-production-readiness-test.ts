@@ -319,19 +319,19 @@ async function main(): Promise<void> {
     economyNowMs: trustedNow,
     lastProcessedEconomyAt: trustedNow - DAY_MS,
     alreadyAppliedPeriodKeys: [],
-    maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+    maxOfflineCostPeriods: 0,
   });
   const periodicSecond = buildPeriodicCostDeductions({
     player: makeLevelPlayer(1),
     economyNowMs: trustedNow,
     lastProcessedEconomyAt: periodic.newlyProcessedUntil,
     alreadyAppliedPeriodKeys: periodic.periodKeysApplied,
-    maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+    maxOfflineCostPeriods: 0,
   });
   check(offline.elapsedMs === DAY_MS, '24 saat elapsed doğru');
   check(offlineSimulation.appliedSimulationHours <= 24, 'offline progress 24 saat cap');
-  check(periodic.periodsElapsed === 1, '1 gün yalnız 1 cost period');
-  check(periodic.periodsElapsed < 100, '1 gün 100 period üretmiyor');
+  check(periodic.periodsElapsed === 1, '1 gün yalnız 1 cost period elapsed');
+  check(periodic.periodsCharged === 0, 'offline catch-up fixed cost = 0');
   check(periodicSecond.periodsCharged === 0, 'ikinci hydrate duplicate gider üretmiyor');
   check(
     shouldSkipDuplicateOfflineApply(trustedNow, trustedNow, trustedNow),

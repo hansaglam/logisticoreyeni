@@ -5,7 +5,7 @@
 
 import './test-globals';
 
-import { GAME_LOOP_TICK_MS, operatingCostBalance } from '../src/config/balance';
+import { GAME_LOOP_TICK_MS } from '../src/config/balance';
 import { STARTER_DRIVER } from '../src/data/drivers';
 import { STARTER_TRUCK } from '../src/data/trucks';
 import {
@@ -25,7 +25,7 @@ import {
   resolveOfflineBaselineMs,
   shouldSkipDuplicateOfflineApply,
 } from '../src/simulation/offlineProgression';
-import { buildPeriodicCostDeductions } from '../src/simulation/periodicCosts';
+import { buildPeriodicCostDeductions, OFFLINE_CATCHUP_MAX_COST_PERIODS, ONLINE_TICK_MAX_COST_PERIODS } from '../src/simulation/periodicCosts';
 import type { Player } from '../src/types/game';
 
 let passed = 0;
@@ -48,13 +48,15 @@ const player: Pick<Player, 'drivers' | 'warehouses' | 'trucks'> = {
   trucks: [{ ...STARTER_TRUCK }],
 };
 
-function periodicFor(hoursOffline: number, appliedKeys: string[] = []) {
+function periodicFor(hoursOffline: number, appliedKeys: string[] = [], online = false) {
   return buildPeriodicCostDeductions({
     player,
     economyNowMs: trustedNow,
     lastProcessedEconomyAt: trustedNow - hoursOffline * HOUR_MS,
     alreadyAppliedPeriodKeys: appliedKeys,
-    maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+    maxOfflineCostPeriods: online
+      ? ONLINE_TICK_MAX_COST_PERIODS
+      : OFFLINE_CATCHUP_MAX_COST_PERIODS,
   });
 }
 
@@ -99,29 +101,31 @@ const oneDaySimulation = calculateOfflineSimulationHours(oneDay.appliedMs, 1);
 const oneDayCosts = periodicFor(24);
 assert(oneDay.elapsedMs === DAY_MS, '24 saat elapsedRealHours = 24');
 assert(oneDaySimulation.appliedSimulationHours === 24, '24 saat en fazla 1 oyun günü');
-assert(oneDayCosts.periodsElapsed === 1, '24 saat yalnız 1 cost period');
-assert(oneDayCosts.periodsCharged === 1, '24 saat yalnız 1 cost deduction');
-assert(oneDayCosts.periodsElapsed < 100, '1 gün 100 period üretmez');
+assert(oneDayCosts.periodsElapsed === 1, '24 saat yalnız 1 cost period elapsed');
+assert(oneDayCosts.periodsCharged === 0, 'offline catch-up: 24 saat fixed cost = 0');
 
 const twoDays = calculateOfflineElapsed(trustedNow - 48 * HOUR_MS, trustedNow);
 const twoDayCosts = periodicFor(48);
 assert(twoDays.capped && twoDays.appliedMs === DAY_MS, '48 saat progress penceresi 24h cap');
-assert(twoDayCosts.periodsElapsed === 2, '48 saat = 2 cost period');
-assert(twoDayCosts.periodsCharged === 2, '48 saatte 2 period kesilir');
+assert(twoDayCosts.periodsElapsed === 2, '48 saat = 2 cost period elapsed');
+assert(twoDayCosts.periodsCharged === 0, 'offline catch-up: 48 saat fixed cost = 0');
 
 const sevenDays = calculateOfflineElapsed(trustedNow - 7 * DAY_MS, trustedNow);
 const sevenDayCosts = periodicFor(7 * 24);
 assert(sevenDays.capped, '7 gün progress capped');
 assert(sevenDayCosts.periodsElapsed === 7, '7 gün elapsed period doğru');
-assert(sevenDayCosts.periodsCharged === 3, '7 gün gideri en fazla 3 period');
+assert(sevenDayCosts.periodsCharged === 0, 'offline catch-up: 72h+ fixed cost = 0');
 assert(sevenDayCosts.newlyProcessedUntil === trustedNow, 'cap sonrası cursor trustedNow');
+
+const onlineDay = periodicFor(24, [], true);
+assert(onlineDay.periodsCharged === 1, 'online tick: 24 saat geçince 1 period kesilir');
 
 const secondHydrate = buildPeriodicCostDeductions({
   player,
   economyNowMs: trustedNow,
   lastProcessedEconomyAt: sevenDayCosts.newlyProcessedUntil,
   alreadyAppliedPeriodKeys: sevenDayCosts.periodKeysApplied,
-  maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+  maxOfflineCostPeriods: OFFLINE_CATCHUP_MAX_COST_PERIODS,
 });
 assert(secondHydrate.periodsCharged === 0, 'aynı save ikinci hydrate deduction 0');
 assert(secondHydrate.totalAmount === 0, 'ikinci hydrate toplam gider 0');
@@ -131,7 +135,7 @@ const firstForegroundTick = buildPeriodicCostDeductions({
   economyNowMs: trustedNow + 1_000,
   lastProcessedEconomyAt: sevenDayCosts.newlyProcessedUntil,
   alreadyAppliedPeriodKeys: sevenDayCosts.periodKeysApplied,
-  maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+  maxOfflineCostPeriods: ONLINE_TICK_MAX_COST_PERIODS,
 });
 assert(firstForegroundTick.periodsCharged === 0, 'hydrate sonrası ilk tick duplicate kesmez');
 assert(
@@ -144,7 +148,7 @@ const backwardCostCursor = buildPeriodicCostDeductions({
   economyNowMs: trustedNow,
   lastProcessedEconomyAt: trustedNow + HOUR_MS,
   alreadyAppliedPeriodKeys: [],
-  maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+  maxOfflineCostPeriods: OFFLINE_CATCHUP_MAX_COST_PERIODS,
 });
 assert(
   backwardCostCursor.newlyProcessedUntil === trustedNow + HOUR_MS,

@@ -12,12 +12,14 @@ import { ROUTES } from '../src/data/routes';
 import { STARTER_TRUCK } from '../src/data/trucks';
 import { contractGenerationBalance } from '../src/config/balance';
 import {
+  canSkipContractScheduleTick,
   countAvailableContracts,
   countContractsAtOrBelowLevel,
   countPlayableContracts,
   countPlayableContractsFromOrigin,
   ensureMinimumEligibleContracts,
   expireOldContracts,
+  processContractGenerationSchedule,
   refreshContractsFromMarket,
   shouldRefreshContracts,
 } from '../src/simulation/contracts';
@@ -262,6 +264,58 @@ const bursaContracts = bursaResult.contracts.filter(
   (contract) => contract.originCityId === 'bursa' && contract.status === 'available',
 );
 assert(bursaContracts.length > 0, 'Bursa-origin contracts exist without special-case code');
+
+console.log('\nContract schedule fast path');
+const steadyBase = buildParams([truckAt('izmir')], [], 48);
+const minimum = ensureMinimumEligibleContracts({
+  ...steadyBase,
+  contracts: [],
+  forceFallback: true,
+  maxNewContracts: contractGenerationBalance.bootstrapMaxContractsPerPass,
+  lastPlayableContractGeneratedTime: 48,
+});
+const steadyContracts = minimum.contracts;
+const steadyTime = 48;
+const fastSchedule = processContractGenerationSchedule(
+  {
+    ...steadyBase,
+    contracts: steadyContracts,
+    previousTime: steadyTime,
+    newTime: steadyTime + 0.5,
+    lastContractGenerationTime: steadyTime,
+    lastMarketRefreshTime: steadyTime,
+    lastDailyCleanupTime: steadyTime,
+    lastPlayableContractGeneratedTime: steadyTime,
+  },
+  { includePlayableCountsInDebug: false },
+);
+assert(fastSchedule.contracts === steadyContracts, 'fast path keeps contract array reference');
+assert(fastSchedule.newContracts.length === 0, 'fast path generates zero contracts');
+
+const expiredContract: Contract = {
+  ...steadyContracts[0]!,
+  id: 'expired-soon',
+  status: 'available',
+  expiresAt: steadyTime + 0.1,
+};
+const expiryContracts = [expiredContract, ...steadyContracts.slice(1)];
+assert(
+  !canSkipContractScheduleTick({
+    contracts: expiryContracts,
+    trucks: steadyBase.trucks,
+    drivers: steadyBase.drivers,
+    playerLevel: 1,
+    currentTime: steadyTime,
+    newTime: steadyTime + 0.2,
+    lastContractGenerationTime: steadyTime,
+    lastMarketRefreshTime: steadyTime,
+    lastDailyCleanupTime: steadyTime,
+    idleTruckOriginCityIds: steadyBase.idleTruckOriginCityIds,
+  }),
+  'expiry boundary prevents schedule skip',
+);
+const unchanged = expireOldContracts(expiryContracts, steadyTime);
+assert(unchanged === expiryContracts, 'expireOldContracts returns same reference when unchanged');
 
 console.log(`\nPASS: ${passed}`);
 console.log(`FAIL: ${failed}`);

@@ -15,6 +15,8 @@ import {
 } from '../src/simulation/offlineProgression';
 import {
   buildPeriodicCostDeductions,
+  OFFLINE_CATCHUP_MAX_COST_PERIODS,
+  ONLINE_TICK_MAX_COST_PERIODS,
   periodKeyForStart,
   PERIOD_24H_MS,
 } from '../src/simulation/periodicCosts';
@@ -79,33 +81,40 @@ const first = buildPeriodicCostDeductions({
   economyNowMs: now,
   lastProcessedEconomyAt: last,
   alreadyAppliedPeriodKeys: [],
-  maxOfflineCostPeriods: 0,
+  maxOfflineCostPeriods: OFFLINE_CATCHUP_MAX_COST_PERIODS,
 });
 
-assert(first.periodsCharged === 0, 'G: offline cost disabled → 0 dönem', `charged=${first.periodsCharged}`);
-assert(first.totalAmount === 0, 'G: offline cost disabled → totalAmount 0');
-assert(first.periodKeysApplied.length === 0, 'period keys empty when disabled');
+assert(
+  first.periodsCharged === 0,
+  'offline catch-up: fixed operating cost = 0',
+  `charged=${first.periodsCharged}`,
+);
+assert(first.capped === true, '72h offline: cost cursor capped without charging');
+assert(first.totalAmount === 0, 'offline catch-up totalAmount = 0');
+assert(
+  first.newlyProcessedUntil === now,
+  'offline catch-up advances economy cursor to now',
+);
 
-const legacyCapped = buildPeriodicCostDeductions({
+const onlineAfterReturn = buildPeriodicCostDeductions({
   player,
-  economyNowMs: now,
-  lastProcessedEconomyAt: last,
-  alreadyAppliedPeriodKeys: [],
-  maxOfflineCostPeriods: 3,
+  economyNowMs: now + PERIOD_24H_MS,
+  lastProcessedEconomyAt: first.newlyProcessedUntil,
+  alreadyAppliedPeriodKeys: first.periodKeysApplied,
+  maxOfflineCostPeriods: ONLINE_TICK_MAX_COST_PERIODS,
 });
 assert(
-  legacyCapped.periodsCharged === 3,
-  'legacy helper max=3 hâlâ cap eder (production max=0)',
-  `charged=${legacyCapped.periodsCharged}`,
+  onlineAfterReturn.periodsCharged === 1,
+  'online: next full 24h period charges once',
+  `charged=${onlineAfterReturn.periodsCharged}`,
 );
-assert(legacyCapped.capped === true, 'legacy: 10 dönem elapsed → capped');
 
 const second = buildPeriodicCostDeductions({
   player,
   economyNowMs: now,
   lastProcessedEconomyAt: last,
-  alreadyAppliedPeriodKeys: legacyCapped.periodKeysApplied,
-  maxOfflineCostPeriods: 3,
+  alreadyAppliedPeriodKeys: first.periodKeysApplied,
+  maxOfflineCostPeriods: OFFLINE_CATCHUP_MAX_COST_PERIODS,
 });
 
 assert(second.periodsCharged === 0, 'G: ikinci hydrate aynı period’u kesmez', `charged=${second.periodsCharged}`);
@@ -137,7 +146,7 @@ const idlePeriodic = buildPeriodicCostDeductions({
   // Rolling trusted cursor: tam 24 gerçek saat = tam 1 dönem.
   lastProcessedEconomyAt: now - PERIOD_24H_MS,
   alreadyAppliedPeriodKeys: [],
-  maxOfflineCostPeriods: 3,
+  maxOfflineCostPeriods: ONLINE_TICK_MAX_COST_PERIODS,
 });
 const idleSalaryDeduction = idlePeriodic.deductions
   .filter((d) => d.type === 'driver_salary')

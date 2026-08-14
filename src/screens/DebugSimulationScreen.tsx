@@ -27,7 +27,7 @@ import {
   formatCompanyScore,
   getCompanyScoreBreakdown,
 } from '../simulation/companyScore';
-import { BACKEND_ENABLED, CLOUD_SAVE_AUTO_RESTORE_ENABLED, CLOUD_SAVE_WRITE_ENABLED } from '../config/backendRoadmap';
+import { BACKEND_ENABLED, CLOUD_SAVE_WRITE_ENABLED } from '../config/backendRoadmap';
 import { getCloudSaveStatus } from '../storage/cloudSaveSync';
 import { getTotalInventoryTons, summarizeFinanceLedger } from '../simulation/trading';
 import { leaderboardConfig } from '../config/leaderboard';

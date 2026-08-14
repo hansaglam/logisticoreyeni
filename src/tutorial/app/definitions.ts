@@ -163,6 +163,13 @@ export const FLEET_TUTORIAL_STEPS: AppTutorialStep[] = [
     targetId: 'rental-return',
     finalCtaLabel: 'Anladım',
   },
+  {
+    id: 'fleet-upgrades',
+    title: 'Filo geliştirmeleri',
+    description:
+      'Geliştirmeler sekmesinden kamyonlarının motor, yakıt, kargo ve dayanıklılık seviyelerini yükseltebilirsin.',
+    targetId: 'fleet-upgrades-tab',
+  },
 ];
 
 export const FLEET_TUTORIAL_EMPTY_STEPS: AppTutorialStep[] = [

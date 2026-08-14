@@ -25,10 +25,12 @@ import { clamp } from '../utils/math';
 import {
   calculateFuelUsed as calculateCanonicalFuelUsed,
   getFuelRequiredForDistance,
+  getTruckFuelConsumptionPerKm,
 } from '../utils/truckFuel';
 import { calculateVehicleSpeed } from '../utils/vehiclePerformance';
 import { sanitizeFuelPricePerLiter } from './economy';
 import { resolveActiveEventModifiers } from './globalMarketSnapshot';
+import { getEngineSpeedMultiplier } from './truckUpgrades';
 
 export interface ContractTripCostInput {
   amount: number;
@@ -37,6 +39,7 @@ export interface ContractTripCostInput {
   globalEconomy: GlobalEconomy;
   /** Kamyon atanmamış tahminlerde kullanılır */
   fuelConsumptionPerKm?: number;
+  truck?: Pick<Truck, 'fuelConsumptionPerKm' | 'upgrades'>;
   /** Event bakımı çarpanı — yalnız maintenance */
   maintenanceCostMultiplier?: number;
 }
@@ -119,6 +122,7 @@ export function calculateContractDurationHours(params: {
   trailerType?: Trailer['type'];
   trailerCapacityBonusTons?: number;
   eventSpeedMultiplier?: number;
+  truck?: Pick<Truck, 'speed' | 'capacity' | 'condition' | 'vehicleClass' | 'catalogId' | 'upgrades'>;
 }): {
   durationHours: number;
   effectiveAverageSpeedKmh: number;
@@ -147,7 +151,9 @@ export function calculateContractDurationHours(params: {
           capacityBonusTons: params.trailerCapacityBonusTons,
         }
       : null,
-    eventSpeedMultiplier: params.eventSpeedMultiplier,
+    eventSpeedMultiplier:
+      (params.eventSpeedMultiplier ?? 1) *
+      (params.truck ? getEngineSpeedMultiplier(params.truck as Truck) : 1),
   });
   const effectiveAverageSpeedKmh = speed.effectiveSpeedKmh;
   const travelHours = distanceKm / effectiveAverageSpeedKmh;
@@ -195,8 +201,9 @@ function resolveFuelPrice(globalEconomy: GlobalEconomy): number {
 
 function estimateContractFuelLiters(input: ContractTripCostInput): number {
   const fuelPerKm =
-    input.fuelConsumptionPerKm ??
-    contractBalance.estimateFuelPerKm;
+    input.truck != null
+      ? getTruckFuelConsumptionPerKm(input.truck)
+      : input.fuelConsumptionPerKm ?? contractBalance.estimateFuelPerKm;
   return getFuelRequiredForDistance({
     distanceKm: input.route.distanceKm,
     fuelConsumptionPerKm: fuelPerKm,
@@ -454,13 +461,16 @@ export function calculateContractEconomics(params: {
     eventMods.maintenanceMultiplier;
 
   const fuelPerKm =
-    params.truck?.fuelConsumptionPerKm ?? contractBalance.estimateFuelPerKm;
+    params.truck != null
+      ? getTruckFuelConsumptionPerKm(params.truck)
+      : contractBalance.estimateFuelPerKm;
   const breakdown = estimateContractTripCostBreakdown({
     amount: params.contract.amount,
     route: params.route,
     urgency: params.contract.urgency ?? 0.4,
     globalEconomy: { fuelPrice: fuelPricePerLiter } as GlobalEconomy,
     fuelConsumptionPerKm: fuelPerKm,
+    truck: params.truck ?? undefined,
     maintenanceCostMultiplier: maintenanceMult,
   });
 
@@ -477,6 +487,7 @@ export function calculateContractEconomics(params: {
     driverTier: params.driver?.tier,
     trailerType: params.trailer?.type,
     trailerCapacityBonusTons: params.trailer?.capacityBonusTons,
+    truck: params.truck ?? undefined,
   });
   const durationHours = Math.max(
     0.25,

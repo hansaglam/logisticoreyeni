@@ -19,8 +19,10 @@ import {
   type SaveRecoveryStage,
 } from './saveRecoveryQuarantine';
 import {
+  computeChecksumFromPreparedPayload,
   computeSaveChecksum,
   CURRENT_CHECKSUM_VERSION,
+  preparePayloadForChecksumShallow,
   verifyRawSaveChecksum,
 } from '../utils/saveIntegrity';
 import { reputationBalance, contractGenerationBalance } from '../config/balance';
@@ -1032,6 +1034,13 @@ export async function computeLocalSaveIntegrityChecksum(
   return computeSaveChecksum(payload, CURRENT_CHECKSUM_VERSION, { shallow: true });
 }
 
+async function computeIntegrityChecksumForSealedPayload(
+  payload: SaveGamePayload,
+): Promise<string> {
+  const prepared = preparePayloadForChecksumShallow(payload);
+  return computeChecksumFromPreparedPayload(prepared);
+}
+
 export async function sealSavePayloadIntegrity(payload: SaveGamePayload): Promise<SaveGamePayload> {
   const {
     getSaveContentRevision,
@@ -1045,14 +1054,32 @@ export async function sealSavePayloadIntegrity(payload: SaveGamePayload): Promis
     payload.meta.integrityChecksum = cached;
     return payload;
   }
-  payload.meta.integrityChecksum = await computeLocalSaveIntegrityChecksum(payload);
+  payload.meta.integrityChecksum = await computeIntegrityChecksumForSealedPayload(payload);
   setCachedIntegrityChecksum(revision, payload.meta.integrityChecksum);
   return payload;
 }
 
+async function persistLocalSavePayload(payload: SaveGamePayload): Promise<number> {
+  if (await isSaveRecoveryFatal()) {
+    throw new Error('save-blocked-recovery-fatal');
+  }
+  const quarantine = await getSaveRecoveryQuarantine();
+  if (quarantine && quarantine.resolved !== true && !quarantine.userChoseNewGame) {
+    throw new Error('save-blocked-recovery-required');
+  }
+  // Single disk serialization — checksum uses canonicalJsonStringify on shallow-prepared meta separately.
+  const diskJson = JSON.stringify(payload);
+  const storageKey = await resolveGameplaySaveStorageKey();
+  await atomicWriteSaveJson(storageKey, diskJson);
+  return diskJson.length;
+}
+
 const SAVE_SLOT_STAGING_SUFFIX = '_staging_v1';
 
-/** Staging → read-back verify → backup previous → atomic promote. */
+/** Staging → read-back verify → backup previous → atomic promote.
+ * Typical I/O per save: 5–6 AsyncStorage ops (staging write, read-back, backup copy,
+ * main promote, staging cleanup). Large payloads dominate wall time — not duplicate serialization.
+ */
 export async function atomicWriteSaveJson(storageKey: string, json: string): Promise<void> {
   const stagingKey = `${storageKey}${SAVE_SLOT_STAGING_SUFFIX}`;
   await AsyncStorage.setItem(stagingKey, json);
@@ -1296,16 +1323,7 @@ async function parseAndMigrateRawSave(rawString: string): Promise<{
 export const localSaveProvider: SaveProvider = {
   async save(payload) {
     try {
-      if (await isSaveRecoveryFatal()) {
-        throw new Error('save-blocked-recovery-fatal');
-      }
-      const quarantine = await getSaveRecoveryQuarantine();
-      if (quarantine && quarantine.resolved !== true && !quarantine.userChoseNewGame) {
-        throw new Error('save-blocked-recovery-required');
-      }
-      const storageKey = await resolveGameplaySaveStorageKey();
-      const json = JSON.stringify(payload);
-      await atomicWriteSaveJson(storageKey, json);
+      await persistLocalSavePayload(payload);
     } catch (error) {
       console.warn('[saveGame] localSaveProvider.save failed:', error);
       throw error;
@@ -2007,13 +2025,8 @@ async function writeGameStateOnce(
     const checksumStarted = readPerfNow();
     await sealSavePayloadIntegrity(payload);
     checksumMs = readPerfNow() - checksumStarted;
-    try {
-      payloadBytes = JSON.stringify(payload).length;
-    } catch {
-      payloadBytes = undefined;
-    }
     const writeStarted = readPerfNow();
-    await activeSaveProvider.save(payload);
+    payloadBytes = await persistLocalSavePayload(payload);
     storageWriteMs = readPerfNow() - writeStarted;
     logPerfSave({
       reason: 'saveGameState',

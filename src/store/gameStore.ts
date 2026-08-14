@@ -12,9 +12,11 @@ import { create } from 'zustand';
 import type { PendingMoreSubRoute } from '../navigation/managementNavigation';
 import {
   isNavigationInteractionActive,
+  logContractScheduleStage,
   logPerfAdvanceTimeStage,
   markAdvanceTimeCleanupDeferred,
   measureSyncTask,
+  PERF_DIAGNOSTICS_ENABLED,
   readPerfNow,
   shouldDeferAdvanceTimeMaintenance,
   takeDeferredAdvanceTimeCleanup,
@@ -109,6 +111,7 @@ import {
   refreshContractsFromMarket,
   replenishAvailableContracts,
   processContractGenerationSchedule,
+  canSkipContractScheduleTick,
   buildPlayerFleetCityContext,
   countPlayableContracts,
   countAvailableContracts,
@@ -399,6 +402,8 @@ import {
 import {
   buildPeriodicCostDeductions,
   logTimeProgressionAudit,
+  OFFLINE_CATCHUP_MAX_COST_PERIODS,
+  ONLINE_TICK_MAX_COST_PERIODS,
 } from '../simulation/periodicCosts';
 import {
   buildGlobalEconomySnapshot,
@@ -522,6 +527,8 @@ import { deleteAccountAndCloudData as runAccountDeletion } from '../utils/accoun
 
 const STARTING_MONEY = 20_000;
 const AUTO_SAVE_MIN_INTERVAL_MS = 15_000;
+/** time_tick autosave — sürekli etkileşimde sonsuz ertelemeyi önler. */
+const AUTO_SAVE_MAX_DEFER_MS = 4_000;
 const ENABLE_SAVE_LOGS = false;
 const ECONOMY_TICK_INTERVAL_HOURS = timeBalance.hoursPerDay;
 const DAILY_COST_INTERVAL_HOURS = timeBalance.hoursPerDay;
@@ -567,6 +574,7 @@ let autoSaveEnabled = true;
 let isSavingGame = false;
 let pendingAutoSaveReason: AutoSaveReason | null = null;
 let timeTickSaveScheduled = false;
+let deferredAutoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSaveReason: AutoSaveReason | null = null;
 let isLoadingSave = false;
 let hasHydratedGame = false;
@@ -720,7 +728,7 @@ export interface NavigationRequest {
   moreSubRoute?: 'finance' | 'warehouse' | 'debug' | 'missions';
 }
 
-export type FleetSubTab = 'trucks' | 'drivers' | 'trailers' | 'shop' | 'hire_drivers';
+export type FleetSubTab = 'trucks' | 'drivers' | 'trailers' | 'upgrades' | 'shop' | 'hire_drivers';
 
 export type AutoSaveReason =
   | 'critical'
@@ -775,7 +783,41 @@ function resetAutoSaveTracking(gameTime = 0): void {
   saveDirty = false;
   pendingAutoSaveReason = null;
   timeTickSaveScheduled = false;
+  if (deferredAutoSaveTimer) {
+    clearTimeout(deferredAutoSaveTimer);
+    deferredAutoSaveTimer = null;
+  }
   resetSaveRevisionState();
+}
+
+function clearDeferredAutoSaveTimer(): void {
+  if (deferredAutoSaveTimer) {
+    clearTimeout(deferredAutoSaveTimer);
+    deferredAutoSaveTimer = null;
+  }
+}
+
+function scheduleDeferredTimeTickSave(getStore: () => GameStore): void {
+  if (timeTickSaveScheduled) {
+    return;
+  }
+  timeTickSaveScheduled = true;
+  InteractionManager.runAfterInteractions(() => {
+    timeTickSaveScheduled = false;
+    clearDeferredAutoSaveTimer();
+    if (saveDirty) {
+      getStore().autoSave('time_tick');
+    }
+  });
+  if (!deferredAutoSaveTimer) {
+    deferredAutoSaveTimer = setTimeout(() => {
+      deferredAutoSaveTimer = null;
+      timeTickSaveScheduled = false;
+      if (saveDirty) {
+        getStore().autoSave('time_tick');
+      }
+    }, AUTO_SAVE_MAX_DEFER_MS);
+  }
 }
 
 export interface SaveStatusSnapshot {
@@ -1633,6 +1675,7 @@ export interface GameStore extends StoreGameState {
     missionsClaimedRewardIds: string[];
   };
   autoSave: (reason?: AutoSaveReason) => void;
+  flushLifecycleSave: (reason?: AutoSaveReason) => Promise<void>;
   markSaveDirty: () => void;
   setAutoSaveEnabled: (enabled: boolean) => void;
   saveStatus: SaveStatusSnapshot;
@@ -1941,8 +1984,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   openUpgradesScreen: (truckId) => {
     set({
-      navigationRequest: { tab: 'more' },
-      pendingMoreSubRoute: 'upgrades',
+      navigationRequest: { tab: 'fleet' },
+      pendingFleetSubTab: 'upgrades',
       pendingUpgradeTruckId: truckId ?? null,
     });
   },
@@ -3645,15 +3688,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       isNavigationInteractionActive() &&
       !timeTickSaveScheduled
     ) {
-      timeTickSaveScheduled = true;
-      InteractionManager.runAfterInteractions(() => {
-        timeTickSaveScheduled = false;
-        if (saveDirty) {
-          get().autoSave('time_tick');
-        }
-      });
+      scheduleDeferredTimeTickSave(get);
       return;
     }
+
+    clearDeferredAutoSaveTimer();
 
     if (!isImmediate) {
       if (lastAutoSaveAt > 0 && now - lastAutoSaveAt < AUTO_SAVE_MIN_INTERVAL_MS) {
@@ -3685,6 +3724,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
           get().autoSave(nextReason);
         }
       });
+  },
+
+  flushLifecycleSave: async (reason: AutoSaveReason = 'background') => {
+    clearDeferredAutoSaveTimer();
+    timeTickSaveScheduled = false;
+    lastSaveReason = reason;
+    if (!autoSaveEnabled || isLoadingSave || !hasHydratedGame) {
+      return;
+    }
+    const state = get();
+    if (!state.isGameReady) {
+      return;
+    }
+    if (isSavingGame) {
+      pendingAutoSaveReason = reason;
+      return;
+    }
+    isSavingGame = true;
+    patchSaveStatus(set, { isSaving: true, lastSaveReason: reason });
+    try {
+      await get().saveGame();
+      saveDirty = false;
+      patchSaveStatus(set, { isDirty: false });
+    } finally {
+      isSavingGame = false;
+      patchSaveStatus(set, { isSaving: false });
+    }
   },
 
   markSaveDirty: () => {
@@ -3885,7 +3951,8 @@ const simulation = plan.simulation;
     }
 
     const progressedState = get();
-    // Offline sabit işletme gideri tamamen kapalı — period deduction üretme.
+    // Product rule: fixed operating costs are never charged during offline catch-up
+    // (OFFLINE_CATCHUP_MAX_COST_PERIODS === 0). Cursor still advances.
     const periodic = buildPeriodicCostDeductions({
       player: progressedState.player,
       economyNowMs: nowMs,
@@ -3893,25 +3960,8 @@ const simulation = plan.simulation;
         progressedState.lastProcessedEconomyAt ?? baselineMs,
       alreadyAppliedPeriodKeys:
         progressedState.appliedEconomyPeriodKeys ?? [],
-      maxOfflineCostPeriods: 0,
+      maxOfflineCostPeriods: OFFLINE_CATCHUP_MAX_COST_PERIODS,
     });
-
-    if (periodic.periodsCharged > 0) {
-      offlineProgressionActive = true;
-      try {
-        get().processDailyOperatingCosts({
-          days: periodic.periodsCharged,
-          elapsedDays: periodic.periodsElapsed,
-          reason: 'offline_catchup',
-          currentTime: progressedState.currentTime,
-          lastDailyOperatingCostTime: progressedState.currentTime,
-          transactionId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
-          referenceId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
-        });
-      } finally {
-        offlineProgressionActive = false;
-      }
-    }
 
     const midState = get();
     const mergedPeriodKeys = [
@@ -4176,41 +4226,50 @@ const simulation = plan.simulation;
     if (!offlineProgressionActive) {
       const costState = get();
       const economyNowMs = getEconomyNow();
+      const periodicBuildStart = readPerfNow();
       const periodic = buildPeriodicCostDeductions({
         player: costState.player,
         economyNowMs,
         lastProcessedEconomyAt: costState.lastProcessedEconomyAt,
         alreadyAppliedPeriodKeys: costState.appliedEconomyPeriodKeys ?? [],
-        maxOfflineCostPeriods: operatingCostBalance.maxOfflineChargeDays,
+        maxOfflineCostPeriods: ONLINE_TICK_MAX_COST_PERIODS,
       });
+      logPerfAdvanceTimeStage('finance-periodic-build', periodicBuildStart);
 
       if (periodic.periodsCharged > 0) {
+        const chargeStart = readPerfNow();
         get().processDailyOperatingCosts({
           days: periodic.periodsCharged,
           elapsedDays: periodic.periodsElapsed,
-          reason:
-            periodic.periodsElapsed > 1 || periodic.capped
-              ? 'offline_catchup'
-              : 'daily_tick',
+          reason: 'daily_tick',
           currentTime: newTime,
           lastDailyOperatingCostTime: newTime,
           transactionId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
           referenceId: `periodic-cost:${periodic.periodKeysApplied.join('|')}`,
         });
+        logPerfAdvanceTimeStage('finance-periodic-charge', chargeStart);
       }
 
-      const afterCosts = get();
-      set({
-        lastProcessedEconomyAt: periodic.newlyProcessedUntil,
-        appliedEconomyPeriodKeys: [
-          ...(afterCosts.appliedEconomyPeriodKeys ?? []),
-          ...periodic.periodKeysApplied,
-        ].slice(-48),
-        dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
-          { ...afterCosts, currentTime: newTime },
-          get().dailyOperatingCostDebug?.lastCharge ?? null,
-        ),
-      });
+      const previousProcessedAt = costState.lastProcessedEconomyAt ?? 0;
+      const economyStateChanged =
+        periodic.periodsCharged > 0 ||
+        periodic.newlyProcessedUntil !== previousProcessedAt ||
+        periodic.periodKeysApplied.length > 0;
+
+      if (economyStateChanged) {
+        const afterCosts = get();
+        set({
+          lastProcessedEconomyAt: periodic.newlyProcessedUntil,
+          appliedEconomyPeriodKeys: [
+            ...(afterCosts.appliedEconomyPeriodKeys ?? []),
+            ...periodic.periodKeysApplied,
+          ].slice(-48),
+          dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
+            { ...afterCosts, currentTime: newTime },
+            get().dailyOperatingCostDebug?.lastCharge ?? null,
+          ),
+        });
+      }
     }
     finishStage('finance-periodic');
 
@@ -4226,57 +4285,107 @@ const simulation = plan.simulation;
     finishStage('economy');
 
     const stateBeforeContracts = get();
-    const scheduleParams = buildContractRefreshParams(stateBeforeContracts);
-    const scheduleResult = processContractGenerationSchedule({
-      ...scheduleParams,
-      previousTime: state.currentTime,
-      newTime,
-      lastContractGenerationTime:
-        stateBeforeContracts.lastContractGenerationTime ?? state.currentTime,
-      lastMarketRefreshTime: stateBeforeContracts.lastMarketRefreshTime ?? 0,
-      lastDailyCleanupTime: stateBeforeContracts.lastDailyCleanupTime ?? 0,
-      lastPlayableContractGeneratedTime:
-        stateBeforeContracts.lastPlayableContractGeneratedTime ?? 0,
-    });
+    const playerLevel = Math.max(
+      1,
+      stateBeforeContracts.player.level ?? stateBeforeContracts.player.companyLevel ?? 1,
+    );
+    const trucks = stateBeforeContracts.player.trucks ?? [];
+    const homeCityId = stateBeforeContracts.player.homeCityId;
+    const idleTruckOriginCityIds = getIdleTruckOriginCityIds(trucks, homeCityId);
+    const includePlayableCountsInDebug =
+      (typeof __DEV__ !== 'undefined' && __DEV__) || PERF_DIAGNOSTICS_ENABLED;
 
-    const contractPatch: Partial<StoreGameState> = {
-      contracts: scheduleResult.contracts,
-      lastContractGenerationTime: scheduleResult.lastContractGenerationTime,
-      lastMarketRefreshTime: scheduleResult.lastMarketRefreshTime,
-      lastDailyCleanupTime: scheduleResult.lastDailyCleanupTime,
-      lastPlayableContractGeneratedTime: scheduleResult.lastPlayableContractGeneratedTime,
-    };
-
+    const scheduleCheckStart = readPerfNow();
     if (
-      (scheduleResult.newContracts.length > 0 || scheduleResult.debug.expiredContractsRemoved > 0) &&
-      shouldLogContractMarketEvent(stateBeforeContracts.eventLog, newTime)
-    ) {
-      const isCatchup = scheduleResult.debug.offlineCatchup;
-      const newCount = scheduleResult.newContracts.length;
-      const expiredCount = scheduleResult.debug.expiredContractsRemoved;
-
-      contractPatch.eventLog = prependGameEvents(
-        stateBeforeContracts.eventLog,
-        [
-          {
-            time: newTime,
-            type: 'market',
-            title: isCatchup ? 'Piyasa güncellendi' : 'Yeni sözleşmeler',
-            message: isCatchup
-              ? `${newCount} yeni sözleşme oluştu${expiredCount > 0 ? `, ${expiredCount} süresi dolan iş kaldırıldı` : ''}.`
-              : `${newCount} yeni taşıma fırsatı piyasaya eklendi.`,
-            importance: 'medium',
-          },
-        ],
+      canSkipContractScheduleTick({
+        contracts: stateBeforeContracts.contracts,
+        trucks,
+        drivers: stateBeforeContracts.player.drivers,
+        playerLevel,
+        currentTime: state.currentTime,
         newTime,
+        lastContractGenerationTime:
+          stateBeforeContracts.lastContractGenerationTime ?? state.currentTime,
+        lastMarketRefreshTime: stateBeforeContracts.lastMarketRefreshTime ?? 0,
+        lastDailyCleanupTime: stateBeforeContracts.lastDailyCleanupTime ?? 0,
+        idleTruckOriginCityIds,
+      })
+    ) {
+      logContractScheduleStage('skip-tick', scheduleCheckStart);
+      finishStage('contract-schedule');
+    } else {
+      logContractScheduleStage('skip-tick', scheduleCheckStart, { skipped: false });
+      const paramsStart = readPerfNow();
+      const scheduleParams = buildContractRefreshParams(stateBeforeContracts);
+      logContractScheduleStage('city-fleet-context', paramsStart);
+      const runStart = readPerfNow();
+      const scheduleResult = processContractGenerationSchedule(
+        {
+          ...scheduleParams,
+          previousTime: state.currentTime,
+          newTime,
+          lastContractGenerationTime:
+            stateBeforeContracts.lastContractGenerationTime ?? state.currentTime,
+          lastMarketRefreshTime: stateBeforeContracts.lastMarketRefreshTime ?? 0,
+          lastDailyCleanupTime: stateBeforeContracts.lastDailyCleanupTime ?? 0,
+          lastPlayableContractGeneratedTime:
+            stateBeforeContracts.lastPlayableContractGeneratedTime ?? 0,
+        },
+        { includePlayableCountsInDebug },
       );
-    }
+      logContractScheduleStage('schedule-run', runStart, {
+        newContracts: scheduleResult.newContracts.length,
+        expiredRemoved: scheduleResult.debug.expiredContractsRemoved,
+        elapsedSmallTicks: scheduleResult.debug.elapsedSmallTicks,
+        elapsedMediumTicks: scheduleResult.debug.elapsedMediumTicks,
+        elapsedDailyTicks: scheduleResult.debug.elapsedDailyTicks,
+        offlineCatchup: scheduleResult.debug.offlineCatchup,
+      });
 
-    set({
-      ...contractPatch,
-      contractGenerationDebug: scheduleResult.debug,
-    });
-    finishStage('contract-schedule');
+      const contractPatch: Partial<StoreGameState> = {
+        contracts: scheduleResult.contracts,
+        lastContractGenerationTime: scheduleResult.lastContractGenerationTime,
+        lastMarketRefreshTime: scheduleResult.lastMarketRefreshTime,
+        lastDailyCleanupTime: scheduleResult.lastDailyCleanupTime,
+        lastPlayableContractGeneratedTime: scheduleResult.lastPlayableContractGeneratedTime,
+      };
+
+      if (
+        (scheduleResult.newContracts.length > 0 ||
+          scheduleResult.debug.expiredContractsRemoved > 0) &&
+        shouldLogContractMarketEvent(stateBeforeContracts.eventLog, newTime)
+      ) {
+        const isCatchup = scheduleResult.debug.offlineCatchup;
+        const newCount = scheduleResult.newContracts.length;
+        const expiredCount = scheduleResult.debug.expiredContractsRemoved;
+
+        contractPatch.eventLog = prependGameEvents(
+          stateBeforeContracts.eventLog,
+          [
+            {
+              time: newTime,
+              type: 'market',
+              title: isCatchup ? 'Piyasa güncellendi' : 'Yeni sözleşmeler',
+              message: isCatchup
+                ? `${newCount} yeni sözleşme oluştu${expiredCount > 0 ? `, ${expiredCount} süresi dolan iş kaldırıldı` : ''}.`
+                : `${newCount} yeni taşıma fırsatı piyasaya eklendi.`,
+              importance: 'medium',
+            },
+          ],
+          newTime,
+        );
+      }
+
+      if (includePlayableCountsInDebug) {
+        set({
+          ...contractPatch,
+          contractGenerationDebug: scheduleResult.debug,
+        });
+      } else {
+        set(contractPatch);
+      }
+      finishStage('contract-schedule');
+    }
 
     if (shouldDeferAdvanceTimeMaintenance()) {
       markAdvanceTimeCleanupDeferred();

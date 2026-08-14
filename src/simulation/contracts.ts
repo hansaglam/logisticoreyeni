@@ -69,6 +69,7 @@ import { meetsDriverLevelRequirement } from './driverProgress';
 import { getRoute as findRoute } from '../data/routes';
 import { getProductByIdSafe } from '../utils/entityLookup';
 import { canAffordVoluntaryPurchase } from '../utils/cashPolicy';
+import { measureContractScheduleStage } from '../utils/performanceDiagnostics';
 import {
   calculateDeliveryFuelLiters,
   getTruckFuelReadiness,
@@ -1072,6 +1073,21 @@ export function generateContractForProduct(
  * Mevcut sözleşmeler mutate edilmez; yalnızca yeni üretilenler döner.
  */
 export function generateContracts(
+  cities: Record<string, City>,
+  routes: Route[],
+  products: Product[],
+  globalEconomy: GlobalEconomy,
+  existingContracts: Contract[],
+  options: GenerateContractsOptions,
+): Contract[] {
+  return measureContractScheduleStage(
+    'route-eligibility',
+    () => generateContractsCore(cities, routes, products, globalEconomy, existingContracts, options),
+    { maxNewContracts: options.maxNewContracts ?? contractBalance.maxContractsPerTick },
+  );
+}
+
+function generateContractsCore(
   cities: Record<string, City>,
   routes: Route[],
   products: Product[],
@@ -2199,12 +2215,14 @@ function buildContractGenerationDebugSnapshot(params: {
   return {
     currentTime: safeTime,
     availableContracts: countAvailableContracts(params.contracts),
-    playableContractsCount: countPlayableContracts(
-      params.contracts,
-      params.trucks,
-      params.drivers,
-      playerLevel,
-      safeTime,
+    playableContractsCount: measureContractScheduleStage('playable-contract-scan', () =>
+      countPlayableContracts(
+        params.contracts,
+        params.trucks,
+        params.drivers,
+        playerLevel,
+        safeTime,
+      ),
     ),
     idleTruckOriginCities: params.idleTruckOriginCityIds ?? [],
     activeDeliveryDestinationCities: params.activeDeliveryDestinationCityIds ?? [],
@@ -2238,6 +2256,65 @@ function computeElapsedTicks(
     return 0;
   }
   return Math.floor((currentTime - lastTime) / intervalHours);
+}
+
+/** advanceTime no-op fast path — generation parametreleri oluşturmadan kontrol. */
+export function canSkipContractScheduleTick(params: {
+  contracts: Contract[] | undefined;
+  trucks?: Truck[];
+  drivers?: Driver[];
+  playerLevel?: number;
+  currentTime: number;
+  newTime: number;
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+  idleTruckOriginCityIds?: string[];
+}): boolean {
+  return isContractScheduleFastPathEligible({
+    contracts: params.contracts,
+    trucks: params.trucks,
+    drivers: params.drivers,
+    playerLevel: params.playerLevel,
+    newTime: params.newTime,
+    lastContractGenerationTime: params.lastContractGenerationTime,
+    lastMarketRefreshTime: params.lastMarketRefreshTime,
+    lastDailyCleanupTime: params.lastDailyCleanupTime,
+    idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+  });
+}
+
+function isContractScheduleFastPathEligible(params: {
+  contracts: Contract[] | undefined;
+  trucks?: Truck[];
+  drivers?: Driver[];
+  playerLevel?: number;
+  newTime: number;
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+  idleTruckOriginCityIds?: string[];
+}): boolean {
+  const gen = contractGenerationBalance;
+  const newTime = params.newTime;
+  if (
+    computeElapsedTicks(params.lastDailyCleanupTime, newTime, gen.dailyCleanupIntervalHours) > 0 ||
+    computeElapsedTicks(params.lastMarketRefreshTime, newTime, gen.mediumGenerationIntervalHours) > 0 ||
+    computeElapsedTicks(params.lastContractGenerationTime, newTime, gen.smallGenerationIntervalHours) > 0
+  ) {
+    return false;
+  }
+  if (contractsNeedExpiryPass(params.contracts, newTime)) {
+    return false;
+  }
+  return !isContractMinimumSupplyNeeded({
+    contracts: params.contracts,
+    trucks: params.trucks,
+    drivers: params.drivers,
+    playerLevel: params.playerLevel,
+    currentTime: newTime,
+    idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+  });
 }
 
 function runBoundedGenerationTicks(
@@ -2291,12 +2368,127 @@ function runBoundedGenerationTicks(
   return { contracts, newContracts, expiredRemoved, processedTicks, catchup };
 }
 
+/** Available sözleşmelerden herhangi biri bu tick'te süresi doluyor mu? */
+export function contractsNeedExpiryPass(
+  contracts: Contract[] | undefined,
+  currentTime: number,
+): boolean {
+  for (const contract of contracts ?? []) {
+    if (contract.status === 'available' && currentTime >= contract.expiresAt) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** ensureMinimumEligibleContracts needsSupply — expire öncesi hızlı kontrol. */
+export function isContractMinimumSupplyNeeded(params: {
+  contracts: Contract[] | undefined;
+  trucks?: Truck[];
+  drivers?: Driver[];
+  playerLevel?: number;
+  currentTime?: number;
+  idleTruckOriginCityIds?: string[];
+}): boolean {
+  const gen = contractGenerationBalance;
+  const contracts = params.contracts ?? [];
+  const playerLevel = Math.max(1, params.playerLevel ?? 1);
+  const trucks = params.trucks ?? [];
+  const drivers = params.drivers ?? [];
+  const currentTime = params.currentTime ?? 0;
+  const idleCities = [
+    ...new Set((params.idleTruckOriginCityIds ?? []).map((cityId) => normalizeCityId(cityId))),
+  ];
+
+  if (countAvailableContracts(contracts) === 0) {
+    return true;
+  }
+  if (idleCities.length > 0 && countPlayableContracts(contracts, trucks, drivers, playerLevel, currentTime) === 0) {
+    return true;
+  }
+  const perCityGap = idleCities.reduce((gap, cityId) => {
+    const have = countPlayableContractsFromOrigin(
+      contracts,
+      cityId,
+      trucks,
+      drivers,
+      playerLevel,
+      currentTime,
+    );
+    return gap + Math.max(0, gen.minAvailableContractsPerIdleTruckCity - have);
+  }, 0);
+  if (perCityGap > 0) {
+    return true;
+  }
+  if (countAvailableContracts(contracts) < gen.minGlobalEligibleContracts) {
+    return true;
+  }
+  if (countContractsAtOrBelowLevel(contracts, playerLevel) < gen.minPlayerLevelEligibleContracts) {
+    return true;
+  }
+  return false;
+}
+
+function buildContractScheduleTimingDebugSnapshot(params: {
+  currentTime: number;
+  contracts: Contract[];
+  lastPlayableContractGeneratedTime?: number;
+  lastContractGenerationTime: number;
+  lastMarketRefreshTime: number;
+  lastDailyCleanupTime: number;
+  generatedContractsCount: number;
+  expiredContractsRemoved: number;
+  elapsedSmallTicks: number;
+  processedSmallTicks: number;
+  elapsedMediumTicks: number;
+  processedMediumTicks: number;
+  elapsedDailyTicks: number;
+  offlineCatchup: boolean;
+  idleTruckOriginCityIds?: string[];
+  activeDeliveryDestinationCityIds?: string[];
+}): ContractGenerationDebugSnapshot {
+  const gen = contractGenerationBalance;
+  const safeTime = params.currentTime ?? 0;
+  const lastGen = params.lastContractGenerationTime ?? 0;
+  const lastMarket = params.lastMarketRefreshTime ?? 0;
+  const lastCleanup = params.lastDailyCleanupTime ?? 0;
+  const hoursSinceGen = Math.max(0, safeTime - lastGen);
+  const hoursSinceMarket = Math.max(0, safeTime - lastMarket);
+
+  return {
+    currentTime: safeTime,
+    availableContracts: countAvailableContracts(params.contracts),
+    playableContractsCount: -1,
+    idleTruckOriginCities: params.idleTruckOriginCityIds ?? [],
+    activeDeliveryDestinationCities: params.activeDeliveryDestinationCityIds ?? [],
+    lastPlayableContractGeneratedTime: params.lastPlayableContractGeneratedTime ?? 0,
+    lastContractGenerationTime: lastGen,
+    lastMarketRefreshTime: lastMarket,
+    lastDailyCleanupTime: lastCleanup,
+    hoursSinceLastGeneration: hoursSinceGen,
+    hoursSinceLastMarketRefresh: hoursSinceMarket,
+    lastGeneratedContractsCount: params.generatedContractsCount,
+    expiredContractsRemoved: params.expiredContractsRemoved,
+    nextSmallGenerationInHours: Math.max(0, gen.smallGenerationIntervalHours - hoursSinceGen),
+    nextMediumGenerationInHours: Math.max(0, gen.mediumGenerationIntervalHours - hoursSinceMarket),
+    nextDailyCleanupInHours: Math.max(0, gen.dailyCleanupIntervalHours - (safeTime - lastCleanup)),
+    elapsedSmallTicks: params.elapsedSmallTicks,
+    processedSmallTicks: params.processedSmallTicks,
+    elapsedMediumTicks: params.elapsedMediumTicks,
+    processedMediumTicks: params.processedMediumTicks,
+    elapsedDailyTicks: params.elapsedDailyTicks,
+    generatedContractsCount: params.generatedContractsCount,
+    offlineCatchup: params.offlineCatchup,
+  };
+}
+
 /**
  * advanceTime sırasında kademeli sözleşme üretim zamanlamasını işler.
  * Küçük (3s), orta (6s) ve günlük (24s) tick'leri toplu hesapla; while döngüsü yok.
  */
 export function processContractGenerationSchedule(
   params: ProcessContractGenerationScheduleParams,
+  options?: { includePlayableCountsInDebug?: boolean },
 ): ProcessContractGenerationScheduleResult {
   const gen = contractGenerationBalance;
   const newTime = params.newTime ?? params.currentTime ?? 0;
@@ -2305,6 +2497,65 @@ export function processContractGenerationSchedule(
   const initialCleanup = params.lastDailyCleanupTime ?? 0;
   const initialMarket = params.lastMarketRefreshTime ?? 0;
   const initialGen = params.lastContractGenerationTime ?? params.previousTime ?? 0;
+
+  const elapsedDailyTicks = computeElapsedTicks(
+    initialCleanup,
+    newTime,
+    gen.dailyCleanupIntervalHours,
+  );
+  const elapsedMediumTicks = computeElapsedTicks(
+    initialMarket,
+    newTime,
+    gen.mediumGenerationIntervalHours,
+  );
+  const elapsedSmallTicks = computeElapsedTicks(
+    initialGen,
+    newTime,
+    gen.smallGenerationIntervalHours,
+  );
+
+  if (
+    measureContractScheduleStage('fast-path-eligibility', () =>
+      isContractScheduleFastPathEligible({
+        contracts,
+        trucks: params.trucks,
+        drivers: params.drivers,
+        playerLevel: params.playerLevel,
+        newTime,
+        lastContractGenerationTime: initialGen,
+        lastMarketRefreshTime: initialMarket,
+        lastDailyCleanupTime: initialCleanup,
+        idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+      }),
+    )
+  ) {
+    return {
+      contracts,
+      newContracts: [],
+      lastContractGenerationTime: initialGen,
+      lastMarketRefreshTime: initialMarket,
+      lastDailyCleanupTime: initialCleanup,
+      lastPlayableContractGeneratedTime: params.lastPlayableContractGeneratedTime ?? 0,
+      debug: buildContractScheduleTimingDebugSnapshot({
+        currentTime: newTime,
+        contracts,
+        lastPlayableContractGeneratedTime: params.lastPlayableContractGeneratedTime,
+        lastContractGenerationTime: initialGen,
+        lastMarketRefreshTime: initialMarket,
+        lastDailyCleanupTime: initialCleanup,
+        generatedContractsCount: 0,
+        expiredContractsRemoved: 0,
+        elapsedSmallTicks: 0,
+        processedSmallTicks: 0,
+        elapsedMediumTicks: 0,
+        processedMediumTicks: 0,
+        elapsedDailyTicks: 0,
+        offlineCatchup: false,
+        idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+        activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+      }),
+    };
+  }
 
   let lastCleanup = initialCleanup;
   let lastMarket = initialMarket;
@@ -2330,26 +2581,29 @@ export function processContractGenerationSchedule(
     activeWorldEvents: params.activeWorldEvents,
   };
 
-  const elapsedDailyTicks = computeElapsedTicks(
-    initialCleanup,
-    newTime,
-    gen.dailyCleanupIntervalHours,
-  );
-
   if (elapsedDailyTicks > 0) {
     offlineCatchup = offlineCatchup || elapsedDailyTicks > gen.maxDailyCleanupTicksProcessedAtOnce;
     const cleanupTime = initialCleanup + elapsedDailyTicks * gen.dailyCleanupIntervalHours;
 
     const beforeDaily = contracts;
-    contracts = expireOldContracts(contracts, cleanupTime);
+    contracts = measureContractScheduleStage(
+      'generation-daily-expiry',
+      () => expireOldContracts(contracts, cleanupTime),
+      { elapsedDailyTicks },
+    );
     totalExpiredRemoved += countNewlyExpiredContracts(beforeDaily, contracts);
 
-    const boost = runContractGenerationTick({
-      ...baseParams,
-      contracts,
-      currentTime: cleanupTime,
-      tick: 'cleanup_boost',
-    });
+    const boost = measureContractScheduleStage(
+      'generation-daily',
+      () =>
+        runContractGenerationTick({
+          ...baseParams,
+          contracts,
+          currentTime: cleanupTime,
+          tick: 'cleanup_boost',
+        }),
+      { elapsedDailyTicks },
+    );
     contracts = boost.contracts;
     allNewContracts.push(...boost.newContracts);
     totalExpiredRemoved += boost.expiredRemoved;
@@ -2357,20 +2611,20 @@ export function processContractGenerationSchedule(
     lastCleanup = initialCleanup + elapsedDailyTicks * gen.dailyCleanupIntervalHours;
   }
 
-  const elapsedMediumTicks = computeElapsedTicks(
-    initialMarket,
-    newTime,
-    gen.mediumGenerationIntervalHours,
+  const mediumResult = measureContractScheduleStage(
+    'generation-medium',
+    () =>
+      runBoundedGenerationTicks({
+        baseParams,
+        contracts,
+        tick: 'medium',
+        initialLastTime: initialMarket,
+        intervalHours: gen.mediumGenerationIntervalHours,
+        elapsedTicks: elapsedMediumTicks,
+        maxProcessedTicks: gen.maxMediumTicksProcessedAtOnce,
+      }),
+    { elapsedMediumTicks },
   );
-  const mediumResult = runBoundedGenerationTicks({
-    baseParams,
-    contracts,
-    tick: 'medium',
-    initialLastTime: initialMarket,
-    intervalHours: gen.mediumGenerationIntervalHours,
-    elapsedTicks: elapsedMediumTicks,
-    maxProcessedTicks: gen.maxMediumTicksProcessedAtOnce,
-  });
   contracts = mediumResult.contracts;
   allNewContracts.push(...mediumResult.newContracts);
   totalExpiredRemoved += mediumResult.expiredRemoved;
@@ -2379,20 +2633,20 @@ export function processContractGenerationSchedule(
     lastMarket = initialMarket + elapsedMediumTicks * gen.mediumGenerationIntervalHours;
   }
 
-  const elapsedSmallTicks = computeElapsedTicks(
-    initialGen,
-    newTime,
-    gen.smallGenerationIntervalHours,
+  const smallResult = measureContractScheduleStage(
+    'generation-small',
+    () =>
+      runBoundedGenerationTicks({
+        baseParams,
+        contracts,
+        tick: 'small',
+        initialLastTime: initialGen,
+        intervalHours: gen.smallGenerationIntervalHours,
+        elapsedTicks: elapsedSmallTicks,
+        maxProcessedTicks: gen.maxSmallTicksProcessedAtOnce,
+      }),
+    { elapsedSmallTicks },
   );
-  const smallResult = runBoundedGenerationTicks({
-    baseParams,
-    contracts,
-    tick: 'small',
-    initialLastTime: initialGen,
-    intervalHours: gen.smallGenerationIntervalHours,
-    elapsedTicks: elapsedSmallTicks,
-    maxProcessedTicks: gen.maxSmallTicksProcessedAtOnce,
-  });
   contracts = smallResult.contracts;
   allNewContracts.push(...smallResult.newContracts);
   totalExpiredRemoved += smallResult.expiredRemoved;
@@ -2404,45 +2658,84 @@ export function processContractGenerationSchedule(
   const generatedContractsCount = allNewContracts.length;
 
   let lastPlayableGenerated = params.lastPlayableContractGeneratedTime ?? 0;
-  const minimumResult = ensureMinimumEligibleContracts({
-    ...baseParams,
-    contracts,
-    currentTime: newTime,
-    trucks: params.trucks,
-    trailers: params.trailers,
-    drivers: params.drivers,
-    homeCityId: params.homeCityId,
-    lastPlayableContractGeneratedTime: lastPlayableGenerated,
-    maxNewContracts: gen.bootstrapMaxContractsPerPass,
-  });
-  if (minimumResult.newContracts.length > 0) {
-    contracts = minimumResult.contracts;
-    allNewContracts.push(...minimumResult.newContracts);
-    lastPlayableGenerated =
-      minimumResult.updatedLastPlayableContractGeneratedTime ?? lastPlayableGenerated;
+  const minimumSupplyNeeded = measureContractScheduleStage(
+    'minimum-supply-check',
+    () =>
+      isContractMinimumSupplyNeeded({
+        contracts,
+        trucks: params.trucks,
+        drivers: params.drivers,
+        playerLevel: params.playerLevel,
+        currentTime: newTime,
+        idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+      }),
+  );
+  if (minimumSupplyNeeded) {
+    const minimumResult = measureContractScheduleStage('minimum-supply-ensure', () =>
+      ensureMinimumEligibleContracts({
+        ...baseParams,
+        contracts,
+        currentTime: newTime,
+        trucks: params.trucks,
+        trailers: params.trailers,
+        drivers: params.drivers,
+        homeCityId: params.homeCityId,
+        lastPlayableContractGeneratedTime: lastPlayableGenerated,
+        maxNewContracts: gen.bootstrapMaxContractsPerPass,
+      }),
+    );
+    if (minimumResult.newContracts.length > 0) {
+      contracts = minimumResult.contracts;
+      allNewContracts.push(...minimumResult.newContracts);
+      lastPlayableGenerated =
+        minimumResult.updatedLastPlayableContractGeneratedTime ?? lastPlayableGenerated;
+    }
   }
 
-  const debug = buildContractGenerationDebugSnapshot({
-    currentTime: newTime,
-    contracts,
-    trucks: params.trucks,
-    drivers: params.drivers,
-    playerLevel: params.playerLevel,
-    idleTruckOriginCityIds: params.idleTruckOriginCityIds,
-    activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
-    lastPlayableContractGeneratedTime: lastPlayableGenerated,
-    lastContractGenerationTime: lastGen,
-    lastMarketRefreshTime: lastMarket,
-    lastDailyCleanupTime: lastCleanup,
-    generatedContractsCount: allNewContracts.length,
-    expiredContractsRemoved: totalExpiredRemoved,
-    elapsedSmallTicks,
-    processedSmallTicks: smallResult.processedTicks,
-    elapsedMediumTicks,
-    processedMediumTicks: mediumResult.processedTicks,
-    elapsedDailyTicks,
-    offlineCatchup,
-  });
+  const debug = measureContractScheduleStage(
+    'debug-snapshot',
+    () =>
+      options?.includePlayableCountsInDebug === false
+        ? buildContractScheduleTimingDebugSnapshot({
+          currentTime: newTime,
+          contracts,
+          lastPlayableContractGeneratedTime: lastPlayableGenerated,
+          lastContractGenerationTime: lastGen,
+          lastMarketRefreshTime: lastMarket,
+          lastDailyCleanupTime: lastCleanup,
+          generatedContractsCount: allNewContracts.length,
+          expiredContractsRemoved: totalExpiredRemoved,
+          elapsedSmallTicks,
+          processedSmallTicks: smallResult.processedTicks,
+          elapsedMediumTicks,
+          processedMediumTicks: mediumResult.processedTicks,
+          elapsedDailyTicks,
+          offlineCatchup,
+          idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+          activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+        })
+      : buildContractGenerationDebugSnapshot({
+          currentTime: newTime,
+          contracts,
+          trucks: params.trucks,
+          drivers: params.drivers,
+          playerLevel: params.playerLevel,
+          idleTruckOriginCityIds: params.idleTruckOriginCityIds,
+          activeDeliveryDestinationCityIds: params.activeDeliveryDestinationCityIds,
+          lastPlayableContractGeneratedTime: lastPlayableGenerated,
+          lastContractGenerationTime: lastGen,
+          lastMarketRefreshTime: lastMarket,
+          lastDailyCleanupTime: lastCleanup,
+          generatedContractsCount: allNewContracts.length,
+          expiredContractsRemoved: totalExpiredRemoved,
+          elapsedSmallTicks,
+          processedSmallTicks: smallResult.processedTicks,
+          elapsedMediumTicks,
+          processedMediumTicks: mediumResult.processedTicks,
+          elapsedDailyTicks,
+          offlineCatchup,
+        }),
+  );
 
   return {
     contracts,
@@ -2620,12 +2913,15 @@ export function refreshContractsFromMarket(
  * Orijinal dizi mutate edilmez; yeni dizi döndürülür.
  */
 export function expireOldContracts(contracts: Contract[], currentTime: number): Contract[] {
-  return contracts.map((contract) => {
+  let changed = false;
+  const next = contracts.map((contract) => {
     if (contract.status === 'available' && currentTime >= contract.expiresAt) {
+      changed = true;
       return { ...contract, status: 'expired' as const };
     }
     return contract;
   });
+  return changed ? next : contracts;
 }
 
 // ---------------------------------------------------------------------------

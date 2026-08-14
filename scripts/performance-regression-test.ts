@@ -37,7 +37,7 @@ assert(app.includes('beginPerfNavigation'), 'navigation press timing');
 assert(app.includes('beginNavigationInteraction'), 'navigation interaction window');
 assert(app.includes('TAB_KEEP_ALIVE'), 'lightweight tab keep-alive cache');
 assert(app.includes('preloadMapAssets'), 'map asset boot preload');
-assert(app.includes('InteractionManager.runAfterInteractions'), 'background save deferred');
+assert(app.includes('flushLifecycleSave'), 'background lifecycle save flush');
 
 assert(save.includes('logPerfSave'), 'saveGameState instruments serialize/checksum/write');
 assert(save.includes('inFlightSaveWrite'), 'storage write single-flight');
@@ -50,12 +50,18 @@ assert(contracts.includes('Math.floor(state.currentTime * 4) / 4'), 'Contracts q
 assert(tutorial.includes('if (!APP_TUTORIALS_ENABLED)'), 'tutorial hook no-op when globally disabled');
 assert(mapPreload.includes('preloadMapAssets'), 'shared map preload helper');
 
+assert(gameStore.includes('canSkipContractScheduleTick'), 'contract schedule no-op fast path');
+assert(gameStore.includes('scheduleDeferredTimeTickSave'), 'time_tick save defer helper');
+assert(gameStore.includes('flushLifecycleSave'), 'lifecycle-critical save flush');
+assert(gameStore.includes('AUTO_SAVE_MAX_DEFER_MS'), 'deferred save max wait');
+assert(save.includes('persistLocalSavePayload'), 'single stringify save write');
+assert(save.includes('computeChecksumFromPreparedPayload'), 'checksum avoids deep clone');
+
 assert(gameStore.includes("measureSyncTask('advanceTime'"), 'game loop tick instrumented');
 assert(gameStore.includes('logPerfAdvanceTimeStage'), 'advanceTime stage timing');
 assert(gameStore.includes('bumpSaveContentRevision'), 'save revision bumps on first dirty');
 assert(gameStore.includes('if (saveDirty)'), 'markSaveDirty no-op when already dirty');
 assert(gameStore.includes('isNavigationInteractionActive()'), 'time_tick save defers during navigation');
-
 assert(more.includes('lazy(() => import'), 'More screen lazy-loads embedded routes');
 assert(more.includes('isActive'), 'More screen respects tab visibility');
 

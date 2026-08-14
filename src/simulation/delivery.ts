@@ -64,6 +64,10 @@ import {
 } from './capacity';
 import { logContractFleetEligibility } from './contractTruckEligibility';
 import { getAttachedTrailerForTruck } from './trailerAttachment';
+import {
+  getDurabilityConditionLossReduction,
+  normalizeTruckUpgrades,
+} from './truckUpgrades';
 
 const isDevBuild = typeof __DEV__ !== 'undefined' && __DEV__;
 
@@ -1013,8 +1017,18 @@ export function calculateConditionLoss(
   const routeFactor = route.difficulty || 1;
   const driverAttentionFactor = 1 + ((100 - driver.attention) / 100) * 0.25;
 
+  const durabilityMultiplier =
+    1 -
+    getDurabilityConditionLossReduction(
+      normalizeTruckUpgrades(truck),
+    );
   const rawLoss =
-    truckBalance.baseConditionWear * distanceFactor * loadFactor * routeFactor * driverAttentionFactor;
+    truckBalance.baseConditionWear *
+    distanceFactor *
+    loadFactor *
+    routeFactor *
+    driverAttentionFactor *
+    durabilityMultiplier;
 
   const isHeavyLoad = loadRatio >= truckBalance.heavyLoadRatio;
   const isHardRoute = route.difficulty >= truckBalance.hardRouteDifficulty;

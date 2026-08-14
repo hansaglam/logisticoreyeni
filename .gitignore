@@ -36,6 +36,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local diagnostic / agent outputs (never commit)
+verify-output.txt
+emulator-output.txt
+emulator-full.txt
+emulator-test-out.txt
+emulator-run-*.txt
+stability-run-*.txt
+final-stability-*.txt
+logisticore-*.txt
+
 # Environment / secrets
 .env
 .env.*

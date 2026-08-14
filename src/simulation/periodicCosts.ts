@@ -10,6 +10,12 @@ import type { Player } from '../types/game';
 
 export const PERIOD_24H_MS = DAY_MS;
 
+/** Offline catch-up: fixed operating costs are never charged (store product rule). */
+export const OFFLINE_CATCHUP_MAX_COST_PERIODS = 0;
+
+/** Online advanceTime: at most one 24h economy period per invocation. */
+export const ONLINE_TICK_MAX_COST_PERIODS = 1;
+
 export interface PeriodicCostDeduction {
   type: 'driver_salary' | 'warehouse_operating' | 'operations' | 'other';
   amount: number;
@@ -101,13 +107,40 @@ export function buildPeriodicCostDeductions(params: {
   maxOfflineCostPeriods?: number;
 }): PeriodicCostApplicationResult {
   const economyNowMs = params.economyNowMs ?? getEconomyNow();
-  const applied = new Set(params.alreadyAppliedPeriodKeys ?? []);
   const { periodsElapsed, periodStarts, capped } = calculatePeriodicCostPeriods({
     economyNowMs,
     lastProcessedEconomyAt: params.lastProcessedEconomyAt,
     maxOfflineCostPeriods: params.maxOfflineCostPeriods,
   });
 
+  const previousProcessedAt =
+    params.lastProcessedEconomyAt != null &&
+    Number.isFinite(params.lastProcessedEconomyAt)
+      ? params.lastProcessedEconomyAt
+      : economyNowMs;
+  const newlyProcessedUntil =
+    economyNowMs <= previousProcessedAt
+      ? previousProcessedAt
+      : capped
+        ? economyNowMs
+        : Math.min(
+            economyNowMs,
+            previousProcessedAt + periodsElapsed * PERIOD_24H_MS,
+          );
+
+  if (periodStarts.length === 0) {
+    return {
+      periodsElapsed,
+      periodsCharged: 0,
+      capped,
+      deductions: [],
+      totalAmount: 0,
+      newlyProcessedUntil,
+      periodKeysApplied: [],
+    };
+  }
+
+  const applied = new Set(params.alreadyAppliedPeriodKeys ?? []);
   const breakdown = calculateDailyOperatingCostBreakdown(params.player);
   const deductions: PeriodicCostDeduction[] = [];
 
@@ -146,23 +179,6 @@ export function buildPeriodicCostDeductions(params: {
 
   const totalAmount = deductions.reduce((sum, d) => sum + d.amount, 0);
   const periodKeysApplied = [...new Set(deductions.map((d) => d.periodKey))];
-  // Normal durumda fractional süre korunur ve sonraki tick'te birikmeye devam
-  // eder. Cap devreye girdiyse eski backlog tamamen tüketilir; aksi halde ilk
-  // foreground tick kalan günleri tekrar tekrar keser.
-  const previousProcessedAt =
-    params.lastProcessedEconomyAt != null &&
-    Number.isFinite(params.lastProcessedEconomyAt)
-      ? params.lastProcessedEconomyAt
-      : economyNowMs;
-  const newlyProcessedUntil =
-    economyNowMs <= previousProcessedAt
-      ? previousProcessedAt
-      : capped
-        ? economyNowMs
-        : Math.min(
-            economyNowMs,
-            previousProcessedAt + periodsElapsed * PERIOD_24H_MS,
-          );
 
   return {
     periodsElapsed,

@@ -3,7 +3,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { operatingCostBalance, timeBalance, tradingBalance } from '../src/config/balance';
+import { timeBalance, tradingBalance } from '../src/config/balance';
+import { OFFLINE_CATCHUP_MAX_COST_PERIODS } from '../src/simulation/periodicCosts';
 import {
   canOpenMoreWarehouses,
   getMaxWarehousesForLevel,
@@ -221,10 +222,10 @@ test('one charge per game day interval', () => {
   assert.equal(computeElapsedOperatingDays(last, last + hoursPerDay * 2.9), 2);
 });
 
-test('offline fixed operating costs disabled — no charge, no friendly cap', () => {
-  assert.equal(operatingCostBalance.maxOfflineChargeDays, 0);
+test('offline catch-up charges zero fixed operating cost periods', () => {
+  assert.equal(OFFLINE_CATCHUP_MAX_COST_PERIODS, 0);
   const elapsed = 10;
-  const charged = Math.min(elapsed, operatingCostBalance.maxOfflineChargeDays);
+  const charged = Math.min(elapsed, OFFLINE_CATCHUP_MAX_COST_PERIODS);
   assert.equal(charged, 0);
   assert.equal(getSkippedOperatingDaysDueToCap(elapsed, charged), 10);
 });

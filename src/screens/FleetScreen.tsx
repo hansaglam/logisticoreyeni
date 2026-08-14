@@ -17,13 +17,13 @@ import { useAppDialog } from '../components/AppDialogProvider';
 import OwnedTruckCard from '../components/fleet/OwnedTruckCard';
 import DriverCard from '../components/fleet/DriverCard';
 import OwnedTrailerCard from '../components/fleet/OwnedTrailerCard';
+import FleetTabSegment, { type FleetTabKey } from '../components/fleet/FleetTabSegment';
+import FleetUpgradesPanel from '../components/fleet/FleetUpgradesPanel';
 /** Kamyon kartı aksiyon etiketleri: Bakım Yap · Geliştirmeleri Yönet */
 import {
   FLEET_HEADER_HEIGHT,
   FLEET_METRIC_HEIGHT,
   FLEET_SECTION_GAP,
-  FLEET_SEGMENT_BG,
-  FLEET_SEGMENT_BORDER,
   getFleetDriverColumnWidths,
 } from '../components/fleet/fleetTheme';
 
@@ -60,7 +60,6 @@ import {
 import TruckTransferModal from '../components/TruckTransferModal';
 import TruckRefuelSheet from '../components/TruckRefuelSheet';
 import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
-import UpgradesScreen from './UpgradesScreen';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatDisplayPercent, formatMoney, spacing, typography } from '../theme';
 import type { Delivery, DeliveryStatus, Driver, Trailer, Truck, TruckTransfer } from '../types/game';
@@ -68,14 +67,8 @@ import type { Delivery, DeliveryStatus, Driver, Trailer, Truck, TruckTransfer } 
 const STATUS_MESSAGE_TIMEOUT_MS = 2500;
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route', 'paused'];
 
-type FleetTab = 'trucks' | 'drivers' | 'trailers';
+type FleetTab = FleetTabKey;
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
-
-const FLEET_TABS = [
-  { key: 'trucks' as const, label: 'Kamyonlar', icon: 'truck' as const },
-  { key: 'drivers' as const, label: 'Şoförler', icon: 'driver' as const },
-  { key: 'trailers' as const, label: 'Dorseler', icon: 'route' as const },
-];
 
 function findActiveDeliveryForTruck(truckId: string, deliveries: Delivery[]): Delivery | undefined {
   return deliveries.find(
@@ -155,40 +148,6 @@ const FleetMetricStrip = React.memo(function FleetMetricStrip({
   );
 });
 
-function FleetTabSegment({
-  activeTab,
-  onChange,
-}: {
-  activeTab: FleetTab;
-  onChange: (tab: FleetTab) => void;
-}) {
-  return (
-    <View style={styles.segmentContainer}>
-      {FLEET_TABS.map((tab) => {
-        const isActive = tab.key === activeTab;
-        return (
-          <Pressable
-            key={tab.key}
-            style={[styles.segmentTab, isActive && styles.segmentTabActive]}
-            onPress={() => onChange(tab.key)}
-          >
-            {tab.icon ? (
-              <GameIcon
-                name={tab.icon}
-                size={14}
-                color={isActive ? colors.accentBlue : colors.textMuted}
-              />
-            ) : null}
-            <Text style={[styles.segmentLabel, isActive && styles.segmentLabelActive]} numberOfLines={1}>
-              {tab.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 function translateErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
   if (error.message.includes('Level')) return error.message;
@@ -235,7 +194,7 @@ export default function FleetScreen() {
   const [refuelSheetTruck, setRefuelSheetTruck] = useState<Truck | null>(null);
   const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
-  const [managingUpgradesTruckId, setManagingUpgradesTruckId] = useState<string | null>(null);
+  const [upgradeFocusTruckId, setUpgradeFocusTruckId] = useState<string | null>(null);
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -264,6 +223,8 @@ export default function FleetScreen() {
       setActiveTab('drivers');
     } else if (pendingFleetSubTab === 'trailers') {
       setActiveTab('trailers');
+    } else if (pendingFleetSubTab === 'upgrades') {
+      setActiveTab('upgrades');
     }
 
     clearPendingFleetSubTab();
@@ -345,7 +306,8 @@ export default function FleetScreen() {
   }, [trucks, fleetManagementState]);
 
   const handleManageUpgrades = useCallback((truck: Truck) => {
-    setManagingUpgradesTruckId(truck.id);
+    setUpgradeFocusTruckId(truck.id);
+    setActiveTab('upgrades');
   }, []);
 
   const handleRepair = useCallback((truck: Truck) => {
@@ -743,16 +705,6 @@ export default function FleetScreen() {
     setTransferModalTruck(truck);
   }, [drivers]);
 
-  if (managingUpgradesTruckId) {
-    return (
-      <UpgradesScreen
-        truckId={managingUpgradesTruckId}
-        onBack={() => setManagingUpgradesTruckId(null)}
-        backLabel="‹ Filo"
-      />
-    );
-  }
-
   return (
     <View style={styles.screenRoot}>
       <AppScreen
@@ -970,6 +922,17 @@ export default function FleetScreen() {
         </View>
       ) : null}
 
+      {activeTab === 'upgrades' ? (
+        <AppTutorialTarget tutorialId="fleet" targetId="fleet-upgrades-tab" layoutMode="stretch">
+          <View style={styles.tabContent}>
+            <FleetUpgradesPanel
+              initialTruckId={upgradeFocusTruckId}
+              onUpgradeFeedback={setStatusMessage}
+            />
+          </View>
+        </AppTutorialTarget>
+      ) : null}
+
       <TruckTransferModal
         visible={transferModalTruck != null}
         truck={transferModalTruck}
@@ -1093,41 +1056,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 16,
     fontWeight: '800',
-  },
-  segmentContainer: {
-    height: 44,
-    borderRadius: 14,
-    padding: 3,
-    backgroundColor: FLEET_SEGMENT_BG,
-    borderWidth: 1,
-    borderColor: FLEET_SEGMENT_BORDER,
-    flexDirection: 'row',
-    gap: 3,
-  },
-  segmentTab: {
-    flex: 1,
-    height: 36,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 4,
-  },
-  segmentTabActive: {
-    backgroundColor: 'rgba(35,136,255,0.13)',
-    borderColor: colors.accentBlue,
-  },
-  segmentLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#8795AA',
-  },
-  segmentLabelActive: {
-    color: colors.accentBlue,
-    fontWeight: '700',
   },
   tabContent: {
     gap: FLEET_SECTION_GAP,

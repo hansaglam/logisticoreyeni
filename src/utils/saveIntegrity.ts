@@ -75,6 +75,15 @@ export async function computeSaveChecksum(
   return result.hash;
 }
 
+/** Checksum for shallow-prepared payload — avoids second deep clone. */
+export async function computeChecksumFromPreparedPayload(prepared: unknown): Promise<string> {
+  const result = await sha256(canonicalJsonStringify(prepared));
+  if (!result.ok) {
+    throw new Error('checksum-failed');
+  }
+  return result.hash;
+}
+
 export function readChecksumVersionFromMeta(meta: unknown): SaveChecksumVersion {
   if (isRecord(meta) && meta.checksumVersion === CURRENT_CHECKSUM_VERSION) {
     return CURRENT_CHECKSUM_VERSION;

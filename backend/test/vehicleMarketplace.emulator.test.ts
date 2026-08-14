@@ -539,8 +539,11 @@ test('purchase rejects insufficient cash, fleet limit, self purchase and stale v
 
 test('concurrent double purchase has exactly one winner and duplicate request is idempotent', async () => {
   const { listingId, recommended } = await createValidListing();
-  await seedState('buyer-a');
-  await seedState('buyer-b');
+  const buyerABefore = await seedState('buyer-a');
+  const buyerBBefore = await seedState('buyer-b');
+  const sellerBefore = (
+    await adminFirestore.doc('users/seller/marketplaceState/current').get()
+  ).data() as MarketplacePlayerState;
   const buy = (uid: string) =>
     purchaseVehicleListingTransaction(
       adminFirestore,
@@ -562,20 +565,77 @@ test('concurrent double purchase has exactly one winner and duplicate request is
     1,
   );
   const winner = results.find((result) => result.ok)!;
+  const loser = results.find((result) => !result.ok)!;
   const winnerUid = winner.transactionId.replace('purchase-', '');
+  const loserUid = loser.transactionId.replace('purchase-', '');
+  const winnerBefore =
+    winnerUid === 'buyer-a' ? buyerABefore : buyerBBefore;
+  const loserBefore = winnerUid === 'buyer-a' ? buyerBBefore : buyerABefore;
   const replay = await buy(winnerUid);
   assert.deepEqual(
     { ...replay, retryCount: undefined },
     { ...winner, retryCount: undefined },
   );
+
+  const listing = (
+    await adminFirestore.doc(`vehicleMarketplaceListings/${listingId}`).get()
+  ).data()!;
+  assert.equal(listing.status, 'sold');
+  assert.equal(listing.buyerUid, winnerUid);
+  assert.equal(listing.transactionId, `purchase-${winnerUid}`);
+
+  const buyerAfter = (
+    await adminFirestore.doc(`users/${winnerUid}/marketplaceState/current`).get()
+  ).data() as MarketplacePlayerState;
+  const buyerLoserAfter = (
+    await adminFirestore.doc(`users/${loserUid}/marketplaceState/current`).get()
+  ).data() as MarketplacePlayerState;
+  const sellerAfter = (
+    await adminFirestore.doc('users/seller/marketplaceState/current').get()
+  ).data() as MarketplacePlayerState;
+
+  const fee = Math.round(recommended * 0.06 * 100) / 100;
+  assert.equal(buyerAfter.canonicalCash, winnerBefore.canonicalCash - recommended);
+  assert.equal(buyerLoserAfter.canonicalCash, loserBefore.canonicalCash);
   assert.equal(
-    (
-      await adminFirestore
-        .collection('vehicleMarketplaceTransactions')
-        .get()
-    ).size,
-    1,
+    sellerAfter.canonicalCash,
+    sellerBefore.canonicalCash + recommended - fee,
   );
+  assert.equal(
+    buyerAfter.ownedTruckSnapshots.some((item) => item.truckId === 'seller-truck-1'),
+    true,
+  );
+  assert.equal(
+    buyerLoserAfter.ownedTruckSnapshots.some((item) => item.truckId === 'seller-truck-1'),
+    false,
+  );
+  assert.equal(
+    sellerAfter.ownedTruckSnapshots.some((item) => item.truckId === 'seller-truck-1'),
+    false,
+  );
+
+  const marketplaceTransactions = await adminFirestore
+    .collection('vehicleMarketplaceTransactions')
+    .get();
+  assert.equal(marketplaceTransactions.size, 1);
+  assert.equal(marketplaceTransactions.docs[0]!.id, `purchase-${winnerUid}`);
+
+  const winnerIdempotency = await adminFirestore
+    .collection('vehicleMarketplaceIdempotency')
+    .where('uid', '==', winnerUid)
+    .get();
+  assert.equal(winnerIdempotency.size, 1);
+  const loserIdempotency = await adminFirestore
+    .collection('vehicleMarketplaceIdempotency')
+    .where('uid', '==', loserUid)
+    .get();
+  assert.equal(loserIdempotency.size, 0);
+
+  const listingLock = (
+    await adminFirestore.doc(`vehicleMarketplaceListingLocks/${listingId}`).get()
+  ).data()!;
+  assert.equal(listingLock.buyerUid, winnerUid);
+  assert.equal(listingLock.transactionId, `purchase-${winnerUid}`);
 });
 
 test('cloud restore cannot resurrect sold truck', () => {

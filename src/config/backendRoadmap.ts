@@ -9,7 +9,11 @@ import Constants from 'expo-constants';
 
 export const BACKEND_ENABLED = true;
 export const CLOUD_SAVE_WRITE_ENABLED = true;
-export const CLOUD_SAVE_AUTO_RESTORE_ENABLED = false;
+/**
+ * Legacy Faz-1 flag — removed. Account-linked cloud auto-restore is handled in
+ * `accountCloudLogin.runPostSignInSaveFlow` when local save is not meaningful
+ * (see `isMeaningfulLocalSave`). There is no separate runtime toggle.
+ */
 
 function readExtraFeatureFlag(key: string): string | undefined {
   const extra = Constants.expoConfig?.extra as

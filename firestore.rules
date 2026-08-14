@@ -110,6 +110,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /vehicleMarketplaceListingLocks/{listingId} {
+      allow read, write: if false;
+    }
+
     // Authenticated players may read the authoritative world market.
     // Admin SDK bypasses rules; normal clients can never write these paths.
     match /globalEconomy/{documentId} {

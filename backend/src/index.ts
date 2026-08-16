@@ -15,6 +15,7 @@ import {
 import {
   migrateLegacyServerStateTransaction,
 } from './serverState';
+import { reconcileAuthoritativeFleetTransaction } from './authoritativeFleetReconciliation';
 import { isValidLeaderboardSeasonKey } from './leaderboardSeason';
 import {
   checkUsernameAvailabilityTransaction,
@@ -477,45 +478,66 @@ export const getVehicleMarketplaceListings = onCall(VEHICLE_MARKETPLACE_FUNCTION
   if (!(await consumeRateLimit(identity.uid, 'list'))) return rateLimitedResult(record);
   const cursorCreatedAt = Number(cursor.createdAt);
   const cursorId = cursor.id;
-  let query = getFirestore()
-    .collection('vehicleMarketplaceListings')
-    .where('status', '==', 'active')
-    .orderBy('createdAt', 'desc')
-    .orderBy(FieldPath.documentId(), 'desc');
-  if (
-    Number.isFinite(cursorCreatedAt) &&
-    cursorCreatedAt > 0 &&
-    typeof cursorId === 'string' &&
-    cursorId.length > 0
-  ) {
-    query = query.startAfter(Timestamp.fromMillis(cursorCreatedAt), cursorId);
-  }
-  const snapshot = await query.limit(limit + 1).get();
-  const visibleDocs = snapshot.docs.slice(0, limit);
-  const lastDocument = visibleDocs.at(-1);
-  const serialized = serializeMarketplaceListingsForClient(visibleDocs);
-  if (serialized.rejectedCount > 0) {
-    logger.warn('[vehicle-marketplace-list-serialize]', {
+  try {
+    let query = getFirestore()
+      .collection('vehicleMarketplaceListings')
+      .where('status', '==', 'active')
+      .orderBy('createdAt', 'desc')
+      .orderBy(FieldPath.documentId(), 'desc');
+    if (
+      Number.isFinite(cursorCreatedAt) &&
+      cursorCreatedAt > 0 &&
+      typeof cursorId === 'string' &&
+      cursorId.length > 0
+    ) {
+      query = query.startAfter(Timestamp.fromMillis(cursorCreatedAt), cursorId);
+    }
+    const snapshot = await query.limit(limit + 1).get();
+    const visibleDocs = snapshot.docs.slice(0, limit);
+    const lastDocument = visibleDocs.at(-1);
+    const serialized = serializeMarketplaceListingsForClient(visibleDocs);
+    if (serialized.rejectedCount > 0) {
+      logger.warn('[vehicle-marketplace-list-serialize]', {
+        rejectedCount: serialized.rejectedCount,
+        samples: serialized.rejected.slice(0, 3),
+      });
+    }
+    return {
+      ok: true,
+      apiVersion: VEHICLE_MARKETPLACE_API_VERSION,
+      listings: serialized.listings.map((listing) => listingDtoToClientWire(listing)),
       rejectedCount: serialized.rejectedCount,
-      samples: serialized.rejected.slice(0, 3),
+      hasMore: snapshot.docs.length > limit,
+      nextCursor: lastDocument
+        ? {
+            createdAt:
+              serialized.listings.at(-1)?.createdAtMs ??
+              timestampToMillis(lastDocument.data().createdAt) ??
+              0,
+            id: lastDocument.id,
+          }
+        : null,
+    };
+  } catch (error) {
+    const code =
+      error && typeof error === 'object' && 'code' in error
+        ? String((error as { code?: unknown }).code ?? '')
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    logger.error('[MARKETPLACE_LOAD_ERROR]', {
+      uidHash: uidHash(identity.uid),
+      code,
+      message: error instanceof Error ? error.message : String(error),
+      pathOrFunction: 'vehicleMarketplaceListings',
     });
+    return {
+      ok: false,
+      reason: code.includes('permission-denied') ? 'permission-denied' : 'service-unavailable',
+      transactionId: '',
+      idempotencyKey: '',
+    };
   }
-  return {
-    ok: true,
-    apiVersion: VEHICLE_MARKETPLACE_API_VERSION,
-    listings: serialized.listings.map((listing) => listingDtoToClientWire(listing)),
-    rejectedCount: serialized.rejectedCount,
-    hasMore: snapshot.docs.length > limit,
-    nextCursor: lastDocument
-      ? {
-          createdAt:
-            serialized.listings.at(-1)?.createdAtMs ??
-            timestampToMillis(lastDocument.data().createdAt) ??
-            0,
-          id: lastDocument.id,
-        }
-      : null,
-  };
 });
 
 export const getMyVehicleListings = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS, async (request) => {
@@ -864,6 +886,60 @@ export const migrateLegacyServerState = onCall(
       flags: result.report?.flags ?? [],
     });
     return result;
+  },
+);
+
+export const reconcileAuthoritativeFleet = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const identity = callableIdentity(request);
+    if (!identity) return unauthenticatedResult(request.data ?? {});
+    const record = requestRecord(request.data);
+    if (
+      !hasOnlyKeys(record, ['force', 'requestedVehicleId']) ||
+      (record.force !== undefined && typeof record.force !== 'boolean') ||
+      (record.requestedVehicleId !== undefined &&
+        !isBoundedId(record.requestedVehicleId))
+    ) {
+      return invalidRequestResult(record);
+    }
+    if (!(await consumeRateLimit(identity.uid, 'migrateServerState'))) {
+      return rateLimitedResult(record);
+    }
+    const result = await reconcileAuthoritativeFleetTransaction(
+      getFirestore(),
+      identity.uid,
+      Date.now(),
+      {
+        force: record.force === true,
+        requestedVehicleId:
+          typeof record.requestedVehicleId === 'string'
+            ? record.requestedVehicleId
+            : undefined,
+      },
+    );
+    logger.info('[reconcile-authoritative-fleet]', {
+      uidHash: uidHash(identity.uid),
+      ok: result.ok,
+      reconciled: result.ok ? result.reconciled : false,
+      truckCount: result.ok ? result.state.ownedTruckSnapshots.length : 0,
+      reason: result.ok ? null : result.reason,
+    });
+    if (!result.ok) {
+      return {
+        ok: false,
+        reason: result.reason,
+        transactionId: '',
+        idempotencyKey: '',
+      };
+    }
+    return {
+      ok: true,
+      reconciled: result.reconciled,
+      marketplaceStateVersion: result.state.stateVersion,
+      sourceSaveVersion: result.state.sourceSaveVersion,
+      ownedTruckIds: result.state.ownedTruckSnapshots.map((truck) => truck.truckId),
+    };
   },
 );
 

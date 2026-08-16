@@ -18,6 +18,12 @@ import type {
 } from './serverStateTypes';
 import { SERVER_STATE_SCHEMA_VERSION } from './serverStateTypes';
 import type { MarketplacePlayerState } from './vehicleMarketplaceTypes';
+import {
+  buildMarketplaceStateFromCloudSave,
+} from './vehicleMarketplaceState';
+import {
+  mergeCloudFleetIntoExistingMarketplaceState,
+} from './authoritativeFleetReconciliation';
 
 /** Matches client STARTING_MONEY — server-defined new-account baseline. */
 export const SERVER_DEFAULT_CASH = 20_000;
@@ -580,8 +586,28 @@ export async function migrateLegacyServerStateTransaction(
       saveSnap.data() ?? {},
       now,
     );
+    const marketplaceBuilt = buildMarketplaceStateFromCloudSave(
+      uid,
+      saveSnap.data() ?? {},
+      now,
+    );
     const report = { ...built.report, dryRun, migrated: !dryRun };
     if (!dryRun) {
+      if (marketplaceBuilt.ok) {
+        const marketplaceRef = firestore.doc(`users/${uid}/marketplaceState/current`);
+        const nextMarketplace = marketplaceSnap.exists
+          ? mergeCloudFleetIntoExistingMarketplaceState(
+              marketplaceSnap.data() as MarketplacePlayerState,
+              marketplaceBuilt.state,
+              now,
+            )
+          : marketplaceBuilt.state;
+        if (marketplaceSnap.exists) {
+          transaction.set(marketplaceRef, nextMarketplace, { merge: true });
+        } else {
+          transaction.create(marketplaceRef, nextMarketplace);
+        }
+      }
       if (existingSnap.exists) {
         transaction.set(ref, built.state, { merge: true });
       } else {

@@ -26,7 +26,7 @@ import MapTruckTrackingSection from '../components/map/MapTruckTrackingSection';
 import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
 import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
 import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
-import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
+import { getVisibleFleetTrucks } from '../simulation/rentalTruckLifecycle';
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
@@ -307,8 +307,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   );
 
   const idleTruckCountByCity = useMemo(
-    () => buildIdleTruckCountByCity(player?.trucks, player?.homeCityId),
-    [player?.trucks, player?.homeCityId],
+    () => buildIdleTruckCountByCity(trucks, player?.homeCityId),
+    [trucks, player?.homeCityId],
   );
 
   const marketOpportunities = useMemo(
@@ -348,7 +348,10 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
 
-  const trucks = player?.trucks ?? [];
+  const trucks = useMemo(
+    () => getVisibleFleetTrucks(player?.trucks, currentTime, activeDeliveries),
+    [player?.trucks, currentTime, activeDeliveries],
+  );
 
   const drivers = player?.drivers ?? [];
   const trailers = player?.trailers ?? [];

@@ -20,6 +20,7 @@ import {
   prepareMarketplaceAccountDeletion,
   purchaseVehicleListingTransaction,
 } from '../src/vehicleMarketplace';
+import { reconcileAuthoritativeFleetTransaction } from '../src/authoritativeFleetReconciliation';
 import {
   listingDtoToClientWire,
   serializeMarketplaceListingsForClient,
@@ -212,7 +213,7 @@ test('valid listing locks vehicle, charges listing fee once and duplicate is ide
   assert.equal(duplicateTransaction.reason, 'already-completed');
 });
 
-test('new user marketplace state bootstraps from server defaults not cloud save', async () => {
+test('new user marketplace state bootstraps from trusted cloud save fleet', async () => {
   const uid = 'new-user';
   await adminFirestore.doc(`users/${uid}`).set({
     uid,
@@ -222,6 +223,7 @@ test('new user marketplace state bootstraps from server defaults not cloud save'
   });
   await adminFirestore.doc(`users/${uid}/saves/current`).set({
     saveVersion: 3,
+    deviceUpdatedAt: NOW_MS,
     gameState: {
       player: {
         money: 75_000,
@@ -229,6 +231,13 @@ test('new user marketplace state bootstraps from server defaults not cloud save'
         trucks: [
           {
             id: 'new-truck-1',
+            catalogId: 'truck-ford-cargo',
+            purchasePrice: 52_000,
+            ownershipType: 'owned',
+            status: 'idle',
+          },
+          {
+            id: 'new-truck-2',
             catalogId: 'truck-ford-cargo',
             purchasePrice: 52_000,
             ownershipType: 'owned',
@@ -249,7 +258,7 @@ test('new user marketplace state bootstraps from server defaults not cloud save'
     {
       transactionId: 'ensure-new-user',
       idempotencyKey: 'ensure-new-user',
-      clientSaveVersion: 1,
+      clientSaveVersion: 3,
     },
     NOW_MS,
   );
@@ -259,13 +268,109 @@ test('new user marketplace state bootstraps from server defaults not cloud save'
     await adminFirestore.doc(`users/${uid}/marketplaceState/current`).get()
   ).data() as MarketplacePlayerState;
   assert.equal(state.ownerUid, uid);
-  assert.equal(state.canonicalCash, SERVER_DEFAULT_CASH);
-  assert.equal(state.ownedTruckSnapshots.length, 1);
-  assert.equal(state.ownedTruckSnapshots[0]?.templateId, 'truck-starter-1');
+  assert.equal(state.canonicalCash, 75_000);
+  assert.equal(state.ownedTruckSnapshots.length, 2);
+  assert.equal(state.ownedTruckSnapshots[0]?.truckId, 'new-truck-1');
   const serverState = (
     await adminFirestore.doc(`users/${uid}/serverState/current`).get()
   ).data();
-  assert.equal(Number(serverState?.cash), SERVER_DEFAULT_CASH);
+  assert.equal(Number(serverState?.cash), 75_000);
+});
+
+test('stale default marketplace state reconciles from cloud save before listing create', async () => {
+  const uid = 'stale-user';
+  await adminFirestore.doc(`users/${uid}`).set({
+    uid,
+    username: 'stale_user',
+    usernameNormalized: 'stale_user',
+    usernameSetupCompleted: true,
+  });
+  const defaultState = buildDefaultServerState(uid, Timestamp.fromMillis(NOW_MS));
+  await adminFirestore.doc(`users/${uid}/serverState/current`).set(defaultState);
+  await adminFirestore.doc(`users/${uid}/marketplaceState/current`).set({
+    ownerUid: uid,
+    canonicalCash: SERVER_DEFAULT_CASH,
+    fleetLimit: 10,
+    stateVersion: 1,
+    sourceSaveVersion: 1,
+    ownedTruckSnapshots: [
+      {
+        truckId: 'truck-starter-1',
+        templateId: 'truck-starter-1',
+        currentCityId: 'izmir',
+        condition: 88,
+        totalMileageKm: 0,
+        currentFuelL: 300,
+        fuelTankCapacityL: 300,
+        purchasePrice: 45_000,
+        ownershipType: 'owned',
+        status: 'idle',
+        assignedDriverId: null,
+        attachedTrailerId: null,
+        activeJobIds: [],
+        marketplaceListingId: null,
+        upgrades: { engine: 0, fuelEfficiency: 0, cargo: 0, durability: 0 },
+      },
+    ],
+    activeListingIds: [],
+    soldTruckTombstones: [],
+    migratedAt: Timestamp.fromMillis(NOW_MS),
+    updatedAt: Timestamp.fromMillis(NOW_MS - 60_000),
+  });
+  await adminFirestore.doc(`users/${uid}/saves/current`).set({
+    saveVersion: 6,
+    deviceUpdatedAt: NOW_MS,
+    ownerUid: uid,
+    gameState: {
+      player: {
+        money: 120_000,
+        homeCityId: 'izmir',
+        trucks: [
+          {
+            id: 'truck-starter-1',
+            catalogId: 'truck-starter-1',
+            purchasePrice: 45_000,
+            ownershipType: 'owned',
+            status: 'idle',
+          },
+          {
+            id: 'legacy-truck-2',
+            catalogId: 'truck-ford-cargo',
+            purchasePrice: 52_000,
+            ownershipType: 'owned',
+            status: 'idle',
+          },
+        ],
+        drivers: [],
+        trailers: [],
+      },
+      activeDeliveries: [],
+      activeTransfers: [],
+      activeWarehouseStockTransfers: [],
+    },
+  });
+
+  const reconciled = await reconcileAuthoritativeFleetTransaction(
+    adminFirestore,
+    uid,
+    NOW_MS,
+    { requestedVehicleId: 'legacy-truck-2' },
+  );
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.reconciled, true);
+
+  const recommended = calculateMarketplaceRecommendedPrice(
+    reconciled.state.ownedTruckSnapshots.find(
+      (truck) => truck.truckId === 'legacy-truck-2',
+    )!,
+  );
+  const created = await createVehicleListingTransaction(
+    adminFirestore,
+    { uid, displayName: 'Stale User' },
+    createInput('legacy-truck-2', recommended, 'stale-reconcile'),
+    NOW_MS,
+  );
+  assert.equal(created.ok, true);
 });
 
 test('missing cloud save still bootstraps safe server-owned marketplace state', async () => {

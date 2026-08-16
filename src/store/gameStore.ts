@@ -317,8 +317,10 @@ import {
 } from '../utils/truckFuel';
 import type { TruckRefuelResult } from '../utils/truckFuel';
 import {
+  bumpCanonicalStateRevision,
   didTruckListChange,
   mergeTruckTickUpdates,
+  patchTruckById,
 } from '../utils/truckFleetState';
 import { contractBalance, contractGenerationBalance, economyBalance, buildTimeScaleDebugSnapshot, getEffectiveOfflineGameSpeed, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
@@ -2032,19 +2034,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   applyVehicleMarketplaceReconciliation: (authoritative) => {
-    const state = get();
-    const result = reconcileFleetWithVehicleMarketplace(
-      state.player.trucks,
-      authoritative,
-    );
-    set({
-      player: {
-        ...state.player,
-        trucks: result.trucks,
-        money: result.authoritativeCash ?? state.player.money,
-      },
-      vehicleMarketplace: result.cache,
+    set((live) => {
+      const result = reconcileFleetWithVehicleMarketplace(
+        live.player.trucks,
+        authoritative,
+      );
+      return {
+        player: {
+          ...live.player,
+          trucks: result.trucks,
+          money: result.authoritativeCash ?? live.player.money,
+        },
+        vehicleMarketplace: result.cache,
+      };
     });
+    bumpCanonicalStateRevision('marketplace-reconciliation');
     get().autoSave('marketplace-reconciliation');
   },
 
@@ -4729,11 +4733,11 @@ const elapsed = plan.elapsed;
       reason,
     };
 
-    const patch: Partial<GameStore> = {
-      player: {
-        ...state.player,
-        money: cashTransaction.cashAfter,
-      },
+    // Apply cash as a delta against live money so concurrent refuel/repair cannot
+    // restore a stale player snapshot (iOS race). Do not surface operating-cost
+    // notifications/event-log — product decision: never show.
+    const moneyDelta = cashTransaction.cashAfter - (state.player.money ?? 0);
+    const patchWithoutPlayer: Partial<GameStore> = {
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
       dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
@@ -4750,10 +4754,18 @@ const elapsed = plan.elapsed;
     };
 
     if (options?.lastDailyOperatingCostTime != null) {
-      patch.lastDailyOperatingCostTime = options.lastDailyOperatingCostTime;
+      patchWithoutPlayer.lastDailyOperatingCostTime = options.lastDailyOperatingCostTime;
     }
 
-    set(patch);
+    set((live) => ({
+      ...patchWithoutPlayer,
+      player: {
+        ...live.player,
+        money: (live.player.money ?? 0) + moneyDelta,
+      },
+      financeLedger: patchWithoutPlayer.financeLedger ?? live.financeLedger ?? [],
+      financeTotals: patchWithoutPlayer.financeTotals ?? live.financeTotals,
+    }));
 
     // "İşletme giderleri işlendi" bildirimi / event-log — ürün kararı: hiçbir koşulda gösterilmez.
 
@@ -4761,34 +4773,46 @@ const elapsed = plan.elapsed;
   },
 
   processExpiredLeases: (source = 'game-tick') => {
-    const state = get();
-    const result = processExpiredRentalTrucks({
-      player: state.player,
-      activeDeliveries: state.activeDeliveries,
-      activeTransfers: state.activeTransfers,
-      activeWarehouseStockTransfers: state.activeWarehouseStockTransfers,
-      currentTime: state.currentTime,
-      source,
+    let pendingNotifications: ReturnType<
+      typeof processExpiredRentalTrucks
+    >['notifications'] = [];
+
+    set((live) => {
+      const result = processExpiredRentalTrucks({
+        player: live.player,
+        activeDeliveries: live.activeDeliveries,
+        activeTransfers: live.activeTransfers,
+        activeWarehouseStockTransfers: live.activeWarehouseStockTransfers,
+        currentTime: live.currentTime,
+        source,
+      });
+
+      if (!result.changed) {
+        return {};
+      }
+
+      pendingNotifications = result.notifications;
+      bumpCanonicalStateRevision('rental-expiry');
+      return {
+        player: {
+          ...live.player,
+          trucks: result.player.trucks,
+          drivers: result.player.drivers,
+          trailers: result.player.trailers ?? live.player.trailers,
+        },
+        activeTransfers: result.activeTransfers,
+        activeWarehouseStockTransfers: result.activeWarehouseStockTransfers,
+      };
     });
 
-    if (!result.changed) {
+    if (pendingNotifications.length === 0) {
       return;
     }
 
-    set({
-      player: {
-        ...state.player,
-        trucks: result.player.trucks,
-        drivers: result.player.drivers,
-        trailers: result.player.trailers ?? state.player.trailers,
-      },
-      activeTransfers: result.activeTransfers,
-      activeWarehouseStockTransfers: result.activeWarehouseStockTransfers,
-    });
-
+    const state = get();
     const existingNotificationIds = new Set(state.notifications.map((item) => item.id));
 
-    for (const draft of result.notifications) {
+    for (const draft of pendingNotifications) {
       if (existingNotificationIds.has(draft.id)) {
         continue;
       }
@@ -5974,21 +5998,6 @@ const elapsed = plan.elapsed;
     const routeLabel = `${getCityName(contract.originCityId)} → ${getCityName(contract.destinationCityId)}`;
     const deliveryStartEventId = `event_delivery_start_${delivery.id}`;
 
-    const updatedTrucks = state.player.trucks.map((t) =>
-      t.id === truckId ? { ...t, status: 'on_route' as const } : t,
-    );
-
-    const updatedDrivers = state.player.drivers.map((d) =>
-      d.id === driverId
-        ? {
-            ...d,
-            status: 'driving' as const,
-            assignedTruckId: truckId,
-            currentCityId: resolveTruckCityId(truck, state.player.homeCityId),
-          }
-        : d,
-    );
-
     const updatedContracts = state.contracts.map((c) =>
       c.id === contractId ? { ...c, status: 'active' as const } : c,
     );
@@ -5997,23 +6006,36 @@ const elapsed = plan.elapsed;
     // Yakıt litre satın alımında ödenmiştir; görev başlangıcı tekrar tahsilat yapmaz.
     const cashAfterStart = cashBeforeStart;
 
-    const updatedTrailers = syncTrailersWithTruckLocation(
-      trailers,
-      truckId,
-      originCityId,
-      'on_route',
-    );
-
-    set({
+    set((live) => ({
       player: {
-        ...state.player,
+        ...live.player,
         money: cashAfterStart,
-        trucks: updatedTrucks,
-        drivers: updatedDrivers,
-        trailers: updatedTrailers,
+        trucks: patchTruckById(live.player.trucks, truckId, (candidate) => ({
+          ...candidate,
+          status: 'on_route',
+        })),
+        drivers: live.player.drivers.map((d) =>
+          d.id === driverId
+            ? {
+                ...d,
+                status: 'driving' as const,
+                assignedTruckId: truckId,
+                currentCityId: resolveTruckCityId(
+                  live.player.trucks.find((item) => item.id === truckId) ?? truck,
+                  live.player.homeCityId,
+                ),
+              }
+            : d,
+        ),
+        trailers: syncTrailersWithTruckLocation(
+          live.player.trailers ?? [],
+          truckId,
+          originCityId,
+          'on_route',
+        ),
       },
       contracts: updatedContracts,
-      activeDeliveries: [...state.activeDeliveries, delivery],
+      activeDeliveries: [...live.activeDeliveries, delivery],
       deliverySettlementDebug: {
         phase: 'start',
         cashBefore: cashBeforeStart,
@@ -6026,18 +6048,18 @@ const elapsed = plan.elapsed;
         cashDeltaOnCompletion: 0,
       },
       eventLog: prependGameEvent(
-        state.eventLog,
+        live.eventLog,
         {
           id: deliveryStartEventId,
-          time: state.currentTime,
+          time: live.currentTime,
           type: 'delivery',
           title: 'Teslimat başladı',
           message: `${truck.name} ve ${driver.name}, ${routeLabel} rotasına çıktı.`,
           importance: 'medium',
         },
-        state.currentTime,
+        live.currentTime,
       ),
-    });
+    }));
 
     try {
       get().addNotification({
@@ -6893,26 +6915,27 @@ const elapsed = plan.elapsed;
       Boolean(deliveryRecord.settlementId);
 
     if (alreadySettled) {
-      const repair = ensureFleetAtDeliveryDestination(
-        state.player.trucks,
-        state.player.drivers,
-        deliveryRecord,
-      );
-      if (repair.changed) {
-        set({
+      set((live) => {
+        const repair = ensureFleetAtDeliveryDestination(
+          live.player.trucks,
+          live.player.drivers,
+          deliveryRecord,
+        );
+        if (!repair.changed) return {};
+        return {
           player: {
-            ...state.player,
+            ...live.player,
             trucks: repair.trucks,
             drivers: repair.drivers,
             trailers: syncTrailersWithTruckLocation(
-              state.player.trailers ?? [],
+              live.player.trailers ?? [],
               deliveryRecord.truckId,
               resolveDeliveryDestinationCityId(deliveryRecord),
               'idle',
             ),
           },
-        });
-      }
+        };
+      });
       return;
     }
 
@@ -8164,37 +8187,43 @@ const elapsed = plan.elapsed;
         ? `${truck.name} tamir edildi. Maliyet: $${repairCost.toFixed(0)} (reklam indirimi -$${discountAmount.toFixed(0)})`
         : `${truck.name} tamir edildi. Maliyet: $${repairCost.toFixed(0)}`;
 
-    set({
-      monetization: nextMonetization,
-      player: {
-        ...state.player,
-        money: repairTransaction.cashAfter,
-        trucks: state.player.trucks.map((t) =>
-          t.id === truckId ? { ...t, condition: 100 } : t,
-        ),
-      },
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'maintenance',
-        amount: repairTransaction.amount,
-        title: 'Kamyon bakımı',
-        description: repairMessage,
-        transactionId: repairTransaction.transactionId,
-        referenceId: repairTransaction.referenceId,
-      }),
-      eventLog: prependGameEvent(
-        state.eventLog,
-        {
-          time: state.currentTime,
-          type: 'fleet',
-          title: 'Kamyon bakımı',
-          message: repairMessage,
-          importance: 'low',
+    set((live) => {
+      const liveTruck = live.player.trucks.find((candidate) => candidate.id === truckId);
+      if (!liveTruck) return {};
+      return {
+        monetization: nextMonetization,
+        player: {
+          ...live.player,
+          money: repairTransaction.cashAfter,
+          trucks: patchTruckById(live.player.trucks, truckId, (candidate) => ({
+            ...candidate,
+            condition: 100,
+          })),
         },
-        state.currentTime,
-      ),
+        ...patchFinanceLedger(live, {
+          time: live.currentTime,
+          type: 'expense',
+          category: 'maintenance',
+          amount: repairTransaction.amount,
+          title: 'Kamyon bakımı',
+          description: repairMessage,
+          transactionId: repairTransaction.transactionId,
+          referenceId: repairTransaction.referenceId,
+        }),
+        eventLog: prependGameEvent(
+          live.eventLog,
+          {
+            time: live.currentTime,
+            type: 'fleet',
+            title: 'Kamyon bakımı',
+            message: repairMessage,
+            importance: 'low',
+          },
+          live.currentTime,
+        ),
+      };
     });
+    bumpCanonicalStateRevision('repair-truck');
     get().autoSave('repair');
     get().applyRetentionEventAndSync({ type: 'truck_maintained', truckId });
   },
@@ -10024,6 +10053,17 @@ const elapsed = plan.elapsed;
       };
     }
 
+    bumpCanonicalStateRevision('refuel-truck');
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[FUEL_IOS_TRACE]', {
+        phase: 'refuelTruck-after-commit',
+        vehicleId: truckId,
+        canonicalFuelAfterMutation: fuelReadBackFromStore,
+        persistedFuel: fuelReadBackFromStore,
+        expectedFuelL: commit.expectedFuelL,
+      });
+    }
+
     get().markSaveDirty();
     get().autoSave('fuel_purchase');
     return commit.result;
@@ -10281,66 +10321,74 @@ const elapsed = plan.elapsed;
       return { success: false, reason, message };
     }
 
-    const normalized = normalizeTruckFuel(truck);
-    const capacity = normalized.fuelTankCapacityL ?? 0;
-    const currentFuel = normalized.currentFuelL ?? 0;
-    const litersAdded = Math.min(assistance.liters, Math.max(0, capacity - currentFuel));
-    const newFuelL = currentFuel + litersAdded;
-    const resumedTruckStatus = delivery ? 'on_route' as const : 'transferring' as const;
-    set({
-      player: {
-        ...state.player,
-        trucks: state.player.trucks.map((candidate) =>
-          candidate.id === truck.id
-            ? normalizeTruckFuel({
-                ...candidate,
-                currentFuelL: newFuelL,
-                status: resumedTruckStatus,
+    const litersAddedPreview = Math.min(
+      assistance.liters,
+      Math.max(0, (normalizeTruckFuel(truck).fuelTankCapacityL ?? 0) - (normalizeTruckFuel(truck).currentFuelL ?? 0)),
+    );
+    const resumedTruckStatus = delivery ? ('on_route' as const) : ('transferring' as const);
+
+    set((live) => {
+      const liveTruck = live.player.trucks.find((candidate) => candidate.id === job.truckId);
+      if (!liveTruck) return {};
+      const normalizedLive = normalizeTruckFuel(liveTruck);
+      const capacity = normalizedLive.fuelTankCapacityL ?? 0;
+      const currentFuel = normalizedLive.currentFuelL ?? 0;
+      const litersAdded = Math.min(assistance.liters, Math.max(0, capacity - currentFuel));
+      const newFuelL = currentFuel + litersAdded;
+      return {
+        player: {
+          ...live.player,
+          trucks: patchTruckById(live.player.trucks, job.truckId, (candidate) =>
+            normalizeTruckFuel({
+              ...candidate,
+              currentFuelL: newFuelL,
+              status: resumedTruckStatus,
+            }),
+          ),
+        },
+        activeDeliveries: live.activeDeliveries.map((candidate) =>
+          candidate.id === jobId
+            ? resumeRoadsideJob(candidate, 'delivery', {
+                litersAdded,
+                roadsideAssistanceGrantedAt: live.currentTime,
               })
             : candidate,
         ),
-      },
-      activeDeliveries: state.activeDeliveries.map((candidate) =>
-        candidate.id === jobId
-          ? resumeRoadsideJob(candidate, 'delivery', {
-              litersAdded,
-              roadsideAssistanceGrantedAt: state.currentTime,
-            })
-          : candidate,
-      ),
-      activeTransfers: (state.activeTransfers ?? []).map((candidate) =>
-        candidate.id === jobId
-          ? resumeRoadsideJob(candidate, 'truck-transfer', {
-              litersAdded,
-              roadsideAssistanceGrantedAt: state.currentTime,
-            })
-          : candidate,
-      ),
-      activeWarehouseStockTransfers: (state.activeWarehouseStockTransfers ?? []).map(
-        (candidate) =>
+        activeTransfers: (live.activeTransfers ?? []).map((candidate) =>
           candidate.id === jobId
-            ? resumeRoadsideJob(candidate, 'warehouse-transfer', {
+            ? resumeRoadsideJob(candidate, 'truck-transfer', {
                 litersAdded,
-                roadsideAssistanceGrantedAt: state.currentTime,
+                roadsideAssistanceGrantedAt: live.currentTime,
               })
             : candidate,
-      ),
-      lastRoadsideFuelAssistanceAt: state.currentTime,
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'fuel',
-        amount: 0,
-        title: 'Sınırlı yol yardımı',
-        description: `${truck.name} · ${litersAdded.toFixed(1)} L yardım · normal bedel ${formatNotificationMoney(assistance.avoidedCost)}`,
-        source: 'roadside-emergency',
-      }),
+        ),
+        activeWarehouseStockTransfers: (live.activeWarehouseStockTransfers ?? []).map(
+          (candidate) =>
+            candidate.id === jobId
+              ? resumeRoadsideJob(candidate, 'warehouse-transfer', {
+                  litersAdded,
+                  roadsideAssistanceGrantedAt: live.currentTime,
+                })
+              : candidate,
+        ),
+        lastRoadsideFuelAssistanceAt: live.currentTime,
+        ...patchFinanceLedger(live, {
+          time: live.currentTime,
+          type: 'expense',
+          category: 'fuel',
+          amount: 0,
+          title: 'Sınırlı yol yardımı',
+          description: `${liveTruck.name} · ${litersAdded.toFixed(1)} L yardım · normal bedel ${formatNotificationMoney(assistance.avoidedCost)}`,
+          source: 'roadside-emergency',
+        }),
+      };
     });
+    bumpCanonicalStateRevision('roadside-assistance');
     get().addNotification({
       time: state.currentTime,
       type: 'info',
       title: 'Sınırlı yol yardımı',
-      message: `${litersAdded.toFixed(1)} L yakıt sağlandı. Bu yardım cooldown süresine tabidir.`,
+      message: `${litersAddedPreview.toFixed(1)} L yakıt sağlandı. Bu yardım cooldown süresine tabidir.`,
       actionLabel: 'Haritada Gör',
       actionTarget: 'map',
     });
@@ -10348,8 +10396,8 @@ const elapsed = plan.elapsed;
     get().autoSave('roadside_fuel');
     return {
       success: true,
-      message: `${litersAdded.toFixed(1)} L sınırlı yol yardımı sağlandı.`,
-      litersAdded,
+      message: `${litersAddedPreview.toFixed(1)} L sınırlı yol yardımı sağlandı.`,
+      litersAdded: litersAddedPreview,
       totalCost: 0,
       source: 'roadside-emergency',
     };

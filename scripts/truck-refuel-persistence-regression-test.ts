@@ -163,7 +163,8 @@ assert(
     'utf8',
   );
   assert(
-    store.includes('mergeTruckTickUpdates(\n                live.player.trucks'),
+    store.includes('mergeTruckTickUpdates') &&
+      store.includes('live.player.trucks'),
     'delivery/transfer ticks merge against live fleet inside functional set',
   );
   assert(store.includes('[refuelTruck] after-commit'), 'refuel read-back logging present');

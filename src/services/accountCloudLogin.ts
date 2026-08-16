@@ -310,6 +310,9 @@ async function uploadLocalSaveForUid(
     throw new CloudSaveConflictError('cloud-upload-failed');
   }
 
+  const { ensureAuthoritativeFleetReady } = await import('./serverStateMigrationService');
+  await ensureAuthoritativeFleetReady();
+
   const verify = await loadGameFromCloudDetailed(authenticatedUid);
   if (!verify.ok) {
     throw new CloudSaveConflictError(
@@ -343,6 +346,9 @@ async function bindStarterSaveToUid(
     state: useGameStore.getState(),
     ownerUid: authenticatedUid,
   });
+
+  const { ensureAuthoritativeFleetReady } = await import('./serverStateMigrationService');
+  await ensureAuthoritativeFleetReady();
 
   setCloudSaveAccountConflictPending(false);
   setAccountSaveFlowPhase('ready');

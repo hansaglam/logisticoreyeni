@@ -244,14 +244,13 @@ export default function ContractQuickActionSheet({
   );
   const fuelReadiness = useMemo(() => {
     if (!contract || !selectedTruckId || !selectedDriverOption?.driver) return null;
-    const liveTruck = liveRefuelTruck ?? selectedTruckOption?.truck ?? null;
-    if (!liveTruck) return null;
+    if (!liveRefuelTruck) return null;
     const route = findRoute(contract.originCityId, contract.destinationCityId);
     if (!route) return null;
     return evaluateDeliveryReadiness({
       contract,
-      truck: liveTruck,
-      trailer: getAttachedTrailerForTruck(liveTruck.id, trailers),
+      truck: liveRefuelTruck,
+      trailer: getAttachedTrailerForTruck(liveRefuelTruck.id, trailers),
       driver: selectedDriverOption.driver,
       route,
       fuelPricePerLiter: globalEconomy.fuelPrice ?? 0,
@@ -262,7 +261,6 @@ export default function ContractQuickActionSheet({
     liveRefuelTruck,
     selectedDriverOption?.driver,
     selectedTruckId,
-    selectedTruckOption?.truck,
     trailers,
   ]);
   const truckFuelReadiness = fuelReadiness?.fuelReadiness ?? null;

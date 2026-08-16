@@ -75,6 +75,7 @@ import {
 } from '../services/vehicleMarketplaceService';
 import { useGameStore } from '../store/gameStore';
 import { SAVE_GAME_VERSION } from '../storage/saveGame';
+import { getSaveContentRevision } from '../storage/saveRevision';
 import { colors, spacing } from '../theme';
 import type {
   VehicleMarketplaceCursor,
@@ -87,6 +88,10 @@ import {
   logMarketplaceDev,
   showAlertAfterModalClose,
 } from '../utils/marketplaceUiSafety';
+import {
+  ensureAuthoritativeFleetReady,
+} from '../services/serverStateMigrationService';
+import { syncLocalSaveToCloud } from '../storage/cloudSaveSync';
 import { markStartup } from '../utils/startupPerformance';
 
 const PAGE_SIZE = 20;
@@ -320,6 +325,22 @@ export default function VehicleMarketplaceScreen({
         setMyListings([]);
         setMyListingsError('auth-required');
         return;
+      }
+
+      const synced = await syncLocalSaveToCloud('manual', {
+        force: true,
+        state: useGameStore.getState(),
+      });
+      if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
+      }
+      const fleetReady = await ensureAuthoritativeFleetReady();
+      if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
+        logMarketplaceLoadError({
+          code: fleetReady.reason ?? 'service-unavailable',
+          message: fleetReady.reason ?? 'fleet-reconcile-failed',
+          callableName: 'reconcileAuthoritativeFleet',
+        });
       }
 
       const [publicResult, myResult] = await Promise.all([
@@ -594,6 +615,12 @@ export default function VehicleMarketplaceScreen({
       return;
     }
 
+    await syncLocalSaveToCloud('manual', {
+      force: true,
+      state: useGameStore.getState(),
+    });
+    await ensureAuthoritativeFleetReady({ requestedVehicleId: truck.id });
+
     setIsCreatingListing(true);
     logMarketplaceDev('Sell Vehicle isCreatingListing', { value: true });
     try {
@@ -601,7 +628,11 @@ export default function VehicleMarketplaceScreen({
         ...actionEnvelope('marketplace-create'),
         truckId: truck.id,
         askingPrice,
-        clientSaveVersion: SAVE_GAME_VERSION,
+        clientSaveVersion: Math.max(
+          SAVE_GAME_VERSION,
+          getSaveContentRevision(),
+          useGameStore.getState().vehicleMarketplace?.marketplaceStateVersion ?? 0,
+        ),
       });
       if (!result.ok) {
         logMarketplaceDev('Sell Vehicle create failed', { reason: result.reason });

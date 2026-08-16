@@ -77,8 +77,18 @@ export default function TruckRefuelSheet({
 }: TruckRefuelSheetProps) {
   const lastTruckRef = useRef<Truck | null>(truck);
   if (truck) lastTruckRef.current = truck;
+
+  useEffect(() => {
+    if (visible || Platform.OS !== 'ios') return;
+    const timer = setTimeout(() => {
+      lastTruckRef.current = null;
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [visible]);
+
+  const resolvedTruckId = truck?.id ?? lastTruckRef.current?.id ?? null;
   const displayTruck = truck ?? lastTruckRef.current;
-  if (!displayTruck) return null;
+  if (!displayTruck || !resolvedTruckId) return null;
   if (embedded && !visible) return null;
   // Android: unmount when closed. iOS must keep Modal mounted with visible=false
   // so native dismiss can finish; returning null here left fuel state stale.
@@ -87,7 +97,8 @@ export default function TruckRefuelSheet({
   return (
     <TruckRefuelSheetContent
       visible={visible}
-      truck={displayTruck}
+      truckId={resolvedTruckId}
+      truckFallback={displayTruck}
       preferredMinimumLiters={preferredMinimumLiters}
       onClose={onClose}
       onSuccess={onSuccess}
@@ -99,16 +110,17 @@ export default function TruckRefuelSheet({
 
 function TruckRefuelSheetContent({
   visible,
-  truck,
+  truckId,
+  truckFallback,
   preferredMinimumLiters = null,
   onClose,
   onSuccess,
   embedded = false,
   source,
-}: TruckRefuelSheetProps) {
+}: TruckRefuelSheetProps & { truckId: string; truckFallback: Truck }) {
   const insets = useAppSafeAreaInsets();
   const liveTruck = useGameStore((state) =>
-    truck ? state.player?.trucks.find((candidate) => candidate.id === truck.id) : undefined,
+    state.player?.trucks.find((candidate) => candidate.id === truckId),
   );
   const cash = useGameStore((state) => state.player?.money ?? 0);
   const cachedSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
@@ -126,7 +138,7 @@ function TruckRefuelSheetContent({
   const [isRefreshingPrice, setIsRefreshingPrice] = useState(false);
   const transactionKeyRef = useRef('');
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const initializedTruckIdRef = useRef(truck?.id);
+  const initializedTruckIdRef = useRef(truckId);
   const renderCountRef = useRef(0);
   const renderWarningSentRef = useRef(false);
 
@@ -144,7 +156,7 @@ function TruckRefuelSheetContent({
     [cachedSnapshot, cachedSnapshotTrusted, marketLastSyncedAtMs, marketSyncStatus],
   );
 
-  const selectedTruck = liveTruck ?? truck;
+  const selectedTruck = liveTruck ?? truckFallback;
   const normalizedTruck = useMemo(
     () => (selectedTruck ? normalizeTruckFuel(selectedTruck) : null),
     [selectedTruck],
@@ -155,7 +167,7 @@ function TruckRefuelSheetContent({
       source: source ?? 'TruckRefuelSheet → liveTruck from store by truck.id ?? prop',
       id: selectedTruck.id,
       name: selectedTruck.name,
-      propId: truck?.id ?? null,
+      propId: truckFallback.id,
       usedLiveStore: Boolean(liveTruck),
       fuel: normalizedTruck?.currentFuelL ?? null,
       capacity: normalizedTruck?.fuelTankCapacityL ?? null,
@@ -167,15 +179,15 @@ function TruckRefuelSheetContent({
   const priceReady = isFuelPricePurchaseReady(fuelPriceQuote);
 
   useEffect(() => {
-    if (initializedTruckIdRef.current === truck?.id) return;
-    initializedTruckIdRef.current = truck?.id;
+    if (initializedTruckIdRef.current === truckId) return;
+    initializedTruckIdRef.current = truckId;
     setChoice('25');
     setErrorMessage(null);
     setSuccessMessage(null);
     setIsSubmitting(false);
     setIsRefreshingPrice(false);
     transactionKeyRef.current = '';
-  }, [truck?.id]);
+  }, [truckId]);
 
   useEffect(() => {
     if (!visible || preferredMinimumLiters == null || preferredMinimumLiters <= 0) return;
@@ -186,7 +198,7 @@ function TruckRefuelSheetContent({
     } else {
       setChoice('full');
     }
-  }, [preferredMinimumLiters, visible, truck?.id]);
+  }, [preferredMinimumLiters, visible, truckId]);
 
   useEffect(
     () => () => {
@@ -309,6 +321,18 @@ function TruckRefuelSheetContent({
     onSuccess?.(result.message);
     closeTimerRef.current = setTimeout(() => {
       setIsSubmitting(false);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        const afterDismiss = useGameStore.getState().player.trucks.find(
+          (candidate) => candidate.id === normalizedTruck.id,
+        );
+        console.log('[FUEL_IOS_TRACE]', {
+          phase: 'modal-dismiss',
+          vehicleId: normalizedTruck.id,
+          fuelAfterModalDismiss: afterDismiss
+            ? normalizeTruckFuel(afterDismiss).currentFuelL
+            : null,
+        });
+      }
       onClose();
     }, 450);
   };

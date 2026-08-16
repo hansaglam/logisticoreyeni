@@ -54,6 +54,7 @@ import {
 } from '../services/accountSaveConflictSession';
 import { getFirebaseAuthSafe } from '../services/firebase';
 import { isVehicleMarketplaceOperationActive } from '../services/vehicleMarketplaceService';
+import { ensureAuthoritativeFleetReady } from '../services/serverStateMigrationService';
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 import {
   configureGoogleSignIn,
@@ -338,6 +339,7 @@ export function useAccountCenter({
         force: true,
         state: useGameStore.getState(),
       });
+      await ensureAuthoritativeFleetReady();
       refreshCloudStatus();
     } finally {
       setIsManualSyncing(false);
@@ -834,10 +836,14 @@ export function useAccountCenter({
     const state = useGameStore.getState();
     if (!isLocalSaveSafeForAccountTransition(state)) return false;
     await state.saveGame();
-    return syncLocalSaveToCloud('manual', {
+    const synced = await syncLocalSaveToCloud('manual', {
       force: true,
       state: useGameStore.getState(),
     });
+    if (synced) {
+      await ensureAuthoritativeFleetReady();
+    }
+    return synced;
   };
 
   const clearAccountScopedClientState = () => {

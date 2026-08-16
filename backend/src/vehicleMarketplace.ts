@@ -41,6 +41,9 @@ import {
   DEFAULT_OUTER_TRANSACTION_ATTEMPTS,
   runFirestoreTransactionWithRetry,
 } from './firestoreTransactionUtils';
+import {
+  reconcileAuthoritativeFleetInTransaction,
+} from './authoritativeFleetReconciliation';
 
 const ACTIVE_JOB_STATUSES = new Set([
   'on_route',
@@ -228,7 +231,7 @@ async function readPurchaseTransactionContext(
   const seller = sellerSnapshot.data() as MarketplacePlayerState;
   if (
     input.clientSaveVersion != null &&
-    buyer.sourceSaveVersion !== input.clientSaveVersion
+    input.clientSaveVersion < buyer.sourceSaveVersion
   ) {
     return { kind: 'return', result: failure(input, 'save-conflict') };
   }
@@ -430,29 +433,76 @@ async function bootstrapMarketplaceStateInTransaction(
   firestore: Firestore,
   uid: string,
   nowMs: number,
+  options?: { requestedVehicleId?: string },
 ): Promise<
   | {
       ok: true;
       state: MarketplacePlayerState;
       wasCreated: boolean;
+      statePersisted: boolean;
       serverState: ServerStateDocument;
     }
   | { ok: false; reason: MarketplaceFailureReason }
 > {
   const playerRef = stateRef(firestore, uid);
   const stateSnapshot = await transaction.get(playerRef);
+  const existing = stateSnapshot.exists
+    ? (stateSnapshot.data() as MarketplacePlayerState)
+    : null;
+
+  if (existing) {
+    const stateReason = validateMarketplaceState(uid, existing);
+    if (stateReason) return { ok: false, reason: stateReason };
+  }
+
+  const now = Timestamp.fromMillis(nowMs);
+  const reconciled = await reconcileAuthoritativeFleetInTransaction(
+    transaction,
+    firestore,
+    uid,
+    nowMs,
+    {
+      existing,
+      requestedVehicleId: options?.requestedVehicleId,
+      write: false,
+    },
+  );
+  if (reconciled.ok) {
+    const shouldPersist = reconciled.reconciled || !existing;
+    if (shouldPersist) {
+      if (existing) {
+        transaction.set(playerRef, reconciled.state, { merge: true });
+      } else {
+        transaction.create(playerRef, reconciled.state);
+      }
+      syncServerStateMirror(
+        transaction,
+        firestore,
+        uid,
+        reconciled.state,
+        reconciled.serverState,
+        now,
+      );
+    }
+    return {
+      ok: true,
+      state: reconciled.state,
+      wasCreated: !existing && shouldPersist,
+      statePersisted: shouldPersist,
+      serverState: reconciled.serverState,
+    };
+  }
+
   const serverRef = serverStateRef(firestore, uid);
   const serverSnapshot = await transaction.get(serverRef);
 
-  if (stateSnapshot.exists) {
-    const state = stateSnapshot.data() as MarketplacePlayerState;
-    const stateReason = validateMarketplaceState(uid, state);
-    if (stateReason) return { ok: false, reason: stateReason };
+  if (existing) {
     if (serverSnapshot.exists) {
       return {
         ok: true,
-        state,
+        state: existing,
         wasCreated: false,
+        statePersisted: false,
         serverState: serverSnapshot.data() as ServerStateDocument,
       };
     }
@@ -463,7 +513,13 @@ async function bootstrapMarketplaceStateInTransaction(
       nowMs,
     );
     if (!ensured.ok) return { ok: false, reason: 'marketplace-state-missing' };
-    return { ok: true, state, wasCreated: false, serverState: ensured.state };
+    return {
+      ok: true,
+      state: existing,
+      wasCreated: false,
+      statePersisted: false,
+      serverState: ensured.state,
+    };
   }
 
   const ensured = await ensureServerStateInTransaction(
@@ -476,13 +532,14 @@ async function bootstrapMarketplaceStateInTransaction(
   const built = buildMarketplaceStateFromServerState(
     uid,
     ensured.state,
-    Timestamp.fromMillis(nowMs),
+    now,
   );
   if (!built.ok) return { ok: false, reason: built.reason };
   return {
     ok: true,
     state: built.state,
     wasCreated: true,
+    statePersisted: false,
     serverState: ensured.state,
   };
 }
@@ -574,7 +631,7 @@ function listingEligibility(
   if (state.syncConflict) return 'save-conflict';
   if (
     input.clientSaveVersion != null &&
-    input.clientSaveVersion !== state.sourceSaveVersion
+    input.clientSaveVersion < state.sourceSaveVersion
   ) {
     return 'save-conflict';
   }
@@ -705,10 +762,12 @@ export async function createVehicleListingTransaction(
       firestore,
       identity.uid,
       nowMs,
+      { requestedVehicleId: input.truckId },
     );
     if (!bootstrap.ok) return failure(input, bootstrap.reason);
     let state = bootstrap.state;
     const stateWasCreated = bootstrap.wasCreated;
+    const statePersisted = bootstrap.statePersisted;
     let serverState = bootstrap.serverState;
     const usernameRaw = userProfileSnap.data()?.username;
     const sellerUsername =
@@ -717,20 +776,26 @@ export async function createVehicleListingTransaction(
       return failure(input, 'username-required');
     }
     const availableVehicleIds = state.ownedTruckSnapshots.map((item) => item.truckId);
-    const vehicle = state.ownedTruckSnapshots.find(
+    let vehicle = state.ownedTruckSnapshots.find(
       (item) => item.truckId === input.truckId,
     );
-    const match = Boolean(vehicle);
-    console.info('[MARKETPLACE_SELL][AUTHORITATIVE_LOOKUP]', {
+    let match = Boolean(vehicle);
+    console.info('[MARKETPLACE_CREATE]', {
       uidHash: createHash('sha256').update(identity.uid).digest('hex').slice(0, 12),
       requestedVehicleId: input.truckId,
-      availableVehicleIds,
-      source: 'users/{uid}/marketplaceState/current.ownedTruckSnapshots',
+      authoritativeVehicleIds: availableVehicleIds,
+      vehicleFound: match,
+      ownerMatch: state.ownerUid === identity.uid,
+      rental: vehicle?.ownershipType === 'leased',
+      alreadyListed: Boolean(vehicle?.marketplaceListingId),
       wasCreated: stateWasCreated,
       sourceSaveVersion: state.sourceSaveVersion,
+      clientSaveVersion: input.clientSaveVersion ?? null,
       serverOwnedTruckIds: serverState.ownedTruckIds,
     });
-    console.info('[MARKETPLACE_SELL][MATCH]', match);
+    if (!vehicle) {
+      return failure(input, 'truck-not-found');
+    }
     const reason = listingEligibility(state, vehicle, input);
     if (reason || !vehicle) return failure(input, reason ?? 'truck-not-found');
     const listingFee =
@@ -783,20 +848,20 @@ export async function createVehicleListingTransaction(
       ownedTruckSnapshots: state.ownedTruckSnapshots.map((item) =>
         item.truckId === vehicle.truckId ? lockedVehicle : item,
       ),
-      activeListingIds: stateWasCreated
+      activeListingIds: stateWasCreated && !statePersisted
         ? [listingId]
-        : FieldValue.arrayUnion(listingId),
+        : [...state.activeListingIds, listingId],
       stateVersion: state.stateVersion + 1,
       updatedAt: now,
     };
     const nextMarketplaceState: MarketplacePlayerState = {
       ...state,
       ...updatedPlayerState,
-      activeListingIds: stateWasCreated
+      activeListingIds: stateWasCreated && !statePersisted
         ? [listingId]
         : [...state.activeListingIds, listingId],
     };
-    if (stateWasCreated) {
+    if (stateWasCreated && !statePersisted) {
       transaction.create(playerRef, {
         ...state,
         ...updatedPlayerState,
@@ -852,11 +917,11 @@ export async function ensureVehicleMarketplaceStateTransaction(
     const state = bootstrap.state;
     if (
       input.clientSaveVersion != null &&
-      input.clientSaveVersion !== state.sourceSaveVersion
+      input.clientSaveVersion < state.sourceSaveVersion
     ) {
       return failure(input, 'save-conflict');
     }
-    if (bootstrap.wasCreated) {
+    if (bootstrap.wasCreated && !bootstrap.statePersisted) {
       transaction.create(playerRef, state);
       syncServerStateMirror(
         transaction,

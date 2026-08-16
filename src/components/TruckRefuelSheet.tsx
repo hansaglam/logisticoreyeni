@@ -117,7 +117,7 @@ function TruckRefuelSheetContent({
   onSuccess,
   embedded = false,
   source,
-}: TruckRefuelSheetProps & { truckId: string; truckFallback: Truck }) {
+}: Omit<TruckRefuelSheetProps, 'truck'> & { truckId: string; truckFallback: Truck }) {
   const insets = useAppSafeAreaInsets();
   const liveTruck = useGameStore((state) =>
     state.player?.trucks.find((candidate) => candidate.id === truckId),

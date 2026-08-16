@@ -85,6 +85,15 @@ import {
   isAccountLinkConflictError,
 } from '../utils/accountLinkErrors';
 import {
+  failureFromLinkError,
+  formatAppleAuthDiagnosticDisplay,
+  getAppleAuthDiagnosticFooter,
+  isAppleAuthCancelFailure,
+  isAppleExistingAccountConflictCode,
+  normalizeAppleAuthFailure,
+  type AppleAuthFailure,
+} from '../utils/appleAuthDiagnostics';
+import {
   beginCloudSaveConflictResolution,
   endCloudSaveConflictResolution,
   getCloudSaveConflictErrorMessage,
@@ -585,6 +594,47 @@ export function useAccountCenter({
     }
   };
 
+  const showAppleLinkFailure = (
+    failure: AppleAuthFailure,
+    fallbackError?: string,
+  ) => {
+    if (isAppleAuthCancelFailure(failure) || fallbackError === 'cancelled') {
+      return;
+    }
+    // Conflict codes never become a generic modal — conflict dialog owns that path.
+    if (
+      isAppleExistingAccountConflictCode(failure.code) ||
+      isAppleExistingAccountConflictCode(failure.firebaseCode) ||
+      isAppleExistingAccountConflictCode(fallbackError)
+    ) {
+      return;
+    }
+    // Internal/TestFlight: stage + code always in the message body. Never drop real codes.
+    showDialog({
+      title: 'Hesap Bağlanamadı',
+      message: formatAppleAuthDiagnosticDisplay(failure),
+      variant: 'warning',
+      footerNote: getAppleAuthDiagnosticFooter(failure),
+      confirmLabel: 'Tamam',
+    });
+  };
+
+  const resolveAppleFailure = (result: {
+    error?: string;
+    appleFailure?: AppleAuthFailure;
+    errorKind?: string;
+  }): AppleAuthFailure => {
+    if (result.appleFailure) {
+      return result.appleFailure;
+    }
+    return failureFromLinkError(
+      result.error,
+      isAppleExistingAccountConflictCode(result.error)
+        ? 'cloud-conflict'
+        : 'anonymous-link-failure',
+    );
+  };
+
   const handleLink = async (provider: 'google' | 'apple') => {
     if (isLinking || isResolvingConflict || isSwitchingAccount || linkTapLock.current) {
       return;
@@ -616,12 +666,32 @@ export function useAccountCenter({
         return;
       }
 
+      if (isAccountLinkConflictError(result.error, result.errorKind)) {
+        if (provider === 'apple') {
+          // Conflict path is owned by saveOutcome / conflict dialogs.
+          showAppleLinkFailure(resolveAppleFailure(result), result.error);
+        }
+        return;
+      }
+
+      if (provider === 'apple') {
+        showAppleLinkFailure(resolveAppleFailure(result), result.error);
+        return;
+      }
+
       const message = linkErrorMessage(result.error);
       if (message) {
         showAlert('Hesap Bağlanamadı', message);
       }
     } catch (error) {
       console.warn('[account] link failed', error);
+      if (provider === 'apple') {
+        showAppleLinkFailure(
+          normalizeAppleAuthFailure(error, 'anonymous-link-failure'),
+          'apple-sign-in-failed',
+        );
+        return;
+      }
       showAlert('Hesap Bağlanamadı', getAccountLinkGeneralErrorMessage());
     } finally {
       setIsLinking(null);
@@ -797,12 +867,21 @@ export function useAccountCenter({
         return;
       }
 
+      if (provider === 'apple') {
+        showAppleLinkFailure(resolveAppleFailure(result), result.error);
+        return;
+      }
+
       const message = linkErrorMessage(result.error);
       if (message) {
         showAlert('Hesap Bağlanamadı', message);
       }
     } catch (error) {
       console.warn('[account] retry link failed', error);
+      if (provider === 'apple') {
+        showAppleLinkFailure(normalizeAppleAuthFailure(error, 'anonymous-link-failure'));
+        return;
+      }
       showAlert('Hesap Bağlanamadı', getAccountLinkGeneralErrorMessage());
     } finally {
       setIsLinking(null);

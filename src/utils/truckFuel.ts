@@ -500,11 +500,24 @@ export function validateTruckRefuelRequest(input: {
 }
 
 export function normalizeTruckFuel(truck: Truck): Truck {
-  const snapshot = getTruckFuelSnapshot(truck);
+  // Preserve fractional liters for simulation/refuel. Display rounding belongs in
+  // getTruckFuelSnapshot only — never Math.round through that path here.
+  const capacityFromTruck = toFuelNumber(truck.fuelTankCapacityL);
+  const fuelTankCapacityL =
+    capacityFromTruck != null && capacityFromTruck > 0
+      ? capacityFromTruck
+      : getDefaultFuelTankCapacityL(truck);
+
+  const currentRaw = toFuelNumber(truck.currentFuelL);
+  const currentFuelL =
+    currentRaw != null
+      ? clamp(currentRaw, 0, fuelTankCapacityL)
+      : Math.round(fuelTankCapacityL * getDefaultFuelFillRatio(truck.id));
+
   return {
     ...truck,
-    fuelTankCapacityL: snapshot.capacityLiters,
-    currentFuelL: roundFuelValue(snapshot.currentLiters),
+    fuelTankCapacityL: roundFuelValue(fuelTankCapacityL),
+    currentFuelL: roundFuelValue(currentFuelL),
     totalMileageKm: Math.max(0, toFuelNumber(truck.totalMileageKm) ?? 0),
   };
 }

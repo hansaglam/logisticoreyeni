@@ -217,7 +217,7 @@ async function run(): Promise<void> {
   const entitlements = readSrc('ios/LogistiCore/LogistiCore.entitlements');
   const nonceSrc = readSrc('src/utils/authNonce.ts');
   const appleSrc = readSrc('src/services/appleAuthService.ts');
-  const accountSrc = readSrc('src/components/AccountSection.tsx');
+  const accountSrc = readSrc('src/hooks/useAccountCenter.ts');
   const diagnosticsSrc = readSrc('src/utils/appleAuthDiagnostics.ts');
 
   assert(
@@ -409,8 +409,10 @@ async function run(): Promise<void> {
   guard.finish();
   assert(guard.tryStart() === true, 'request can start again after finish');
   assert(
-    readSrc('src/components/AccountSection.tsx').includes('if (isLinking)') &&
-      readSrc('src/components/AccountSection.tsx').includes('disabled={Boolean(isLinking)}'),
+    readSrc('src/hooks/useAccountCenter.ts').includes('if (isLinking') &&
+      readSrc('src/components/accountCenter/AccountConnectionTab.tsx').includes(
+        'disabled={Boolean(isLinking)}',
+      ),
     'UI double tap / loading guard present',
   );
 
@@ -474,7 +476,12 @@ async function run(): Promise<void> {
   const authService = readSrc('src/services/authService.ts');
   assert(authService.includes("pendingCredential: provider === 'apple' ? undefined : credential"), 'Apple pending credential is not cached after failed link');
   assert(accountSrc.includes('getAppleAuthDiagnosticFooter'), 'internal diagnostic footer wired to UI');
-  assert(accountSrc.includes("label=\"Apple ile Devam Et\""), 'Apple continue button still present');
+  assert(
+    readSrc('src/components/accountCenter/AccountConnectionTab.tsx').includes(
+      'Apple ile Devam Et',
+    ),
+    'Apple continue button still present',
+  );
 }
 
 void run()

@@ -604,7 +604,6 @@ export async function saveGameToCloud(
       schemaVersion: 1,
       version: savePayload.version ?? 1,
       saveVersion,
-      ownerUid: uid,
       updatedAt: serverTimestamp(),
       deviceUpdatedAt,
       gameState: sanitizedGameState,

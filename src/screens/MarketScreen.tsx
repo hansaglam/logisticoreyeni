@@ -2617,6 +2617,10 @@ const styles = StyleSheet.create({
     color: colors.accentAmber,
     marginTop: 1,
   },
+  tutorialProductPriceTarget: {
+    alignSelf: 'stretch',
+    width: '100%',
+  },
   productPrice: {
     fontSize: 15,
     fontWeight: '800',

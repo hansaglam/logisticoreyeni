@@ -237,16 +237,23 @@ export default function ContractQuickActionSheet({
 
   const selectedTruckOption = truckOptions.find((option) => option.truck.id === selectedTruckId);
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
+  const liveRefuelTruck = useGameStore((state) =>
+    selectedTruckId
+      ? state.player?.trucks.find((candidate) => candidate.id === selectedTruckId) ?? null
+      : null,
+  );
   const fuelReadiness = useMemo(() => {
-    if (!contract || !selectedTruckOption?.truck || !selectedDriverOption?.driver) return null;
+    if (!contract || !selectedTruckId || !selectedDriverOption?.driver) return null;
+    const liveTruck = liveRefuelTruck ?? selectedTruckOption?.truck ?? null;
+    if (!liveTruck) return null;
     const route = findRoute(contract.originCityId, contract.destinationCityId);
     const product = getProductByIdSafe(contract.productId);
     if (!route || !product) return null;
     return getTruckFuelReadiness(
-      selectedTruckOption.truck,
+      liveTruck,
       calculateDeliveryFuelLiters({
         contract,
-        truck: selectedTruckOption.truck,
+        truck: liveTruck,
         driver: selectedDriverOption.driver,
         route,
         product,
@@ -256,7 +263,9 @@ export default function ContractQuickActionSheet({
   }, [
     contract,
     globalEconomy.fuelPrice,
+    liveRefuelTruck,
     selectedDriverOption?.driver,
+    selectedTruckId,
     selectedTruckOption?.truck,
   ]);
 
@@ -619,8 +628,10 @@ export default function ContractQuickActionSheet({
       />
       <TruckRefuelSheet
         visible={refuelVisible}
-        truck={selectedTruckOption?.truck ?? null}
+        truck={liveRefuelTruck}
+        preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
         onClose={() => setRefuelVisible(false)}
+        onSuccess={() => setRefuelVisible(false)}
       />
     </>
   );

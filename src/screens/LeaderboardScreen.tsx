@@ -26,6 +26,7 @@ import {
   SectionTitle,
   StatusBadge,
 } from '../components/ui';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   DEFAULT_ACCOUNT_STATUS,
   getAccountStatus,
@@ -55,7 +56,6 @@ import { fetchUsernameProfile } from '../services/usernameService';
 import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
 import { leaderboardConfig } from '../config/leaderboard';
 import { formatLeaderboardSeasonRange } from '../utils/leaderboardSeason';
-import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { colors, spacing, typography } from '../theme';
 
 interface LeaderboardScreenProps {
@@ -481,7 +481,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   if (isLoading && entries.length === 0) {
     return (
       <View style={styles.screenRoot}>
-        <AppScreen scrollBottomPadding={0}>
+        <AppScreen reserveTabBarSpace={false}>
           {onBack ? (
             <ScreenHeader
               title="Liderlik Tablosu"
@@ -506,7 +506,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
 
   return (
     <View style={styles.screenRoot}>
-      <AppScreen scrollBottomPadding={0}>
+      <AppScreen reserveTabBarSpace={false}>
         {onBack ? (
           <ScreenHeader
             title="Liderlik Tablosu"

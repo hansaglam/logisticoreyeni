@@ -1,6 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BackHandler,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -40,6 +41,9 @@ import {
   mapFailureReasonToMarketplaceKind,
 } from '../domain/marketplaceErrorModel';
 import {
+  getVehicleMarketplaceEligibility,
+} from '../domain/vehicleMarketplaceEligibility';
+import {
   applyMarketplaceFetchError,
   applyMarketplaceFetchSuccess,
   beginMarketplaceRefresh,
@@ -72,6 +76,11 @@ import type {
   VehicleMarketplaceListing,
 } from '../types/vehicleMarketplace';
 import { AppScreen, EmptyState, GameIcon } from '../components/ui';
+import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import {
+  logMarketplaceDev,
+  showAlertAfterModalClose,
+} from '../utils/marketplaceUiSafety';
 
 const PAGE_SIZE = 20;
 
@@ -94,7 +103,10 @@ export default function VehicleMarketplaceScreen({
   onBack: () => void;
 }) {
   const { alert: showAlert } = useAppDialog();
+  const { scrollBottomPadding } = useTabBarLayout();
   const player = useGameStore((state) => state.player);
+  const activeDeliveries = useGameStore((state) => state.activeDeliveries);
+  const activeTransfers = useGameStore((state) => state.activeTransfers);
   const applyReconciliation = useGameStore(
     (state) => state.applyVehicleMarketplaceReconciliation,
   );
@@ -117,10 +129,10 @@ export default function VehicleMarketplaceScreen({
   const [filtersVisible, setFiltersVisible] = useState(false);
   const [selected, setSelected] = useState<VehicleMarketplaceListing | null>(null);
   const [purchaseTarget, setPurchaseTarget] = useState<VehicleMarketplaceListing | null>(null);
-  const [purchasing, setPurchasing] = useState(false);
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [isBuyingVehicle, setIsBuyingVehicle] = useState(false);
+  const [isDeletingListing, setIsDeletingListing] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [isCreatingListing, setIsCreatingListing] = useState(false);
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const requestSeqRef = useRef(0);
   const lastAuthUidRef = useRef<string | null>(null);
@@ -148,6 +160,83 @@ export default function VehicleMarketplaceScreen({
   const isRefreshing = screenState.status === 'refreshing';
   const isUnavailable = screenState.status === 'error';
   const unavailableKind = screenState.status === 'error' ? screenState.error : null;
+
+  const closeCreateSheet = useCallback(() => {
+    logMarketplaceDev('create sheet close');
+    setCreateVisible(false);
+    setIsCreatingListing(false);
+    clearPendingSellTruckId();
+  }, [clearPendingSellTruckId]);
+
+  const closeBlockingSheets = useCallback(() => {
+    if (createVisible && !isCreatingListing) {
+      closeCreateSheet();
+      return true;
+    }
+    if (filtersVisible) {
+      setFiltersVisible(false);
+      return true;
+    }
+    if (selected != null) {
+      setSelected(null);
+      return true;
+    }
+    if (purchaseTarget != null && !isBuyingVehicle) {
+      setPurchaseTarget(null);
+      return true;
+    }
+    return false;
+  }, [
+    closeCreateSheet,
+    createVisible,
+    filtersVisible,
+    isBuyingVehicle,
+    isCreatingListing,
+    purchaseTarget,
+    selected,
+  ]);
+
+  const handleBack = useCallback(() => {
+    logMarketplaceDev('back pressed', {
+      createVisible,
+      filtersVisible,
+      selected: selected?.id ?? null,
+      purchaseTarget: purchaseTarget?.id ?? null,
+      isCreatingListing,
+      isBuyingVehicle,
+      screenStatus: screenState.status,
+    });
+    if (isCreatingListing || isBuyingVehicle) {
+      return;
+    }
+    if (closeBlockingSheets()) return;
+    onBack();
+  }, [
+    closeBlockingSheets,
+    createVisible,
+    filtersVisible,
+    isBuyingVehicle,
+    isCreatingListing,
+    onBack,
+    purchaseTarget,
+    screenState.status,
+    selected,
+  ]);
+
+  useEffect(() => {
+    logMarketplaceDev('OPEN');
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (isCreatingListing || isBuyingVehicle) {
+        return true;
+      }
+      if (closeBlockingSheets()) {
+        return true;
+      }
+      onBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [closeBlockingSheets, isBuyingVehicle, isCreatingListing, onBack]);
 
   const resetMarketplaceData = useCallback(() => {
     setScreenState({ status: 'idle' });
@@ -205,50 +294,61 @@ export default function VehicleMarketplaceScreen({
     setScreenState((current) => beginMarketplaceRefresh(current));
     if (options?.isRetry) setRetrying(true);
 
-    if (!isLinkedMarketplaceUser()) {
+    try {
+      if (!isLinkedMarketplaceUser()) {
+        if (requestSeq !== requestSeqRef.current) return;
+        logMarketplaceDev('listings load failed', { reason: 'auth-required' });
+        setScreenState(
+          applyMarketplaceFetchError(
+            mapFailureReasonToMarketplaceKind('auth-required'),
+          ),
+        );
+        setMyListings([]);
+        setMyListingsError('auth-required');
+        return;
+      }
+
+      const [publicResult, myResult] = await Promise.all([
+        loadFirstPage(),
+        syncMineAndReconcile(),
+      ]);
+
       if (requestSeq !== requestSeqRef.current) return;
-      setScreenState(
-        applyMarketplaceFetchError(
-          mapFailureReasonToMarketplaceKind('auth-required'),
-        ),
-      );
-      setMyListings([]);
-      setMyListingsError('auth-required');
-      setRetrying(false);
-      return;
-    }
 
-    const [publicResult, myResult] = await Promise.all([
-      loadFirstPage(),
-      syncMineAndReconcile(),
-    ]);
-
-    if (requestSeq !== requestSeqRef.current) return;
-
-    if (!publicResult.ok) {
-      setScreenState(
-        applyMarketplaceFetchError(
-          mapFailureReasonToMarketplaceKind(
+      if (!publicResult.ok) {
+        logMarketplaceDev('listings load failed', {
+          reason: publicResult.reason ?? 'unknown',
+          kind: mapFailureReasonToMarketplaceKind(
             publicResult.reason as VehicleMarketplaceFailureReason | undefined,
           ),
-        ),
-      );
-      setRetrying(false);
-      return;
-    }
+        });
+        setScreenState(
+          applyMarketplaceFetchError(
+            mapFailureReasonToMarketplaceKind(
+              publicResult.reason as VehicleMarketplaceFailureReason | undefined,
+            ),
+          ),
+        );
+        return;
+      }
 
-    setScreenState(applyMarketplaceFetchSuccess(publicResult.listings ?? []));
-    if (
-      !myResult.ok &&
-      (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
-    ) {
-      setScreenState(
-        applyMarketplaceFetchError(
-          mapFailureReasonToMarketplaceKind('auth-required'),
-        ),
-      );
+      setScreenState(applyMarketplaceFetchSuccess(publicResult.listings ?? []));
+      if (
+        !myResult.ok &&
+        (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
+      ) {
+        logMarketplaceDev('my listings auth failed', { reason: myResult.reason });
+        setScreenState(
+          applyMarketplaceFetchError(
+            mapFailureReasonToMarketplaceKind('auth-required'),
+          ),
+        );
+      }
+    } finally {
+      if (requestSeq === requestSeqRef.current) {
+        setRetrying(false);
+      }
     }
-    setRetrying(false);
   }, [loadFirstPage, syncMineAndReconcile]);
 
   useEffect(() => {
@@ -270,6 +370,7 @@ export default function VehicleMarketplaceScreen({
 
   useEffect(() => {
     if (!VEHICLE_MARKETPLACE_ENABLED || !pendingSellTruckId) return;
+    logMarketplaceDev('pending sell open', { truckId: pendingSellTruckId });
     setActiveTab('mine');
     setCreateVisible(true);
   }, [pendingSellTruckId]);
@@ -277,20 +378,20 @@ export default function VehicleMarketplaceScreen({
   const loadMore = async () => {
     if (!hasMore || !cursor || loadingMore || activeTab !== 'available' || isUnavailable) return;
     setLoadingMore(true);
-    const page = await getVehicleMarketplaceListings(PAGE_SIZE, cursor);
-    if (page.ok) {
-      const merged = mergeMarketplacePage(listings, page);
-      setScreenState(applyMarketplaceFetchSuccess(merged));
-      setCursor(page.nextCursor);
-      setHasMore(page.hasMore);
-    } else {
-      setScreenState(
-        applyMarketplaceFetchError(
-          mapFailureReasonToMarketplaceKind(page.reason),
-        ),
-      );
+    try {
+      const page = await getVehicleMarketplaceListings(PAGE_SIZE, cursor);
+      if (page.ok) {
+        const merged = mergeMarketplacePage(listings, page);
+        setScreenState(applyMarketplaceFetchSuccess(merged));
+        setCursor(page.nextCursor);
+        setHasMore(page.hasMore);
+      } else {
+        logMarketplaceDev('load more failed', { reason: page.reason });
+        // Keep existing listings visible; do not lock the whole screen on pagination failure.
+      }
+    } finally {
+      setLoadingMore(false);
     }
-    setLoadingMore(false);
   };
 
   const onRefresh = async () => {
@@ -324,17 +425,25 @@ export default function VehicleMarketplaceScreen({
     };
   }, [activeMine.length, listings]);
 
-  const canCreateListing = useMemo(() => {
-    const activeListingTruckIds = new Set(
-      activeMine.map((listing) => listing.truckSnapshot.truckId),
-    );
-    return player.trucks.some(
-      (truck) =>
-        truck.status === 'idle' &&
-        truck.ownershipType !== 'leased' &&
-        !activeListingTruckIds.has(truck.id),
-    );
-  }, [activeMine, player.trucks]);
+  const eligibilityContext = useMemo(
+    () => ({
+      trucks: player.trucks,
+      drivers: player.drivers,
+      trailers: player.trailers,
+      activeDeliveries,
+      activeTransfers,
+      activeListingTruckIds: activeMine.map((listing) => listing.truckSnapshot.truckId),
+    }),
+    [activeDeliveries, activeMine, activeTransfers, player.drivers, player.trailers, player.trucks],
+  );
+
+  const canCreateListing = useMemo(
+    () =>
+      player.trucks.some(
+        (truck) => getVehicleMarketplaceEligibility(truck.id, eligibilityContext).eligible,
+      ),
+    [eligibilityContext, player.trucks],
+  );
 
   const beginPurchase = (listing: VehicleMarketplaceListing) => {
     const uid = getFirebaseAuthSafe()?.currentUser?.uid;
@@ -347,27 +456,37 @@ export default function VehicleMarketplaceScreen({
   };
 
   const confirmPurchase = async () => {
-    if (!purchaseTarget || purchasing) return;
-    setPurchasing(true);
-    const result = await purchaseVehicleListing({
-      ...actionEnvelope('marketplace-purchase'),
-      listingId: purchaseTarget.id,
-      listingVersion: purchaseTarget.version,
-      quotedPrice: purchaseTarget.askingPrice,
-    });
-    if (!result.ok) {
-      showAlert('Satın alma tamamlanamadı', getMarketplaceErrorMessage(result.reason));
-      setPurchasing(false);
-      if (result.reason === 'listing-not-active' || result.reason === 'stale-listing-version') {
+    if (!purchaseTarget || isBuyingVehicle) return;
+    setIsBuyingVehicle(true);
+    try {
+      const result = await purchaseVehicleListing({
+        ...actionEnvelope('marketplace-purchase'),
+        listingId: purchaseTarget.id,
+        listingVersion: purchaseTarget.version,
+        quotedPrice: purchaseTarget.askingPrice,
+      });
+      if (!result.ok) {
         setPurchaseTarget(null);
-        await onRefresh();
+        showAlertAfterModalClose(
+          showAlert,
+          'Satın alma tamamlanamadı',
+          getMarketplaceErrorMessage(result.reason),
+        );
+        if (result.reason === 'listing-not-active' || result.reason === 'stale-listing-version') {
+          await onRefresh();
+        }
+        return;
       }
-      return;
+      await refreshAll();
+      setPurchaseTarget(null);
+      showAlertAfterModalClose(
+        showAlert,
+        'Satın alma tamamlandı',
+        'Araç authoritative pazar kaydından filona aktarıldı.',
+      );
+    } finally {
+      setIsBuyingVehicle(false);
     }
-    await refreshAll();
-    setPurchasing(false);
-    setPurchaseTarget(null);
-    showAlert('Satın alma tamamlandı', 'Araç authoritative pazar kaydından filona aktarıldı.');
   };
 
   const requestCancel = (listing: VehicleMarketplaceListing) => {
@@ -382,24 +501,44 @@ export default function VehicleMarketplaceScreen({
   };
 
   const performCancel = async (listing: VehicleMarketplaceListing) => {
-    if (cancellingId) return;
-    setCancellingId(listing.id);
-    const result = await cancelVehicleListing({
-      ...actionEnvelope('marketplace-cancel'),
-      listingId: listing.id,
-      listingVersion: listing.version,
-    });
-    if (!result.ok) {
-      showAlert('İlan iptal edilemedi', getMarketplaceErrorMessage(result.reason));
-    } else {
-      await refreshAll();
+    if (isDeletingListing) return;
+    setIsDeletingListing(listing.id);
+    try {
+      const result = await cancelVehicleListing({
+        ...actionEnvelope('marketplace-cancel'),
+        listingId: listing.id,
+        listingVersion: listing.version,
+      });
+      if (!result.ok) {
+        showAlert('İlan iptal edilemedi', getMarketplaceErrorMessage(result.reason));
+      } else {
+        await refreshAll();
+      }
+    } finally {
+      setIsDeletingListing(null);
     }
-    setCancellingId(null);
   };
 
   const performCreate = async (truck: (typeof player.trucks)[number], askingPrice: number) => {
-    if (creating) return;
-    setCreating(true);
+    if (isCreatingListing) return;
+
+    const eligibility = getVehicleMarketplaceEligibility(truck.id, eligibilityContext);
+    logMarketplaceDev('Sell Vehicle eligibility', {
+      vehicleId: truck.id,
+      vehicleStatus: truck.status,
+      eligible: eligibility.eligible,
+      reason: eligibility.reason ?? null,
+    });
+    if (!eligibility.eligible) {
+      logMarketplaceDev('Sell Vehicle validation failed', { reason: eligibility.reason });
+      // Keep sheet open; show inline-safe alert AFTER closing sheet to avoid nested Modals.
+      closeCreateSheet();
+      showAlertAfterModalClose(showAlert, 'İlan oluşturulamadı', eligibility.message);
+      return;
+    }
+
+    setIsCreatingListing(true);
+    logMarketplaceDev('Sell Vehicle isCreatingListing', { value: true });
     try {
       const result = await createVehicleListing({
         ...actionEnvelope('marketplace-create'),
@@ -408,22 +547,35 @@ export default function VehicleMarketplaceScreen({
         clientSaveVersion: SAVE_GAME_VERSION,
       });
       if (!result.ok) {
-        showAlert('İlan oluşturulamadı', getMarketplaceErrorMessage(result.reason), [
-          { text: 'Vazgeç', style: 'cancel' },
-          {
-            text: 'Tekrar Dene',
-            onPress: () => void performCreate(truck, askingPrice),
-          },
-        ]);
+        logMarketplaceDev('Sell Vehicle create failed', { reason: result.reason });
+        closeCreateSheet();
+        showAlertAfterModalClose(
+          showAlert,
+          'İlan oluşturulamadı',
+          getMarketplaceErrorMessage(result.reason),
+          [
+            { text: 'Vazgeç', style: 'cancel' },
+            {
+              text: 'Tekrar Dene',
+              onPress: () => {
+                void performCreate(truck, askingPrice);
+              },
+            },
+          ],
+        );
         return;
       }
       await refreshAll();
-      setCreateVisible(false);
-      clearPendingSellTruckId();
+      closeCreateSheet();
       setActiveTab('mine');
-      showAlert('İlan oluşturuldu', 'Araç backend tarafından kilitlendi ve pazarda yayınlandı.');
+      showAlertAfterModalClose(
+        showAlert,
+        'İlan oluşturuldu',
+        'Araç backend tarafından kilitlendi ve pazarda yayınlandı.',
+      );
     } finally {
-      setCreating(false);
+      setIsCreatingListing(false);
+      logMarketplaceDev('Sell Vehicle cleanup completed');
     }
   };
 
@@ -431,7 +583,7 @@ export default function VehicleMarketplaceScreen({
     return (
       <AppScreen>
         <MarketplaceHeader
-          onBack={onBack}
+          onBack={handleBack}
           stats={{ activeListings: 0, averagePrice: null, modelCount: 0, myListings: 0 }}
         />
         <EmptyState
@@ -457,7 +609,7 @@ export default function VehicleMarketplaceScreen({
 
   return (
     <View style={styles.screenRoot}>
-      <AppScreen padding={false}>
+      <AppScreen padding={false} reserveTabBarSpace={false}>
         <FlatList
           ref={listRef}
           data={activeTab === 'available' && !isUnavailable ? visibleListings : []}
@@ -487,7 +639,7 @@ export default function VehicleMarketplaceScreen({
             return listingCard;
           }}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: scrollBottomPadding }]}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
@@ -501,7 +653,7 @@ export default function VehicleMarketplaceScreen({
           <>
             <MarketplaceHeader
               stats={stats}
-              onBack={onBack}
+              onBack={handleBack}
               loading={isInitialLoading || isRefreshing}
               onCreateListing={() => setCreateVisible(true)}
               helpAction={<AppTutorialHelpButton {...marketplaceTutorial.helpButtonProps} />}
@@ -586,7 +738,7 @@ export default function VehicleMarketplaceScreen({
                 <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="my-listings" layoutMode="stretch">
                   <MyVehicleListings
                     listings={activeMine}
-                    cancellingId={cancellingId}
+                    cancellingId={isDeletingListing}
                     onDetail={setSelected}
                     onCancel={requestCancel}
                     onSellVehicle={() => setCreateVisible(true)}
@@ -612,12 +764,10 @@ export default function VehicleMarketplaceScreen({
       <VehicleListingCreateSheet
         visible={createVisible}
         trucks={player.trucks}
-        creating={creating}
+        creating={isCreatingListing}
+        eligibilityContext={eligibilityContext}
         initialTruckId={pendingSellTruckId}
-        onClose={() => {
-          setCreateVisible(false);
-          clearPendingSellTruckId();
-        }}
+        onClose={closeCreateSheet}
         onCreate={(truck, askingPrice) => void performCreate(truck, askingPrice)}
       />
       <VehicleListingDetailSheet
@@ -631,8 +781,11 @@ export default function VehicleMarketplaceScreen({
         cash={player.money}
         fleetCount={player.trucks.length}
         fleetLimit={fleetLimit}
-        purchasing={purchasing}
-        onClose={() => setPurchaseTarget(null)}
+        purchasing={isBuyingVehicle}
+        onClose={() => {
+          if (isBuyingVehicle) return;
+          setPurchaseTarget(null);
+        }}
         onConfirm={() => void confirmPurchase()}
       />
       </AppScreen>
@@ -645,7 +798,7 @@ const styles = StyleSheet.create({
   screenRoot: {
     flex: 1,
   },
-  content: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
+  content: { paddingHorizontal: spacing.lg },
   separator: { height: spacing.md },
   toolbar: {
     minHeight: 52, flexDirection: 'row', alignItems: 'center',

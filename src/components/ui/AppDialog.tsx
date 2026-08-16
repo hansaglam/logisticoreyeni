@@ -192,19 +192,16 @@ export default function AppDialog({
   };
 
   const handleCancel = () => {
-    const fn = onCancel;
-    handleDismiss();
-    if (fn) {
-      queueMicrotask(() => fn());
-    }
+    // Dismiss first so nested Modals never stack action → new Modal on top of this one.
+    runDialogActionAfterDismiss(handleDismiss, () => {
+      onCancel?.();
+    });
   };
 
   const handleConfirm = () => {
-    const fn = onConfirm;
-    handleDismiss();
-    if (fn) {
-      queueMicrotask(() => fn());
-    }
+    runDialogActionAfterDismiss(handleDismiss, () => {
+      onConfirm?.();
+    });
   };
 
   return (

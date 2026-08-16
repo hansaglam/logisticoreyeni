@@ -166,6 +166,8 @@ export function getMarketplaceErrorMessage(reason?: string): string {
       return 'Önce araca bağlı dorseyi ayırmalısın.';
     case 'already-listed':
       return 'Bu araç zaten aktif bir ilanda.';
+    case 'leased-truck':
+      return 'Kiralık araçlar Araç Pazarı’nda satışa çıkarılamaz.';
     case 'invalid-price':
       return 'Satış fiyatı izin verilen aralığın dışında.';
     case 'starter-protection':

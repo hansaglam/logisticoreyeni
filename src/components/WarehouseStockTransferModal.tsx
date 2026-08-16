@@ -239,6 +239,7 @@ export default function WarehouseStockTransferModal({
   const canStartBase = Boolean(validation?.success && preview);
 
   return (
+    <>
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
@@ -375,23 +376,26 @@ export default function WarehouseStockTransferModal({
               variant="primary"
             />
           </View>
-          <FuelRequirementModal
-            visible={fuelRequirementVisible}
-            readiness={fuelReadiness}
-            onCancel={() => setFuelRequirementVisible(false)}
-            onBuyFuel={() => {
-              setFuelRequirementVisible(false);
-              setRefuelVisible(true);
-            }}
-          />
-          <TruckRefuelSheet
-            visible={refuelVisible}
-            truck={selectedTruck ?? null}
-            onClose={() => setRefuelVisible(false)}
-          />
         </View>
       </View>
     </Modal>
+    <FuelRequirementModal
+      visible={fuelRequirementVisible}
+      readiness={fuelReadiness}
+      onCancel={() => setFuelRequirementVisible(false)}
+      onBuyFuel={() => {
+        setFuelRequirementVisible(false);
+        setRefuelVisible(true);
+      }}
+    />
+    <TruckRefuelSheet
+      visible={refuelVisible}
+      truck={selectedTruck ?? null}
+      preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
+      onClose={() => setRefuelVisible(false)}
+      onSuccess={() => setRefuelVisible(false)}
+    />
+    </>
   );
 }
 

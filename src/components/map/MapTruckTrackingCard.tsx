@@ -169,6 +169,24 @@ function MapTruckTrackingCard({
   );
   const fuelJob = activeDelivery ?? transfer;
   const fuelWarning = getFuelWarningForJob(fuelJob, truck);
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log('[FUEL_DEBUG][MAP]', {
+      source: 'MapTruckTrackingCard → getTruckTrackingMetrics(truck + delivery)',
+      id: truck.id,
+      name: truck.name,
+      truckCurrentFuelL: truck.currentFuelL ?? null,
+      metricsFuelL: metrics.currentFuelL,
+      capacity: metrics.fuelTankCapacityL,
+      percent: metrics.fuelPercent,
+      status: truck.status,
+      deliveryId: activeDelivery?.id ?? null,
+      deliveryFuelConsumedL: activeDelivery?.fuelConsumedL ?? null,
+      deliveryFuelLitersAtStart: activeDelivery?.fuelLitersAtStart ?? null,
+      deliveryFuelLitersTotal: activeDelivery?.fuelLitersTotal ?? null,
+      deliveryProgress: activeDelivery?.progress ?? null,
+    });
+  }
   const showDeliveryBoost =
     isActiveDelivery && activeDelivery != null && areAdsFeatureEnabled();
 

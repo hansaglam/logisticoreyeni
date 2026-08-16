@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
-import { colors, spacing } from '../../theme';
+import { PAGE_HORIZONTAL_PADDING } from '../../constants/layout';
+import { colors } from '../../theme';
 
 interface AppScreenProps {
   children: React.ReactNode;
@@ -17,6 +18,11 @@ interface AppScreenProps {
   padding?: boolean;
   /** More menüsü alt ekranları — üst safe-area padding'i atlanır */
   embedded?: boolean;
+  /**
+   * Tab bar + safe-area için alt boşluk ayırır.
+   * FlatList kendi contentContainerStyle padding'ini yönetiyorsa false verin.
+   */
+  reserveTabBarSpace?: boolean;
   contentContainerStyle?: StyleProp<ViewStyle>;
   /** Tab bar üstü ekstra boşluk — verilmezse layout hook değeri kullanılır */
   scrollBottomPadding?: number;
@@ -44,6 +50,7 @@ export default function AppScreen({
   scroll = false,
   padding = true,
   embedded = false,
+  reserveTabBarSpace = true,
   contentContainerStyle,
   scrollBottomPadding: scrollBottomPaddingOverride,
   scrollRef,
@@ -53,11 +60,13 @@ export default function AppScreen({
   scrollEventThrottle = 16,
 }: AppScreenProps) {
   const { contentBottomPadding: defaultScrollPadding, screenTopPadding } = useTabBarLayout();
-  const bottomPadding = resolveBottomPadding(
-    defaultScrollPadding,
-    contentContainerStyle,
-    scrollBottomPaddingOverride,
-  );
+  const bottomPadding = reserveTabBarSpace
+    ? resolveBottomPadding(
+        defaultScrollPadding,
+        contentContainerStyle,
+        scrollBottomPaddingOverride,
+      )
+    : 0;
   const topPadding = embedded ? 0 : screenTopPadding;
 
   const paddedStyle = padding
@@ -78,7 +87,7 @@ export default function AppScreen({
             contentContainerStyle={[
               paddedStyle,
               contentContainerStyle,
-              { paddingBottom: bottomPadding },
+              reserveTabBarSpace ? { paddingBottom: bottomPadding } : null,
             ]}
             showsVerticalScrollIndicator={false}
           >
@@ -90,7 +99,7 @@ export default function AppScreen({
               styles.flex,
               paddedStyle,
               contentContainerStyle,
-              { paddingBottom: bottomPadding },
+              reserveTabBarSpace ? { paddingBottom: bottomPadding } : null,
             ]}
           >
             {children}
@@ -117,7 +126,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   paddedContent: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: PAGE_HORIZONTAL_PADDING,
   },
   paddedContentEmbedded: {
     paddingTop: 0,

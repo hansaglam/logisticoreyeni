@@ -948,7 +948,9 @@ export default function FleetScreen() {
         visible={refuelSheetTruck != null}
         truck={refuelSheetTruck}
         onClose={() => setRefuelSheetTruck(null)}
-        onSuccess={(message) => setStatusMessage({ type: 'success', text: message })}
+        onSuccess={(message) => {
+          setStatusMessage({ type: 'success', text: message });
+        }}
       />
       <RoadsideFuelSheet
         visible={roadsideFuelJobId != null}

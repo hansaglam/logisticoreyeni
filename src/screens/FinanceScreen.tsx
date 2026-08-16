@@ -5,13 +5,14 @@
  */
 
 import React, { useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import { CARD_GAP, getMetricChipWidth } from '../constants/layout';
 
 import {
   AppCard,
@@ -247,9 +248,17 @@ function FinanceMetricStrip({
   netProfit: number;
   dailyFixedCosts: number;
 }) {
+  const { width: windowWidth } = useWindowDimensions();
+  const chipWidth = getMetricChipWidth(windowWidth);
+
   return (
-    <View style={styles.metricStrip}>
-      <View style={styles.metricPillWrap}>
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.metricStrip}
+    >
+      <View style={[styles.metricPillWrap, { width: chipWidth }]}>
         <SmallStatPill
           label="Nakit"
           value={formatMoney(cash)}
@@ -258,7 +267,7 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-      <View style={styles.metricPillWrap}>
+      <View style={[styles.metricPillWrap, { width: chipWidth }]}>
         <SmallStatPill
           label="Toplam gelir"
           value={formatMoney(totalRevenue)}
@@ -267,7 +276,7 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-      <View style={styles.metricPillWrap}>
+      <View style={[styles.metricPillWrap, { width: chipWidth }]}>
         <SmallStatPill
           label="Toplam gider"
           value={formatMoney(totalExpenses)}
@@ -276,7 +285,7 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-      <View style={styles.metricPillWrap}>
+      <View style={[styles.metricPillWrap, { width: chipWidth }]}>
         <SmallStatPill
           label="Net kâr"
           value={formatMoney(netProfit)}
@@ -285,7 +294,7 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-      <View style={styles.metricPillWrapWide}>
+      <View style={[styles.metricPillWrap, { width: chipWidth }]}>
         <SmallStatPill
           label="Günlük sabit gider"
           value={formatMoney(dailyFixedCosts)}
@@ -294,11 +303,11 @@ function FinanceMetricStrip({
           layout="chip"
         />
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
-export default function FinanceScreen() {
+export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) {
   useScreenRenderProfiler('Finance');
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
@@ -630,7 +639,7 @@ export default function FinanceScreen() {
     <View style={styles.screenRoot}>
       <AppScreen
         scroll
-        embedded
+        embedded={!onBack}
         scrollRef={scrollRef}
         onScroll={financeTutorial.handleScroll}
         onScrollEndDrag={financeTutorial.handleScrollEnd}
@@ -642,6 +651,7 @@ export default function FinanceScreen() {
         title="Finans"
         subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"
         compact
+        onBack={onBack}
         rightAction={<AppTutorialHelpButton {...financeTutorial.helpButtonProps} />}
       />
 
@@ -973,21 +983,13 @@ const styles = StyleSheet.create({
 
   metricStrip: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
+    alignItems: 'stretch',
+    gap: CARD_GAP,
+    paddingBottom: spacing.xs,
     marginBottom: 12,
   },
   metricPillWrap: {
-    flexGrow: 1,
-    flexBasis: '47%',
-    minWidth: 148,
-    maxWidth: '100%',
-  },
-  metricPillWrapWide: {
-    flexGrow: 1,
-    flexBasis: '100%',
-    minWidth: 148,
-    maxWidth: '100%',
+    flexShrink: 0,
   },
   summaryHint: {
     ...typography.caption,

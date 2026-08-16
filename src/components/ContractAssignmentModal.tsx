@@ -425,24 +425,40 @@ export default function ContractAssignmentModal({
 
   const selectedTruckOption = truckOptions.find((option) => option.truck.id === selectedTruckId);
   const selectedDriverOption = driverOptions.find((option) => option.driver.id === selectedDriverId);
+  const liveRefuelTruck = useGameStore((state) =>
+    selectedTruckId
+      ? state.player?.trucks.find((candidate) => candidate.id === selectedTruckId) ?? null
+      : null,
+  );
+
   const fuelReadiness = useMemo(() => {
-    if (!contract || !selectedTruckOption?.truck || !selectedDriverOption?.driver) return null;
+    if (!contract || !selectedTruckId || !selectedDriverOption?.driver) return null;
+    const liveTruck =
+      liveRefuelTruck ?? selectedTruckOption?.truck ?? null;
+    if (!liveTruck) return null;
     const route = findRoute(contract.originCityId, contract.destinationCityId);
     const product = getProductByIdSafe(contract.productId);
     if (!route || !product) return null;
     const requiredFuelL = calculateDeliveryFuelLiters({
       contract,
-      truck: selectedTruckOption.truck,
+      truck: liveTruck,
       driver: selectedDriverOption.driver,
       route,
       product,
     });
     return getTruckFuelReadiness(
-      selectedTruckOption.truck,
+      liveTruck,
       requiredFuelL,
       globalEconomy?.fuelPrice ?? 0,
     );
-  }, [contract, globalEconomy?.fuelPrice, selectedDriverOption?.driver, selectedTruckOption?.truck]);
+  }, [
+    contract,
+    globalEconomy?.fuelPrice,
+    liveRefuelTruck,
+    selectedDriverOption?.driver,
+    selectedTruckId,
+    selectedTruckOption?.truck,
+  ]);
 
   const summaryFinancials = useMemo((): ContractSummaryFinancials | null => {
     if (!contract) return null;
@@ -646,6 +662,7 @@ export default function ContractAssignmentModal({
   };
 
   return (
+    <>
     <Modal
       visible={visible}
       animationType="slide"
@@ -836,22 +853,27 @@ export default function ContractAssignmentModal({
           </TutorialTarget>
         </View>
       </View>
-      <FuelRequirementModal
-        visible={fuelRequirementVisible}
-        readiness={fuelReadiness}
-        onCancel={() => setFuelRequirementVisible(false)}
-        onBuyFuel={() => {
-          setFuelRequirementVisible(false);
-          setRefuelVisible(true);
-        }}
-      />
-      <TruckRefuelSheet
-        visible={refuelVisible}
-        truck={selectedTruckOption?.truck ?? null}
-        onClose={() => setRefuelVisible(false)}
-      />
       <TutorialOverlay layer="modal" />
     </Modal>
+    <FuelRequirementModal
+      visible={fuelRequirementVisible}
+      readiness={fuelReadiness}
+      onCancel={() => setFuelRequirementVisible(false)}
+      onBuyFuel={() => {
+        setFuelRequirementVisible(false);
+        setRefuelVisible(true);
+      }}
+    />
+    <TruckRefuelSheet
+      visible={refuelVisible}
+      truck={liveRefuelTruck}
+      preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
+      onClose={() => setRefuelVisible(false)}
+      onSuccess={() => {
+        setRefuelVisible(false);
+      }}
+    />
+    </>
   );
 }
 

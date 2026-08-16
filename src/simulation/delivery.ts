@@ -1509,6 +1509,23 @@ export function updateDeliveryProgressWithFuel(
   }
 
   if (delivery.status === 'paused' && delivery.pausedReason === 'out-of-fuel') {
+    const normalized = normalizeTruckFuel(truck);
+    const availableFuel = normalized.currentFuelL ?? 0;
+    // If a concurrent refuel restored fuel, never clobber it back to 0.
+    if (availableFuel > 1e-6) {
+      return {
+        delivery: {
+          ...delivery,
+          estimatedArrivalTime: delivery.estimatedArrivalTime + hoursPassed,
+          lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
+          currentSpeedKmh: 0,
+        },
+        truck: {
+          ...normalized,
+          status: 'out_of_fuel',
+        },
+      };
+    }
     return {
       delivery: {
         ...delivery,
@@ -1517,7 +1534,7 @@ export function updateDeliveryProgressWithFuel(
         currentSpeedKmh: 0,
       },
       truck: {
-        ...normalizeTruckFuel(truck),
+        ...normalized,
         currentFuelL: 0,
         status: 'out_of_fuel',
       },

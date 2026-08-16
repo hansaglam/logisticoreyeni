@@ -237,7 +237,6 @@ export default function AccountCenterScreen({
     <View style={styles.screenRoot}>
       <AppScreen
         scroll
-        embedded
         scrollRef={scrollRef}
         onScroll={accountTutorial.handleScroll}
         onScrollEndDrag={accountTutorial.handleScrollEnd}

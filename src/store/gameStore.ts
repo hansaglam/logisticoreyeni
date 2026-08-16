@@ -303,8 +303,13 @@ import {
   getTruckFuelReadiness,
   normalizeTruckFuel,
   validateTruckRefuelRequest,
+  calculateDeliveryFuelLiters,
 } from '../utils/truckFuel';
 import type { TruckRefuelResult } from '../utils/truckFuel';
+import {
+  didTruckListChange,
+  mergeTruckTickUpdates,
+} from '../utils/truckFleetState';
 import { contractBalance, contractGenerationBalance, economyBalance, buildTimeScaleDebugSnapshot, getEffectiveOfflineGameSpeed, getMsPerGameHour, levelBalance, marketAlertBalance, operatingCostBalance, reputationBalance, timeBalance, tradingBalance, warehouseBalance } from '../config/balance';
 import {
   applyAdRewardGrant,
@@ -4200,9 +4205,10 @@ const simulation = plan.simulation;
       stateAfterDelivery.eventLog,
     );
     if (qualityResult.newEvents.length > 0 || qualityResult.warehouses !== stateAfterDelivery.player.warehouses) {
+      const liveAfterQuality = get();
       set({
         player: {
-          ...stateAfterDelivery.player,
+          ...liveAfterQuality.player,
           warehouses: qualityResult.warehouses.map((warehouse) =>
             normalizeWarehouse(warehouse, newTime),
           ),
@@ -4210,7 +4216,7 @@ const simulation = plan.simulation;
         ...(qualityResult.newEvents.length > 0
           ? {
               eventLog: prependGameEvents(
-                stateAfterDelivery.eventLog,
+                liveAfterQuality.eventLog,
                 qualityResult.newEvents,
                 newTime,
               ),
@@ -5707,6 +5713,26 @@ const simulation = plan.simulation;
       };
     }
 
+    // Fuel gate BEFORE creating any delivery object / mutating fleet.
+    const deliveryFuelReadiness = getTruckFuelReadiness(
+      truck,
+      calculateDeliveryFuelLiters({
+        contract,
+        truck,
+        driver,
+        route,
+        product,
+      }),
+      getSnapshotFuelPrice(state.cachedGlobalEconomySnapshot, state.globalEconomy),
+    );
+    if (!deliveryFuelReadiness.canCompleteWithoutRefuel) {
+      return {
+        success: false,
+        errorCode: 'INSUFFICIENT_FUEL',
+        message: `Bu rota için yakıt yetersiz. En az ${Math.ceil(deliveryFuelReadiness.requiredFuelL)} L yakıt gerekiyor. Aracında ${Math.floor(deliveryFuelReadiness.currentFuelL)} L var.`,
+      };
+    }
+
     let delivery: Delivery;
     try {
       logDeliveryStartCapacity({ contract, truck, trailers, product });
@@ -5737,19 +5763,6 @@ const simulation = plan.simulation;
         success: false,
         errorCode: 'DELIVERY_CREATE_FAILED',
         message,
-      };
-    }
-
-    const deliveryFuelReadiness = getTruckFuelReadiness(
-      truck,
-      delivery.fuelLitersTotal ?? 0,
-      getSnapshotFuelPrice(state.cachedGlobalEconomySnapshot, state.globalEconomy),
-    );
-    if (!deliveryFuelReadiness.canCompleteWithoutRefuel) {
-      return {
-        success: false,
-        errorCode: 'INSUFFICIENT_FUEL',
-        message: `Bu rota için ${Math.ceil(deliveryFuelReadiness.requiredFuelL)} L yakıt gerekiyor. Kamyonda ${Math.floor(deliveryFuelReadiness.currentFuelL)} L var.`,
       };
     }
 
@@ -5944,7 +5957,8 @@ const simulation = plan.simulation;
       state.currentTime,
     );
 
-    let updatedTrucks = state.player.trucks;
+    const baselineTrucks = state.player.trucks;
+    let updatedTrucks = baselineTrucks;
     const updatedDeliveries = state.activeDeliveries.map((delivery) => {
       if (delivery.status !== 'on_route' && delivery.status !== 'preparing') {
         if (delivery.status === 'paused' && delivery.pausedReason === 'out-of-fuel') {
@@ -6076,13 +6090,24 @@ const simulation = plan.simulation;
       return updated;
     });
 
-    set({
+    const trucksChanged = didTruckListChange(baselineTrucks, updatedTrucks);
+    // Functional set: merge against the *latest* fleet at commit time so a concurrent
+    // refuel between tick compute and set cannot be overwritten (iOS-prone race).
+    set((live) => ({
       activeDeliveries: updatedDeliveries,
-      player: {
-        ...state.player,
-        trucks: updatedTrucks,
-      },
-    });
+      ...(trucksChanged
+        ? {
+            player: {
+              ...live.player,
+              trucks: mergeTruckTickUpdates(
+                live.player.trucks,
+                baselineTrucks,
+                updatedTrucks,
+              ),
+            },
+          }
+        : {}),
+    }));
 
     for (const warning of fuelWarningsToNotify) {
       get().addNotification({
@@ -6143,7 +6168,8 @@ const simulation = plan.simulation;
       key: string;
     }> = [];
 
-    let updatedTrucks = state.player.trucks;
+    const baselineTrucks = state.player.trucks;
+    let updatedTrucks = baselineTrucks;
     const updatedTransfers = (state.activeTransfers ?? []).map((transfer) => {
       if (transfer.status !== 'active' && transfer.status !== 'paused') {
         return transfer;
@@ -6181,13 +6207,22 @@ const simulation = plan.simulation;
       return updated;
     });
 
-    set({
+    const trucksChanged = didTruckListChange(baselineTrucks, updatedTrucks);
+    set((live) => ({
       activeTransfers: updatedTransfers,
-      player: {
-        ...state.player,
-        trucks: updatedTrucks,
-      },
-    });
+      ...(trucksChanged
+        ? {
+            player: {
+              ...live.player,
+              trucks: mergeTruckTickUpdates(
+                live.player.trucks,
+                baselineTrucks,
+                updatedTrucks,
+              ),
+            },
+          }
+        : {}),
+    }));
 
     for (const warning of fuelWarningsToNotify) {
       get().addNotification({
@@ -8898,7 +8933,8 @@ const simulation = plan.simulation;
       key: string;
     }> = [];
 
-    let updatedTrucks = state.player.trucks;
+    const baselineTrucks = state.player.trucks;
+    let updatedTrucks = baselineTrucks;
     const updatedTransfers = (state.activeWarehouseStockTransfers ?? []).map((transfer) => {
       if (
         transfer.status !== 'active' &&
@@ -8939,13 +8975,22 @@ const simulation = plan.simulation;
       return updated;
     });
 
-    set({
+    const trucksChanged = didTruckListChange(baselineTrucks, updatedTrucks);
+    set((live) => ({
       activeWarehouseStockTransfers: updatedTransfers,
-      player: {
-        ...state.player,
-        trucks: updatedTrucks,
-      },
-    });
+      ...(trucksChanged
+        ? {
+            player: {
+              ...live.player,
+              trucks: mergeTruckTickUpdates(
+                live.player.trucks,
+                baselineTrucks,
+                updatedTrucks,
+              ),
+            },
+          }
+        : {}),
+    }));
 
     for (const warning of fuelWarningsToNotify) {
       get().addNotification({
@@ -9320,99 +9365,219 @@ const simulation = plan.simulation;
   },
 
   refuelTruck: ({ truckId, liters, expectedUnitPrice, idempotencyKey }) => {
-    const state = get();
-    const fuelQuote = resolveStoreFuelPriceQuote(state);
-    if (!isFuelPricePurchaseReady(fuelQuote) || fuelQuote.pricePerLiter == null) {
+    const preliminary = get();
+    const preliminaryQuote = resolveStoreFuelPriceQuote(preliminary);
+    if (
+      !isFuelPricePurchaseReady(preliminaryQuote) ||
+      preliminaryQuote.pricePerLiter == null
+    ) {
       return {
         success: false,
         reason: 'market-unavailable',
         message: 'Yakıt fiyatına ulaşılamıyor. Tekrar dene.',
       };
     }
-    if (idempotencyKey && (state.fuelTransactionKeys ?? []).includes(idempotencyKey)) {
-      return {
-        success: true,
-        message: 'Yakıt işlemi daha önce uygulandı.',
+
+    type RefuelCommit =
+      | { kind: 'success'; result: TruckRefuelResult; expectedFuelL: number; cashAfter: number }
+      | { kind: 'failure'; result: TruckRefuelResult }
+      | { kind: 'noop-idempotent'; result: TruckRefuelResult };
+
+    const commitBox: { value: RefuelCommit | null } = { value: null };
+
+    // Single atomic set: validate + cash + fuel against the *live* fleet so a
+    // concurrent delivery tick cannot observe a half-applied purchase.
+    set((live) => {
+      if (idempotencyKey && (live.fuelTransactionKeys ?? []).includes(idempotencyKey)) {
+        const existing = live.player.trucks.find((candidate) => candidate.id === truckId);
+        commitBox.value = {
+          kind: 'noop-idempotent',
+          result: {
+            success: true,
+            message: 'Yakıt işlemi daha önce uygulandı.',
+            litersAdded: 0,
+            totalCost: 0,
+            unitPrice: preliminaryQuote.pricePerLiter ?? 0,
+          },
+        };
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.log('[refuelTruck] idempotent-replay', {
+            vehicleId: truckId,
+            fuelReadBackFromStore: existing
+              ? normalizeTruckFuel(existing).currentFuelL
+              : null,
+          });
+        }
+        return {};
+      }
+
+      const fuelQuote = resolveStoreFuelPriceQuote(live);
+      if (!isFuelPricePurchaseReady(fuelQuote) || fuelQuote.pricePerLiter == null) {
+        commitBox.value = {
+          kind: 'failure',
+          result: {
+            success: false,
+            reason: 'market-unavailable',
+            message: 'Yakıt fiyatına ulaşılamıyor. Tekrar dene.',
+          },
+        };
+        return {};
+      }
+
+      const liveTruck = live.player.trucks.find((candidate) => candidate.id === truckId);
+      if (!liveTruck) {
+        commitBox.value = {
+          kind: 'failure',
+          result: {
+            success: false,
+            reason: 'truck-not-found',
+            message: 'Kamyon bulunamadı.',
+          },
+        };
+        return {};
+      }
+
+      const unitPrice = fuelQuote.pricePerLiter;
+      const fuelBefore = normalizeTruckFuel(liveTruck).currentFuelL ?? 0;
+      const validation = validateTruckRefuelRequest({
+        truck: liveTruck,
+        requestedLiters: liters,
+        currentMoney: live.player.money,
+        currentUnitPrice: unitPrice,
+        expectedUnitPrice,
+      });
+      if (!validation.result.success || !validation.quote) {
+        commitBox.value = { kind: 'failure', result: validation.result };
+        return {};
+      }
+
+      const quote = validation.quote;
+      const transactionId =
+        idempotencyKey ??
+        `refuel:${liveTruck.id}:${quote.currentFuelL}:${quote.newFuelL}:${quote.unitPrice}`;
+      const cashBefore = live.player.money;
+      const cashTransaction = applyCashTransaction({
+        currentCash: cashBefore,
+        amount: quote.totalCost,
+        kind: 'voluntary-expense',
+        referenceId: `truck:${liveTruck.id}:fuel`,
+        transactionId,
+        appliedTransactionIds: live.fuelTransactionKeys ?? [],
+      });
+      if (!cashTransaction.ok) {
+        commitBox.value = {
+          kind: 'failure',
+          result: {
+            success: false,
+            reason: 'insufficient-funds',
+            message: 'Yakıt almak için yeterli nakdin yok.',
+          },
+        };
+        return {};
+      }
+
+      // Apply liters onto the live truck (never a modal snapshot).
+      const fueledTruck = normalizeTruckFuel({
+        ...liveTruck,
+        currentFuelL: quote.newFuelL,
+      });
+      const updatedTrucks = live.player.trucks.map((candidate) =>
+        candidate.id === truckId ? fueledTruck : candidate,
+      );
+
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[refuelTruck] before-commit', {
+          vehicleId: liveTruck.id,
+          fuelBefore,
+          fuelAfterCalculation: quote.newFuelL,
+          purchasedLiters: quote.litersToAdd,
+          cashBefore,
+          cashAfter: cashTransaction.cashAfter,
+        });
+      }
+
+      commitBox.value = {
+        kind: 'success',
+        expectedFuelL: quote.newFuelL,
+        cashAfter: cashTransaction.cashAfter,
+        result: validation.result,
       };
-    }
-    const truck = state.player.trucks.find((candidate) => candidate.id === truckId);
-    if (!truck) {
+
+      return {
+        player: {
+          ...live.player,
+          money: cashTransaction.cashAfter,
+          trucks: updatedTrucks,
+        },
+        ...patchFinanceLedger(live, {
+          time: live.currentTime,
+          type: 'expense',
+          category: 'fuel_purchase',
+          amount: cashTransaction.amount,
+          description: `${liveTruck.name} · ${quote.litersToAdd.toFixed(1)} L yakıt alımı`,
+          transactionId: cashTransaction.transactionId,
+          referenceId: cashTransaction.referenceId,
+        }),
+        eventLog: prependGameEvent(
+          live.eventLog,
+          {
+            time: live.currentTime,
+            type: 'finance',
+            title: 'Yakıt alındı',
+            message: `${liveTruck.name} için ${quote.litersToAdd.toFixed(1)} L yakıt alındı.`,
+            importance: 'low',
+          },
+          live.currentTime,
+        ),
+        fuelTransactionKeys: [
+          ...(live.fuelTransactionKeys ?? []),
+          cashTransaction.transactionId,
+        ].slice(-32),
+      };
+    });
+
+    const commit = commitBox.value;
+    if (!commit) {
       return {
         success: false,
         reason: 'truck-not-found',
-        message: 'Kamyon bulunamadı.',
+        message: 'Yakıt güncellemesi uygulanamadı. Tekrar dene.',
       };
     }
-    const unitPrice = fuelQuote.pricePerLiter;
-    const validation = validateTruckRefuelRequest({
-      truck,
-      requestedLiters: liters,
-      currentMoney: state.player.money,
-      currentUnitPrice: unitPrice,
-      expectedUnitPrice,
-    });
-    if (!validation.result.success || !validation.quote) {
-      return validation.result;
+    if (commit.kind === 'failure') {
+      return commit.result;
     }
-    const quote = validation.quote;
-    const transactionId =
-      idempotencyKey ??
-      `refuel:${truck.id}:${quote.currentFuelL}:${quote.newFuelL}:${quote.unitPrice}`;
-    const cashTransaction = applyCashTransaction({
-      currentCash: state.player.money,
-      amount: quote.totalCost,
-      kind: 'voluntary-expense',
-      referenceId: `truck:${truck.id}:fuel`,
-      transactionId,
-      appliedTransactionIds: state.fuelTransactionKeys ?? [],
-    });
-    if (!cashTransaction.ok) {
+    if (commit.kind === 'noop-idempotent') {
+      return commit.result;
+    }
+
+    const committedTruck = get().player.trucks.find((candidate) => candidate.id === truckId);
+    const fuelReadBackFromStore = committedTruck
+      ? normalizeTruckFuel(committedTruck).currentFuelL
+      : null;
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[refuelTruck] after-commit', {
+        vehicleId: truckId,
+        fuelReadBackFromStore,
+        expectedFuelL: commit.expectedFuelL,
+        cashAfter: get().player.money,
+        persistedFuel: fuelReadBackFromStore,
+      });
+    }
+    if (
+      fuelReadBackFromStore == null ||
+      Math.abs(fuelReadBackFromStore - commit.expectedFuelL) > 0.05
+    ) {
       return {
         success: false,
-        reason: 'insufficient-funds',
-        message: 'Yakıt almak için yeterli nakdin yok.',
+        reason: 'truck-not-found',
+        message: 'Yakıt güncellemesi uygulanamadı. Tekrar dene.',
       };
     }
 
-    const updatedTrucks = state.player.trucks.map((candidate) =>
-      candidate.id === truck.id
-        ? normalizeTruckFuel({ ...candidate, currentFuelL: quote.newFuelL })
-        : candidate,
-    );
-    set({
-      player: {
-        ...state.player,
-        money: cashTransaction.cashAfter,
-        trucks: updatedTrucks,
-      },
-      ...patchFinanceLedger(state, {
-        time: state.currentTime,
-        type: 'expense',
-        category: 'fuel_purchase',
-        amount: cashTransaction.amount,
-        description: `${truck.name} · ${quote.litersToAdd.toFixed(1)} L yakıt alımı`,
-        transactionId: cashTransaction.transactionId,
-        referenceId: cashTransaction.referenceId,
-      }),
-      eventLog: prependGameEvent(
-        state.eventLog,
-        {
-          time: state.currentTime,
-          type: 'finance',
-          title: 'Yakıt alındı',
-          message: `${truck.name} için ${quote.litersToAdd.toFixed(1)} L yakıt alındı.`,
-          importance: 'low',
-        },
-        state.currentTime,
-      ),
-      fuelTransactionKeys: [
-        ...(state.fuelTransactionKeys ?? []),
-        cashTransaction.transactionId,
-      ].slice(-32),
-    });
     get().markSaveDirty();
     get().autoSave('fuel_purchase');
-    return validation.result;
+    return commit.result;
   },
 
   purchaseRoadsideFuel: ({ jobId, liters, expectedUnitPrice, idempotencyKey }) => {

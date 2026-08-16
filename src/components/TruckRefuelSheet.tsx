@@ -33,6 +33,8 @@ type RefuelChoice = '25' | '50' | 'full' | 'max';
 export interface TruckRefuelSheetProps {
   visible: boolean;
   truck: Truck | null;
+  /** When opened from insufficient-route flow, prefer covering at least this many liters. */
+  preferredMinimumLiters?: number | null;
   onClose: () => void;
   onSuccess?: (message: string) => void;
 }
@@ -62,6 +64,7 @@ function formatLiters(value: number): string {
 export default function TruckRefuelSheet({
   visible,
   truck,
+  preferredMinimumLiters = null,
   onClose,
   onSuccess,
 }: TruckRefuelSheetProps) {
@@ -71,6 +74,7 @@ export default function TruckRefuelSheet({
     <TruckRefuelSheetContent
       visible={visible}
       truck={truck}
+      preferredMinimumLiters={preferredMinimumLiters}
       onClose={onClose}
       onSuccess={onSuccess}
     />
@@ -80,6 +84,7 @@ export default function TruckRefuelSheet({
 function TruckRefuelSheetContent({
   visible,
   truck,
+  preferredMinimumLiters = null,
   onClose,
   onSuccess,
 }: TruckRefuelSheetProps) {
@@ -127,6 +132,19 @@ function TruckRefuelSheetContent({
     [selectedTruck],
   );
 
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && visible && selectedTruck) {
+    console.log('[FUEL_DEBUG][MODAL_CITY]', {
+      source: 'TruckRefuelSheet → liveTruck from store by truck.id ?? prop',
+      id: selectedTruck.id,
+      name: selectedTruck.name,
+      propId: truck?.id ?? null,
+      usedLiveStore: Boolean(liveTruck),
+      fuel: normalizedTruck?.currentFuelL ?? null,
+      capacity: normalizedTruck?.fuelTankCapacityL ?? null,
+      status: selectedTruck.status,
+    });
+  }
+
   const pricePerLiter = fuelPriceQuote.pricePerLiter;
   const priceReady = isFuelPricePurchaseReady(fuelPriceQuote);
 
@@ -140,6 +158,17 @@ function TruckRefuelSheetContent({
     setIsRefreshingPrice(false);
     transactionKeyRef.current = '';
   }, [truck?.id]);
+
+  useEffect(() => {
+    if (!visible || preferredMinimumLiters == null || preferredMinimumLiters <= 0) return;
+    if (preferredMinimumLiters <= 25) {
+      setChoice('25');
+    } else if (preferredMinimumLiters <= 50) {
+      setChoice('50');
+    } else {
+      setChoice('full');
+    }
+  }, [preferredMinimumLiters, visible, truck?.id]);
 
   useEffect(
     () => () => {
@@ -244,6 +273,19 @@ function TruckRefuelSheetContent({
       setIsSubmitting(false);
       return;
     }
+
+    // Re-read canonical fleet fuel before celebrating success (guards stale UI).
+    const verified = useGameStore.getState().player.trucks.find(
+      (candidate) => candidate.id === normalizedTruck.id,
+    );
+    const verifiedFuel = verified ? normalizeTruckFuel(verified).currentFuelL ?? 0 : null;
+    if (verifiedFuel == null || Math.abs(verifiedFuel - quote.newFuelL) > 0.5) {
+      setErrorMessage('Yakıt güncellemesi doğrulanamadı. Tekrar dene.');
+      setIsSubmitting(false);
+      transactionKeyRef.current = '';
+      return;
+    }
+
     setErrorMessage(null);
     setSuccessMessage(result.message);
     onSuccess?.(result.message);

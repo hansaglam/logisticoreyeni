@@ -15,6 +15,7 @@ import {
   type LayoutChangeEvent,
   type ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppDialog } from '../components/AppDialogProvider';
 import { MIN_TOUCH_TARGET } from '../constants/layout';
@@ -293,12 +294,11 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
 
   if (route === 'finance') {
     return (
-      <EmbeddedModule>
-        <SubNavBar title="Finans" onBack={() => setRoute('menu')} />
+      <View style={styles.embeddedRoot}>
         <Suspense fallback={<EmbeddedScreenFallback />}>
-          <FinanceScreen />
+          <FinanceScreen onBack={() => setRoute('menu')} />
         </Suspense>
-      </EmbeddedModule>
+      </View>
     );
   }
 
@@ -516,8 +516,9 @@ function EmbeddedModule({ children }: { children: React.ReactNode }) {
 }
 
 function SubNavBar({ title, onBack }: { title: string; onBack: () => void }) {
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.subNav}>
+    <View style={[styles.subNav, { paddingTop: Math.max(insets.top, 8) }]}>
       <TouchableOpacity style={styles.subNavBack} onPress={onBack} activeOpacity={0.8}>
         <Text style={styles.subNavBackText}>‹ Şirket</Text>
       </TouchableOpacity>
@@ -543,7 +544,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.lg,
-    paddingTop: 4,
     paddingBottom: 2,
     backgroundColor: colors.background,
     borderBottomWidth: 1,

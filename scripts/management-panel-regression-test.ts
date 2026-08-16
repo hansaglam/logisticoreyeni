@@ -22,6 +22,10 @@ import {
   MANAGEMENT_PANEL_MAX_HEIGHT_RATIO,
   MANAGEMENT_TILE_MIN_HEIGHT,
 } from '../src/components/management/managementTheme';
+import {
+  getManagementPanelAvailableHeight,
+  getMetricChipWidth,
+} from '../src/constants/layout';
 
 let pass = 0;
 let fail = 0;
@@ -123,6 +127,18 @@ console.log('\nPanel height strategy');
   assert(cramped.needsScroll, 'short available height enables scroll');
   assert(cramped.panelHeight === 300, 'cramped screen caps at available height');
   assert(eightItems.naturalHeight > 380 && eightItems.naturalHeight < 620, 'natural height compact');
+
+  const shortPhone = getManagementPanelAvailableHeight({
+    windowHeight: 667,
+    topInset: 44,
+    bottomOffset: 90,
+    maxHeightRatio: 0.72,
+  });
+  assert(shortPhone <= 667 - 90 - 44, 'short phone available height respects bottomOffset + topInset');
+  assert(shortPhone >= 200, 'available height never collapses below floor');
+  const chip = getMetricChipWidth(390);
+  assert(chip >= 112 && chip <= 148, 'finance metric chip width stays bounded');
+  assert(chip * 2 + 12 <= 390 - 32, 'two chips + gap fit inside page without overflow');
 }
 
 console.log('\nPanel interaction');
@@ -149,6 +165,8 @@ console.log('\nPanel interaction');
   assert(managementPanel.includes("width: '100%'"), 'panel stretches to full anchor width');
   assert(managementPanel.includes('panelContentWidth'), 'grid width from window dimensions');
   assert(!managementPanel.includes('panelWidth'), 'no shrink-wrap onLayout width loop');
+  assert(managementPanel.includes('getManagementPanelAvailableHeight'), 'panel height uses shared available-height helper');
+  assert(managementPanel.includes('bottomOffset'), 'panel accounts for tab bar bottom offset');
   assert(managementPanel.includes('resolveManagementPanelHeight'), 'panel uses bounded height resolver');
   assert(managementPanel.includes('height: panelHeight'), 'panel always gets explicit height');
   assert(!managementPanel.includes('scrollBottomPadding'), 'panel does not double-count tab bar inset');

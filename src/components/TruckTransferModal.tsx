@@ -215,6 +215,7 @@ export default function TruckTransferModal({
   const scrollBottomPadding = FOOTER_SUMMARY_HEIGHT + FOOTER_BUTTON_HEIGHT + footerBottomPadding + 24;
 
   return (
+    <>
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
       <View style={styles.overlay}>
         <Pressable style={styles.overlayPressable} onPress={onClose} />
@@ -341,23 +342,26 @@ export default function TruckTransferModal({
               style={styles.startButton}
             />
           </View>
-          <FuelRequirementModal
-            visible={fuelRequirementVisible}
-            readiness={fuelReadiness}
-            onCancel={() => setFuelRequirementVisible(false)}
-            onBuyFuel={() => {
-              setFuelRequirementVisible(false);
-              setRefuelVisible(true);
-            }}
-          />
-          <TruckRefuelSheet
-            visible={refuelVisible}
-            truck={truck}
-            onClose={() => setRefuelVisible(false)}
-          />
         </View>
       </View>
     </Modal>
+    <FuelRequirementModal
+      visible={fuelRequirementVisible}
+      readiness={fuelReadiness}
+      onCancel={() => setFuelRequirementVisible(false)}
+      onBuyFuel={() => {
+        setFuelRequirementVisible(false);
+        setRefuelVisible(true);
+      }}
+    />
+    <TruckRefuelSheet
+      visible={refuelVisible}
+      truck={truck}
+      preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
+      onClose={() => setRefuelVisible(false)}
+      onSuccess={() => setRefuelVisible(false)}
+    />
+    </>
   );
 }
 

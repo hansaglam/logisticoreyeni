@@ -101,7 +101,7 @@ interface MissionsScreenProps {
 }
 
 export default function MissionsScreen({ onBack }: MissionsScreenProps) {
-  const { contentBottomPadding, scrollBottomPadding, screenTopPadding } = useTabBarLayout();
+  const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const [activeTab, setActiveTab] = useState<MissionsTabKey>('missions');
 
   const currentTime = useGameStore((state) => state.currentTime);
@@ -251,11 +251,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
         styles.content,
         {
           paddingTop: screenTopPadding,
-          paddingBottom: Math.max(
-            contentBottomPadding ?? 0,
-            scrollBottomPadding ?? 0,
-            spacing.xxl,
-          ),
+          paddingBottom: Math.max(contentBottomPadding, spacing.xxl),
         },
       ]}
       showsVerticalScrollIndicator={false}
@@ -431,7 +427,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   content: {
-    paddingTop: spacing.sm,
     paddingHorizontal: spacing.md,
   },
   tabRow: {

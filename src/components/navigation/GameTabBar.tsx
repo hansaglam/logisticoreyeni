@@ -9,7 +9,14 @@ import {
   View,
 } from 'react-native';
 
-import { TAB_BAR_CHROME_BOTTOM } from '../../constants/layout';
+import {
+  GAME_CENTER_BUTTON_LIFT,
+  GAME_CENTER_BUTTON_RING_SIZE,
+  GAME_CENTER_BUTTON_SIZE,
+  getTabBarBottomPadding,
+  TAB_BAR_PADDING_TOP,
+  TAB_BAR_ROW_HEIGHT,
+} from '../../constants/layout';
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import { getContractAvailability } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
@@ -38,12 +45,6 @@ const TAB_BAR_BORDER = 'rgba(35, 136, 255, 0.24)';
 const TAB_ACTIVE_COLOR = '#2388FF';
 const TAB_INACTIVE_ICON = '#8493AA';
 const TAB_INACTIVE_LABEL = '#8694AA';
-
-const TAB_BAR_PADDING_TOP = 8;
-const TAB_BAR_ROW_HEIGHT = 58;
-const CENTER_BUTTON_SIZE = 58;
-const CENTER_BUTTON_RING_SIZE = 61;
-const CENTER_BUTTON_LIFT = 9;
 
 function isMainTabKey(tab: TabKey): boolean {
   return (MAIN_TAB_KEYS as readonly TabKey[]).includes(tab);
@@ -193,9 +194,9 @@ function GameTabBarContent({
   const leftTabs = LEFT_TAB_KEYS.map((key) => tabMap.get(key)).filter(Boolean) as TabDefinition[];
   const rightTabs = RIGHT_TAB_KEYS.map((key) => tabMap.get(key)).filter(Boolean) as TabDefinition[];
 
-  const quickAccessPanelOffset = totalBarHeight + CENTER_BUTTON_LIFT + 8;
+  const quickAccessPanelOffset = totalBarHeight + GAME_CENTER_BUTTON_LIFT + 8;
   const highlightedTab = isMainTabKey(activeTab) ? activeTab : null;
-  const bottomPadding = Math.max(safeBottom, TAB_BAR_CHROME_BOTTOM);
+  const bottomPadding = getTabBarBottomPadding(safeBottom);
 
   const handleTabPress = useCallback(
     (tab: TabKey) => {
@@ -410,14 +411,15 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   centerSlot: {
-    width: CENTER_BUTTON_RING_SIZE + 4,
+    width: GAME_CENTER_BUTTON_RING_SIZE + 4,
+    height: TAB_BAR_ROW_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -CENTER_BUTTON_LIFT,
+    marginTop: -GAME_CENTER_BUTTON_LIFT,
   },
   centerButton: {
-    width: CENTER_BUTTON_RING_SIZE,
-    height: CENTER_BUTTON_RING_SIZE,
+    width: GAME_CENTER_BUTTON_RING_SIZE,
+    height: GAME_CENTER_BUTTON_RING_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -430,16 +432,16 @@ const styles = StyleSheet.create({
   },
   centerButtonRing: {
     position: 'absolute',
-    width: CENTER_BUTTON_RING_SIZE,
-    height: CENTER_BUTTON_RING_SIZE,
-    borderRadius: CENTER_BUTTON_RING_SIZE / 2,
+    width: GAME_CENTER_BUTTON_RING_SIZE,
+    height: GAME_CENTER_BUTTON_RING_SIZE,
+    borderRadius: GAME_CENTER_BUTTON_RING_SIZE / 2,
     borderWidth: 1,
     borderColor: 'rgba(74, 168, 255, 0.38)',
   },
   centerButtonInner: {
-    width: CENTER_BUTTON_SIZE,
-    height: CENTER_BUTTON_SIZE,
-    borderRadius: CENTER_BUTTON_SIZE / 2,
+    width: GAME_CENTER_BUTTON_SIZE,
+    height: GAME_CENTER_BUTTON_SIZE,
+    borderRadius: GAME_CENTER_BUTTON_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: TAB_ACTIVE_COLOR,

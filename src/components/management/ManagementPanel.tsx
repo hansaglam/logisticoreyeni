@@ -20,6 +20,7 @@ import {
 } from './managementTheme';
 import { resolveManagementPanelHeight } from './managementLayout';
 import { useManagementItems } from './useManagementPanelData';
+import { getManagementPanelAvailableHeight, PAGE_HORIZONTAL_PADDING } from '../../constants/layout';
 
 export interface ManagementPanelProps {
   visible: boolean;
@@ -42,10 +43,14 @@ export default function ManagementPanel({
   const insets = useAppSafeAreaInsets();
 
   const panelContentWidth =
-    windowWidth - spacing.lg * 2 - MANAGEMENT_PANEL_PADDING * 2;
+    windowWidth - PAGE_HORIZONTAL_PADDING * 2 - MANAGEMENT_PANEL_PADDING * 2;
 
-  const availableHeight =
-    windowHeight * MANAGEMENT_PANEL_MAX_HEIGHT_RATIO - Math.max(insets.top, 0) * 0.15;
+  const availableHeight = getManagementPanelAvailableHeight({
+    windowHeight,
+    topInset: insets.top,
+    bottomOffset,
+    maxHeightRatio: MANAGEMENT_PANEL_MAX_HEIGHT_RATIO,
+  });
 
   const layout = useMemo(
     () =>
@@ -183,8 +188,8 @@ const styles = StyleSheet.create({
   },
   panelAnchor: {
     position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
+    left: PAGE_HORIZONTAL_PADDING,
+    right: PAGE_HORIZONTAL_PADDING,
     alignItems: 'stretch',
     zIndex: 20,
     elevation: 20,

@@ -13,6 +13,10 @@ import {
 
 import { getTruckArtwork } from '../../assets/fleetAssets';
 import { vehicleMarketplaceBalance } from '../../config/balance';
+import {
+  getVehicleMarketplaceEligibility,
+  type VehicleMarketplaceEligibilityContext,
+} from '../../domain/vehicleMarketplaceEligibility';
 import { calculateTruckResaleValue } from '../../simulation/fleetManagement';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import type { Truck } from '../../types/game';
@@ -22,6 +26,7 @@ export default function VehicleListingCreateSheet({
   visible,
   trucks,
   creating,
+  eligibilityContext,
   initialTruckId,
   onClose,
   onCreate,
@@ -29,27 +34,58 @@ export default function VehicleListingCreateSheet({
   visible: boolean;
   trucks: Truck[];
   creating: boolean;
+  eligibilityContext: VehicleMarketplaceEligibilityContext;
   initialTruckId?: string | null;
   onClose: () => void;
   onCreate: (truck: Truck, askingPrice: number) => void;
 }) {
   const eligible = useMemo(
-    () => trucks.filter((truck) => truck.status === 'idle' && truck.ownershipType !== 'leased'),
-    [trucks],
+    () =>
+      trucks.filter(
+        (truck) => getVehicleMarketplaceEligibility(truck.id, eligibilityContext).eligible,
+      ),
+    [eligibilityContext, trucks],
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = eligible.find((truck) => truck.id === selectedId) ?? eligible[0];
   const recommended = selected ? calculateTruckResaleValue(selected) : 0;
   const [price, setPrice] = useState('');
+  const [inlineError, setInlineError] = useState<string | null>(null);
+
+  const initialEligibility = useMemo(() => {
+    if (!initialTruckId) return null;
+    return getVehicleMarketplaceEligibility(initialTruckId, eligibilityContext);
+  }, [eligibilityContext, initialTruckId]);
 
   useEffect(() => {
-    if (visible && eligible[0]) {
+    if (!visible) {
+      setInlineError(null);
+      return;
+    }
+    if (eligible[0]) {
       const preferred = eligible.some((truck) => truck.id === initialTruckId)
         ? initialTruckId
         : eligible[0].id;
       setSelectedId(preferred ?? eligible[0].id);
+      if (
+        initialTruckId &&
+        initialEligibility &&
+        !initialEligibility.eligible &&
+        !eligible.some((truck) => truck.id === initialTruckId)
+      ) {
+        setInlineError(initialEligibility.message);
+      } else {
+        setInlineError(null);
+      }
+    } else if (initialEligibility && !initialEligibility.eligible) {
+      setInlineError(initialEligibility.message);
+      setSelectedId(null);
+    } else {
+      setInlineError(null);
+      setSelectedId(null);
     }
-  }, [eligible, initialTruckId, visible]);
+  }, [eligible, initialEligibility, initialTruckId, visible]);
+
   useEffect(() => {
     setPrice(recommended > 0 ? String(recommended) : '');
   }, [recommended]);
@@ -59,9 +95,29 @@ export default function VehicleListingCreateSheet({
   const max = Math.round(recommended * vehicleMarketplaceBalance.vehicleMarketplaceMaxPriceRatio);
   const validPrice = Number.isFinite(askingPrice) && askingPrice >= min && askingPrice <= max;
 
+  const handleClose = () => {
+    if (creating) return;
+    onClose();
+  };
+
+  const handleCreate = () => {
+    if (!selected || creating) return;
+    const eligibility = getVehicleMarketplaceEligibility(selected.id, eligibilityContext);
+    if (!eligibility.eligible) {
+      setInlineError(eligibility.message);
+      return;
+    }
+    if (!validPrice) {
+      setInlineError('Satış fiyatı izin verilen aralığın dışında.');
+      return;
+    }
+    setInlineError(null);
+    onCreate(selected, askingPrice);
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
+      <Pressable style={styles.backdrop} onPress={handleClose} pointerEvents={creating ? 'none' : 'auto'}>
         <Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}>
           <View style={styles.handle} />
           <View style={styles.header}>
@@ -69,11 +125,12 @@ export default function VehicleListingCreateSheet({
               <Text style={styles.title}>Aracı Satışa Çıkar</Text>
               <Text style={styles.subtitle}>Uygun ve boşta olan kamyonunu seç</Text>
             </View>
-            <TouchableOpacity style={styles.close} onPress={onClose} disabled={creating}>
+            <TouchableOpacity style={styles.close} onPress={handleClose} disabled={creating}>
               <GameIcon name="close" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
           <ScrollView contentContainerStyle={styles.content}>
+            {inlineError ? <Text style={styles.inlineError}>{inlineError}</Text> : null}
             {eligible.length === 0 ? (
               <Text style={styles.empty}>Satışa uygun boşta aracın bulunmuyor.</Text>
             ) : (
@@ -84,7 +141,11 @@ export default function VehicleListingCreateSheet({
                   <TouchableOpacity
                     key={truck.id}
                     style={[styles.truckRow, active && styles.truckRowActive]}
-                    onPress={() => setSelectedId(truck.id)}
+                    onPress={() => {
+                      setSelectedId(truck.id);
+                      setInlineError(null);
+                    }}
+                    disabled={creating}
                   >
                     <View style={styles.artWrap}>
                       {art ? <Image source={art} resizeMode="contain" style={styles.art} /> : null}
@@ -111,6 +172,7 @@ export default function VehicleListingCreateSheet({
                   value={price}
                   onChangeText={setPrice}
                   keyboardType="numeric"
+                  editable={!creating}
                   style={[styles.input, !validPrice && styles.inputInvalid]}
                   placeholderTextColor={colors.textMuted}
                 />
@@ -128,7 +190,7 @@ export default function VehicleListingCreateSheet({
           </ScrollView>
           <ActionButton
             label={creating ? 'İlan oluşturuluyor…' : 'Satış İlanı Oluştur'}
-            onPress={() => selected && onCreate(selected, askingPrice)}
+            onPress={handleCreate}
             disabled={!selected || !validPrice || creating}
             icon="truck"
             fullWidth
@@ -154,6 +216,18 @@ const styles = StyleSheet.create({
   close: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cardSoft, borderWidth: 1, borderColor: colors.border },
   content: { paddingHorizontal: spacing.lg, gap: spacing.sm, paddingBottom: spacing.lg },
   empty: { color: colors.textMuted, textAlign: 'center', paddingVertical: spacing.xl },
+  inlineError: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
   truckRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 72, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, borderRadius: 14, padding: spacing.sm },
   truckRowActive: { borderColor: colors.accentBlue, backgroundColor: colors.accentBlueSoft },
   artWrap: { width: 78, height: 54, borderRadius: 10, backgroundColor: colors.surface3, alignItems: 'center', justifyContent: 'center' },

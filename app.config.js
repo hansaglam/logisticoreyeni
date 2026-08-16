@@ -94,6 +94,7 @@ module.exports = () => {
       'expo-font',
       'expo-build-properties',
       './plugins/withGoogleSignInModularHeaders.js',
+      './plugins/withIosModularHeaders',
       [
         'expo-navigation-bar',
         {

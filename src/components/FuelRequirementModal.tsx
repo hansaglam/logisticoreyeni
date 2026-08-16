@@ -50,9 +50,9 @@ export default function FuelRequirementModal({
             </View>
           </View>
 
-          <Text style={styles.title}>Yakıt Yetersiz</Text>
+          <Text style={styles.title}>Bu rota için yakıt yetersiz.</Text>
           <Text style={styles.message}>
-            Bu teslimat için {required} yakıt gerekiyor. Kamyonda {current} var.
+            En az {required} yakıt gerekiyor. Aracında {current} var.
           </Text>
 
           <View style={styles.deficitBadge}>

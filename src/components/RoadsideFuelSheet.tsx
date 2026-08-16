@@ -63,6 +63,21 @@ export default function RoadsideFuelSheet({
   );
   const truck = job ? trucks.find((candidate) => candidate.id === job.truckId) : undefined;
 
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && visible && truck) {
+    console.log('[FUEL_DEBUG][MODAL_ROADSIDE]', {
+      source: 'RoadsideFuelSheet → player.trucks.find(job.truckId)',
+      id: truck.id,
+      name: truck.name,
+      jobId,
+      jobTruckId: job?.truckId ?? null,
+      fuel: truck.currentFuelL ?? null,
+      capacity: truck.fuelTankCapacityL ?? null,
+      status: truck.status,
+      jobFuelLitersAtStart: job?.fuelLitersAtStart ?? null,
+      jobFuelConsumedL: job?.fuelConsumedL ?? null,
+    });
+  }
+
   useEffect(() => {
     if (!visible) return;
     setChoice('25');

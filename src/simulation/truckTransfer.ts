@@ -250,6 +250,22 @@ export function updateTransferProgressWithFuel(
   }
 
   if (transfer.status === 'paused' && transfer.pausedReason === 'out-of-fuel') {
+    const normalized = normalizeTruckFuel(truck);
+    const availableFuel = normalized.currentFuelL ?? 0;
+    if (availableFuel > 1e-6) {
+      return {
+        transfer: {
+          ...transfer,
+          estimatedArrivalAt: transfer.estimatedArrivalAt + hoursPassed,
+          lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
+          currentSpeedKmh: 0,
+        },
+        truck: {
+          ...normalized,
+          status: 'out_of_fuel',
+        },
+      };
+    }
     return {
       transfer: {
         ...transfer,
@@ -258,7 +274,7 @@ export function updateTransferProgressWithFuel(
         currentSpeedKmh: 0,
       },
       truck: {
-        ...normalizeTruckFuel(truck),
+        ...normalized,
         currentFuelL: 0,
         status: 'out_of_fuel',
       },

@@ -139,12 +139,15 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
   const [moreOpen, setMoreOpen] = useState(false);
   const layout = useMemo(() => getFleetTruckColumnWidths(screenWidth), [screenWidth]);
 
-  const isOnRoute = truck.status === 'on_route';
-  const isTransferring = truck.status === 'transferring';
-  const isIdle = truck.status === 'idle';
-  const isMaintenance = truck.status === 'maintenance';
-  const isOutOfFuel = truck.status === 'out_of_fuel';
-  const isLeased = isActiveLeasedTruck(truck);
+  const liveTruck = useGameStore(
+    (state) => state.player?.trucks.find((candidate) => candidate.id === truck.id) ?? truck,
+  );
+  const isOnRoute = liveTruck.status === 'on_route';
+  const isTransferring = liveTruck.status === 'transferring';
+  const isIdle = liveTruck.status === 'idle';
+  const isMaintenance = liveTruck.status === 'maintenance';
+  const isOutOfFuel = liveTruck.status === 'out_of_fuel';
+  const isLeased = isActiveLeasedTruck(liveTruck);
   const needsLiveTime = isOnRoute || isTransferring || isOutOfFuel || isLeased;
   const currentTime = useGameStore((state) => (needsLiveTime ? state.currentTime : 0));
   const warehouseTransfer = useGameStore((state) =>
@@ -157,33 +160,49 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
     ),
   );
 
-  const catalogId = getTruckCatalogId(truck);
-  const artwork = useMemo(() => getTruckArtwork(truck), [truck.id, truck.catalogId]);
+  const catalogId = getTruckCatalogId(liveTruck);
+  const artwork = useMemo(() => getTruckArtwork(liveTruck), [liveTruck.id, liveTruck.catalogId]);
   const accentBorder = getTruckAccentBorder(catalogId);
 
-  const truckCondition = truck.condition ?? 100;
+  const truckCondition = liveTruck.condition ?? 100;
   const conditionColor = getConditionColor(truckCondition);
-  const repairCost = calculateTruckRepairCost(truck);
-  const statusBadge = getTruckStatusPresentation(truck);
-  const displayName = stripLeaseSuffixFromTruckName(truck.name);
+  const repairCost = calculateTruckRepairCost(liveTruck);
+  const statusBadge = getTruckStatusPresentation(liveTruck);
+  const displayName = stripLeaseSuffixFromTruckName(liveTruck.name);
   const showRepairButton = truckCondition < 100 && truckCondition < REPAIR_HIDE_THRESHOLD;
-  const truckCityId = resolveTruckCityId(truck, homeCityId);
+  const truckCityId = resolveTruckCityId(liveTruck, homeCityId);
   const truckCityName = getCityName(truckCityId);
-  const hasIdleDriver = !!selectDriverForTransfer(truck.id, drivers);
-  const transferBlockedReason = getTruckTransferBlockedReason(truck, hasIdleDriver);
+  const hasIdleDriver = !!selectDriverForTransfer(liveTruck.id, drivers);
+  const transferBlockedReason = getTruckTransferBlockedReason(liveTruck, hasIdleDriver);
   const canTransfer = transferBlockedReason == null;
-  const showRecallIzmir = isIdle && (truck.currentCityId ?? '').toLowerCase() !== 'izmir';
-  const resaleValue = isLeased ? 0 : calculateTruckResaleValue(truck);
-  const displayValue = isLeased ? 0 : resaleValue > 0 ? resaleValue : truck.purchasePrice ?? 0;
-  const upgradeLevel = truck.upgradeLevel ?? 0;
-  const capacityTons = getTruckEffectiveCapacityTons(truck, trailers);
+  const showRecallIzmir = isIdle && (liveTruck.currentCityId ?? '').toLowerCase() !== 'izmir';
+  const resaleValue = isLeased ? 0 : calculateTruckResaleValue(liveTruck);
+  const displayValue = isLeased ? 0 : resaleValue > 0 ? resaleValue : liveTruck.purchasePrice ?? 0;
+  const upgradeLevel = liveTruck.upgradeLevel ?? 0;
+  const capacityTons = getTruckEffectiveCapacityTons(liveTruck, trailers);
   const capacityLabel = `${Math.round(capacityTons)} t`;
-  const attachedTrailer = getAttachedTrailerForTruck(truck.id, trailers);
-  const fuelSnapshot = getTruckFuelSnapshot(truck);
-  const normalizedFuelTruck = normalizeTruckFuel(truck);
+  const attachedTrailer = getAttachedTrailerForTruck(liveTruck.id, trailers);
+  const fuelSnapshot = getTruckFuelSnapshot(liveTruck);
+  const normalizedFuelTruck = normalizeTruckFuel(liveTruck);
   const fuelPercent = fuelSnapshot.percentage;
   const fuelJob = delivery ?? transfer ?? warehouseTransfer;
-  const fuelWarning = getFuelWarningForJob(fuelJob, truck);
+  const fuelWarning = getFuelWarningForJob(fuelJob, liveTruck);
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log('[FUEL_DEBUG][FLEET]', {
+      source: 'OwnedTruckCard → useGameStore(player.trucks by id) ?? prop',
+      id: liveTruck.id,
+      name: liveTruck.name,
+      propId: truck.id,
+      fuel: normalizedFuelTruck.currentFuelL ?? null,
+      capacity: normalizedFuelTruck.fuelTankCapacityL ?? null,
+      percent: fuelPercent,
+      status: liveTruck.status,
+      deliveryId: delivery?.id ?? null,
+      deliveryFuelConsumedL: delivery?.fuelConsumedL ?? null,
+      deliveryFuelLitersAtStart: delivery?.fuelLitersAtStart ?? null,
+    });
+  }
 
   const maintenanceDiscountToken = getActiveMaintenanceDiscountToken(
     monetization,
@@ -208,7 +227,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
       onShowSellBlocked(sellCheck.reason ?? 'Kamyon satılamaz.');
       return;
     }
-    onSell(truck);
+    onSell(liveTruck);
   }, [onShowSellBlocked, onSell, sellCheck, truck]);
 
   const handleMorePress = useCallback(() => {
@@ -293,7 +312,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
             <>
               <Text style={styles.valueLabel}>Kira</Text>
               <Text style={styles.leaseAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                {formatLeaseRemainingDays(currentTime, truck.leaseExpiresAt)}
+                {formatLeaseRemainingDays(currentTime, liveTruck.leaseExpiresAt)}
               </Text>
             </>
           ) : null}
@@ -331,7 +350,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
         <View style={styles.featurePill}>
           <Text style={styles.featureLabel}>Hız</Text>
           <Text style={styles.featureValue} numberOfLines={1}>
-            {truck.speed ?? 0} km/sa
+            {liveTruck.speed ?? 0} km/sa
           </Text>
         </View>
         <View style={styles.featurePill}>
@@ -344,9 +363,9 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
 
       <Pressable
         style={styles.fuelDetail}
-        onPress={() => onRefuel(truck)}
+        onPress={() => onRefuel(liveTruck)}
         accessibilityRole="button"
-        accessibilityLabel={`${truck.name} yakıt detayını aç`}
+        accessibilityLabel={`${liveTruck.name} yakıt detayını aç`}
       >
         <GameIcon
           name="fuel"
@@ -401,7 +420,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
       <View style={styles.actionRow}>
         <Pressable
           style={[styles.actionBtn, styles.actionPrimary, (!canTransfer || busyActions) && styles.actionDisabled]}
-          onPress={() => onTransfer(truck)}
+          onPress={() => onTransfer(liveTruck)}
           disabled={!canTransfer || busyActions}
         >
           <GameIcon name="route" size={13} color={canTransfer && !busyActions ? '#FFFFFF' : colors.textMuted} />
@@ -420,7 +439,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
                 : styles.actionOutline,
               (!showRepairButton || !canAffordEffectiveRepair || busyActions) && styles.actionDisabled,
             ]}
-            onPress={() => onRepair(truck)}
+            onPress={() => onRepair(liveTruck)}
             disabled={!showRepairButton || !canAffordEffectiveRepair || busyActions}
           >
             <GameIcon name="repair" size={13} color={colors.accentAmber} />
@@ -435,7 +454,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
 
         <Pressable
           style={[styles.actionBtn, styles.actionOutline, (!canManageUpgrades || busyActions) && styles.actionDisabled]}
-          onPress={() => onManageUpgrades(truck)}
+          onPress={() => onManageUpgrades(liveTruck)}
           disabled={!canManageUpgrades || busyActions}
         >
           <GameIcon name="upgrade" size={13} color={colors.accentBlue} />
@@ -457,13 +476,13 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
 
       {moreOpen ? (
         <View style={styles.morePanel}>
-          <Pressable style={styles.moreAction} onPress={() => onRefuel(truck)}>
+          <Pressable style={styles.moreAction} onPress={() => onRefuel(liveTruck)}>
             <Text style={styles.moreActionText} numberOfLines={1}>
               Yakıt Detayı ve Dolum
             </Text>
           </Pressable>
           {showRecallIzmir && canTransfer ? (
-            <Pressable style={styles.moreAction} onPress={() => onTransfer(truck, 'izmir')}>
+            <Pressable style={styles.moreAction} onPress={() => onTransfer(liveTruck, 'izmir')}>
               <Text style={styles.moreActionText} numberOfLines={1}>
                 İzmir'e Çağır
               </Text>
@@ -479,7 +498,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           {VEHICLE_MARKETPLACE_ENABLED && sellCheck.canSell && isIdle && !isLeased ? (
             <Pressable
               style={[styles.moreAction, styles.marketplaceAction]}
-              onPress={() => onMarketplaceSell(truck)}
+              onPress={() => onMarketplaceSell(liveTruck)}
             >
               <View style={styles.marketplaceActionRow}>
                 <GameIcon name="truck" size={14} color={colors.info} />
@@ -500,7 +519,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
               label="Reklam · %30 indirim"
               description="Sonraki bakımda en fazla $500 indirim uygulanır."
               context={{
-                selectedTruckId: truck.id,
+                selectedTruckId: liveTruck.id,
                 currentRepairCost: repairCost,
               }}
               variant="secondary"
@@ -509,7 +528,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           {isLeased ? (
             <Text style={styles.moreMeta} numberOfLines={2}>
               Haftalık {formatMoney(getTruckWeeklyLeaseCost(truck))} · Kalan{' '}
-              {formatLeaseRemainingDays(currentTime, truck.leaseExpiresAt)}
+              {formatLeaseRemainingDays(currentTime, liveTruck.leaseExpiresAt)}
             </Text>
           ) : null}
         </View>

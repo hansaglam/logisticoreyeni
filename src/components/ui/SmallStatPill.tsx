@@ -39,7 +39,7 @@ export default function SmallStatPill({
           </View>
         ) : null}
         <View style={styles.chipTextBlock}>
-          <Text style={styles.labelChip} numberOfLines={1}>
+          <Text style={styles.labelChip} numberOfLines={1} ellipsizeMode="tail">
             {label}
           </Text>
           <Text
@@ -161,11 +161,11 @@ const styles = StyleSheet.create({
   pillChip: {
     flexDirection: 'row',
     alignItems: 'center',
+    width: '100%',
     backgroundColor: colors.cardSoft,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    width: '100%',
     minWidth: 0,
     minHeight: 54,
     paddingHorizontal: 10,
@@ -199,5 +199,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '800',
+    flexShrink: 1,
   },
 });

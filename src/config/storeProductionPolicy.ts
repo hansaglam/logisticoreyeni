@@ -57,6 +57,9 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
   if (env.EXPO_PUBLIC_DEBUG_CLOUD_SAVE_CONFLICT === '1') {
     errors.push('EXPO_PUBLIC_DEBUG_CLOUD_SAVE_CONFLICT must be unset for store production');
   }
+  if (env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC must be false/unset for store production');
+  }
 
   for (const [key, value] of Object.entries(env)) {
     if (!value) continue;

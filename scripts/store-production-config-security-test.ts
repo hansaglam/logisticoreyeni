@@ -49,6 +49,13 @@ async function main() {
 
   assert.ok(
     validateStoreProductionEnv({
+      env: withEnv(productionBase, { EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC: 'true' }),
+    }).some((e) => e.includes('ENABLE_TEST_MONEY_SYNC')),
+    'production test money sync true fails',
+  );
+
+  assert.ok(
+    validateStoreProductionEnv({
       env: withEnv(productionBase, { EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: 'localhost:9099' }),
     }).some((e) => e.includes('localhost')),
     'localhost config fails',

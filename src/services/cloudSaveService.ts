@@ -25,6 +25,7 @@ import {
 
 import type { SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
+import { isTestMoneySyncEnabled } from '../config/testMoneySync';
 import {
   buildCloudSaveSummary,
   buildCloudSaveSummaryFromPayload,
@@ -468,6 +469,7 @@ export async function updateUserProfileSummary(uid: string, state: StoreGameStat
         ? existingProvider
         : 'anonymous';
 
+    const omitMoney = isTestMoneySyncEnabled();
     const profileData = sanitizeForFirestore({
       uid,
       provider,
@@ -479,7 +481,8 @@ export async function updateUserProfileSummary(uid: string, state: StoreGameStat
       companyName: summary.companyName,
       level: summary.level,
       companyScore: summary.companyScore,
-      money: summary.money,
+      // TEST_MONEY_SYNC: leave users/{uid}.money alone so console edits are not overwritten.
+      ...(omitMoney ? {} : { money: summary.money }),
       isDeleted: false,
       ...(existing.exists() ? {} : { createdAt: serverTimestamp() }),
     });
@@ -575,6 +578,7 @@ export async function saveGameToCloud(
         ? existingProvider
         : 'anonymous';
 
+    const omitMoney = isTestMoneySyncEnabled();
     const profileData = sanitizeForFirestore({
       uid,
       ownerUid: uid,
@@ -587,7 +591,8 @@ export async function saveGameToCloud(
       companyName: summary.companyName,
       level: summary.level,
       companyScore: summary.companyScore,
-      money: summary.money,
+      // TEST_MONEY_SYNC: leave users/{uid}.money alone so console edits are not overwritten.
+      ...(omitMoney ? {} : { money: summary.money }),
       isDeleted: false,
       ...(existing.exists() ? {} : { createdAt: serverTimestamp() }),
     });

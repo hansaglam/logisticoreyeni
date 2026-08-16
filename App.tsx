@@ -44,6 +44,10 @@ import SaveRecoveryScreen from './src/screens/SaveRecoveryScreen';
 import { logProductionBuildConfigOnce } from './src/services/productionBuildAudit';
 import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
+import {
+  flushPendingTestMoneySync,
+  startTestMoneySync,
+} from './src/services/testMoneySyncService';
 import type { ProductId } from './src/types/game';
 import {
   enableImmersiveGameMode,
@@ -490,6 +494,11 @@ export default function App() {
 
     void preloadMapAssets();
     void initCloudSaveSync(() => useGameStore.getState());
+    const stopTestMoneySync = startTestMoneySync();
+    flushPendingTestMoneySync();
+    return () => {
+      stopTestMoneySync();
+    };
   }, [bootPhase, isGameReady]);
 
   return (

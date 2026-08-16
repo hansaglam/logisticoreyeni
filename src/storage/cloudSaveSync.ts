@@ -22,6 +22,7 @@ import {
   type CloudSavePayload,
 } from '../services/cloudSaveService';
 import { submitCurrentLeaderboardScore } from '../services/leaderboardService';
+import { markStartup } from '../utils/startupPerformance';
 import {
   getLeaderboardSubmitEligibility,
   isExpectedLeaderboardSubmitSkip,
@@ -753,7 +754,12 @@ export async function initCloudSaveSync(getState: () => StoreGameState): Promise
     cloudSyncInitialized = true;
 
     const state = getState();
-    await updateUserProfileSummary(user.uid, state);
+    markStartup('FIRESTORE_PROFILE_START');
+    try {
+      await updateUserProfileSummary(user.uid, state);
+    } finally {
+      markStartup('FIRESTORE_PROFILE_DONE');
+    }
 
     const localPayload = serializeGameState(state);
     const cloudMeta = await getCloudSaveMeta(user.uid);

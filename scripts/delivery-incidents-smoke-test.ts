@@ -165,14 +165,18 @@ console.log('\nResolve effects');
     incident,
   });
 
+  const remainingBefore =
+    (1 - delivery.progress) * Math.max(delivery.travelHours, 0.1);
   const resolved = resolveDeliveryIncident(delivery, 'alt_route', 151);
   assert(resolved.ok, 'resolve choice effects uygular');
   assert(resolved.effects?.cashDelta === -250, 'cashDelta uygulanır');
   assert(resolved.delivery?.incident?.status === 'resolved', 'incident resolved olur');
   assert(resolved.delivery?.incidentResolved === true, 'incidentResolved true olur');
+  const remainingAfter =
+    (1 - (resolved.delivery?.progress ?? 0)) * Math.max(resolved.delivery?.travelHours ?? 0, 0.1);
   assert(
-    (resolved.delivery?.estimatedArrivalTime ?? 0) < delivery.estimatedArrivalTime,
-    'deliveryTimeDeltaHours uygulanır',
+    remainingAfter < remainingBefore - 0.5,
+    'deliveryTimeDeltaHours remaining travel’i kısaltır',
   );
 
   const second = resolveDeliveryIncident(resolved.delivery!, 'wait', 152);

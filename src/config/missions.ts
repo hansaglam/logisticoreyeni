@@ -86,9 +86,9 @@ export const CAREER_MISSIONS: MissionConfig[] = [
   },
   {
     id: 'reach_company_score_150k',
-    title: 'Şirket Puanı 250.000',
-    description: 'Şirket puanını 250.000 seviyesine çıkar.',
-    targetValue: 250_000,
+    title: 'Şirket Puanı 25.000',
+    description: 'Şirket puanını 25.000 seviyesine çıkar.',
+    targetValue: 25_000,
     reward: { money: 5000, xp: 150 },
     category: 'career',
   },

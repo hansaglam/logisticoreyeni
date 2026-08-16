@@ -31,7 +31,8 @@ function maximumLiters(cash: number, price: number, space: number): number {
 
 console.log('\nTruckRefuelSheet render-loop regression test');
 const source = readFileSync(resolve(process.cwd(), 'src/components/TruckRefuelSheet.tsx'), 'utf8');
-check(source.indexOf('if (!visible || !truck) return null;') < source.indexOf('function TruckRefuelSheetContent'), 'FleetScreen closed sheet has no store subscription');
+check(source.includes("if (!visible && Platform.OS !== 'ios') return null"), 'Android closed sheet unmounts; iOS keeps Modal for dismiss');
+check(source.includes('lastTruckRef'), 'iOS dismiss keeps last truck so Modal is not torn down with visible=true');
 check(!source.includes('useGameStore((state) => selectFuelPriceQuote(state))'), 'fresh-object Zustand selector removed');
 check(source.includes('const cachedSnapshot = useGameStore') && source.includes('const marketSyncStatus = useGameStore'), 'store inputs use stable selectors');
 check(source.includes('[cachedSnapshot, cachedSnapshotTrusted, marketLastSyncedAtMs, marketSyncStatus]'), 'quote dependencies are stable');

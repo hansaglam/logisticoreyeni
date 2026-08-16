@@ -60,6 +60,12 @@ import {
 } from '../domain/vehicleMarketplacePresentation';
 import { subscribeAuthState } from '../services/authService';
 import { getFirebaseAuthSafe } from '../services/firebase';
+import { logMarketplaceAuthProbe } from '../utils/marketplaceAuthDiagnostics';
+import {
+  logMarketplaceLoadError,
+  logMarketplaceSellAuthoritativeLookup,
+  logMarketplaceSellLocal,
+} from '../utils/marketplaceSellDiagnostics';
 import {
   cancelVehicleListing,
   createVehicleListing,
@@ -81,6 +87,7 @@ import {
   logMarketplaceDev,
   showAlertAfterModalClose,
 } from '../utils/marketplaceUiSafety';
+import { markStartup } from '../utils/startupPerformance';
 
 const PAGE_SIZE = 20;
 
@@ -225,6 +232,9 @@ export default function VehicleMarketplaceScreen({
 
   useEffect(() => {
     logMarketplaceDev('OPEN');
+    void logMarketplaceAuthProbe('screen-open', {
+      screenStatus: screenState.status,
+    });
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isCreatingListing || isBuyingVehicle) {
         return true;
@@ -298,6 +308,10 @@ export default function VehicleMarketplaceScreen({
       if (!isLinkedMarketplaceUser()) {
         if (requestSeq !== requestSeqRef.current) return;
         logMarketplaceDev('listings load failed', { reason: 'auth-required' });
+        void logMarketplaceAuthProbe('screen-gate-blocked', {
+          gate: 'isLinkedMarketplaceUser',
+          condition: '!(currentUser && !currentUser.isAnonymous)',
+        });
         setScreenState(
           applyMarketplaceFetchError(
             mapFailureReasonToMarketplaceKind('auth-required'),
@@ -316,9 +330,24 @@ export default function VehicleMarketplaceScreen({
       if (requestSeq !== requestSeqRef.current) return;
 
       if (!publicResult.ok) {
+        logMarketplaceLoadError({
+          code: publicResult.reason ?? 'unknown',
+          message: getMarketplaceKindMessage(
+            mapFailureReasonToMarketplaceKind(
+              publicResult.reason as VehicleMarketplaceFailureReason | undefined,
+            ),
+          ),
+          callableName: 'getVehicleMarketplaceListings',
+        });
         logMarketplaceDev('listings load failed', {
           reason: publicResult.reason ?? 'unknown',
           kind: mapFailureReasonToMarketplaceKind(
+            publicResult.reason as VehicleMarketplaceFailureReason | undefined,
+          ),
+        });
+        void logMarketplaceAuthProbe('public-listings-failed', {
+          reason: publicResult.reason ?? 'unknown',
+          mappedKind: mapFailureReasonToMarketplaceKind(
             publicResult.reason as VehicleMarketplaceFailureReason | undefined,
           ),
         });
@@ -338,6 +367,9 @@ export default function VehicleMarketplaceScreen({
         (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
       ) {
         logMarketplaceDev('my listings auth failed', { reason: myResult.reason });
+        void logMarketplaceAuthProbe('my-listings-auth-failed', {
+          reason: myResult.reason,
+        });
         setScreenState(
           applyMarketplaceFetchError(
             mapFailureReasonToMarketplaceKind('auth-required'),
@@ -353,13 +385,23 @@ export default function VehicleMarketplaceScreen({
 
   useEffect(() => {
     if (!VEHICLE_MARKETPLACE_ENABLED) return;
-    void refreshAll();
+    markStartup('MARKETPLACE_INIT_START');
+    void refreshAll().finally(() => {
+      markStartup('MARKETPLACE_INIT_DONE');
+    });
   }, [refreshAll]);
 
   useEffect(() => {
     if (!VEHICLE_MARKETPLACE_ENABLED) return;
     const unsub = subscribeAuthState((user) => {
       const uid = user && !user.isAnonymous ? user.uid : null;
+      void logMarketplaceAuthProbe('auth-state-changed', {
+        callbackUid: user?.uid ?? null,
+        callbackIsAnonymous: user?.isAnonymous ?? null,
+        linkedUid: uid,
+        lastLinkedUid: lastAuthUidRef.current,
+        skippedBecauseUnchanged: lastAuthUidRef.current === uid,
+      });
       if (lastAuthUidRef.current === uid) return;
       lastAuthUidRef.current = uid;
       resetMarketplaceData();
@@ -521,6 +563,21 @@ export default function VehicleMarketplaceScreen({
 
   const performCreate = async (truck: (typeof player.trucks)[number], askingPrice: number) => {
     if (isCreatingListing) return;
+
+    await logMarketplaceSellLocal(truck);
+    const uid = getFirebaseAuthSafe()?.currentUser?.uid ?? null;
+    const mineProbe = await getMyVehicleListings();
+    const availableVehicleIds = (mineProbe.reconciliation?.vehicles ?? []).map(
+      (vehicle) => vehicle.truckId,
+    );
+    logMarketplaceSellAuthoritativeLookup({
+      uid,
+      requestedVehicleId: truck.id,
+      availableVehicleIds,
+      source: mineProbe.ok
+        ? 'getMyVehicleListings.reconciliation.vehicles'
+        : `getMyVehicleListings-failed:${mineProbe.reason ?? 'unknown'}`,
+    });
 
     const eligibility = getVehicleMarketplaceEligibility(truck.id, eligibilityContext);
     logMarketplaceDev('Sell Vehicle eligibility', {

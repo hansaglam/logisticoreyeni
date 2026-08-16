@@ -109,6 +109,30 @@ const routeAfterRace = merged.find((truck) => truck.id === 'en-route-b');
 assert(closeTo(idleAfterRace?.currentFuelL ?? 0, 400), 'race merge keeps refueled idle truck at 400');
 assert(closeTo(routeAfterRace?.currentFuelL ?? 0, 190), 'race merge still applies en-route fuel burn');
 
+// Stranded roadside refill vs tick that still sees 0 L / out_of_fuel (iOS-prone).
+const strandedBaseline = [
+  makeTruck({ id: 'stranded', status: 'out_of_fuel', currentFuelL: 0 }),
+];
+const strandedTick = [
+  { ...strandedBaseline[0], status: 'out_of_fuel' as const, currentFuelL: 0 },
+];
+const strandedLiveAfterRoadside = [
+  { ...strandedBaseline[0], status: 'on_route' as const, currentFuelL: 400 },
+];
+const strandedMerged = mergeTruckTickUpdates(
+  strandedLiveAfterRoadside,
+  strandedBaseline,
+  strandedTick,
+);
+assert(
+  closeTo(strandedMerged.find((truck) => truck.id === 'stranded')?.currentFuelL ?? 0, 400),
+  'stranded roadside refill is not clobbered by an out-of-fuel tick',
+);
+assert(
+  strandedMerged.find((truck) => truck.id === 'stranded')?.status === 'on_route',
+  'stranded refill keeps resumed on_route status',
+);
+
 // Simulate the iOS-prone gap: merge must use live fleet at commit time, not a
 // pre-get() snapshot taken before a concurrent refuel.
 const staleLiveSnapshot = baselineFleet;
@@ -143,6 +167,10 @@ assert(
     'delivery/transfer ticks merge against live fleet inside functional set',
   );
   assert(store.includes('[refuelTruck] after-commit'), 'refuel read-back logging present');
+  assert(
+    store.includes('set((live) => {') && store.includes('resumeRoadsideJob(candidate, \'delivery\''),
+    'roadside fuel commits against live fleet inside functional set',
+  );
   assert(
     store.includes('calculateDeliveryFuelLiters'),
     'delivery start uses canonical fuel requirement helper',

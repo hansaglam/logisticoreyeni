@@ -190,6 +190,7 @@ test('trusted score submit writes backend-calculated score from serverState', as
   assert.equal(snap.data()?.uid, 'player-1');
   assert.equal(typeof snap.data()?.username, 'string');
   assert.ok(String(snap.data()?.username).length > 0);
+  assert.equal(snap.data()?.scoreVersion, 2);
 });
 
 test('submit without username is rejected', async () => {
@@ -207,9 +208,9 @@ test('submit without username is rejected', async () => {
   assert.equal(result.reason, 'username-required');
 });
 
-test('lower score does not overwrite higher score', async () => {
+test('current score overwrites previous score and ineligible players are removed', async () => {
   await seedServerState('player-2', {
-    cash: 500_000,
+    cash: 80_000,
     completedDeliveries: 40,
     companyLevel: 10,
     reputation: 90,
@@ -221,6 +222,7 @@ test('lower score does not overwrite higher score', async () => {
   );
   assert.equal(first.ok, true);
   if (!first.ok) return;
+  assert.equal(first.rankedEligible, true);
 
   await seedServerState('player-2', {
     cash: 1_000,
@@ -236,18 +238,17 @@ test('lower score does not overwrite higher score', async () => {
   );
   assert.equal(second.ok, true);
   if (!second.ok) return;
-  assert.equal(second.updated, false);
-  assert.equal(second.reason, 'score-not-improved');
-  assert.equal(second.score, first.score);
+  assert.equal(second.reason, 'not-ranked-eligible');
+  assert.equal(second.rankedEligible, false);
 
   const snap = await adminFirestore
     .doc(`leaderboards/${first.seasonKey}/entries/player-2`)
     .get();
-  assert.equal(snap.data()?.companyScore, first.score);
+  assert.equal(snap.exists, false);
 });
 
 test('duplicate submit is idempotent', async () => {
-  await seedServerState('player-3');
+  await seedServerState('player-3', { completedDeliveries: 5 });
   const a = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'player-3', displayName: null },
@@ -266,7 +267,7 @@ test('duplicate submit is idempotent', async () => {
 });
 
 test('wrong uid payload is ignored — entry owned by auth uid', async () => {
-  await seedServerState('real-uid');
+  await seedServerState('real-uid', { completedDeliveries: 5 });
   const result = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'real-uid', displayName: null },
@@ -291,7 +292,7 @@ test('getLeaderboard returns top list and own rank', async () => {
       cash: 100_000 * (i + 1),
       companyLevel: i + 1,
       reputation: 40 + i,
-      completedDeliveries: i * 3,
+      completedDeliveries: (i + 1) * 3,
     });
     await submitLeaderboardScoreTransaction(
       adminFirestore,
@@ -354,7 +355,7 @@ test('malicious cloud save write does not change leaderboard score', async () =>
 });
 
 test('account deletion clears leaderboard entries', async () => {
-  await seedServerState('delete-me');
+  await seedServerState('delete-me', { completedDeliveries: 6 });
   const submitted = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid: 'delete-me', displayName: null },
@@ -394,7 +395,61 @@ test('cash alone does not dominate score unboundedly', () => {
   });
   assert.ok(whale.totalScore > modest.totalScore);
   assert.ok(whale.totalScore < modest.totalScore + 500_000_000);
-  assert.ok(whale.financialScore < 500_000_000);
+  assert.ok(whale.financialScore <= 8_000);
+  assert.ok(whale.totalScore - modest.totalScore < 5_000);
+  assert.ok(whale.financialScore <= 8_000);
+});
+
+test('zero-delivery default account is not ranked', async () => {
+  await seedServerState('fresh-uid');
+  const result = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: 'fresh-uid', displayName: null },
+    { transactionId: 'tx-fresh', idempotencyKey: 'idem-fresh' },
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.reason, 'not-ranked-eligible');
+  const snap = await adminFirestore
+    .doc(`leaderboards/${result.seasonKey}/entries/fresh-uid`)
+    .get();
+  assert.equal(snap.exists, false);
+});
+
+test('v1 ghost scores are excluded from ranking', async () => {
+  const seasonKey = getLeaderboardSeasonKey();
+  await adminFirestore.doc(`leaderboards/${seasonKey}/entries/v1-ghost`).set({
+    uid: 'v1-ghost',
+    username: 'oldscore',
+    companyName: 'Ghost Co',
+    companyScore: 119_535,
+    level: 1,
+    reputation: 50,
+    completedContracts: 0,
+    scoreVersion: 1,
+    seasonKey,
+  });
+  await seedServerState('v2-player', {
+    completedDeliveries: 14,
+    companyLevel: 6,
+    reputation: 32,
+    cash: 18_000,
+  });
+  const submitted = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: 'v2-player', displayName: null },
+    { transactionId: 'tx-v2', idempotencyKey: 'idem-v2' },
+  );
+  assert.equal(submitted.ok, true);
+  const board = await getLeaderboardSnapshot(
+    adminFirestore,
+    { uid: 'v2-player', displayName: null },
+    { limit: 100 },
+  );
+  assert.equal(board.ok, true);
+  if (!board.ok) return;
+  assert.equal(board.entries.some((entry) => entry.uid === 'v1-ghost'), false);
+  assert.equal(board.entries[0]?.uid, 'v2-player');
 });
 
 test('leaderboard bootstraps default serverState when canonical state missing', async () => {
@@ -411,11 +466,16 @@ test('leaderboard bootstraps default serverState when canonical state missing', 
   );
   assert.equal(result.ok, true);
   if (!result.ok) return;
+  assert.equal(result.reason, 'not-ranked-eligible');
   const serverSnap = await adminFirestore
     .doc('users/missing-save/serverState/current')
     .get();
   assert.equal(serverSnap.exists, true);
   assert.equal(Number(serverSnap.data()?.cash), 20_000);
+  const entrySnap = await adminFirestore
+    .doc(`leaderboards/${result.seasonKey}/entries/missing-save`)
+    .get();
+  assert.equal(entrySnap.exists, false);
 });
 
 test('cross-platform: Android and iOS users share one leaderboard (no platform filter)', async () => {
@@ -511,14 +571,14 @@ test('same UID submit from Android then iOS metadata updates one entry (no dupli
     usernameNormalized: 'crossdevice',
     usernameSetupCompleted: true,
   });
-  await seedServerState(uid, { cash: 80_000, companyLevel: 4, reputation: 45 });
+  await seedServerState(uid, { cash: 80_000, companyLevel: 4, reputation: 45, completedDeliveries: 5 });
 
   const first = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid, displayName: null },
     { transactionId: 'tx-same-1', idempotencyKey: 'idem-same-1' },
   );
-  await seedServerState(uid, { cash: 200_000, companyLevel: 7, reputation: 70 });
+  await seedServerState(uid, { cash: 200_000, companyLevel: 7, reputation: 70, completedDeliveries: 12 });
   const second = await submitLeaderboardScoreTransaction(
     adminFirestore,
     { uid, displayName: null },
@@ -542,7 +602,7 @@ test('cross-platform pagination returns mixed entries without platform cursor', 
       cash: 50_000 * (i + 1),
       companyLevel: i + 1,
       reputation: 40 + i,
-      completedDeliveries: i * 2,
+      completedDeliveries: (i + 1) * 3,
     });
     await submitLeaderboardScoreTransaction(
       adminFirestore,

@@ -16,9 +16,10 @@ import type { ContractPreview } from '../../simulation/contractPreview';
 import { getContractCargoWeight } from '../../simulation/delivery';
 import { getContractAvailabilityLabel } from '../../utils/contractAvailabilityDisplay';
 import {
+  classifyDeadlineRisk,
   formatDeadlineRiskNote,
   formatLatePenaltyHint,
-  hasDeadlineRisk,
+  getDeadlineRiskBadgeLabel,
 } from '../../utils/deadlineUx';
 import { getCityName, getProductName } from '../../utils/entityLookup';
 import { colors, formatMoney, formatRatioPercent, radius, shadows, spacing, typography } from '../../theme';
@@ -136,8 +137,13 @@ export default function ContractDetailModal({
 
   const urgencyLabel = preview.isUrgent ? 'Acil' : 'Normal';
   const profitTone = preview.estimatedOperationalProfit >= 0 ? 'success' : 'danger';
-  const deadlineRisk = hasDeadlineRisk(contract.deadlineHours ?? 0, preview.estimatedTravelHours);
+  const deadlineLevel = classifyDeadlineRisk(
+    preview.estimatedTravelHours,
+    contract.deadlineHours ?? 0,
+  );
+  const deadlineRisk = deadlineLevel === 'risky' || deadlineLevel === 'impossible';
   const deadlineRiskNote = formatDeadlineRiskNote(preview.isUrgent, deadlineRisk);
+  const deadlineQualityLabel = getDeadlineRiskBadgeLabel(deadlineLevel);
   const latePenaltyHint = formatLatePenaltyHint(
     preview.isUrgent,
     preview.contractTypePenaltyMultiplier,
@@ -177,6 +183,21 @@ export default function ContractDetailModal({
             <DetailRow label="Yük" value={`${cargoWeight.toFixed(1)} t`} />
             <DetailRow label="Çıkış şehri" value={originCityName} />
             <DetailRow label="Teslim süresi" value={formatTimeLeft(contract.deadlineHours)} />
+            {preview.estimatedTravelHours > 0 ? (
+              <DetailRow
+                label="Süre kalitesi"
+                value={deadlineQualityLabel}
+                tone={
+                  deadlineLevel === 'comfortable'
+                    ? 'success'
+                    : deadlineLevel === 'normal'
+                      ? 'default'
+                      : deadlineLevel === 'risky'
+                        ? 'warning'
+                        : 'danger'
+                }
+              />
+            ) : null}
             {preview.estimatedTravelHours > 0 ? (
               <DetailRow
                 label="Tahmini yol süresi"

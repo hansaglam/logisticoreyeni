@@ -9,6 +9,7 @@ import {
   getMarketplaceFirebaseErrorCode,
 } from '../domain/vehicleMarketplaceErrors';
 import type { VehicleMarketplaceFailureReason } from '../types/vehicleMarketplace';
+import { logMarketplaceLoadError } from '../utils/marketplaceSellDiagnostics';
 
 export const MARKETPLACE_CALL_TIMEOUT_MS = 15_000;
 
@@ -62,11 +63,27 @@ export function logMarketplaceCallableFailure(
   callableName: MarketplaceCallableName,
   error: unknown,
 ): void {
+  const firebaseCode = getMarketplaceFirebaseErrorCode(error) || null;
+  const backendReason = getMarketplaceBackendReason(error) ?? null;
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof (error as { message?: unknown })?.message === 'string'
+        ? String((error as { message: string }).message)
+        : null;
   console.warn('[marketplace-callable-failed]', {
     callableName,
-    firebaseCode: getMarketplaceFirebaseErrorCode(error) || null,
-    backendReason: getMarketplaceBackendReason(error) ?? null,
+    firebaseCode,
+    backendReason,
   });
+  if (callableName === 'getVehicleMarketplaceListings' || callableName === 'getMyVehicleListings') {
+    logMarketplaceLoadError({
+      code: firebaseCode ?? backendReason ?? 'callable-failed',
+      message,
+      callableName,
+      backendReason,
+    });
+  }
 }
 
 async function withMarketplaceTimeout<T>(

@@ -65,6 +65,7 @@ export function resumeRoadsideJob<T extends RoadsideFuelJob>(
     ...job,
     status: (jobType === 'delivery' ? 'on_route' : 'active') as T['status'],
     pausedReason: undefined,
+    fuelWarningsEmitted: (job.fuelWarningsEmitted ?? []).filter((key) => key !== 'out-of-fuel'),
     fuelLitersAtStart: Math.max(0, job.fuelLitersAtStart ?? 0) + Math.max(0, options.litersAdded),
     ...(options.roadsideAssistanceGrantedAt != null
       ? { roadsideAssistanceGrantedAt: options.roadsideAssistanceGrantedAt }

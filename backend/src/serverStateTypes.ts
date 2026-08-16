@@ -63,6 +63,8 @@ export interface ServerStateDocument {
   suspiciousFlags: string[];
   updatedAt: Timestamp;
   createdAt: Timestamp;
+  leaderboardSeasonKey?: string;
+  weeklySeasonBaselineCompleted?: number;
 }
 
 export type ServerStateFailureReason =

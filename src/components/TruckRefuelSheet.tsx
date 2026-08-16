@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +18,7 @@ import {
 import { colors, spacing, typography } from '../theme';
 import { formatMoney, formatMoneyDecimal, formatUnitPrice } from '../theme/format';
 import type { GameIconName } from '../theme/icons';
+import { IOS_STACKED_MODAL_PROPS } from '../utils/modalPresentation';
 import {
   calculateTruckRefuelQuote,
   getTruckFuelPercent,
@@ -37,6 +39,9 @@ export interface TruckRefuelSheetProps {
   preferredMinimumLiters?: number | null;
   onClose: () => void;
   onSuccess?: (message: string) => void;
+  /** Overlay inside an already-open Modal — iOS cannot stack a second RN Modal. */
+  embedded?: boolean;
+  source?: 'job_assignment' | 'fleet' | 'transfer' | 'warehouse' | 'map';
 }
 
 const CHOICES: Array<{ id: RefuelChoice; label: string; icon: GameIconName }> = [
@@ -67,16 +72,27 @@ export default function TruckRefuelSheet({
   preferredMinimumLiters = null,
   onClose,
   onSuccess,
+  embedded = false,
+  source,
 }: TruckRefuelSheetProps) {
-  if (!visible || !truck) return null;
+  const lastTruckRef = useRef<Truck | null>(truck);
+  if (truck) lastTruckRef.current = truck;
+  const displayTruck = truck ?? lastTruckRef.current;
+  if (!displayTruck) return null;
+  if (embedded && !visible) return null;
+  // Android: unmount when closed. iOS must keep Modal mounted with visible=false
+  // so native dismiss can finish; returning null here left fuel state stale.
+  if (!visible && Platform.OS !== 'ios') return null;
 
   return (
     <TruckRefuelSheetContent
       visible={visible}
-      truck={truck}
+      truck={displayTruck}
       preferredMinimumLiters={preferredMinimumLiters}
       onClose={onClose}
       onSuccess={onSuccess}
+      embedded={embedded}
+      source={source}
     />
   );
 }
@@ -87,6 +103,8 @@ function TruckRefuelSheetContent({
   preferredMinimumLiters = null,
   onClose,
   onSuccess,
+  embedded = false,
+  source,
 }: TruckRefuelSheetProps) {
   const insets = useAppSafeAreaInsets();
   const liveTruck = useGameStore((state) =>
@@ -134,7 +152,7 @@ function TruckRefuelSheetContent({
 
   if (typeof __DEV__ !== 'undefined' && __DEV__ && visible && selectedTruck) {
     console.log('[FUEL_DEBUG][MODAL_CITY]', {
-      source: 'TruckRefuelSheet → liveTruck from store by truck.id ?? prop',
+      source: source ?? 'TruckRefuelSheet → liveTruck from store by truck.id ?? prop',
       id: selectedTruck.id,
       name: selectedTruck.name,
       propId: truck?.id ?? null,
@@ -251,7 +269,7 @@ function TruckRefuelSheetContent({
   }, [refreshMarketSnapshot]);
 
   const handleSubmit = () => {
-    if (!normalizedTruck || !quote || isSubmitting || !priceReady || pricePerLiter == null) {
+    if (!visible || !normalizedTruck || !quote || isSubmitting || !priceReady || pricePerLiter == null) {
       return;
     }
     setIsSubmitting(true);
@@ -308,14 +326,7 @@ function TruckRefuelSheetContent({
       ? formatUnitPrice(pricePerLiter, '/L')
       : '—';
 
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      statusBarTranslucent
-      onRequestClose={onClose}
-    >
+  const sheet = (
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={[styles.sheet, { paddingBottom: bottomPadding }]}>
@@ -529,6 +540,26 @@ function TruckRefuelSheetContent({
           />
         </View>
       </View>
+  );
+
+  if (embedded) {
+    return (
+      <View style={styles.embeddedRoot} pointerEvents="box-none">
+        {sheet}
+      </View>
+    );
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      onRequestClose={onClose}
+      {...IOS_STACKED_MODAL_PROPS}
+    >
+      {sheet}
     </Modal>
   );
 }
@@ -538,6 +569,10 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(2, 8, 20, 0.78)',
+  },
+  embeddedRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
   },
   sheet: {
     maxHeight: '89%',

@@ -17,7 +17,9 @@ import {
 import { useAppDialog } from '../components/AppDialogProvider';
 import ContractAssignmentModal from '../components/ContractAssignmentModal';
 import ContractQuickActionSheet from '../components/contracts/ContractQuickActionSheet';
+import DeliveryHealthBanner from '../components/delivery/DeliveryHealthBanner';
 import DeliveryIncidentCard from '../components/delivery/DeliveryIncidentCard';
+import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
 import DeliveryBoostPanel from '../components/monetization/DeliveryBoostPanel';
 import AdRewardButton from '../components/monetization/AdRewardButton';
 import { contractGenerationBalance } from '../config/balance';
@@ -496,6 +498,8 @@ const ContractCard = React.memo(function ContractCard({
     contractType: preview.contractType,
     contractTypeLabel: preview.contractTypeLabel,
     cargoWeightTons: cargoWeight,
+    estimatedTravelHours: preview.estimatedTravelHours,
+    deadlineHours: contract.deadlineHours,
   });
   const payment = preview.estimatedGrossPayment ?? contract.payment ?? 0;
   const estimatedProfit = preview.estimatedOperationalProfit ?? 0;
@@ -636,6 +640,7 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
   onBoostSuccess,
 }: ActiveDeliveryCardProps) {
   const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
+  const [roadsideJobId, setRoadsideJobId] = React.useState<string | null>(null);
   const deadlineHoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
   const etaHoursLeft = Math.max(0, delivery.estimatedArrivalTime - currentTime);
   const isLateRisk = delivery.estimatedArrivalTime > delivery.deadlineTime;
@@ -681,6 +686,12 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
           </View>
         </View>
       </View>
+      <DeliveryHealthBanner
+        delivery={delivery}
+        currentTime={currentTime}
+        truck={truck}
+        onRefuel={() => setRoadsideJobId(delivery.id)}
+      />
       <View style={styles.activeProgressRow}>
         <ProgressBar progress={delivery.progress} color={COLORS.cyan} height={3} />
         <Text style={styles.activeProgressText}>{formatPercent(delivery.progress)}</Text>
@@ -691,6 +702,11 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
       {showBoost ? (
         <DeliveryBoostPanel delivery={delivery} truck={truck} onSuccess={onBoostSuccess} />
       ) : null}
+      <RoadsideFuelSheet
+        visible={roadsideJobId != null}
+        jobId={roadsideJobId}
+        onClose={() => setRoadsideJobId(null)}
+      />
     </View>
   );
 });

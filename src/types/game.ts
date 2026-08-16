@@ -676,6 +676,7 @@ export interface Delivery {
   currentSpeedKmh?: number;
   pausedReason?: JobPausedReason;
   fuelWarningsEmitted?: FuelWarningKey[];
+  fuelOutEventCount?: number;
   roadsideAssistanceGrantedAt?: number;
   /** Toplam bakım maliyeti ($) */
   maintenanceCost: number;
@@ -714,6 +715,10 @@ export interface Delivery {
   incidentResolutionHistory?: DeliveryIncidentResolutionRecord[];
   /** Ödüllü reklam ile hızlandırma geçmişi */
   deliveryAdBoost?: DeliveryAdBoostState;
+  /** Aktif teslimatta biriken duraklama süreleri */
+  delayDiagnostics?: import('../domain/deliveryDelayDiagnostics').DeliveryDelayDiagnostics;
+  /** Göreve başlarken kaydedilen ETA / yakıt / risk özeti */
+  startReadiness?: import('../domain/deliveryDelayDiagnostics').DeliveryStartReadinessSnapshot;
 }
 
 export interface DeliveryAdBoostState {
@@ -1238,12 +1243,17 @@ export type RecommendedMapAction =
 
 /** Şirket puanı dağılımı — runtime hesaplanır, save'e yazılmaz */
 export interface CompanyScoreBreakdown {
+  deliveryScore: number;
+  progressionScore: number;
+  reputationScore: number;
+  assetScore: number;
+  financeScore: number;
+  weeklyActivityScore: number;
   cashScore: number;
   truckValueScore: number;
   warehouseValueScore: number;
   inventoryValueScore: number;
   completedContractsScore: number;
-  reputationScore: number;
   levelScore: number;
   weeklyTradeProfitScore: number;
   /** totalScore'a eklenen negatif ceza katkısı (ör. -9000) */
@@ -1251,6 +1261,7 @@ export interface CompanyScoreBreakdown {
   /** Pozitif ceza büyüklüğü — yalnızca bilgi amaçlı */
   penaltyCostScore: number;
   totalScore: number;
+  rankedEligible: boolean;
   truckValue: number;
   warehouseValue: number;
   inventoryValue: number;
@@ -1597,6 +1608,12 @@ export interface StoreGameState {
   fuelTransactionKeys?: string[];
   /** Son itibar değişimleri — save'e yazılır (sınırlı liste). */
   reputationHistory?: import('../domain/reputationModel').ReputationHistoryEntry[];
+  /** Son teslimat sonuç / gecikme geçmişi — itibar listesinden ayrı. */
+  deliverySettlementHistory?: import('../domain/deliveryDelayDiagnostics').DeliverySettlementRecord[];
+  /** OS bildirim dedupe anahtarları — save'e yazılır. */
+  osNotificationDedupeKeys?: string[];
+  /** Oyun içi OS izin isteği bir kez soruldu. */
+  osNotificationPermissionAsked?: boolean;
 }
 
 /**
@@ -1629,6 +1646,7 @@ export type StartDeliveryErrorCode =
   | 'ROUTE_NOT_FOUND'
   | 'INSUFFICIENT_FUEL'
   | 'INSUFFICIENT_FUNDS'
+  | 'DEADLINE_IMPOSSIBLE'
   | 'DELIVERY_CREATE_FAILED'
   | 'TRUCK_NOT_AT_ORIGIN'
   | 'NO_TRUCK_AT_ORIGIN'

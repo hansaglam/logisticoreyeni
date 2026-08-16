@@ -55,7 +55,16 @@ import {
 import { fetchUsernameProfile } from '../services/usernameService';
 import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
 import { leaderboardConfig } from '../config/leaderboard';
+import {
+  LEADERBOARD_SCORE_EXPLAINER,
+  LEADERBOARD_UNRANKED_MESSAGE,
+  LEADERBOARD_UNRANKED_TITLE,
+  isLeaderboardRankedEligible,
+} from '../domain/leaderboardRankEligibility';
 import { formatLeaderboardSeasonRange } from '../utils/leaderboardSeason';
+import { markStartup } from '../utils/startupPerformance';
+import { formatCompanyScore, getCompanyScoreBreakdown } from '../simulation/companyScore';
+import { useGameStore } from '../store/gameStore';
 import { colors, spacing, typography } from '../theme';
 
 interface LeaderboardScreenProps {
@@ -246,6 +255,71 @@ function PlayerSummaryCard({
   );
 }
 
+function UnrankedEligibilityCard({
+  completedDeliveries,
+  remaining,
+}: {
+  completedDeliveries: number;
+  remaining: number;
+}) {
+  return (
+    <AppCard variant="soft" style={styles.unrankedCard} padded>
+      <View style={styles.guestHeader}>
+        <GameIcon name="warning" size={18} color={colors.accentAmber} />
+        <Text style={styles.guestTitle}>{LEADERBOARD_UNRANKED_TITLE}</Text>
+      </View>
+      <Text style={styles.guestText}>{LEADERBOARD_UNRANKED_MESSAGE}</Text>
+      <Text style={styles.unrankedProgress}>
+        {completedDeliveries}/{leaderboardConfig.minCompletedDeliveriesToRank} teslimat · {remaining} teslimat kaldı
+      </Text>
+    </AppCard>
+  );
+}
+
+function ScoreExplainerCard({
+  breakdown,
+}: {
+  breakdown: {
+    deliveryScore: number;
+    progressionScore: number;
+    reputationScore: number;
+    assetScore: number;
+    weeklyActivityScore: number;
+    totalScore: number;
+    rankedEligible: boolean;
+  };
+}) {
+  return (
+    <AppCard variant="soft" style={styles.explainerCard} padded>
+      <Text style={styles.explainerTitle}>Şirket puanı nasıl hesaplanır?</Text>
+      <Text style={styles.seasonHint}>{LEADERBOARD_SCORE_EXPLAINER}</Text>
+      <View style={styles.explainerBreakdown}>
+          <Text style={styles.explainerLine}>
+            Teslimatlar: {formatCompanyScore(breakdown.deliveryScore)}
+          </Text>
+          <Text style={styles.explainerLine}>
+            Şirket gelişimi: {formatCompanyScore(breakdown.progressionScore)}
+          </Text>
+          <Text style={styles.explainerLine}>
+            İtibar: {formatCompanyScore(breakdown.reputationScore)}
+          </Text>
+          <Text style={styles.explainerLine}>
+            Filo ve varlıklar: {formatCompanyScore(breakdown.assetScore)}
+          </Text>
+          <Text style={styles.explainerLine}>
+            Haftalık performans: {formatCompanyScore(breakdown.weeklyActivityScore)}
+          </Text>
+          <Text style={styles.explainerTotal}>
+            Toplam: {formatCompanyScore(breakdown.totalScore)}
+          </Text>
+          <Text style={styles.seasonHint}>
+            Haftalık operasyon puanı sunucuda, bu haftaki teslimatlara göre hesaplanır.
+          </Text>
+        </View>
+    </AppCard>
+  );
+}
+
 function GuestPromptCard() {
   return (
     <AppCard variant="soft" style={styles.guestCard} padded>
@@ -292,18 +366,37 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
 
   const eligible = isLeaderboardEligible();
   const uid = account.uid;
+  const player = useGameStore((state) => state.player);
+  const cities = useGameStore((state) => state.cities);
+  const products = useGameStore((state) => state.products);
+  const financeLedger = useGameStore((state) => state.financeLedger);
+  const currentTime = useGameStore((state) => state.currentTime);
+  const completedDeliveries = Math.max(0, player?.completedContracts ?? 0);
+  const rankedEligible = isLeaderboardRankedEligible(completedDeliveries);
+  const localScoreBreakdown = useMemo(
+    () =>
+      getCompanyScoreBreakdown({
+        player,
+        cities,
+        products,
+        financeLedger,
+        currentTime,
+      }),
+    [player, cities, products, financeLedger, currentTime],
+  );
 
   const fetchData =
     screenState.status === 'ready' || screenState.status === 'refreshing'
       ? screenState.data
       : null;
+  const emptySeason = screenState.status === 'empty' ? screenState.season : null;
   const seasonLabel = useMemo(
     () =>
       formatLeaderboardSeasonRange(
-        fetchData?.seasonStartMs,
-        fetchData?.seasonEndMs,
+        fetchData?.seasonStartMs ?? emptySeason?.startsAt,
+        fetchData?.seasonEndMs ?? emptySeason?.endsAt,
       ),
-    [fetchData?.seasonEndMs, fetchData?.seasonStartMs],
+    [emptySeason?.endsAt, emptySeason?.startsAt, fetchData?.seasonEndMs, fetchData?.seasonStartMs],
   );
   const entries = fetchData?.entries ?? [];
   const playerEntry = fetchData?.playerEntry ?? null;
@@ -324,6 +417,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   }, []);
 
   const loadLeaderboard = useCallback(async (refresh = false) => {
+    markStartup('LEADERBOARD_INIT_START');
     const requestSeq = ++requestSeqRef.current;
     setScreenState((current) => beginLeaderboardRefresh(current));
 
@@ -359,6 +453,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
     }
 
     setScreenState(applyLeaderboardFetchSuccess(result));
+    markStartup('LEADERBOARD_INIT_DONE');
   }, [uid]);
 
   useEffect(() => {
@@ -445,8 +540,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
               <StatusBadge label="Canlı" variant="success" size="sm" />
             </View>
             <Text style={styles.seasonHint}>
-              Sıralama şirket puanına göre yapılır. Nakit, filo ve operasyon gücün bir arada
-              değerlendirilir.
+              {LEADERBOARD_SCORE_EXPLAINER} Varsayılan itibar sıralamada avantaj sağlamaz.
             </Text>
           </AppCard>
         </AppTutorialTarget>
@@ -456,7 +550,17 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
           <UsernamePromptCard onOpenAccountSettings={onOpenAccountSettings} />
         ) : null}
 
-        {eligible && playerEntry ? (
+        {eligible && usernameReady !== false && !rankedEligible ? (
+          <UnrankedEligibilityCard
+            completedDeliveries={completedDeliveries}
+            remaining={Math.max(
+              0,
+              leaderboardConfig.minCompletedDeliveriesToRank - completedDeliveries,
+            )}
+          />
+        ) : null}
+
+        {eligible && rankedEligible && playerEntry ? (
           <AppTutorialTarget tutorialId="leaderboard" targetId="my-rank" layoutMode="stretch">
             <PlayerSummaryCard
               entry={playerEntry}
@@ -466,12 +570,14 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
           </AppTutorialTarget>
         ) : null}
 
+        <ScoreExplainerCard breakdown={localScoreBreakdown} />
+
         <AppTutorialTarget tutorialId="leaderboard" targetId="company-ranking" layoutMode="stretch">
           <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
         </AppTutorialTarget>
       </View>
     ),
-    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, playerOutsideTop],
+    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, playerOutsideTop, rankedEligible, completedDeliveries, localScoreBreakdown],
   );
 
   const headerRightAction = (
@@ -649,6 +755,37 @@ const styles = StyleSheet.create({
     color: colors.accentBlue,
     fontSize: 13,
     fontWeight: '800',
+  },
+  unrankedCard: {
+    gap: spacing.sm,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  unrankedProgress: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.accentAmber,
+  },
+  explainerCard: {
+    gap: spacing.sm,
+  },
+  explainerTitle: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  explainerBreakdown: {
+    gap: 4,
+  },
+  explainerLine: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  explainerTotal: {
+    ...typography.bodySmall,
+    fontWeight: '800',
+    marginTop: 4,
   },
   playerCard: {
     gap: spacing.sm,

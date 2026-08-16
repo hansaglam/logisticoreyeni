@@ -53,6 +53,7 @@ export type LeaderboardFailureReason =
   | 'rate-limited'
   | 'season-closed'
   | 'score-not-improved'
+  | 'not-ranked-eligible'
   | 'service-unavailable'
   | 'firebase-disabled'
   | 'feature-disabled';
@@ -212,6 +213,7 @@ export function mapBackendReasonToLeaderboardFailure(raw: unknown): LeaderboardF
     'rate-limited',
     'season-closed',
     'score-not-improved',
+    'not-ranked-eligible',
     'service-unavailable',
     'server-state-missing',
     'backend-not-ready',

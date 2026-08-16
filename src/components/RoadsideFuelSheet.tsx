@@ -18,6 +18,8 @@ import {
   getRoadsideFuelLitersToDestination,
   type RoadsideFuelJob,
 } from '../simulation/roadsideFuel';
+import { IOS_STACKED_MODAL_PROPS } from '../utils/modalPresentation';
+import { normalizeTruckFuel } from '../utils/truckFuel';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import { ActionButton, GameIcon, IconButton } from './ui';
 
@@ -50,16 +52,21 @@ export default function RoadsideFuelSheet({
   const [choice, setChoice] = useState<Choice>('25');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [canRequestAssistance, setCanRequestAssistance] = useState(false);
+  const lastJobIdRef = useRef<string | null>(jobId);
+  if (jobId) lastJobIdRef.current = jobId;
+  const shownRef = useRef(false);
+  if (visible) shownRef.current = true;
   const transactionKeyRef = useRef('');
 
+  const resolvedJobId = jobId ?? lastJobIdRef.current;
   const job = useMemo(
     () =>
-      (deliveries.find((candidate) => candidate.id === jobId) ??
-        transfers.find((candidate) => candidate.id === jobId) ??
-        warehouseTransfers.find((candidate) => candidate.id === jobId)) as
+      (deliveries.find((candidate) => candidate.id === resolvedJobId) ??
+        transfers.find((candidate) => candidate.id === resolvedJobId) ??
+        warehouseTransfers.find((candidate) => candidate.id === resolvedJobId)) as
         | RoadsideFuelJob
         | undefined,
-    [deliveries, jobId, transfers, warehouseTransfers],
+    [deliveries, resolvedJobId, transfers, warehouseTransfers],
   );
   const truck = job ? trucks.find((candidate) => candidate.id === job.truckId) : undefined;
 
@@ -94,12 +101,12 @@ export default function RoadsideFuelSheet({
     : null;
 
   const handlePurchase = () => {
-    if (!jobId || !quote) return;
+    if (!resolvedJobId || !quote || !truck) return;
     if (!transactionKeyRef.current) {
-      transactionKeyRef.current = `roadside:${jobId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      transactionKeyRef.current = `roadside:${resolvedJobId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     }
     const result = purchaseRoadsideFuel({
-      jobId,
+      jobId: resolvedJobId,
       liters: quote.litersToAdd,
       expectedUnitPrice: fuelPrice,
       idempotencyKey: transactionKeyRef.current,
@@ -107,6 +114,15 @@ export default function RoadsideFuelSheet({
     if (!result.success) {
       setErrorMessage(result.message);
       setCanRequestAssistance(result.reason === 'insufficient-funds');
+      return;
+    }
+    const verified = useGameStore.getState().player.trucks.find(
+      (candidate) => candidate.id === truck.id,
+    );
+    const verifiedFuel = verified ? normalizeTruckFuel(verified).currentFuelL ?? 0 : null;
+    if (verifiedFuel == null || Math.abs(verifiedFuel - quote.newFuelL) > 0.5) {
+      setErrorMessage('Yakıt güncellemesi doğrulanamadı. Tekrar dene.');
+      transactionKeyRef.current = '';
       return;
     }
     onSuccess?.(result.message);
@@ -124,10 +140,29 @@ export default function RoadsideFuelSheet({
     onClose();
   };
 
-  if (!job || !truck) return null;
+  if (!shownRef.current) return null;
+  if (!job || !truck) {
+    return (
+      <Modal
+        visible={visible}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={onClose}
+        {...IOS_STACKED_MODAL_PROPS}
+      />
+    );
+  }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      onRequestClose={onClose}
+      {...IOS_STACKED_MODAL_PROPS}
+    >
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + spacing.md }]}>

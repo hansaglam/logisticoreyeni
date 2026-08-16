@@ -7,6 +7,7 @@
 export const leaderboardConfig = {
   seasonType: 'weekly' as const,
   leaderboardSize: 100,
+  minCompletedDeliveriesToRank: 3,
   /** Ekonomik ödül dağıtımı kapalı — yalnızca prestij/sıralama. */
   rewardsEnabled: false,
   prestigeRanks: [1, 2, 3] as const,

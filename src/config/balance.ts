@@ -625,20 +625,21 @@ export const reputationBalance = {
   max: REPUTATION_MAX,
 } as const;
 
-/** Şirket puanı (Company Score) — haftalık leaderboard sıralaması için */
+/** Şirket puanı (Company Score) v2 — leaderboard ile aynı ölçek. */
 export const companyScoreBalance = {
-  truckValueWeight: 0.85,
-  warehouseValueWeight: 0.75,
-  inventoryValueWeight: 0.7,
-  completedContractBonus: 1500,
-  reputationBonusPerPoint: 1000,
-  levelBonusPerLevel: 5000,
-  weeklyTradeProfitWeight: 0.5,
-  failedDeliveryPenalty: 5000,
-  lateDeliveryPenalty: 2000,
-  /** Haftalık ticaret kârı penceresi (oyun saati) */
+  scoreVersion: 2,
+  minCompletedDeliveriesToRank: 3,
+  reputationBaseline: 50,
+  truckValueWeight: 0,
+  warehouseValueWeight: 0,
+  inventoryValueWeight: 0,
+  completedContractBonus: 380,
+  reputationBonusPerPoint: 0,
+  levelBonusPerLevel: 720,
+  weeklyTradeProfitWeight: 0,
+  failedDeliveryPenalty: 320,
+  lateDeliveryPenalty: 110,
   weeklyHours: 168,
-  /** Depo tier bonusu: (upgradeTier - 1) × oran */
   warehouseTierBonusRate: 0.15,
 } as const;
 

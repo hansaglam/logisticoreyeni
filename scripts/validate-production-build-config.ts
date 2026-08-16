@@ -222,9 +222,14 @@ assert(emulatorHits.length === 0, 'no emulator connect calls in src', emulatorHi
 
 const appTsx = readFileSync(resolve(ROOT, 'App.tsx'), 'utf8');
 assert(
-  appTsx.includes('await initAnonymousAuth()') &&
-    appTsx.includes('await useGameStore.getState().initializeGame()'),
-  'App bootstraps auth before initializeGame',
+  appTsx.includes('probeSaveRecoveryOnColdStart') &&
+    appTsx.includes('await useGameStore.getState().initializeGame()') &&
+    appTsx.includes('Local-first'),
+  'App loads local save and initializeGame without blocking the UI on auth',
+);
+assert(
+  !/await initAnonymousAuth\(\);\s*if \(cancelled\) return;\s*logProductionBuildConfigOnce/.test(appTsx),
+  'Firebase Auth restore no longer gates first render',
 );
 
 console.log(`\nResult: ${failed === 0 ? 'PASS' : 'FAIL'} (${failed} failed)\n`);

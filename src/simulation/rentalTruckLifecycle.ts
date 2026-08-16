@@ -300,7 +300,7 @@ function buildExpiryWarningNotification(
   return {
     id: `rental-warning:${truck.id}`,
     kind: 'rental-expiring-soon',
-    title: 'Kiralama süresi yaklaşıyor',
+    title: 'Kiralık aracın süresi bitiyor',
     message: `${truck.name} aracının kiralama süresi yakında sona erecek.`,
     truckId: truck.id,
     truckName: truck.name,
@@ -339,7 +339,7 @@ function buildReturnedNotification(truck: Truck): RentalTruckNotificationDraft {
   return {
     id: `rental-returned:${truck.id}`,
     kind: 'rental-returned',
-    title: 'Araç iade edildi',
+    title: 'Kiralık araç iade edildi',
     message: `${truck.name} kiralama şirketine iade edildi ve filodan çıkarıldı.`,
     truckId: truck.id,
     truckName: truck.name,

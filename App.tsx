@@ -28,6 +28,7 @@ import { useSpotlightTutorialStore } from './src/store/spotlightTutorialStore';
 import { useGameStore } from './src/store/gameStore';
 import {
   addNotificationResponseListener,
+  getGameplayNotificationOpenFromResponse,
   getMarketAlertFocusFromResponse,
   isFleetRentalNotificationResponse,
   setupNotificationHandler,
@@ -36,10 +37,7 @@ import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
 import { gatherAdsConsentIfNeeded } from './src/services/adsConsentService';
 import { initializeAdProvider } from './src/services/adProvider';
-import {
-  probeSaveRecoveryWithCloudAttempt,
-  type SaveRecoveryProbeResult,
-} from './src/services/saveRecoveryService';
+import type { SaveRecoveryProbeResult } from './src/services/saveRecoveryService';
 import SaveRecoveryScreen from './src/screens/SaveRecoveryScreen';
 import { logProductionBuildConfigOnce } from './src/services/productionBuildAudit';
 import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
@@ -63,6 +61,7 @@ import MarketScreen from './src/screens/MarketScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import VehicleMarketplaceScreen from './src/screens/VehicleMarketplaceScreen';
 import OfflineProgressSummaryModal from './src/components/offline/OfflineProgressSummaryModal';
+import DeliveryResultSheet from './src/components/delivery/DeliveryResultSheet';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 import { selectHasPendingDeliveryIncident } from './src/tutorial/app/selectors';
 import DeliveryIncidentModal from './src/components/delivery/DeliveryIncidentModal';
@@ -77,6 +76,12 @@ import {
   setPerfActiveScreen,
 } from './src/utils/performanceDiagnostics';
 import { preloadMapAssets } from './src/utils/mapAssetPreload';
+import {
+  getStartupElapsedMs,
+  markStartup,
+} from './src/utils/startupPerformance';
+
+markStartup('APP_START');
 
 const TAB_PERFORMANCE_LOG_ENABLED =
   (typeof __DEV__ !== 'undefined' && __DEV__) ||
@@ -177,6 +182,8 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
   const pendingOfflineProgressSummary = useGameStore((state) => state.pendingOfflineProgressSummary);
   const dismissOfflineProgressSummary = useGameStore((state) => state.dismissOfflineProgressSummary);
+  const pendingDeliveryResultSummary = useGameStore((state) => state.pendingDeliveryResultSummary);
+  const dismissDeliveryResultSummary = useGameStore((state) => state.dismissDeliveryResultSummary);
   const pendingIncidentDeliveryId = useGameStore(
     (state) => selectHasPendingDeliveryIncident(state)
       ? state.activeDeliveries?.find(
@@ -187,6 +194,10 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   );
 
   useSpotlightTutorialTriggers({ activeTab, isGameReady });
+
+  useLayoutEffect(() => {
+    markStartup('FIRST_MAIN_SCREEN_RENDER');
+  }, []);
 
   useEffect(() => {
     if (!ENABLE_SPOTLIGHT_TUTORIAL) {
@@ -348,9 +359,20 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
         summary={pendingOfflineProgressSummary}
         onDismiss={dismissOfflineProgressSummary}
       />
+      <DeliveryResultSheet
+        visible={
+          pendingDeliveryResultSummary != null && pendingOfflineProgressSummary == null
+        }
+        record={pendingOfflineProgressSummary == null ? pendingDeliveryResultSummary : null}
+        onDismiss={dismissDeliveryResultSummary}
+      />
       <DeliveryIncidentModal
         pendingDeliveryId={pendingIncidentDeliveryId}
-        enabled={activeTab === 'dashboard' && pendingOfflineProgressSummary == null}
+        enabled={
+          activeTab === 'dashboard' &&
+          pendingOfflineProgressSummary == null &&
+          pendingDeliveryResultSummary == null
+        }
       />
       {ENABLE_SPOTLIGHT_TUTORIAL ? <TutorialOverlay layer="root" /> : null}
       <GameTabBar
@@ -363,11 +385,11 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   );
 }
 
-function GameLoadingScreen() {
+function GameLoadingScreen({ hint }: { hint: string }) {
   return (
     <View style={styles.loadingRoot}>
       <ActivityIndicator size="large" color={UI.colors.primary} />
-      <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
+      <Text style={styles.loadingText}>{hint}</Text>
     </View>
   );
 }
@@ -375,6 +397,7 @@ function GameLoadingScreen() {
 export default function App() {
   const isGameReady = useGameStore((state) => state.isGameReady);
   const [bootPhase, setBootPhase] = useState<'loading' | 'recovery' | 'ready'>('loading');
+  const [bootHint, setBootHint] = useState('Şirket hazırlanıyor...');
   const [recoveryProbe, setRecoveryProbe] = useState<SaveRecoveryProbeResult | null>(null);
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
   const appStateRef = useRef(AppState.currentState);
@@ -416,34 +439,95 @@ export default function App() {
   }, [bootPhase]);
 
   useEffect(() => {
-    // Auth sırası (paralel değil):
-    // Firebase/Auth initialize → onAuthStateChanged initial →
-    // signInAnonymously (gerekirse) → auth ready → initializeGame →
-    // globalEconomy/current read.
+    if (bootPhase === 'ready' && isGameReady) {
+      return;
+    }
+    const timer = setInterval(() => {
+      if (getStartupElapsedMs() >= 2000) {
+        setBootHint('Son kontroller...');
+      }
+    }, 400);
+    return () => clearInterval(timer);
+  }, [bootPhase, isGameReady]);
+
+  useEffect(() => {
+    markStartup('JS_READY');
+    // Local-first: load save and paint UI without waiting for Firebase Auth,
+    // cloud restore, marketplace, or leaderboard.
+    // Auth initializes in parallel (required for recovery cloud probe / later sync).
     // Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.
     let cancelled = false;
     void (async () => {
       configureGoogleSignIn();
       logFirebaseRuntimeConfigOnce();
-      // Auth restore tamamlanana kadar anonymous sign-in yapılmaz.
-      await initAnonymousAuth();
+      setBootHint('Kayıt yükleniyor...');
+      const { probeSaveRecoveryOnColdStart } = await import(
+        './src/services/saveRecoveryService'
+      );
+      const probe = await probeSaveRecoveryOnColdStart();
       if (cancelled) return;
       logProductionBuildConfigOnce();
-      const probe = await probeSaveRecoveryWithCloudAttempt();
-      if (cancelled) return;
       if (probe.required && !probe.quarantine?.userChoseNewGame) {
         setRecoveryProbe(probe);
         setBootPhase('recovery');
+        void (async () => {
+          markStartup('AUTH_INIT_START');
+          await initAnonymousAuth();
+          markStartup('AUTH_INIT_DONE');
+          if (cancelled) return;
+          const {
+            invalidateSaveRecoveryColdStartProbe,
+            probeSaveRecoveryWithCloudAttempt,
+          } = await import('./src/services/saveRecoveryService');
+          invalidateSaveRecoveryColdStartProbe();
+          const cloudProbe = await probeSaveRecoveryWithCloudAttempt({ force: true });
+          if (cancelled) return;
+          if (!cloudProbe.required || cloudProbe.quarantine?.userChoseNewGame) {
+            await startGame();
+          }
+        })();
         return;
       }
       await startGame();
     })();
 
+    const authPromise = (async () => {
+      markStartup('AUTH_INIT_START');
+      try {
+        await initAnonymousAuth();
+      } finally {
+        markStartup('AUTH_INIT_DONE');
+      }
+    })();
+    void authPromise;
+
+    markStartup('NOTIFICATIONS_INIT_START');
     setupNotificationHandler();
+    markStartup('NOTIFICATIONS_INIT_DONE');
     const notificationSub = addNotificationResponseListener((response) => {
       if (isFleetRentalNotificationResponse(response)) {
         useGameStore.setState({ navigationRequest: { tab: 'fleet' } });
         return;
+      }
+      const gameplayOpen = getGameplayNotificationOpenFromResponse(response);
+      if (gameplayOpen?.tab) {
+        if (gameplayOpen.tab === 'more' && gameplayOpen.moreSubRoute) {
+          useGameStore.setState({
+            navigationRequest: { tab: 'more' },
+            pendingMoreSubRoute: gameplayOpen.moreSubRoute,
+          });
+          return;
+        }
+        if (
+          gameplayOpen.tab === 'map' ||
+          gameplayOpen.tab === 'contracts' ||
+          gameplayOpen.tab === 'fleet' ||
+          gameplayOpen.tab === 'dashboard' ||
+          gameplayOpen.tab === 'more'
+        ) {
+          useGameStore.setState({ navigationRequest: { tab: gameplayOpen.tab } });
+          return;
+        }
       }
       const focus = getMarketAlertFocusFromResponse(response);
       if (focus) {
@@ -493,7 +577,14 @@ export default function App() {
     }
 
     void preloadMapAssets();
-    void initCloudSaveSync(() => useGameStore.getState());
+    void (async () => {
+      markStartup('CLOUD_SYNC_START');
+      try {
+        await initCloudSaveSync(() => useGameStore.getState());
+      } finally {
+        markStartup('CLOUD_SYNC_DONE');
+      }
+    })();
     const stopTestMoneySync = startTestMoneySync();
     flushPendingTestMoneySync();
     return () => {
@@ -510,7 +601,7 @@ export default function App() {
           ) : bootPhase === 'ready' && isGameReady ? (
             <AppShell isAppActive={isAppActive} />
           ) : (
-            <GameLoadingScreen />
+            <GameLoadingScreen hint={bootHint} />
           )}
         </AppDialogProvider>
       </AppSafeAreaProvider>

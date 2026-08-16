@@ -22,11 +22,10 @@ import {
 } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
 import { getSnapshotFuelPrice } from '../../simulation/globalMarketSnapshot';
-import {
-  calculateDeliveryFuelLiters,
-  getTruckFuelReadiness,
-} from '../../utils/truckFuel';
 import { getRoute as findRoute } from '../../data/routes';
+import { evaluateDeliveryReadiness } from '../../domain/deliveryReadiness';
+import { getAttachedTrailerForTruck } from '../../simulation/trailerAttachment';
+import DeliveryReadinessCard from '../delivery/DeliveryReadinessCard';
 import {
   buildDriverOptions,
   buildTruckOptions,
@@ -40,7 +39,7 @@ import {
   type TruckOption,
 } from '../../utils/assignmentOptions';
 import { getContractAvailabilityLabel } from '../../utils/contractAvailabilityDisplay';
-import { getCityName, getProductByIdSafe, getProductName } from '../../utils/entityLookup';
+import { getCityName, getProductName } from '../../utils/entityLookup';
 import { colors, formatMoney, formatRatioPercent, spacing, typography } from '../../theme';
 import type { Contract, Driver, Truck } from '../../types/game';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
@@ -51,6 +50,7 @@ import { ActionButton, GameIcon, IconButton, StatusBadge } from '../ui';
 import AssignmentPickerSheet from './AssignmentPickerSheet';
 import FuelRequirementModal from '../FuelRequirementModal';
 import TruckRefuelSheet from '../TruckRefuelSheet';
+import { shouldEmbedNestedFuelUi } from '../../utils/modalPresentation';
 
 const OVERLAY_OPACITY = 0.52;
 const SHEET_RADIUS = 24;
@@ -247,19 +247,15 @@ export default function ContractQuickActionSheet({
     const liveTruck = liveRefuelTruck ?? selectedTruckOption?.truck ?? null;
     if (!liveTruck) return null;
     const route = findRoute(contract.originCityId, contract.destinationCityId);
-    const product = getProductByIdSafe(contract.productId);
-    if (!route || !product) return null;
-    return getTruckFuelReadiness(
-      liveTruck,
-      calculateDeliveryFuelLiters({
-        contract,
-        truck: liveTruck,
-        driver: selectedDriverOption.driver,
-        route,
-        product,
-      }),
-      globalEconomy.fuelPrice ?? 0,
-    );
+    if (!route) return null;
+    return evaluateDeliveryReadiness({
+      contract,
+      truck: liveTruck,
+      trailer: getAttachedTrailerForTruck(liveTruck.id, trailers),
+      driver: selectedDriverOption.driver,
+      route,
+      fuelPricePerLiter: globalEconomy.fuelPrice ?? 0,
+    });
   }, [
     contract,
     globalEconomy.fuelPrice,
@@ -267,7 +263,9 @@ export default function ContractQuickActionSheet({
     selectedDriverOption?.driver,
     selectedTruckId,
     selectedTruckOption?.truck,
+    trailers,
   ]);
+  const truckFuelReadiness = fuelReadiness?.fuelReadiness ?? null;
 
   const assignmentPreview = useMemo(() => {
     if (!contract) return null;
@@ -378,12 +376,41 @@ export default function ContractQuickActionSheet({
 
   const handleStart = () => {
     if (!selectedTruckId || !selectedDriverId || !canStart) return;
-    if (fuelReadiness?.canCompleteWithoutRefuel === false) {
+    if (fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')) {
       setFuelRequirementVisible(true);
+      return;
+    }
+    if (fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')) {
+      setPickerMode('truck');
       return;
     }
     onStartDelivery(selectedTruckId, selectedDriverId);
   };
+
+  const nestFuelUi = shouldEmbedNestedFuelUi();
+  const fuelFlow = (
+    <>
+      <FuelRequirementModal
+        visible={fuelRequirementVisible}
+        readiness={truckFuelReadiness}
+        embedded={nestFuelUi}
+        onCancel={() => setFuelRequirementVisible(false)}
+        onBuyFuel={() => {
+          setFuelRequirementVisible(false);
+          setRefuelVisible(true);
+        }}
+      />
+      <TruckRefuelSheet
+        visible={refuelVisible}
+        truck={liveRefuelTruck}
+        preferredMinimumLiters={truckFuelReadiness?.fuelDeficitL ?? null}
+        embedded={nestFuelUi}
+        source="job_assignment"
+        onClose={() => setRefuelVisible(false)}
+        onSuccess={() => setRefuelVisible(false)}
+      />
+    </>
+  );
 
   return (
     <>
@@ -580,6 +607,12 @@ export default function ContractQuickActionSheet({
                   style={styles.fleetButton}
                 />
               ) : null}
+
+              <DeliveryReadinessCard
+                readiness={fuelReadiness}
+                onSelectAnotherVehicle={() => setPickerMode('truck')}
+                onBuyFuel={() => setFuelRequirementVisible(true)}
+              />
             </ScrollView>
 
             <View style={[styles.footer, { paddingBottom: spacing.sm }]}>
@@ -591,10 +624,16 @@ export default function ContractQuickActionSheet({
                 onTutorialPress={handleStart}
               >
                 <ActionButton
-                  label="Teslimatı Başlat"
+                  label={
+                    fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')
+                      ? 'Yakıt gerekli'
+                      : fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')
+                        ? 'Başka Araç Seç'
+                        : 'Teslimatı Başlat'
+                  }
                   icon="truck"
                   onPress={handleStart}
-                  disabled={!canStart}
+                  disabled={!canStart && !fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')}
                   fullWidth
                   variant="primary"
                   style={styles.startButton}
@@ -604,6 +643,7 @@ export default function ContractQuickActionSheet({
           </View>
         </View>
         <TutorialOverlay layer="modal" />
+        {nestFuelUi ? fuelFlow : null}
       </Modal>
 
       <AssignmentPickerSheet
@@ -617,22 +657,7 @@ export default function ContractQuickActionSheet({
         onSelectDriver={setSelectedDriverId}
         onClose={() => setPickerMode(null)}
       />
-      <FuelRequirementModal
-        visible={fuelRequirementVisible}
-        readiness={fuelReadiness}
-        onCancel={() => setFuelRequirementVisible(false)}
-        onBuyFuel={() => {
-          setFuelRequirementVisible(false);
-          setRefuelVisible(true);
-        }}
-      />
-      <TruckRefuelSheet
-        visible={refuelVisible}
-        truck={liveRefuelTruck}
-        preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
-        onClose={() => setRefuelVisible(false)}
-        onSuccess={() => setRefuelVisible(false)}
-      />
+      {nestFuelUi ? null : fuelFlow}
     </>
   );
 }

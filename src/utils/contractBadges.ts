@@ -10,6 +10,10 @@ import {
   getCargoWeightClassLabel,
 } from '../simulation/capacity';
 import { getContractAvailabilityLabel } from './contractAvailabilityDisplay';
+import {
+  classifyDeadlineRisk,
+  getDeadlineRiskBadgeLabel,
+} from './deadlineUx';
 
 export interface ContractCardBadge {
   key: string;
@@ -19,6 +23,18 @@ export interface ContractCardBadge {
   borderColor: string;
   soft?: boolean;
 }
+
+const GREEN = {
+  textColor: '#4ADE80',
+  backgroundColor: 'rgba(74, 222, 128, 0.12)',
+  borderColor: 'rgba(74, 222, 128, 0.55)',
+} as const;
+
+const BLUE = {
+  textColor: '#60A5FA',
+  backgroundColor: 'rgba(96, 165, 250, 0.12)',
+  borderColor: 'rgba(96, 165, 250, 0.55)',
+} as const;
 
 const AMBER = {
   textColor: '#F59E0B',
@@ -103,6 +119,37 @@ function getAvailabilityBadge(availability: ContractAvailability): ContractCardB
   };
 }
 
+function getDeadlineQualityBadge(
+  estimatedTravelHours: number | undefined,
+  deadlineHours: number | undefined,
+): ContractCardBadge | null {
+  if (
+    estimatedTravelHours == null ||
+    deadlineHours == null ||
+    !(estimatedTravelHours > 0) ||
+    !(deadlineHours > 0)
+  ) {
+    return null;
+  }
+
+  const level = classifyDeadlineRisk(estimatedTravelHours, deadlineHours);
+  const label = getDeadlineRiskBadgeLabel(level);
+  const style =
+    level === 'comfortable'
+      ? GREEN
+      : level === 'normal'
+        ? BLUE
+        : level === 'risky'
+          ? AMBER
+          : RED;
+
+  return {
+    key: `deadline-${level}`,
+    label,
+    ...style,
+  };
+}
+
 function getRiskBadge(riskLevel: ContractRiskLevel, riskLabel: string): ContractCardBadge | null {
   if (riskLevel === 'low') {
     return null;
@@ -140,6 +187,8 @@ export function buildContractCardBadges(params: {
   contractType?: import('../types/game').ContractType;
   contractTypeLabel?: string;
   cargoWeightTons?: number;
+  estimatedTravelHours?: number;
+  deadlineHours?: number;
 }): ContractCardBadge[] {
   const {
     availability,
@@ -149,12 +198,19 @@ export function buildContractCardBadges(params: {
     contractType,
     contractTypeLabel,
     cargoWeightTons,
+    estimatedTravelHours,
+    deadlineHours,
   } = params;
   const badges: ContractCardBadge[] = [];
 
   const availabilityBadge = getAvailabilityBadge(availability);
   if (availabilityBadge) {
     badges.push(availabilityBadge);
+  }
+
+  const deadlineBadge = getDeadlineQualityBadge(estimatedTravelHours, deadlineHours);
+  if (deadlineBadge) {
+    badges.push(deadlineBadge);
   }
 
   const cargoWeightClass = cargoWeightTons != null ? getCargoWeightClass(cargoWeightTons) : null;
@@ -192,7 +248,7 @@ export function buildContractCardBadges(params: {
       backgroundColor: 'rgba(248, 113, 113, 0.10)',
       borderColor: 'rgba(248, 113, 113, 0.65)',
     });
-  } else {
+  } else if (!deadlineBadge) {
     const riskBadge = getRiskBadge(riskLevel, riskLabel);
     if (riskBadge) {
       badges.push(riskBadge);

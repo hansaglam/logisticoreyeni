@@ -74,6 +74,8 @@ export function applyReputationChange(
     reason: input.displayReason ?? reputationReasonToDisplayText(input.reason),
     source: input.source,
     createdAt: input.createdAt,
+    ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
+    ...(input.contractId ? { contractId: input.contractId } : {}),
   };
 
   const reputationHistory = [entry, ...existingHistory].slice(0, REPUTATION_HISTORY_MAX);
@@ -109,6 +111,11 @@ export function normalizeReputationHistory(
         typeof (entry as ReputationHistoryEntry).createdAt === 'number'
       );
     })
+    .map((entry) => ({
+      ...entry,
+      ...(typeof entry.deliveryId === 'string' ? { deliveryId: entry.deliveryId } : {}),
+      ...(typeof entry.contractId === 'string' ? { contractId: entry.contractId } : {}),
+    }))
     .slice(0, REPUTATION_HISTORY_MAX);
 }
 

@@ -82,6 +82,9 @@ function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncide
   return (
     <View style={[styles.card, compact && styles.cardCompact]}>
       <Text style={[styles.title, compact && styles.titleCompact]}>HIZLI MÜDAHALE</Text>
+      <Text style={[styles.pendingBadge, compact && styles.pendingBadgeCompact]}>
+        Karar bekleniyor
+      </Text>
       <Text
         style={[styles.incidentTitle, compact && styles.incidentTitleCompact]}
         numberOfLines={2}
@@ -93,6 +96,9 @@ function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncide
         numberOfLines={compact ? 1 : 2}
       >
         {incident.description}
+      </Text>
+      <Text style={[styles.clockNote, compact && styles.clockNoteCompact]}>
+        Teslimat, karar verene kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.
       </Text>
       <Text style={[styles.prompt, compact && styles.promptCompact]}>
         Operasyon kararını seç.
@@ -223,6 +229,26 @@ const styles = StyleSheet.create({
   titleCompact: {
     fontSize: 9,
     letterSpacing: 0.9,
+  },
+  pendingBadge: {
+    ...typography.caption,
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.warning,
+  },
+  pendingBadgeCompact: {
+    fontSize: 10,
+  },
+  clockNote: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.danger,
+    fontWeight: '700',
+    lineHeight: 15,
+  },
+  clockNoteCompact: {
+    fontSize: 10,
+    lineHeight: 13,
   },
   incidentTitle: {
     ...typography.body,

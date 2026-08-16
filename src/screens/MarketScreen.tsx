@@ -1771,7 +1771,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     setFetchUiStatus('loading');
     setShowSuccessBanner(false);
     try {
-      const result = await refreshMarketSnapshot();
+      const result = await refreshMarketSnapshot({ includeHistory: true });
       if (result.success && !result.stale) {
         setFetchUiStatus('success');
         setShowSuccessBanner(true);

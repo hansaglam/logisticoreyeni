@@ -209,7 +209,7 @@ console.log('\nCompany score integration');
     financeLedger: [],
     currentTime: 0,
   });
-  check(breakdown.reputationScore === 61_000, 'reputation contributes to company score');
+  check(breakdown.reputationScore === 1_584, 'reputation 61 is a modest quality bonus vs 50 baseline');
 }
 
 console.log('\nLegacy preservation');

@@ -320,19 +320,19 @@ export const LEADERBOARD_TUTORIAL_STEPS: AppTutorialStep[] = [
   {
     id: 'weekly-season',
     title: 'Haftalık sezon',
-    description: 'Liderlik tablosu haftalık sezonlara göre sıralanır.',
+    description: 'Sıralama her Pazartesi 00:00 UTC’de yenilenir. Haftalık puan, o haftaki teslimatlara göre hesaplanır.',
     targetId: 'weekly-season',
   },
   {
     id: 'company-ranking',
     title: 'Şirket puanı sıralaması',
-    description: 'Şirket puanına göre diğer oyuncularla yarışırsın.',
+    description: 'Puan teslimat, gelişim, itibar, filo ve haftalık operasyondan oluşur. Yeni hesaplar 3 teslimattan sonra sıralanır.',
     targetId: 'company-ranking',
   },
   {
     id: 'my-rank',
     title: 'Kendi sıran',
-    description: 'Haftalık sıralamadaki konumunu buradan takip edebilirsin.',
+    description: 'En az 3 teslimat tamamladıysan haftalık konumunu burada görürsün. Varsayılan itibar avantaj sağlamaz.',
     targetId: 'my-rank',
     finalCtaLabel: 'Anladım',
   },
@@ -342,7 +342,7 @@ export const LEADERBOARD_TUTORIAL_EMPTY_STEPS: AppTutorialStep[] = [
   {
     id: 'leaderboard-purpose',
     title: 'Liderlik tablosu',
-    description: 'Haftalık sezonda şirket puanına göre sıralanırsın.',
+    description: 'Haftalık sezonda sıralanmak için en az 3 teslimat tamamlaman gerekir.',
     targetId: 'leaderboard-header',
   },
   {
@@ -353,7 +353,7 @@ export const LEADERBOARD_TUTORIAL_EMPTY_STEPS: AppTutorialStep[] = [
   {
     id: 'leaderboard-next',
     title: 'Yarış',
-    description: 'Sözleşmeleri tamamlayarak şirket puanını artır.',
+    description: 'Teslimat yaparak ve şirketi geliştirerek puanını artır. Nakit tek başına sıralamayı belirlemez.',
     finalCtaLabel: 'Anladım',
   },
 ];

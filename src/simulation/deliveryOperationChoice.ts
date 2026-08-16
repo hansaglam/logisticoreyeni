@@ -234,14 +234,47 @@ export function applyDeliveryRemainingTimeDelta(
   }
 
   const deltaHours = remainingSecondsToDeliveryTimeDeltaHours(remainingTimeDeltaSeconds);
-  let nextEta = delivery.estimatedArrivalTime + deltaHours;
+  const remainingProgress = Math.max(0, 1 - Math.min(1, Math.max(0, delivery.progress)));
+  const currentTravelHours = Math.max(delivery.travelHours, 0.1);
+  const progressRemainingHours = remainingProgress * currentTravelHours;
+  const etaRemainingHours =
+    currentGameTime != null &&
+    Number.isFinite(currentGameTime) &&
+    typeof delivery.estimatedArrivalTime === 'number' &&
+    Number.isFinite(delivery.estimatedArrivalTime)
+      ? delivery.estimatedArrivalTime - currentGameTime
+      : progressRemainingHours;
+  const currentRemainingHours =
+    etaRemainingHours > 1e-6 ? etaRemainingHours : progressRemainingHours;
+  const nextRemainingHours = Math.max(0.05, currentRemainingHours + deltaHours);
+  const nextTravelHours =
+    remainingProgress > 0.001
+      ? nextRemainingHours / remainingProgress
+      : Math.max(0.1, currentTravelHours + deltaHours);
+  let nextEta =
+    (currentGameTime != null && Number.isFinite(currentGameTime)
+      ? currentGameTime
+      : delivery.estimatedArrivalTime - currentRemainingHours) + nextRemainingHours;
   if (currentGameTime != null && Number.isFinite(currentGameTime)) {
     nextEta = Math.max(currentGameTime, nextEta);
   }
 
+  const previousChoiceDelay =
+    typeof delivery.delayDiagnostics?.incidentChoiceDelayHours === 'number'
+      ? delivery.delayDiagnostics.incidentChoiceDelayHours
+      : 0;
+
   return {
     ...delivery,
+    travelHours: nextTravelHours,
     estimatedArrivalTime: nextEta,
+    delayDiagnostics: {
+      outOfFuelHours: delivery.delayDiagnostics?.outOfFuelHours ?? 0,
+      incidentPendingHours: delivery.delayDiagnostics?.incidentPendingHours ?? 0,
+      otherPausedHours: delivery.delayDiagnostics?.otherPausedHours ?? 0,
+      fuelOutCount: delivery.delayDiagnostics?.fuelOutCount ?? 0,
+      incidentChoiceDelayHours: previousChoiceDelay + Math.max(0, deltaHours),
+    },
   };
 }
 

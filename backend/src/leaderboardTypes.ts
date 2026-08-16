@@ -30,6 +30,7 @@ export interface LeaderboardEntryDocument {
   level: number;
   reputation: number;
   completedContracts: number;
+  weeklyCompletedDeliveries?: number;
   seasonKey: string;
   updatedAt: unknown;
   sourceSaveVersion: number;
@@ -68,7 +69,8 @@ export type SubmitLeaderboardScoreResult =
       seasonKey: string;
       score: number;
       updated: boolean;
-      reason?: 'score-not-improved';
+      rankedEligible?: boolean;
+      reason?: 'score-not-improved' | 'not-ranked-eligible';
       entry: {
         username: string;
         companyName: string;

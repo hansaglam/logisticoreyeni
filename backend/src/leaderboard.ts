@@ -24,6 +24,8 @@ import type { MarketplacePlayerState } from './vehicleMarketplaceTypes';
 import {
   calculateLeaderboardScore,
   extractCanonicalPlayerStateFromServerState,
+  LEADERBOARD_SCORE_VERSION,
+  resolveWeeklySeasonActivity,
 } from './leaderboardScore';
 import type {
   GetLeaderboardInput,
@@ -38,7 +40,7 @@ import type {
 
 export const LEADERBOARD_PAGE_SIZE_DEFAULT = 50;
 export const LEADERBOARD_PAGE_SIZE_MAX = 100;
-export const LEADERBOARD_SCORE_VERSION = 1;
+export { LEADERBOARD_SCORE_VERSION };
 
 const IDEMPOTENCY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -60,6 +62,16 @@ function failure(
     transactionId: input.transactionId,
     idempotencyKey: input.idempotencyKey,
   };
+}
+
+function isCurrentScoreVersion(data: Record<string, unknown> | undefined): boolean {
+  return Math.max(0, Math.floor(Number(data?.scoreVersion) || 0)) === LEADERBOARD_SCORE_VERSION;
+}
+
+function rankedEntriesCollection(firestore: Firestore, seasonKey: string) {
+  return firestore
+    .collection(`leaderboards/${seasonKey}/entries`)
+    .where('scoreVersion', '==', LEADERBOARD_SCORE_VERSION);
 }
 
 function toPublicEntry(
@@ -101,13 +113,11 @@ async function countBetterScores(
   score: number,
   uid: string,
 ): Promise<number> {
-  const higher = await firestore
-    .collection(`leaderboards/${seasonKey}/entries`)
+  const higher = await rankedEntriesCollection(firestore, seasonKey)
     .where('companyScore', '>', score)
     .count()
     .get();
-  const tied = await firestore
-    .collection(`leaderboards/${seasonKey}/entries`)
+  const tied = await rankedEntriesCollection(firestore, seasonKey)
     .where('companyScore', '==', score)
     .where(FieldPath.documentId(), '<', uid)
     .count()
@@ -192,7 +202,10 @@ export async function submitLeaderboardScoreTransaction(
           : 'invalid-player-state');
       }
 
-      const extracted = extractCanonicalPlayerStateFromServerState(serverState);
+      const seasonActivity = resolveWeeklySeasonActivity(serverState, seasonKey);
+      const extracted = extractCanonicalPlayerStateFromServerState(serverState, {
+        weeklyCompletedDeliveries: seasonActivity.weeklyCompletedDeliveries,
+      });
       if (!extracted.ok) {
         return failure(input, extracted.reason === 'server-state-not-initialized'
           ? 'server-state-not-initialized'
@@ -214,9 +227,9 @@ export async function submitLeaderboardScoreTransaction(
       }
 
       const ref = entryDocumentRef;
-      const existingScore = existingSnap.exists
-        ? Math.max(0, Math.floor(Number(existingSnap.data()?.companyScore) || 0))
-        : -1;
+      const existingScoreVersion = existingSnap.exists
+        ? Math.max(0, Math.floor(Number(existingSnap.data()?.scoreVersion) || 0))
+        : 0;
 
       const entryPayload = {
         uid: identity.uid,
@@ -226,6 +239,7 @@ export async function submitLeaderboardScoreTransaction(
         level: breakdown.level,
         reputation: breakdown.reputation,
         completedContracts: breakdown.completedContracts,
+        weeklyCompletedDeliveries: breakdown.weeklyCompletedDeliveries,
         seasonKey,
         updatedAt: Timestamp.fromMillis(nowMs),
         sourceSaveVersion: sourceVersion,
@@ -233,33 +247,43 @@ export async function submitLeaderboardScoreTransaction(
       };
 
       let updated = false;
-      let reason: 'score-not-improved' | undefined;
+      let reason: 'score-not-improved' | 'not-ranked-eligible' | undefined;
       if (serverStateCreated) {
-        transaction.create(serverRef, serverState);
-      }
-      if (breakdown.totalScore > existingScore) {
-        transaction.set(ref, entryPayload, { merge: true });
-        updated = true;
-      } else if (existingSnap.exists) {
-        // Keep higher score; refresh username/display snapshot when equal/lower.
-        reason = 'score-not-improved';
+        transaction.create(serverRef, {
+          ...serverState,
+          leaderboardSeasonKey: seasonActivity.leaderboardSeasonKey,
+          weeklySeasonBaselineCompleted: seasonActivity.weeklySeasonBaselineCompleted,
+          leaderboardScore: breakdown.totalScore,
+        });
+      } else {
         transaction.set(
-          ref,
+          serverRef,
           {
-            username,
-            companyName: breakdown.companyName,
-            level: breakdown.level,
-            reputation: breakdown.reputation,
-            completedContracts: breakdown.completedContracts,
+            leaderboardSeasonKey: seasonActivity.leaderboardSeasonKey,
+            weeklySeasonBaselineCompleted: seasonActivity.weeklySeasonBaselineCompleted,
+            leaderboardScore: breakdown.totalScore,
             updatedAt: Timestamp.fromMillis(nowMs),
-            sourceSaveVersion: sourceVersion,
-            scoreVersion: LEADERBOARD_SCORE_VERSION,
           },
           { merge: true },
         );
+      }
+
+      if (!breakdown.rankedEligible) {
+        reason = 'not-ranked-eligible';
+        if (existingSnap.exists) {
+          transaction.delete(ref);
+          updated = true;
+        }
       } else {
         transaction.set(ref, entryPayload, { merge: true });
-        updated = true;
+        const previous = existingSnap.exists
+          ? Math.max(0, Math.floor(Number(existingSnap.data()?.companyScore) || 0))
+          : null;
+        updated =
+          previous !== breakdown.totalScore || existingScoreVersion !== LEADERBOARD_SCORE_VERSION;
+        if (!updated) {
+          reason = 'score-not-improved';
+        }
       }
 
       const success: SubmitLeaderboardScoreResult = {
@@ -267,13 +291,14 @@ export async function submitLeaderboardScoreTransaction(
         transactionId: input.transactionId,
         idempotencyKey: input.idempotencyKey,
         seasonKey,
-        score: Math.max(existingScore, breakdown.totalScore),
+        score: breakdown.totalScore,
         updated,
+        rankedEligible: breakdown.rankedEligible,
         ...(reason ? { reason } : {}),
         entry: {
           username,
           companyName: breakdown.companyName,
-          companyScore: Math.max(existingScore, breakdown.totalScore),
+          companyScore: breakdown.totalScore,
           level: breakdown.level,
           reputation: breakdown.reputation,
           completedContracts: breakdown.completedContracts,
@@ -327,8 +352,7 @@ export async function getLeaderboardSnapshot(
   );
 
   try {
-    let query: Query = firestore
-      .collection(`leaderboards/${seasonKey}/entries`)
+    let query: Query = rankedEntriesCollection(firestore, seasonKey)
       .orderBy('companyScore', 'desc')
       .orderBy(FieldPath.documentId(), 'asc');
 
@@ -368,9 +392,11 @@ export async function getLeaderboardSnapshot(
       const playerSnap = await entryRef(firestore, seasonKey, identity.uid).get();
       if (playerSnap.exists) {
         const data = playerSnap.data() as Record<string, unknown>;
-        const score = Math.max(0, Math.floor(Number(data.companyScore) || 0));
-        playerRank = (await countBetterScores(firestore, seasonKey, score, identity.uid)) + 1;
-        playerEntry = toPublicEntry(data, playerRank, seasonKey);
+        if (isCurrentScoreVersion(data)) {
+          const score = Math.max(0, Math.floor(Number(data.companyScore) || 0));
+          playerRank = (await countBetterScores(firestore, seasonKey, score, identity.uid)) + 1;
+          playerEntry = toPublicEntry(data, playerRank, seasonKey);
+        }
       }
     }
 
@@ -383,8 +409,7 @@ export async function getLeaderboardSnapshot(
           }
         : null;
 
-    const totalParticipantsSnap = await firestore
-      .collection(`leaderboards/${seasonKey}/entries`)
+    const totalParticipantsSnap = await rankedEntriesCollection(firestore, seasonKey)
       .count()
       .get();
 

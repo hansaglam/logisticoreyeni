@@ -51,6 +51,7 @@ export type LeaderboardErrorCode =
   | 'rate-limited'
   | 'season-closed'
   | 'score-not-improved'
+  | 'not-ranked-eligible'
   | 'service-unavailable'
   | 'firebase-disabled'
   | 'feature-disabled'
@@ -100,6 +101,7 @@ export interface LeaderboardSubmitResult {
   updated?: boolean;
   score?: number;
   seasonKey?: string;
+  rankedEligible?: boolean;
   errorCode?: LeaderboardErrorCode | string;
   error?: string;
 }
@@ -331,6 +333,7 @@ export async function submitLeaderboardScore(options?: {
       updated?: boolean;
       score?: number;
       seasonKey?: string;
+      rankedEligible?: boolean;
     }
   >(LEADERBOARD_CALLABLES.submit);
 
@@ -395,7 +398,13 @@ export async function submitLeaderboardScore(options?: {
       updated: Boolean(data.updated),
       score: data.score,
       seasonKey: data.seasonKey,
-      errorCode: data.reason === 'score-not-improved' ? 'score-not-improved' : undefined,
+      rankedEligible: data.rankedEligible !== false && data.reason !== 'not-ranked-eligible',
+      errorCode:
+        data.reason === 'score-not-improved'
+          ? 'score-not-improved'
+          : data.reason === 'not-ranked-eligible'
+            ? 'not-ranked-eligible'
+            : undefined,
     };
   } catch (error) {
     const errorCode = mapCallableError(error);

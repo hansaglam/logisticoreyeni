@@ -40,6 +40,8 @@ export type ReputationHistoryEntry = {
   reason: string;
   source: ReputationSource;
   createdAt: number;
+  deliveryId?: string;
+  contractId?: string;
 };
 
 export function clampReputation(value: number): number {

@@ -140,6 +140,7 @@ export interface OfflineProgressSummary {
   dailyCostsApplied: boolean;
   hasMeaningfulChanges: boolean;
   ledgerEntryCount: number;
+  deliveryNotes?: string[];
 }
 
 export interface OfflineProgressSnapshot {
@@ -523,6 +524,7 @@ export function buildOfflineProgressSummary(
     worldEventsUpdated?: boolean;
     marketUpdated?: boolean;
     dailyCostsApplied?: boolean;
+    deliveryNotes?: string[];
   } = {},
 ): OfflineProgressSummary {
   const ledgerDelta = summarizeOfflineLedgerDelta(before, after.financeLedger);
@@ -552,11 +554,13 @@ export function buildOfflineProgressSummary(
     extras.marketUpdated ?? afterCityPrices.join(',') !== before.citiesSignature;
   const dailyCostsApplied = extras.dailyCostsApplied ?? false;
 
+  const deliveryNotes = (extras.deliveryNotes ?? []).filter((note) => note.trim().length > 0).slice(0, 3);
   const hasMeaningfulChanges =
     completedDeliveries > 0 ||
     completedTruckTransfers > 0 ||
     completedWarehouseTransfers > 0 ||
     lateDeliveries > 0 ||
+    deliveryNotes.length > 0 ||
     Math.abs(netChange) >= 1 ||
     driverLevelUps.length > 0 ||
     worldEventsUpdated ||
@@ -582,6 +586,7 @@ export function buildOfflineProgressSummary(
     dailyCostsApplied,
     hasMeaningfulChanges,
     ledgerEntryCount: ledgerDelta.ledgerEntryCount,
+    ...(deliveryNotes.length > 0 ? { deliveryNotes } : {}),
   };
 }
 

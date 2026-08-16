@@ -705,6 +705,35 @@ export default function FleetScreen() {
     setTransferModalTruck(truck);
   }, [drivers]);
 
+  const handleOpenRefuel = useCallback((truck: Truck) => {
+    const state = useGameStore.getState();
+    const liveTruck =
+      state.player.trucks.find((candidate) => candidate.id === truck.id) ?? truck;
+    const delivery = findActiveDeliveryForTruck(liveTruck.id, state.activeDeliveries);
+    const transfer = (state.activeTransfers ?? []).find(
+      (candidate) =>
+        candidate.truckId === liveTruck.id &&
+        (candidate.status === 'active' || candidate.status === 'paused'),
+    );
+    const warehouseTransfer = (state.activeWarehouseStockTransfers ?? []).find(
+      (candidate) =>
+        candidate.truckId === liveTruck.id &&
+        (candidate.status === 'active' ||
+          candidate.status === 'pending' ||
+          candidate.status === 'paused'),
+    );
+    const job = delivery ?? transfer ?? warehouseTransfer;
+    const stranded =
+      liveTruck.status === 'out_of_fuel' ||
+      job?.status === 'paused' ||
+      job?.pausedReason === 'out-of-fuel';
+    if (stranded && job) {
+      setRoadsideFuelJobId(job.id);
+      return;
+    }
+    setRefuelSheetTruck(liveTruck);
+  }, []);
+
   return (
     <View style={styles.screenRoot}>
       <AppScreen
@@ -786,7 +815,7 @@ export default function FleetScreen() {
                     onRepair={handleRepair}
                     onManageUpgrades={handleManageUpgrades}
                     onTransfer={handleOpenTransfer}
-                    onRefuel={setRefuelSheetTruck}
+                    onRefuel={handleOpenRefuel}
                     onRoadsideFuel={setRoadsideFuelJobId}
                     onSell={handleSellTruck}
                     onMarketplaceSell={(selectedTruck) =>
@@ -947,6 +976,7 @@ export default function FleetScreen() {
       <TruckRefuelSheet
         visible={refuelSheetTruck != null}
         truck={refuelSheetTruck}
+        source="fleet"
         onClose={() => setRefuelSheetTruck(null)}
         onSuccess={(message) => {
           setStatusMessage({ type: 'success', text: message });

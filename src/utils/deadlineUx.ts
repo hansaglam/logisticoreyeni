@@ -2,13 +2,34 @@
  * Teslim süresi / deadline UX metinleri — kart ve detay ekranlarında paylaşılır.
  */
 
-const DEADLINE_RISK_SLACK = 0.85;
+export const DEADLINE_COMFORTABLE_RATIO = 0.7;
+export const DEADLINE_RISK_SLACK = 0.85;
+
+export type DeadlineRiskLevel = 'comfortable' | 'normal' | 'risky' | 'impossible';
+
+export function classifyDeadlineRisk(
+  estimatedTravelHours: number,
+  deadlineHours: number,
+): DeadlineRiskLevel {
+  if (deadlineHours <= 0 || estimatedTravelHours <= 0) {
+    return 'normal';
+  }
+  const ratio = estimatedTravelHours / deadlineHours;
+  if (ratio > 1) {
+    return 'impossible';
+  }
+  if (ratio >= DEADLINE_RISK_SLACK) {
+    return 'risky';
+  }
+  if (ratio >= DEADLINE_COMFORTABLE_RATIO) {
+    return 'normal';
+  }
+  return 'comfortable';
+}
 
 export function hasDeadlineRisk(deadlineHours: number, estimatedTravelHours: number): boolean {
-  if (deadlineHours <= 0 || estimatedTravelHours <= 0) {
-    return false;
-  }
-  return estimatedTravelHours >= deadlineHours * DEADLINE_RISK_SLACK;
+  const level = classifyDeadlineRisk(estimatedTravelHours, deadlineHours);
+  return level === 'risky' || level === 'impossible';
 }
 
 export function isDeliveryLateRisk(
@@ -16,6 +37,21 @@ export function isDeliveryLateRisk(
   deadlineTime: number,
 ): boolean {
   return estimatedArrivalTime > deadlineTime;
+}
+
+export function getDeadlineRiskBadgeLabel(level: DeadlineRiskLevel): string {
+  switch (level) {
+    case 'comfortable':
+      return 'RAHAT';
+    case 'normal':
+      return 'NORMAL';
+    case 'risky':
+      return 'RİSKLİ';
+    case 'impossible':
+      return 'YETİŞEMEZ';
+    default:
+      return 'NORMAL';
+  }
 }
 
 export function formatDeadlineRiskNote(isUrgent: boolean, deadlineRisk: boolean): string | null {

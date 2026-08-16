@@ -51,6 +51,17 @@ assert(tutorial.includes('if (!APP_TUTORIALS_ENABLED)'), 'tutorial hook no-op wh
 assert(mapPreload.includes('preloadMapAssets'), 'shared map preload helper');
 
 assert(gameStore.includes('canSkipContractScheduleTick'), 'contract schedule no-op fast path');
+assert(gameStore.includes('probeSaveRecoveryOnColdStart'), 'cold start uses local recovery probe');
+assert(
+  gameStore.includes("refreshMarketSnapshot({ includeHistory: false })"),
+  'post-render market refresh skips 3000-doc history',
+);
+assert(
+  !gameStore.includes('await get().refreshMarketSnapshot();'),
+  'initializeGame does not await live market snapshot',
+);
+assert(app.includes('Local-first'), 'App boot is local-first');
+assert(app.includes('markStartup'), 'startup timing marks wired');
 assert(gameStore.includes('scheduleDeferredTimeTickSave'), 'time_tick save defer helper');
 assert(gameStore.includes('flushLifecycleSave'), 'lifecycle-critical save flush');
 assert(gameStore.includes('AUTO_SAVE_MAX_DEFER_MS'), 'deferred save max wait');

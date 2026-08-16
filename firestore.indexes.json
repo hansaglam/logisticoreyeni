@@ -55,8 +55,30 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
+          "fieldPath": "scoreVersion",
+          "order": "ASCENDING"
+        },
+        {
           "fieldPath": "companyScore",
           "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "scoreVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "companyScore",
+          "order": "ASCENDING"
         },
         {
           "fieldPath": "__name__",

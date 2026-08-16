@@ -35,6 +35,7 @@ import { getTruckFuelReadiness } from '../utils/truckFuel';
 import type { ProductId, Warehouse } from '../types/game';
 import TruckRefuelSheet from './TruckRefuelSheet';
 import FuelRequirementModal from './FuelRequirementModal';
+import { shouldEmbedNestedFuelUi } from '../utils/modalPresentation';
 
 export interface WarehouseStockTransferModalProps {
   visible: boolean;
@@ -232,6 +233,31 @@ export default function WarehouseStockTransferModal({
     onClose();
   };
 
+  const nestFuelUi = shouldEmbedNestedFuelUi();
+  const fuelFlow = (
+    <>
+      <FuelRequirementModal
+        visible={fuelRequirementVisible}
+        readiness={fuelReadiness}
+        embedded={nestFuelUi}
+        onCancel={() => setFuelRequirementVisible(false)}
+        onBuyFuel={() => {
+          setFuelRequirementVisible(false);
+          setRefuelVisible(true);
+        }}
+      />
+      <TruckRefuelSheet
+        visible={refuelVisible}
+        truck={selectedTruck ?? null}
+        preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
+        embedded={nestFuelUi}
+        source="warehouse"
+        onClose={() => setRefuelVisible(false)}
+        onSuccess={() => setRefuelVisible(false)}
+      />
+    </>
+  );
+
   if (!visible || !sourceWarehouse || !productId) {
     return null;
   }
@@ -378,23 +404,9 @@ export default function WarehouseStockTransferModal({
           </View>
         </View>
       </View>
+      {nestFuelUi ? fuelFlow : null}
     </Modal>
-    <FuelRequirementModal
-      visible={fuelRequirementVisible}
-      readiness={fuelReadiness}
-      onCancel={() => setFuelRequirementVisible(false)}
-      onBuyFuel={() => {
-        setFuelRequirementVisible(false);
-        setRefuelVisible(true);
-      }}
-    />
-    <TruckRefuelSheet
-      visible={refuelVisible}
-      truck={selectedTruck ?? null}
-      preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
-      onClose={() => setRefuelVisible(false)}
-      onSuccess={() => setRefuelVisible(false)}
-    />
+    {nestFuelUi ? null : fuelFlow}
     </>
   );
 }

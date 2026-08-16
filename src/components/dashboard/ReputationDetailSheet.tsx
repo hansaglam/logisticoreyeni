@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -21,8 +21,15 @@ import {
 } from '../../config/reputationRules';
 import type { ReputationSummary } from '../../domain/reputationModel';
 import type { ReputationHistoryEntry } from '../../domain/reputationModel';
+import {
+  buildReputationHistoryDetail,
+  LEGACY_SETTLEMENT_UNAVAILABLE,
+} from '../../domain/deliveryResultPresentation';
+import { findSettlementRecord } from '../../domain/deliveryDelayDiagnostics';
+import { getCityName } from '../../utils/entityLookup';
 import { GameIcon, ProgressBar } from '../ui';
 import { colors } from '../../theme';
+import { useGameStore } from '../../store/gameStore';
 
 interface ReputationDetailSheetProps {
   visible: boolean;
@@ -56,6 +63,14 @@ export default function ReputationDetailSheet({
     blockingModals: !visible,
     autoStart: true,
   });
+  const settlementHistory = useGameStore((state) => state.deliverySettlementHistory ?? []);
+  const [selectedEntry, setSelectedEntry] = useState<ReputationHistoryEntry | null>(null);
+
+  useEffect(() => {
+    if (!visible) {
+      setSelectedEntry(null);
+    }
+  }, [visible]);
 
   const pointsToNext =
     summary.nextTierAt != null ? Math.max(0, summary.nextTierAt - summary.score) : null;
@@ -79,6 +94,13 @@ export default function ReputationDetailSheet({
             </View>
           </View>
 
+          {selectedEntry ? (
+            <ReputationHistoryDetailView
+              entry={selectedEntry}
+              record={findSettlementRecord(settlementHistory, selectedEntry.deliveryId)}
+              onBack={() => setSelectedEntry(null)}
+            />
+          ) : (
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={styles.scrollContent}
@@ -142,29 +164,97 @@ export default function ReputationDetailSheet({
                 {history.length === 0 ? (
                   <Text style={styles.emptyHistory}>Henüz kayıtlı itibar değişimi yok.</Text>
                 ) : (
-                  history.slice(0, 10).map((entry) => (
-                    <View key={entry.id} style={styles.historyRow}>
-                      <Text
-                        style={[
-                          styles.historyDelta,
-                          entry.delta >= 0 ? styles.historyDeltaPositive : styles.historyDeltaNegative,
-                        ]}
+                  history.slice(0, 10).map((entry) => {
+                    const isDeliveryEntry =
+                      entry.source === 'delivery-settlement' ||
+                      entry.source === 'delivery-failure' ||
+                      entry.source === 'contract-cancelled';
+                    return (
+                      <Pressable
+                        key={entry.id}
+                        style={styles.historyRow}
+                        onPress={isDeliveryEntry ? () => setSelectedEntry(entry) : undefined}
+                        disabled={!isDeliveryEntry}
                       >
-                        {entry.delta > 0 ? `+${entry.delta}` : entry.delta}
-                      </Text>
-                      <Text style={styles.historyReason} numberOfLines={2}>
-                        {entry.reason}
-                      </Text>
-                    </View>
-                  ))
+                        <Text
+                          style={[
+                            styles.historyDelta,
+                            entry.delta >= 0 ? styles.historyDeltaPositive : styles.historyDeltaNegative,
+                          ]}
+                        >
+                          {entry.delta > 0 ? `+${entry.delta}` : entry.delta}
+                        </Text>
+                        <Text style={styles.historyReason} numberOfLines={2}>
+                          {entry.reason}
+                        </Text>
+                        {isDeliveryEntry ? (
+                          <GameIcon name="chevronRight" size={14} color={colors.textMuted} />
+                        ) : null}
+                      </Pressable>
+                    );
+                  })
                 )}
               </View>
             </AppTutorialTarget>
           </ScrollView>
+          )}
           <AppTutorialOverlay {...reputationTutorial.overlayProps} />
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+function ReputationHistoryDetailView({
+  entry,
+  record,
+  onBack,
+}: {
+  entry: ReputationHistoryEntry;
+  record: ReturnType<typeof findSettlementRecord>;
+  onBack: () => void;
+}) {
+  const detail = buildReputationHistoryDetail(record);
+  const routeLabel = record
+    ? `${getCityName(record.originCityId)} → ${getCityName(record.destinationCityId)}`
+    : null;
+
+  return (
+    <View style={styles.detailWrap}>
+      <Pressable onPress={onBack} style={styles.detailBack} accessibilityRole="button">
+        <Text style={styles.detailBackText}>← Geri</Text>
+      </Pressable>
+      <Text style={styles.detailTitle}>{detail.title}</Text>
+      {routeLabel ? <Text style={styles.detailRoute}>{routeLabel}</Text> : null}
+      {detail.unavailable ? (
+        <Text style={styles.emptyHistory}>{LEGACY_SETTLEMENT_UNAVAILABLE}</Text>
+      ) : (
+        <>
+          {detail.plannedLine ? <Text style={styles.detailLine}>{detail.plannedLine}</Text> : null}
+          {detail.actualLine ? <Text style={styles.detailLine}>{detail.actualLine}</Text> : null}
+          {detail.latenessLine ? <Text style={styles.detailLine}>{detail.latenessLine}</Text> : null}
+          {detail.causes.length > 0 ? (
+            <>
+              <Text style={styles.sectionTitle}>Nedenler</Text>
+              {detail.causes.map((cause) => (
+                <Text key={cause} style={styles.detailLine}>
+                  • {cause}
+                </Text>
+              ))}
+            </>
+          ) : null}
+          <Text style={styles.sectionTitle}>İtibar değişimi</Text>
+          <Text
+            style={[
+              styles.historyDelta,
+              entry.delta >= 0 ? styles.historyDeltaPositive : styles.historyDeltaNegative,
+            ]}
+          >
+            {detail.reputationLine || (entry.delta > 0 ? `+${entry.delta}` : `${entry.delta}`)}
+          </Text>
+        </>
+      )}
+    </View>
   );
 }
 
@@ -295,5 +385,33 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     fontStyle: 'italic',
+  },
+  detailWrap: {
+    gap: 8,
+    paddingBottom: 12,
+  },
+  detailBack: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  detailBackText: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  detailTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  detailRoute: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  detailLine: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
   },
 });

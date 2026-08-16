@@ -382,63 +382,45 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
 
   const companyScoreLines: BreakdownLine[] = useMemo(
     () => [
-      { icon: 'cash', label: 'Nakit', amount: companyScoreBreakdown.cashScore, color: colors.success },
+      { icon: 'contract', label: 'Teslimat performansı', amount: companyScoreBreakdown.deliveryScore, color: colors.success },
       {
-        icon: 'truck',
-        label: 'Filo değeri',
-        amount: companyScoreBreakdown.truckValueScore,
+        icon: 'upgrade',
+        label: 'Şirket gelişimi',
+        amount: companyScoreBreakdown.progressionScore,
         color: colors.accentBlue,
       },
       {
-        icon: 'warehouse',
-        label: 'Depo değeri',
-        amount: companyScoreBreakdown.warehouseValueScore,
-        color: colors.accentAmber,
-      },
-      {
-        icon: 'market',
-        label: 'Stok değeri',
-        amount: companyScoreBreakdown.inventoryValueScore,
-        color: colors.info,
-      },
-      {
-        icon: 'contract',
-        label: 'Teslimat bonusu',
-        amount: companyScoreBreakdown.completedContractsScore,
-        color: colors.success,
-      },
-      {
         icon: 'company',
-        label: 'İtibar bonusu',
+        label: 'İtibar',
         amount: companyScoreBreakdown.reputationScore,
         color: colors.accentAmber,
       },
       {
-        icon: 'upgrade',
-        label: 'Seviye bonusu',
-        amount: companyScoreBreakdown.levelScore,
+        icon: 'truck',
+        label: 'Filo ve varlıklar',
+        amount: companyScoreBreakdown.assetScore,
         color: colors.accentBlue,
       },
       {
-        icon: 'profit',
-        label: 'Haftalık ticaret bonusu',
-        amount: companyScoreBreakdown.weeklyTradeProfitScore,
+        icon: 'cash',
+        label: 'Finansal performans',
+        amount: companyScoreBreakdown.financeScore,
         color: colors.success,
       },
       {
-        icon: 'warning',
-        label: 'Ceza Etkisi',
-        amount: companyScoreBreakdown.penaltyScore,
-        color: colors.danger,
+        icon: 'profit',
+        label: 'Haftalık operasyon',
+        amount: companyScoreBreakdown.weeklyActivityScore,
+        color: colors.success,
       },
     ],
     [companyScoreBreakdown],
   );
 
   const companyScoreHint =
-    companyScoreBreakdown.penaltyScore < 0
-      ? 'Başarısız ve geç teslimatlar şirket puanını düşürür. Haftalık liderlik tablosu bu puana göre sıralanır.'
-      : 'Haftalık liderlik tablosu bu puana göre sıralanır. Sadece nakit değil, filo ve operasyon gücü de sayılır.';
+    !companyScoreBreakdown.rankedEligible
+      ? 'Haftalık sıralamaya girmek için en az 3 teslimat tamamlamalısın. Varsayılan itibar (50) nötrdür.'
+      : 'Şirket puanı; teslimat performansı, şirket gelişimi, itibar, filo değeri ve haftalık operasyon sonuçlarından hesaplanır. Nakit bakiyesi sıralamayı domine etmez.';
 
   const availableContractCount = useMemo(
     () => contracts.filter((c) => c.status === 'available').length,

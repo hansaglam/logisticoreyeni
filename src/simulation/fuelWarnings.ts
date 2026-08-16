@@ -65,8 +65,9 @@ export function getFuelWarningForJob(
   ) {
     return {
       key: 'out-of-fuel',
-      title: 'Yakıt bitti',
-      message: 'Yakıt bitti. Araç rota üzerinde durdu.',
+      title: 'ARAÇ YAKITSIZ KALDI',
+      message:
+        'Teslimat ilerlemiyor ancak son teslim süresi işlemeye devam ediyor. Gecikme cezası almamak için araca yakıt ekle.',
       priority: 1,
       fuelPercent,
       remainingRangeKm: 0,

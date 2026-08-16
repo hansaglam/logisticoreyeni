@@ -716,9 +716,21 @@ export async function createVehicleListingTransaction(
     if (!sellerUsername || userProfileSnap.data()?.usernameSetupCompleted !== true) {
       return failure(input, 'username-required');
     }
+    const availableVehicleIds = state.ownedTruckSnapshots.map((item) => item.truckId);
     const vehicle = state.ownedTruckSnapshots.find(
       (item) => item.truckId === input.truckId,
     );
+    const match = Boolean(vehicle);
+    console.info('[MARKETPLACE_SELL][AUTHORITATIVE_LOOKUP]', {
+      uidHash: createHash('sha256').update(identity.uid).digest('hex').slice(0, 12),
+      requestedVehicleId: input.truckId,
+      availableVehicleIds,
+      source: 'users/{uid}/marketplaceState/current.ownedTruckSnapshots',
+      wasCreated: stateWasCreated,
+      sourceSaveVersion: state.sourceSaveVersion,
+      serverOwnedTruckIds: serverState.ownedTruckIds,
+    });
+    console.info('[MARKETPLACE_SELL][MATCH]', match);
     const reason = listingEligibility(state, vehicle, input);
     if (reason || !vehicle) return failure(input, reason ?? 'truck-not-found');
     const listingFee =

@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius, spacing, typography } from '../theme';
+import { IOS_STACKED_MODAL_PROPS } from '../utils/modalPresentation';
 import type { TruckFuelReadiness } from '../utils/truckFuel';
 import { ActionButton, GameIcon } from './ui';
 
@@ -10,6 +11,8 @@ export interface FuelRequirementModalProps {
   readiness: TruckFuelReadiness | null;
   onCancel: () => void;
   onBuyFuel: () => void;
+  /** Render as an overlay View inside an already-open Modal (required on iOS). */
+  embedded?: boolean;
 }
 
 function formatLiters(value: number): string {
@@ -21,21 +24,15 @@ export default function FuelRequirementModal({
   readiness,
   onCancel,
   onBuyFuel,
+  embedded = false,
 }: FuelRequirementModalProps) {
-  if (!readiness) return null;
+  if (!readiness || (!visible && embedded)) return null;
 
   const required = formatLiters(readiness.requiredFuelL);
   const current = formatLiters(readiness.currentFuelL);
   const deficit = formatLiters(readiness.fuelDeficitL);
 
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      statusBarTranslucent
-      onRequestClose={onCancel}
-    >
+  const body = (
       <Pressable style={styles.backdrop} onPress={onCancel}>
         <Pressable
           accessibilityViewIsModal
@@ -50,9 +47,9 @@ export default function FuelRequirementModal({
             </View>
           </View>
 
-          <Text style={styles.title}>Bu rota için yakıt yetersiz.</Text>
+          <Text style={styles.title}>Yakıt yetersiz</Text>
           <Text style={styles.message}>
-            En az {required} yakıt gerekiyor. Aracında {current} var.
+            Bu rota için yaklaşık {required} yakıt gerekiyor.{'\n'}Aracında {current} var.
           </Text>
 
           <View style={styles.deficitBadge}>
@@ -95,7 +92,7 @@ export default function FuelRequirementModal({
               style={styles.action}
             />
             <ActionButton
-              label="Yakıt Satın Al"
+              label="Yakıt Al"
               icon="fuel"
               onPress={onBuyFuel}
               style={styles.action}
@@ -103,11 +100,35 @@ export default function FuelRequirementModal({
           </View>
         </Pressable>
       </Pressable>
+  );
+
+  if (embedded) {
+    return (
+      <View style={styles.embeddedRoot} pointerEvents="box-none">
+        {body}
+      </View>
+    );
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onCancel}
+      {...IOS_STACKED_MODAL_PROPS}
+    >
+      {body}
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  embeddedRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
+  },
   backdrop: {
     flex: 1,
     alignItems: 'center',

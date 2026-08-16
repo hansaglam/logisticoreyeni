@@ -27,6 +27,11 @@ import {
 } from '../utils/saveIntegrity';
 import { reputationBalance, contractGenerationBalance } from '../config/balance';
 import { normalizeReputationHistory } from '../simulation/reputationService';
+import {
+  normalizeDelayDiagnostics,
+  normalizeSettlementHistory,
+} from '../domain/deliveryDelayDiagnostics';
+import { normalizeOsDedupeKeys } from '../domain/osNotifications';
 import { APP_VERSION } from '../config/appVersion';
 import { CITIES } from '../data/cities';
 import {
@@ -200,6 +205,9 @@ export interface SaveGamePayload {
   lastRoadsideFuelAssistanceAt?: number;
   fuelTransactionKeys?: string[];
   reputationHistory?: import('../domain/reputationModel').ReputationHistoryEntry[];
+  deliverySettlementHistory?: import('../domain/deliveryDelayDiagnostics').DeliverySettlementRecord[];
+  osNotificationDedupeKeys?: string[];
+  osNotificationPermissionAsked?: boolean;
 }
 
 export interface SaveBackupStatus {
@@ -392,6 +400,7 @@ function normalizeFuelJobFields<
     lastFuelProcessedAt?: number;
     distanceTraveledKm?: number;
     fuelWarningsEmitted?: FuelWarningKey[];
+    fuelOutEventCount?: number;
     roadsideAssistanceGrantedAt?: number;
   },
 >(
@@ -453,9 +462,15 @@ function normalizeFuelJobFields<
       finiteNonNegative(job.distanceTraveledKm, distanceKm * processedProgress),
     ),
     fuelWarningsEmitted: warningKeys,
+    fuelOutEventCount: Number.isFinite(job.fuelOutEventCount)
+      ? Math.max(0, Math.floor(Number(job.fuelOutEventCount)))
+      : 0,
     roadsideAssistanceGrantedAt: Number.isFinite(job.roadsideAssistanceGrantedAt)
       ? Number(job.roadsideAssistanceGrantedAt)
       : undefined,
+    delayDiagnostics: normalizeDelayDiagnostics(
+      (job as { delayDiagnostics?: unknown }).delayDiagnostics,
+    ),
   };
 }
 
@@ -464,15 +479,20 @@ function normalizeDeliveryFuelJobs(
   trucks: Player['trucks'],
   currentTime: number,
 ): Delivery[] {
-  return normalizeActiveDeliveries(deliveries).map((delivery) =>
-    normalizeFuelJobFields(
+  return normalizeActiveDeliveries(deliveries).map((delivery) => {
+    const normalized = normalizeFuelJobFields(
       delivery,
       'on_route',
       trucks,
       currentTime,
       finiteNonNegative(delivery.distanceKm, 0),
-    ),
-  );
+    );
+    return {
+      ...normalized,
+      delayDiagnostics: normalizeDelayDiagnostics(delivery.delayDiagnostics),
+      startReadiness: delivery.startReadiness,
+    };
+  });
 }
 
 function normalizeTruckTransferFuelJobs(
@@ -1650,6 +1670,9 @@ export function serializeGameState(
     lastRoadsideFuelAssistanceAt: state.lastRoadsideFuelAssistanceAt,
     fuelTransactionKeys: state.fuelTransactionKeys?.slice(-32),
     reputationHistory: normalizeReputationHistory(state.reputationHistory).slice(0, 20),
+    deliverySettlementHistory: normalizeSettlementHistory(state.deliverySettlementHistory),
+    osNotificationDedupeKeys: normalizeOsDedupeKeys(state.osNotificationDedupeKeys),
+    osNotificationPermissionAsked: state.osNotificationPermissionAsked === true,
   };
 }
 
@@ -1867,6 +1890,9 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
           .slice(-32)
       : [],
     reputationHistory: normalizeReputationHistory(payload.reputationHistory),
+    deliverySettlementHistory: normalizeSettlementHistory(payload.deliverySettlementHistory),
+    osNotificationDedupeKeys: normalizeOsDedupeKeys(payload.osNotificationDedupeKeys),
+    osNotificationPermissionAsked: payload.osNotificationPermissionAsked === true,
   };
 }
 

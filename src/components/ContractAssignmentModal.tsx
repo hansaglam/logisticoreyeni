@@ -16,7 +16,7 @@ import { useAppDialog } from './AppDialogProvider';
 
 import { getBottomInset } from '../constants/layout';
 import { getScreenTopPadding } from '../utils/screenInsets';
-import { getCityName, getProductByIdSafe, getProductName } from '../utils/entityLookup';
+import { getCityName, getProductName } from '../utils/entityLookup';
 import { getRoute as findRoute } from '../data/routes';
 import {
   buildContractPreview,
@@ -28,7 +28,6 @@ import {
   getContractCargoWeight,
   isTruckAtContractOrigin,
 } from '../simulation/delivery';
-import { calculateDeliveryFuelLiters, getTruckFuelReadiness } from '../utils/truckFuel';
 import {
   evaluateDriverOption,
   evaluateTruckOption,
@@ -40,6 +39,7 @@ import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney } from '../theme/format';
 import type { GameIconName } from '../theme/icons';
+import { shouldEmbedNestedFuelUi } from '../utils/modalPresentation';
 import {
   ActionButton,
   AppCard,
@@ -55,6 +55,9 @@ import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import TutorialOverlay from './tutorial/TutorialOverlay';
 import TruckRefuelSheet from './TruckRefuelSheet';
 import FuelRequirementModal from './FuelRequirementModal';
+import DeliveryReadinessCard from './delivery/DeliveryReadinessCard';
+import { evaluateDeliveryReadiness } from '../domain/deliveryReadiness';
+import { getAttachedTrailerForTruck } from '../simulation/trailerAttachment';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
 
@@ -437,20 +440,15 @@ export default function ContractAssignmentModal({
       liveRefuelTruck ?? selectedTruckOption?.truck ?? null;
     if (!liveTruck) return null;
     const route = findRoute(contract.originCityId, contract.destinationCityId);
-    const product = getProductByIdSafe(contract.productId);
-    if (!route || !product) return null;
-    const requiredFuelL = calculateDeliveryFuelLiters({
+    if (!route) return null;
+    return evaluateDeliveryReadiness({
       contract,
       truck: liveTruck,
+      trailer: getAttachedTrailerForTruck(liveTruck.id, trailers),
       driver: selectedDriverOption.driver,
       route,
-      product,
+      fuelPricePerLiter: globalEconomy?.fuelPrice ?? 0,
     });
-    return getTruckFuelReadiness(
-      liveTruck,
-      requiredFuelL,
-      globalEconomy?.fuelPrice ?? 0,
-    );
   }, [
     contract,
     globalEconomy?.fuelPrice,
@@ -458,7 +456,9 @@ export default function ContractAssignmentModal({
     selectedDriverOption?.driver,
     selectedTruckId,
     selectedTruckOption?.truck,
+    trailers,
   ]);
+  const truckFuelReadiness = fuelReadiness?.fuelReadiness ?? null;
 
   const summaryFinancials = useMemo((): ContractSummaryFinancials | null => {
     if (!contract) return null;
@@ -539,6 +539,51 @@ export default function ContractAssignmentModal({
   const selectionSummary = canConfirm
     ? `${selectedTruckOption?.truck.name ?? 'Kamyon'} + ${selectedDriverOption?.driver.name ?? 'Şoför'} hazır`
     : 'Kamyon ve şoför seçmelisin';
+
+  const handleStartDelivery = () => {
+    if (!selectedTruckId || !selectedDriverId || !canConfirm) return;
+    if (fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')) {
+      setFuelRequirementVisible(true);
+      return;
+    }
+    if (fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')) {
+      setSelectedTruckId(null);
+      return;
+    }
+    onConfirm(selectedTruckId, selectedDriverId);
+  };
+
+  const startLabel = fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')
+    ? 'Yakıt gerekli'
+    : fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')
+      ? 'Başka Araç Seç'
+      : 'Teslimatı Başlat';
+  const nestFuelUi = shouldEmbedNestedFuelUi();
+  const fuelFlow = (
+    <>
+      <FuelRequirementModal
+        visible={fuelRequirementVisible}
+        readiness={truckFuelReadiness}
+        embedded={nestFuelUi}
+        onCancel={() => setFuelRequirementVisible(false)}
+        onBuyFuel={() => {
+          setFuelRequirementVisible(false);
+          setRefuelVisible(true);
+        }}
+      />
+      <TruckRefuelSheet
+        visible={refuelVisible}
+        truck={liveRefuelTruck}
+        preferredMinimumLiters={truckFuelReadiness?.fuelDeficitL ?? null}
+        embedded={nestFuelUi}
+        source="job_assignment"
+        onClose={() => setRefuelVisible(false)}
+        onSuccess={() => {
+          setRefuelVisible(false);
+        }}
+      />
+    </>
+  );
 
   const renderAvailabilityWarning = () => {
     if (!availability || availability.canStart) {
@@ -802,6 +847,11 @@ export default function ContractAssignmentModal({
               );
             })}
           </AssignmentSection>
+          <DeliveryReadinessCard
+            readiness={fuelReadiness}
+            onSelectAnotherVehicle={() => setSelectedTruckId(null)}
+            onBuyFuel={() => setFuelRequirementVisible(true)}
+          />
         </ScrollView>
 
         <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
@@ -811,40 +861,12 @@ export default function ContractAssignmentModal({
           ) : null}
           <TutorialTarget
             id="assignment-start-button"
-            onTutorialPress={() => {
-              if (
-                selectedTruckId &&
-                selectedDriverId &&
-                canConfirm
-              ) {
-                if (fuelReadiness?.canCompleteWithoutRefuel === false) {
-                  setFuelRequirementVisible(true);
-                } else {
-                  onConfirm(selectedTruckId, selectedDriverId);
-                }
-              }
-            }}
+            onTutorialPress={handleStartDelivery}
           >
             <ActionButton
-              label={
-                fuelReadiness && !fuelReadiness.canCompleteWithoutRefuel
-                  ? 'Yakıt gerekli'
-                  : 'Teslimatı Başlat'
-              }
+              label={startLabel}
               icon="truck"
-              onPress={() => {
-                if (
-                  selectedTruckId &&
-                  selectedDriverId &&
-                  canConfirm
-                ) {
-                  if (fuelReadiness?.canCompleteWithoutRefuel === false) {
-                    setFuelRequirementVisible(true);
-                  } else {
-                    onConfirm(selectedTruckId, selectedDriverId);
-                  }
-                }
-              }}
+              onPress={handleStartDelivery}
               disabled={!canConfirm}
               fullWidth
               variant="primary"
@@ -854,25 +876,9 @@ export default function ContractAssignmentModal({
         </View>
       </View>
       <TutorialOverlay layer="modal" />
+      {nestFuelUi ? fuelFlow : null}
     </Modal>
-    <FuelRequirementModal
-      visible={fuelRequirementVisible}
-      readiness={fuelReadiness}
-      onCancel={() => setFuelRequirementVisible(false)}
-      onBuyFuel={() => {
-        setFuelRequirementVisible(false);
-        setRefuelVisible(true);
-      }}
-    />
-    <TruckRefuelSheet
-      visible={refuelVisible}
-      truck={liveRefuelTruck}
-      preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
-      onClose={() => setRefuelVisible(false)}
-      onSuccess={() => {
-        setRefuelVisible(false);
-      }}
-    />
+    {nestFuelUi ? null : fuelFlow}
     </>
   );
 }

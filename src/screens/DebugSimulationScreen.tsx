@@ -1548,53 +1548,43 @@ export default function DebugSimulationScreen() {
                 color={COLORS.primary}
               />
               <StatItem
-                label="Cash Score"
-                value={formatCompanyScore(companyScoreBreakdown.cashScore)}
+                label="Ranked Eligible"
+                value={companyScoreBreakdown.rankedEligible ? 'yes' : 'no'}
+                color={companyScoreBreakdown.rankedEligible ? COLORS.success : COLORS.danger}
+              />
+              <StatItem
+                label="Delivery Score"
+                value={formatCompanyScore(companyScoreBreakdown.deliveryScore)}
                 color={COLORS.success}
               />
               <StatItem
-                label="Fleet Score"
-                value={formatCompanyScore(companyScoreBreakdown.truckValueScore)}
+                label="Progression Score"
+                value={formatCompanyScore(companyScoreBreakdown.progressionScore)}
                 color={COLORS.secondary}
               />
               <StatItem
-                label="Warehouse Score"
-                value={formatCompanyScore(companyScoreBreakdown.warehouseValueScore)}
-                color={COLORS.secondary}
-              />
-              <StatItem
-                label="Inventory Score"
-                value={formatCompanyScore(companyScoreBreakdown.inventoryValueScore)}
-                color={COLORS.secondary}
-              />
-              <StatItem
-                label="Delivery Bonus"
-                value={formatCompanyScore(companyScoreBreakdown.completedContractsScore)}
-                color={COLORS.success}
-              />
-              <StatItem
-                label="Reputation Bonus"
+                label="Reputation Score"
                 value={formatCompanyScore(companyScoreBreakdown.reputationScore)}
                 color={COLORS.success}
               />
               <StatItem
-                label="Level Bonus"
-                value={formatCompanyScore(companyScoreBreakdown.levelScore)}
+                label="Asset Score"
+                value={formatCompanyScore(companyScoreBreakdown.assetScore)}
+                color={COLORS.secondary}
+              />
+              <StatItem
+                label="Finance Score"
+                value={formatCompanyScore(companyScoreBreakdown.financeScore)}
                 color={COLORS.success}
               />
               <StatItem
-                label="Trade Bonus"
-                value={formatCompanyScore(companyScoreBreakdown.weeklyTradeProfitScore)}
+                label="Weekly Activity"
+                value={formatCompanyScore(companyScoreBreakdown.weeklyActivityScore)}
                 color={COLORS.success}
               />
               <StatItem
                 label="Penalty Effect"
                 value={formatCompanyScore(companyScoreBreakdown.penaltyScore)}
-                color={COLORS.danger}
-              />
-              <StatItem
-                label="Penalty Cost"
-                value={formatCompanyScore(companyScoreBreakdown.penaltyCostScore)}
                 color={COLORS.danger}
               />
               <StatItem

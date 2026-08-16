@@ -27,6 +27,7 @@ import { formatCityLocative } from '../theme/format';
 import type { Route, Truck } from '../types/game';
 import TruckRefuelSheet from './TruckRefuelSheet';
 import FuelRequirementModal from './FuelRequirementModal';
+import { shouldEmbedNestedFuelUi } from '../utils/modalPresentation';
 
 const TRANSFER_CITY_IDS = CITY_IDS;
 const FOOTER_SUMMARY_HEIGHT = 72;
@@ -211,6 +212,31 @@ export default function TruckTransferModal({
     onError?.(result.message ?? 'Transfer başlatılamadı.');
   };
 
+  const nestFuelUi = shouldEmbedNestedFuelUi();
+  const fuelFlow = (
+    <>
+      <FuelRequirementModal
+        visible={fuelRequirementVisible}
+        readiness={fuelReadiness}
+        embedded={nestFuelUi}
+        onCancel={() => setFuelRequirementVisible(false)}
+        onBuyFuel={() => {
+          setFuelRequirementVisible(false);
+          setRefuelVisible(true);
+        }}
+      />
+      <TruckRefuelSheet
+        visible={refuelVisible}
+        truck={truck}
+        preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
+        embedded={nestFuelUi}
+        source="transfer"
+        onClose={() => setRefuelVisible(false)}
+        onSuccess={() => setRefuelVisible(false)}
+      />
+    </>
+  );
+
   const footerBottomPadding = getModalSheetPaddingBottom(insets);
   const scrollBottomPadding = FOOTER_SUMMARY_HEIGHT + FOOTER_BUTTON_HEIGHT + footerBottomPadding + 24;
 
@@ -344,23 +370,9 @@ export default function TruckTransferModal({
           </View>
         </View>
       </View>
+      {nestFuelUi ? fuelFlow : null}
     </Modal>
-    <FuelRequirementModal
-      visible={fuelRequirementVisible}
-      readiness={fuelReadiness}
-      onCancel={() => setFuelRequirementVisible(false)}
-      onBuyFuel={() => {
-        setFuelRequirementVisible(false);
-        setRefuelVisible(true);
-      }}
-    />
-    <TruckRefuelSheet
-      visible={refuelVisible}
-      truck={truck}
-      preferredMinimumLiters={fuelReadiness?.fuelDeficitL ?? null}
-      onClose={() => setRefuelVisible(false)}
-      onSuccess={() => setRefuelVisible(false)}
-    />
+    {nestFuelUi ? null : fuelFlow}
     </>
   );
 }

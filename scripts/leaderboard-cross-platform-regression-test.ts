@@ -92,6 +92,8 @@ console.log('  ✓ Structured dev logs present');
 
 assert.match(leaderboardBackend, /orderBy\('companyScore', 'desc'\)/);
 assert.match(leaderboardBackend, /orderBy\(FieldPath\.documentId\(\), 'asc'\)/);
-console.log('  ✓ Backend sort: companyScore DESC, uid ASC tie-breaker');
+assert.match(leaderboardBackend, /where\('scoreVersion', '==', LEADERBOARD_SCORE_VERSION\)/);
+assert.match(read('backend/src/leaderboardScore.ts'), /LEADERBOARD_SCORE_VERSION = 2/);
+console.log('  ✓ Backend sort: companyScore DESC, uid ASC tie-breaker (score v2 only)');
 
 console.log('\n✅ ALL PASS\n');

@@ -103,6 +103,17 @@ export default function OfflineProgressSummaryModal({
               />
             ) : null}
 
+            {summary.deliveryNotes && summary.deliveryNotes.length > 0 ? (
+              <View style={styles.noteBlock}>
+                <Text style={styles.noteTitle}>Teslimat uyarısı</Text>
+                {summary.deliveryNotes.slice(0, 3).map((line) => (
+                  <Text key={line} style={styles.noteText}>
+                    {line}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
+
             {summary.driverLevelUps.length > 0 ? (
               <View style={styles.noteBlock}>
                 <Text style={styles.noteTitle}>Şoför gelişimi</Text>

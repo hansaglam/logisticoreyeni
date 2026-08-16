@@ -21,6 +21,10 @@ import type {
   Truck,
 } from '../types/game';
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
+import { classifyDeadlineRisk } from '../utils/deadlineUx';
+import {
+  createEmptyDelayDiagnostics,
+} from '../domain/deliveryDelayDiagnostics';
 import { isTruckEligibleForNewAssignment } from './rentalTruckLifecycle';
 import { debugConfig } from '../config/debug';
 import {
@@ -1460,6 +1464,15 @@ export function createDelivery(params: CreateDeliveryParams): Delivery {
     breakdownChance,
     accidentChance,
     conditionLoss,
+    delayDiagnostics: createEmptyDelayDiagnostics(),
+    startReadiness: {
+      estimatedTravelHours: travelHours,
+      deadlineHours: contract.deadlineHours,
+      timeMarginHours: contract.deadlineHours - travelHours,
+      deadlineRisk: classifyDeadlineRisk(travelHours, contract.deadlineHours),
+      requiredFuelL: fuelLitersTotal,
+      currentFuelL: fuelLitersAtStart,
+    },
   };
 }
 

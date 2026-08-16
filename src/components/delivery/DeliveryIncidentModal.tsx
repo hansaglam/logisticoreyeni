@@ -134,6 +134,10 @@ export default function DeliveryIncidentModal({
           ) : (
             <>
               <Text style={styles.description} numberOfLines={3}>{incident.description}</Text>
+              <Text style={styles.pendingTitle}>Karar bekleniyor</Text>
+              <Text style={styles.clockNote}>
+                Teslimat, karar verene kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.
+              </Text>
               <Text style={styles.requiredText}>Devam etmek için bir karar seç.</Text>
               <ScrollView
                 style={styles.choiceScroll}
@@ -225,6 +229,8 @@ const styles = StyleSheet.create({
   title: { ...typography.cardTitle, fontSize: 19, lineHeight: 24 },
   description: { ...typography.body, color: colors.textSecondary },
   requiredText: { ...typography.caption, color: colors.textMuted },
+  pendingTitle: { ...typography.bodySmall, fontWeight: '800', color: colors.warning },
+  clockNote: { ...typography.caption, color: colors.danger, fontWeight: '700', lineHeight: 16 },
   choiceScroll: { flexGrow: 0 },
   choiceList: { gap: spacing.sm },
   choiceButton: {

@@ -38,6 +38,7 @@ import {
   type MarketplaceCallableName,
 } from './marketplaceCallable';
 import { recordMarketplaceCallableResult } from './backendDiagnostics';
+import { logMarketplaceLoadError } from '../utils/marketplaceSellDiagnostics';
 
 export const VEHICLE_MARKETPLACE_FUNCTIONS_REGION = FIREBASE_FUNCTIONS_REGION;
 export const VEHICLE_MARKETPLACE_CALLABLES = {
@@ -68,6 +69,16 @@ async function ensureMarketplaceAuthReady(): Promise<{
   await waitForInitialAuthState();
   const user = getFirebaseAuthSafe()?.currentUser ?? null;
   if (!user || user.isAnonymous) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.info('[MARKETPLACE_AUTH]', {
+        source: 'ensureMarketplaceAuthReady',
+        firebaseCurrentUserUid: user?.uid ?? null,
+        firebaseIsAnonymous: user?.isAnonymous ?? null,
+        providerIds: (user?.providerData ?? []).map((entry) => entry.providerId),
+        authReady: isAuthSessionReady(),
+        marketplaceAccessResult: 'GUEST',
+      });
+    }
     return { ok: false, reason: 'auth-required' };
   }
   return { ok: true, uid: user.uid };
@@ -145,9 +156,26 @@ function logCallableError(error: unknown, callableName: string): void {
   console.warn('[marketplace-callable-failed]', {
     callableName,
     firebaseCode,
+    firestoreErrorCode:
+      typeof errorRecord(error).code === 'string'
+        ? errorRecord(error).code
+        : null,
+    firestoreErrorMessage:
+      typeof errorRecord(error).message === 'string'
+        ? errorRecord(error).message
+        : null,
+    collections: [
+      'vehicleMarketplaceListings',
+      'vehicleMarketplaceTransactions',
+      'vehicleMarketplaceRateLimits',
+      'vehicleMarketplaceIdempotency',
+      'vehicleMarketplaceActionReceipts',
+    ],
     authReady: isAuthSessionReady(),
     userPresent: Boolean(user),
     anonymous: user?.isAnonymous ?? null,
+    uid: user?.uid ?? null,
+    providerIds: (user?.providerData ?? []).map((entry) => entry.providerId),
     region: VEHICLE_MARKETPLACE_FUNCTIONS_REGION,
     projectId: getFirebaseAppSafe()?.options.projectId ?? null,
     backendReason,
@@ -347,6 +375,11 @@ export async function getVehicleMarketplaceListings(
     Record<string, unknown>
   >(VEHICLE_MARKETPLACE_CALLABLES.list, { limit, cursor });
   if (!result.ok) {
+    logMarketplaceLoadError({
+      code: result.reason,
+      message: result.reason,
+      callableName: VEHICLE_MARKETPLACE_CALLABLES.list,
+    });
     return {
       ok: false,
       listings: [],
@@ -357,6 +390,13 @@ export async function getVehicleMarketplaceListings(
 
   const parsed = parseVehicleMarketplaceListResponse(result.data, 'list');
   if (!parsed.success) {
+    logMarketplaceLoadError({
+      code: parsed.reason,
+      message: parsed.detail ?? 'list-response-parse-failed',
+      callableName: VEHICLE_MARKETPLACE_CALLABLES.list,
+      field: parsed.field,
+      detail: parsed.detail,
+    });
     recordMarketplaceCallableResult({
       success: false,
       code: parsed.reason,

@@ -60,7 +60,7 @@ function buildStatusLine(
   if ((truck.status === 'on_route' || truck.status === 'out_of_fuel') && delivery) {
     const parts: string[] = [];
     if (truck.status === 'out_of_fuel') {
-      parts.push('Yakıt bitti');
+      parts.push('Yakıt bitti — süre işlemeye devam ediyor');
     }
     if (typeof delivery.progress === 'number') {
       const pct = Math.round(Math.max(0, Math.min(1, delivery.progress)) * 100);

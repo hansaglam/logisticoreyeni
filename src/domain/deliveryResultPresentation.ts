@@ -9,6 +9,7 @@ import type {
   DeliveryDelayCause,
   DeliverySettlementRecord,
 } from './deliveryDelayDiagnostics';
+import { computePausedHours } from './deliveryDelayDiagnostics';
 import type { DeliveryReadinessResult } from './deliveryReadiness';
 import type { DeliveryPunctuality } from '../simulation/reputationSettlement';
 
@@ -100,7 +101,7 @@ export function buildDeliveryResultPresentation(
   const tips = buildNextDeliveryTips(record);
   const failureDetail =
     record.failureReason === 'too_late'
-      ? `Son teslim süresi ${formatGameDuration(record.deadlineHours)} idi.\nTeslimat ${formatGameDuration(record.actualTravelHours)} sürdüğü için başarısız sayıldı.`
+      ? buildTooLateFailureDetail(record)
       : record.failureReason === 'breakdown'
         ? 'Araç arızası teslimatı sonlandırdı.'
         : record.failureReason === 'accident'
@@ -116,6 +117,26 @@ export function buildDeliveryResultPresentation(
     tips,
     failureDetail,
   };
+}
+
+function buildTooLateFailureDetail(record: DeliverySettlementRecord): string {
+  const wallClock =
+    record.wallClockTravelHours != null &&
+    Math.abs(record.wallClockTravelHours - record.actualTravelHours) >= 0.08
+      ? `\nToplam geçen süre: ${formatGameDuration(record.wallClockTravelHours)}`
+      : '';
+  const paused = computePausedHours({
+    outOfFuelHours: record.timePausedOutOfFuel,
+    incidentPendingHours: record.timePausedIncident,
+    otherPausedHours: 0,
+    fuelOutCount: record.fuelOutEventCount,
+    incidentChoiceDelayHours: record.incidentChoiceDelayHours,
+  });
+  const pauseLine =
+    paused >= 0.08
+      ? `\nBeklenmeyen duraklama: ${formatGameDuration(paused)} (son teslime sayılmaz)`
+      : '';
+  return `Son teslim süresi ${formatGameDuration(record.deadlineHours)} idi.\nEfektif teslim süresi ${formatGameDuration(record.actualTravelHours)} olduğu için başarısız sayıldı.${wallClock}${pauseLine}`;
 }
 
 export function buildCauseLines(record: DeliverySettlementRecord): string[] {
@@ -239,11 +260,16 @@ export function buildReputationHistoryDetail(record: DeliverySettlementRecord | 
   }
 
   const presentation = buildDeliveryResultPresentation(record);
+  const wallClockDiffers =
+    record.wallClockTravelHours != null &&
+    Math.abs(record.wallClockTravelHours - record.actualTravelHours) >= 0.08;
   return {
     title: presentation.title,
     routeLabel: null,
     plannedLine: `Planlanan teslim: ${formatGameDuration(record.deadlineHours)}`,
-    actualLine: `Gerçek teslim: ${formatGameDuration(record.actualTravelHours)}`,
+    actualLine: wallClockDiffers
+      ? `Efektif teslim: ${formatGameDuration(record.actualTravelHours)} (toplam ${formatGameDuration(record.wallClockTravelHours!)})`
+      : `Gerçek teslim: ${formatGameDuration(record.actualTravelHours)}`,
     latenessLine:
       record.latenessHours >= 1 / 60
         ? `Gecikme: ${formatGameDuration(record.latenessHours)}`

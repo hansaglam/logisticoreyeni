@@ -23,6 +23,7 @@ export interface DeliveryHealthSnapshot {
   latenessHours: number;
   alreadyLate: boolean;
   clockContinues: boolean;
+  deadlinePaused: boolean;
   detailLine: string | null;
   canonicalFuelL: number | null;
   fuelCapacityL: number | null;
@@ -93,7 +94,8 @@ export function resolveDeliveryHealth(input: {
     status = 'deadline_risk';
   }
 
-  const clockContinues = status === 'out_of_fuel' || status === 'incident_pending';
+  const clockContinues = status !== 'out_of_fuel' && status !== 'incident_pending';
+  const deadlinePaused = !clockContinues;
 
   const showOutOfFuelWarning = fuelEmpty && remainingProgress > 0;
   const showLowFuelWarning = !showOutOfFuelWarning && insufficientForRoute && remainingProgress > 0;
@@ -109,6 +111,7 @@ export function resolveDeliveryHealth(input: {
     latenessHours,
     alreadyLate,
     clockContinues,
+    deadlinePaused,
     detailLine:
       status === 'out_of_fuel' || status === 'incident_pending'
         ? getDeliveryHealthDetail(status, {
@@ -155,10 +158,10 @@ function getDeliveryHealthDetail(
   times: { etaHoursLeft: number; deadlineHoursLeft: number; latenessHours: number },
 ): string | null {
   if (status === 'out_of_fuel') {
-    return 'Yakıt bitti — teslimat süresi işlemeye devam ediyor.';
+    return 'Yakıt bitti — teslimat durdu. Son teslim süresi de durdu; yakıt alınca devam eder.';
   }
   if (status === 'incident_pending') {
-    return 'Teslimat, karar verene kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.';
+    return 'Operasyon kararı bekleniyor — teslimat ve son teslim süresi durdu. Karar verince devam eder.';
   }
   return null;
 }

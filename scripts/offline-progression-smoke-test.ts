@@ -201,7 +201,7 @@ console.log('1. Elapsed guards');
 
 {
   const now = Date.now();
-  const lastSeen = now - Math.max(1, MIN_OFFLINE_PROGRESS_MS - 1);
+  const lastSeen = now - 3 * 60_000;
   const short = calculateOfflineElapsed(lastSeen, now);
   assert(!short.shouldApply, 'elapsed < 5dk (teslimatsız) ise uygulanmaz');
   assert(short.reason === 'below_minimum', 'below_minimum reason');
@@ -372,12 +372,12 @@ console.log('\n3. Delivery incidents offline');
     2,
   );
   assert(
-    offlineResult.deliveries[0]?.incident == null,
-    'offline sırasında pending incident temizlenir',
+    offlineResult.deliveries[0]?.incident?.status === 'pending',
+    'offline sırasında pending incident korunur',
   );
   assert(
-    offlineResult.deliveries[0]?.incidentResolved === true,
-    'pending incident otomatik resolved sayılır',
+    offlineResult.deliveries[0]?.incidentResolved !== true,
+    'pending incident otomatik resolve edilmez',
   );
 }
 

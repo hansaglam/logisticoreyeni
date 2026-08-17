@@ -23,7 +23,7 @@ export const REPUTATION_RULES = {
   deliveryLateMajor: -4,
 
   contractCancelled: -6,
-  deliveryFailed: -8,
+  deliveryFailed: -6,
 
   positiveOperationOutcome: 1,
   negativeOperationOutcome: -2,

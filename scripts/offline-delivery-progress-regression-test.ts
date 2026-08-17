@@ -265,6 +265,52 @@ function runRealTimeDeliveryTests(): void {
     'settlement id format',
   );
 
+  const pendingIncidentDelivery = makeDelivery({
+    progress: 0.35,
+    travelHours: 10,
+    expectedDurationGameHours: 10,
+    startedRealAtMs: now - 30_000,
+    lastProgressedRealAtMs: now - 30_000,
+    incident: {
+      id: 'inc_pending',
+      deliveryId: 'delivery_offline',
+      type: 'traffic',
+      title: 'Trafik',
+      description: 'Test',
+      createdAtGameTime: 0,
+      triggerProgress: 0.3,
+      status: 'pending',
+      choices: [
+        { id: 'a', label: 'A', description: '', effects: {} },
+        { id: 'b', label: 'B', description: '', effects: {} },
+      ],
+    },
+    incidentResolved: false,
+    delayDiagnostics: {
+      outOfFuelHours: 0,
+      incidentPendingHours: 0,
+      otherPausedHours: 0,
+      fuelOutCount: 0,
+    },
+  });
+  const pendingReconciled = reconcileDeliveriesWithRealTime({
+    deliveries: [pendingIncidentDelivery],
+    nowMs: now,
+    gameSpeed: 1,
+  });
+  assert(
+    pendingReconciled.deliveries[0]?.incident?.status === 'pending',
+    'reconcile preserves pending incident',
+  );
+  assert(
+    (pendingReconciled.deliveries[0]?.delayDiagnostics?.incidentPendingHours ?? 0) > 0,
+    'reconcile records incident wait during catch-up',
+  );
+  assert(
+    (pendingReconciled.deliveries[0]?.progress ?? 0) === pendingIncidentDelivery.progress,
+    'reconcile does not progress delivery while incident pending',
+  );
+
   const elapsedWithDelivery = calculateOfflineElapsed(now - 45_000, now, {
     hasActiveDeliveries: true,
   });
@@ -274,8 +320,11 @@ function runRealTimeDeliveryTests(): void {
   assert(storeSrc.includes('reconcileDeliveriesWithRealTime'), 'store reconciles real-time');
   assert(storeSrc.includes('computeRequiredDeliveryCatchUpGameHours'), 'store uses delivery catch-up hours');
   assert(storeSrc.includes('buildDeliverySettlementId'), 'store sets settlementId');
-  assert(storeSrc.includes("reason: 'offline_skip'"), 'offline fixed costs still skipped');
-  assert(storeSrc.includes('maxOfflineCostPeriods: 0'), 'periodic offline costs stay 0');
+  assert(storeSrc.includes("'offline_skip'"), 'offline fixed costs still skipped');
+  assert(
+    storeSrc.includes('OFFLINE_CATCHUP_MAX_COST_PERIODS'),
+    'periodic offline costs use catch-up constant',
+  );
   assert(!storeSrc.includes("title: 'İşletme giderleri işlendi'"), 'no operating cost toast');
 
   const appSrc = readSrc('App.tsx');
@@ -376,7 +425,7 @@ function runOfflineProgressTests(): void {
     metaLastSimulatedRealTimeMs: nowMs - 90 * 60_000,
     gameState: { gameSpeed: 1 },
   });
-  assert(cloudRestore.baselineMs === nowMs - 60 * 60_000, 'cloud restore en yeni geçerli timestamp'i kullanır');
+  assert(cloudRestore.baselineMs === nowMs - 60 * 60_000, 'cloud restore en yeni gecerli timestamp kullanir');
 }
 
 function run(): void {

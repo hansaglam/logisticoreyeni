@@ -52,6 +52,10 @@ import {
   submitCurrentLeaderboardScore,
   type LeaderboardRankedEntry,
 } from '../services/leaderboardService';
+import {
+  markLeaderboardSeasonSubmitted,
+  maybeSubmitLeaderboardForSeasonChange,
+} from '../services/leaderboardSeasonSync';
 import { fetchUsernameProfile } from '../services/usernameService';
 import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
 import { leaderboardConfig } from '../config/leaderboard';
@@ -436,8 +440,21 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
       return;
     }
 
-    await submitCurrentLeaderboardScore({ force: true });
+    await maybeSubmitLeaderboardForSeasonChange();
+    const submitResult = await submitCurrentLeaderboardScore({ force: true });
     if (requestSeq !== requestSeqRef.current) return;
+    if (submitResult.ok && submitResult.seasonKey) {
+      await markLeaderboardSeasonSubmitted(submitResult.seasonKey);
+    } else if (
+      submitResult.errorCode &&
+      submitResult.errorCode !== 'score-not-improved' &&
+      submitResult.errorCode !== 'not-ranked-eligible'
+    ) {
+      logLeaderboardError(
+        typeof submitResult.errorCode === 'string' ? submitResult.errorCode : undefined,
+        submitResult.error,
+      );
+    }
 
     const result = await fetchWeeklyLeaderboard(uid);
     if (requestSeq !== requestSeqRef.current) return;

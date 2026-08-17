@@ -87,6 +87,7 @@ import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   logMarketplaceDev,
   showAlertAfterModalClose,
+  showSuccessAfterModalClose,
 } from '../utils/marketplaceUiSafety';
 import {
   ensureAuthoritativeFleetReady,
@@ -114,7 +115,7 @@ export default function VehicleMarketplaceScreen({
 }: {
   onBack: () => void;
 }) {
-  const { alert: showAlert } = useAppDialog();
+  const { alert: showAlert, showDialog } = useAppDialog();
   const { scrollBottomPadding } = useTabBarLayout();
   const player = useGameStore((state) => state.player);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries);
@@ -546,10 +547,10 @@ export default function VehicleMarketplaceScreen({
       }
       await refreshAll();
       setPurchaseTarget(null);
-      showAlertAfterModalClose(
-        showAlert,
+      showSuccessAfterModalClose(
+        showDialog,
         'Satın alma tamamlandı',
-        'Araç authoritative pazar kaydından filona aktarıldı.',
+        `${getMarketplaceTruckName(purchaseTarget.truckSnapshot.templateId)} filona eklendi.`,
       );
     } finally {
       setIsBuyingVehicle(false);
@@ -660,10 +661,10 @@ export default function VehicleMarketplaceScreen({
       await refreshAll();
       closeCreateSheet();
       setActiveTab('mine');
-      showAlertAfterModalClose(
-        showAlert,
+      showSuccessAfterModalClose(
+        showDialog,
         'İlan oluşturuldu',
-        'Araç backend tarafından kilitlendi ve pazarda yayınlandı.',
+        `${truck.name} satışa çıkarıldı ve pazarda listelendi. İlan süresince bu araç teslimat veya transfer için kullanılamaz.`,
       );
     } finally {
       setIsCreatingListing(false);

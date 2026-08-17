@@ -135,6 +135,7 @@ const OPTIONAL_UNDEFINED_FIELD_SUFFIXES = new Set([
   'triggerProgress',
   'effectSummary',
   'incidentGenerated',
+  'incidentRollsAttempted',
   'incidentResolved',
   'incidentResolutionHistory',
 ]);

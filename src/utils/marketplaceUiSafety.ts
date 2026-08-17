@@ -6,13 +6,18 @@
 
 import { InteractionManager } from 'react-native';
 
-import type { AppDialogAlertButton } from '../components/AppDialogProvider';
+import type {
+  AppDialogAlertButton,
+  AppDialogOptions,
+} from '../components/AppDialogProvider';
 
 type ShowAlert = (
   title: string,
   message?: string,
   buttons?: AppDialogAlertButton[],
 ) => void;
+
+type ShowDialog = (options: AppDialogOptions) => void;
 
 const AFTER_MODAL_MS = 80;
 
@@ -26,6 +31,30 @@ export function showAlertAfterModalClose(
     setTimeout(() => {
       showAlert(title, message, buttons);
     }, AFTER_MODAL_MS);
+  });
+}
+
+export function showDialogAfterModalClose(
+  showDialog: ShowDialog,
+  options: AppDialogOptions,
+): void {
+  InteractionManager.runAfterInteractions(() => {
+    setTimeout(() => {
+      showDialog(options);
+    }, AFTER_MODAL_MS);
+  });
+}
+
+export function showSuccessAfterModalClose(
+  showDialog: ShowDialog,
+  title: string,
+  message?: string,
+): void {
+  showDialogAfterModalClose(showDialog, {
+    title,
+    message,
+    variant: 'success',
+    confirmLabel: 'Tamam',
   });
 }
 

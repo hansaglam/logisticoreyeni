@@ -23,6 +23,7 @@ import type {
 import { deliveryBalance, deliveryCostBalance, truckBalance } from '../config/balance';
 import { classifyDeadlineRisk } from '../utils/deadlineUx';
 import {
+  computeEffectiveTravelHours,
   createEmptyDelayDiagnostics,
 } from '../domain/deliveryDelayDiagnostics';
 import { getRoute } from '../data/routes';
@@ -1940,7 +1941,7 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
   }
 
   const completionTime = gameState.currentTime;
-  const actualTravelHours = completionTime - delivery.startedAt;
+  const actualTravelHours = computeEffectiveTravelHours(delivery, completionTime);
 
   if (isCriticallyLate(contract, actualTravelHours)) {
     return failDelivery(gameState, deliveryId, 'too_late');

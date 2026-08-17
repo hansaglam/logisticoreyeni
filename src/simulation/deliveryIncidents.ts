@@ -1,6 +1,6 @@
 /**
- * Delivery Incident V1 — nadir operasyon kararları.
- * Her teslimatta max 1 olay; düşük ihtimal; deterministik seed.
+ * Delivery Incident V1 — kontrollü operasyon kararları.
+ * Uzun rotalarda max 2 olay; deterministik seed.
  */
 
 import type {
@@ -24,17 +24,18 @@ import {
 
 const INCIDENT_PROGRESS_MIN = 0.2;
 const INCIDENT_PROGRESS_MAX = 0.85;
-const MIN_TRAVEL_HOURS_FOR_INCIDENT = 4;
-const MIN_COMPLETED_CONTRACTS_FOR_INCIDENT = 2;
-export const DELIVERY_INCIDENT_COOLDOWN_HOURS = 8;
+const MIN_TRAVEL_HOURS_FOR_INCIDENT = 3;
+const MIN_COMPLETED_CONTRACTS_FOR_INCIDENT = 1;
+export const DELIVERY_INCIDENT_COOLDOWN_HOURS = 4;
+export const LONG_DELIVERY_INCIDENT_THRESHOLD_HOURS = 12;
 
 const INCIDENT_CHANCE_BY_TYPE: Record<ContractType, number> = {
-  standard: 0.2,
-  urgent: 0.25,
-  fragile: 0.3,
-  high_reputation: 0.25,
-  bulk: 0.2,
-  refrigerated: 0.25,
+  standard: 0.38,
+  urgent: 0.45,
+  fragile: 0.5,
+  high_reputation: 0.45,
+  bulk: 0.38,
+  refrigerated: 0.45,
 };
 
 export const DELIVERY_INCIDENT_TYPES: readonly DeliveryIncidentType[] = [
@@ -73,10 +74,30 @@ export function getIncidentChanceForContractType(contractType?: ContractType | s
   return INCIDENT_CHANCE_BY_TYPE[type] ?? INCIDENT_CHANCE_BY_TYPE.standard;
 }
 
-export function getIncidentTriggerProgress(delivery: Delivery): number {
-  const seed = `${delivery.id}:${delivery.contractId}:trigger`;
+export function getIncidentTriggerProgress(delivery: Delivery, rollIndex = 0): number {
+  const seed = `${delivery.id}:${delivery.contractId}:trigger:${rollIndex}`;
   const roll = hashStringToUnit(seed);
-  return INCIDENT_PROGRESS_MIN + 0.05 + roll * (INCIDENT_PROGRESS_MAX - INCIDENT_PROGRESS_MIN - 0.1);
+  const windowSpan = INCIDENT_PROGRESS_MAX - INCIDENT_PROGRESS_MIN - 0.1;
+  const offset = 0.05 + rollIndex * 0.12;
+  return INCIDENT_PROGRESS_MIN + offset + roll * Math.max(0.15, windowSpan - offset);
+}
+
+export function getMaxIncidentsForDelivery(delivery: Delivery): number {
+  return (delivery.travelHours ?? 0) >= LONG_DELIVERY_INCIDENT_THRESHOLD_HOURS ? 2 : 1;
+}
+
+export function getDeliveryIncidentRollIndex(delivery: Delivery): number {
+  return delivery.incidentRollsAttempted ?? 0;
+}
+
+export function canAttemptDeliveryIncidentRoll(delivery: Delivery): boolean {
+  if (
+    delivery.incident?.status === 'pending' &&
+    delivery.incidentResolved !== true
+  ) {
+    return false;
+  }
+  return getDeliveryIncidentRollIndex(delivery) < getMaxIncidentsForDelivery(delivery);
 }
 
 export function shouldGenerateDeliveryIncident(
@@ -84,9 +105,6 @@ export function shouldGenerateDeliveryIncident(
   player: Player,
   contract?: Contract,
 ): boolean {
-  if (delivery.incidentGenerated) {
-    return false;
-  }
   if (delivery.status !== 'on_route' && delivery.status !== 'preparing') {
     return false;
   }
@@ -452,27 +470,23 @@ export function maybeRollDeliveryIncident(
   currentGameTime: number,
   excludedType?: DeliveryIncidentType,
 ): Delivery {
-  if (delivery.incidentGenerated) {
+  if (!canAttemptDeliveryIncidentRoll(delivery)) {
     return delivery;
   }
 
-  const triggerProgress = getIncidentTriggerProgress(delivery);
+  const rollIndex = getDeliveryIncidentRollIndex(delivery);
+  const triggerProgress = getIncidentTriggerProgress(delivery, rollIndex);
   if (delivery.progress < triggerProgress) {
     return delivery;
   }
 
-  const rolledDelivery: Delivery = { ...delivery, incidentGenerated: true };
-
-  // Eligibility must inspect the original delivery. Passing rolledDelivery here
-  // caused every production event to reject itself because incidentGenerated
-  // had already been set to true.
   if (!shouldGenerateDeliveryIncident(delivery, player, contract)) {
-    return rolledDelivery;
+    return delivery;
   }
 
-  const seed = `${delivery.id}:${delivery.contractId}:${Math.floor(delivery.startedAt / 24)}`;
+  const seed = `${delivery.id}:${delivery.contractId}:${Math.floor(delivery.startedAt / 24)}:${rollIndex}`;
   const incident = tryGenerateDeliveryIncident(
-    rolledDelivery,
+    delivery,
     contract!,
     player,
     seed,
@@ -481,12 +495,19 @@ export function maybeRollDeliveryIncident(
     excludedType,
   );
 
+  const nextRollCount = rollIndex + 1;
   if (!incident) {
-    return rolledDelivery;
+    return {
+      ...delivery,
+      incidentRollsAttempted: nextRollCount,
+    };
   }
 
   return {
-    ...rolledDelivery,
+    ...delivery,
+    incidentRollsAttempted: nextRollCount,
+    incidentGenerated: true,
+    incidentResolved: false,
     incident,
   };
 }
@@ -629,6 +650,13 @@ export function normalizeDelivery(delivery: Delivery): Delivery {
         ? delivery.settlementId
         : undefined,
     incidentGenerated: delivery.incidentGenerated === true || Boolean(incident),
+    incidentRollsAttempted:
+      typeof delivery.incidentRollsAttempted === 'number' &&
+      Number.isFinite(delivery.incidentRollsAttempted)
+        ? Math.max(0, Math.floor(delivery.incidentRollsAttempted))
+        : delivery.incidentGenerated === true || Boolean(incident)
+          ? 1
+          : 0,
     incidentResolved,
     incident:
       incident && incident.status === 'pending' && !incidentResolved

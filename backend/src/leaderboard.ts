@@ -19,6 +19,7 @@ import {
   serverStateRef,
   validateServerState,
 } from './serverState';
+import { ensureLeaderboardSeasonSeeded } from './leaderboardSeasonSeed';
 import type { ServerStateDocument } from './serverStateTypes';
 import type { MarketplacePlayerState } from './vehicleMarketplaceTypes';
 import {
@@ -344,6 +345,17 @@ export async function getLeaderboardSnapshot(
   // V1: yalnız aktif sezon. Geçmiş sezonlar closed.
   if (seasonKey !== getLeaderboardSeasonKey(nowMs)) {
     return { ok: false, reason: 'season-closed', seasonKey };
+  }
+
+  try {
+    await ensureLeaderboardSeasonSeeded(firestore, seasonKey, nowMs, {
+      maxDurationMs: 20_000,
+    });
+  } catch (error) {
+    console.error('[leaderboard-seed-on-get-failed]', {
+      seasonKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   const limit = Math.min(

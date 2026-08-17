@@ -22,6 +22,10 @@ import {
   type CloudSavePayload,
 } from '../services/cloudSaveService';
 import { submitCurrentLeaderboardScore } from '../services/leaderboardService';
+import {
+  markLeaderboardSeasonSubmitted,
+  maybeSubmitLeaderboardForSeasonChange,
+} from '../services/leaderboardSeasonSync';
 import { markStartup } from '../utils/startupPerformance';
 import {
   getLeaderboardSubmitEligibility,
@@ -848,6 +852,10 @@ async function syncLeaderboardFromGameState(_state: StoreGameState): Promise<voi
   }
 
   const result = await submitCurrentLeaderboardScore({ force: false });
+  if (result.ok && result.seasonKey) {
+    await markLeaderboardSeasonSubmitted(result.seasonKey);
+  }
+  await maybeSubmitLeaderboardForSeasonChange();
   if (
     !result.ok &&
     typeof __DEV__ !== 'undefined' &&

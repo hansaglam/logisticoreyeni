@@ -66,6 +66,11 @@ export default function DeliveryHealthBanner({
           {formatGameDuration(health.latenessHours)} gecikmiş durumda
         </Text>
       ) : null}
+      {health.deadlinePaused ? (
+        <Text style={[styles.detail, { color: colors.success }]}>
+          Son teslim süresi durdu — müdahale edebilirsin
+        </Text>
+      ) : null}
       {health.detailLine ? <Text style={styles.detail}>{health.detailLine}</Text> : null}
       {health.showRefuelCta && onRefuel ? (
         <ActionButton label="Yakıt Al" icon="fuel" onPress={onRefuel} style={styles.cta} />

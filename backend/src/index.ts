@@ -12,12 +12,13 @@ import {
   getLeaderboardSnapshot,
   submitLeaderboardScoreTransaction,
 } from './leaderboard';
+import { seedLeaderboardSeason } from './leaderboardSeasonSeed';
 import {
   migrateLegacyServerStateTransaction,
 } from './serverState';
 import { reconcileAuthoritativeFleetTransaction } from './authoritativeFleetReconciliation';
 import { parseMarketplaceListRequest } from './vehicleMarketplaceListRequest';
-import { isValidLeaderboardSeasonKey } from './leaderboardSeason';
+import { getLeaderboardSeasonKey, isValidLeaderboardSeasonKey } from './leaderboardSeason';
 import {
   checkUsernameAvailabilityTransaction,
   getUsernameProfileForUid,
@@ -181,6 +182,48 @@ export const generateGlobalEconomy = onSchedule(
       });
     } catch (error) {
       logger.error('[global-economy-worker]', {
+        durationMs: Date.now() - startedAt,
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : String(error),
+      });
+      throw error;
+    }
+  },
+);
+
+/** Haftalık sezon rollover — kayıtlı oyuncuları yeni sezona taşır. */
+export const seedWeeklyLeaderboard = onSchedule(
+  {
+    schedule: '5 0 * * *',
+    timeZone: 'UTC',
+    retryCount: 2,
+    maxInstances: 1,
+    timeoutSeconds: 540,
+    memory: '512MiB',
+  },
+  async () => {
+    const startedAt = Date.now();
+    const seasonKey = getLeaderboardSeasonKey(startedAt);
+    try {
+      const result = await seedLeaderboardSeason(getFirestore(), seasonKey, {
+        nowMs: startedAt,
+        maxDurationMs: 480_000,
+      });
+      logger.info('[leaderboard-season-seed]', {
+        seasonKey: result.seasonKey,
+        ran: result.ran,
+        completed: result.completed,
+        seeded: result.seeded,
+        skipped: result.skipped,
+        deleted: result.deleted,
+        pagesProcessed: result.pagesProcessed,
+        durationMs: result.durationMs,
+      });
+    } catch (error) {
+      logger.error('[leaderboard-season-seed]', {
+        seasonKey,
         durationMs: Date.now() - startedAt,
         error:
           error instanceof Error

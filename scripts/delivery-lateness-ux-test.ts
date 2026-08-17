@@ -14,6 +14,7 @@ import { STARTER_TRUCK } from '../src/data/trucks';
 import {
   accumulateDeliveryTickDiagnostics,
   buildDeliverySettlementRecord,
+  computeEffectiveTravelHours,
   createEmptyDelayDiagnostics,
   deriveDeliveryDelayCauses,
   findSettlementRecord,
@@ -122,7 +123,7 @@ console.log('Reputation balance unchanged');
   assert(REPUTATION_RULES.deliveryOnTime === 2, 'on-time +2');
   assert(REPUTATION_RULES.deliveryLateMinor === -2, 'minor late -2');
   assert(REPUTATION_RULES.deliveryLateMajor === -4, 'major late -4');
-  assert(REPUTATION_RULES.deliveryFailed === -8, 'failed -8');
+  assert(REPUTATION_RULES.deliveryFailed === -6, 'failed -6');
   assert(REPUTATION_RULES.contractCancelled === -6, 'cancelled -6');
 }
 
@@ -287,10 +288,12 @@ console.log('\nTEST 5 — pending incident wait is recorded');
     truck: makeTruck(),
   });
   assert(health.status === 'incident_pending', 'active status is OLAY BEKLİYOR');
+  assert(health.deadlinePaused === true, 'deadline paused during incident');
   assert(
-    health.detailLine?.includes('işlemeye devam ediyor'),
-    'player is told the clock continues',
+    health.detailLine?.includes('durdu'),
+    'player is told the clock paused',
   );
+  assert(after.deadlineTime === started.deadlineTime + 1, 'deadline extends while waiting');
 }
 
 console.log('\nTEST 6 — fuel + incident both shown');
@@ -341,10 +344,10 @@ console.log('\nTEST 7 — breakdown failure copy');
     deadlineHours: 12,
     punctualityResult: 'failed',
     failureReason: 'breakdown',
-    reputationDelta: -8,
+    reputationDelta: -6,
   });
   assert(record.primaryCause === 'BREAKDOWN', 'primary cause BREAKDOWN');
-  assert(record.reputationDelta === -8, 'failure delta stays -8');
+  assert(record.reputationDelta === -6, 'failure delta is -6');
   const presentation = buildDeliveryResultPresentation(record);
   assert(presentation.title.includes('Araç arızası'), 'result names breakdown');
 }
@@ -363,12 +366,25 @@ console.log('\nTEST 8 — too late shows actual vs deadline');
     deadlineHours: 10,
     punctualityResult: 'failed',
     failureReason: 'too_late',
-    reputationDelta: -8,
+    reputationDelta: -6,
   });
   const presentation = buildDeliveryResultPresentation(record);
   assert(presentation.headline.includes('10s'), 'deadline hours in copy');
-  assert(presentation.headline.includes('21s'), 'actual hours in copy');
+  assert(presentation.headline.includes('Efektif'), 'effective hours in copy');
   assert(presentation.headline.includes('başarısız'), 'failed wording');
+}
+
+console.log('\nTEST 8b — background clock inflation capped by progress');
+{
+  const inflated = makeDelivery({
+    progress: 0.4,
+    travelHours: 10,
+    startedAt: 0,
+    delayDiagnostics: createEmptyDelayDiagnostics(),
+  });
+  const effective = computeEffectiveTravelHours(inflated, 275);
+  assert(effective <= 4.01, 'effective travel capped by progress', `got=${effective}`);
+  assert(effective < 50, 'offline wall-clock does not inflate lateness');
 }
 
 console.log('\nTEST 9 — legacy history has no fabricated cause');
@@ -454,7 +470,7 @@ console.log('\nUI wiring');
   assert(store.includes('evaluateDeliveryReadiness'), 'startDelivery uses readiness evaluator');
   assert(store.includes("errorCode: 'DEADLINE_IMPOSSIBLE'"), 'store blocks impossible ETA');
   assert(assignment.includes('DeliveryReadinessCard'), 'assignment shows readiness card');
-  assert(health.includes('Yakıt bitti — teslimat süresi işlemeye devam ediyor.'), 'fuel clock copy');
+  assert(health.includes('durdu'), 'fuel clock copy paused');
   assert(fuel.includes('ARAÇ YAKITSIZ KALDI'), 'prominent out-of-fuel title');
   assert(app.includes('DeliveryResultSheet'), 'result sheet mounted');
   assert(sheet.includes('LEGACY_SETTLEMENT_UNAVAILABLE'), 'history details handle legacy entries');

@@ -199,6 +199,7 @@ import {
   getLatestDeliveryIncident,
   isDeliveryIncidentCooldownActive,
   maybeRollDeliveryIncident,
+  canAttemptDeliveryIncidentRoll,
   createDebugDeliveryIncident,
   resolveDeliveryIncident as resolveDeliveryIncidentSim,
 } from '../simulation/deliveryIncidents';
@@ -249,6 +250,8 @@ import {
 import {
   accumulateDeliveryTickDiagnostics,
   buildDeliverySettlementRecord,
+  computeEffectiveTravelHours,
+  computeWallClockTravelHours,
   prependSettlementRecord,
 } from '../domain/deliveryDelayDiagnostics';
 import type { DeliverySettlementRecord } from '../domain/deliveryDelayDiagnostics';
@@ -6495,7 +6498,7 @@ const elapsed = plan.elapsed;
         !offlineProgressionActive &&
         !pendingIncidentReserved &&
         !incidentCooldownActive &&
-        !updated.incidentGenerated &&
+        canAttemptDeliveryIncidentRoll(updated) &&
         updated.progress >= 0.2 &&
         updated.progress <= 0.85 &&
         state.player
@@ -7138,10 +7141,11 @@ const elapsed = plan.elapsed;
     }
 
     const beforeMoney = state.player.money;
-    const actualTravelHours = state.currentTime - delivery.startedAt;
+    const wallClockTravelHours = computeWallClockTravelHours(delivery, state.currentTime);
+    const actualTravelHours = computeEffectiveTravelHours(delivery, state.currentTime);
     const product = getProductByIdSafe(delivery.productId);
 
-    // Kritik gecikme → başarısız teslimat
+    // Kritik gecikme → başarısız teslimat (yalnızca efektif süre)
     if (actualTravelHours > contract.deadlineHours * 2) {
       get().failDeliveryById(deliveryId, 'too_late');
       return;
@@ -7268,6 +7272,7 @@ const elapsed = plan.elapsed;
       contractId: contract.id,
       completedAt: state.currentTime,
       actualTravelHours,
+      wallClockTravelHours,
       deadlineHours: contract.deadlineHours,
       punctualityResult: deliveryReputationResult.punctuality,
       reputationDelta: deliveryReputationResult.delta,
@@ -7543,12 +7548,14 @@ const elapsed = plan.elapsed;
     const merged = mergeSimulationIntoStore(state, newSimState, moneyAfterFail);
     const settledAt = state.currentTime;
     const failureReputation = deliveryFailureReasonToReputationDelta(reason);
-    const actualTravelHours = Math.max(0, state.currentTime - delivery.startedAt);
+    const wallClockTravelHours = computeWallClockTravelHours(delivery, state.currentTime);
+    const actualTravelHours = computeEffectiveTravelHours(delivery, state.currentTime);
     const settlementRecord = buildDeliverySettlementRecord({
       delivery,
       contractId: contract?.id ?? delivery.contractId,
       completedAt: state.currentTime,
       actualTravelHours,
+      wallClockTravelHours,
       deadlineHours: contract?.deadlineHours ?? Math.max(0.1, delivery.deadlineTime - delivery.startedAt),
       punctualityResult: reason === 'cancelled' ? 'cancelled' : 'failed',
       failureReason: reason,

@@ -41,6 +41,7 @@ import {
   selectIdleTruckForContract,
   updateDeliveryProgressWithFuel,
 } from '../../src/simulation/delivery';
+import { computeEffectiveTravelHours } from '../../src/domain/deliveryDelayDiagnostics';
 import type { SimulationGameState } from '../../src/types/game';
 import {
   applyDriverXp,
@@ -369,7 +370,7 @@ function completeDeliveryHeadless(state: HeadlessSimState, deliveryId: string): 
   const contract = sim.contracts.find((c) => c.id === delivery.contractId);
   if (!contract) return state;
 
-  const actualTravelHours = state.currentTime - delivery.startedAt;
+  const actualTravelHours = computeEffectiveTravelHours(delivery, state.currentTime);
   if (actualTravelHours > contract.deadlineHours * 2) {
     return failDeliveryHeadless(state, deliveryId, 'too_late');
   }

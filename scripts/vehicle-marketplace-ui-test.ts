@@ -1,6 +1,8 @@
 import './test-globals';
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import {
   VEHICLE_MARKETPLACE_ENABLED,
@@ -125,6 +127,24 @@ assert.equal(reconciliation.trucks.length, 1, 'authoritative purchase must add t
 assert.equal(reconciliation.trucks[0].id, first.truckSnapshot.truckId);
 assert.equal(reconciliation.authoritativeCash, 13_500);
 
+const ROOT = resolve(__dirname, '..');
+const readSource = (rel: string) => readFileSync(resolve(ROOT, rel), 'utf8');
+
+const createSheetSource = readSource('src/components/marketplace/VehicleListingCreateSheet.tsx');
+assert.match(createSheetSource, /KeyboardAvoidingView/);
+assert.match(createSheetSource, /keyboardShouldPersistTaps="handled"/);
+assert.match(createSheetSource, /getBottomInset/);
+assert.match(createSheetSource, /scrollToEnd/);
+
+const marketplaceScreenSource = readSource('src/screens/VehicleMarketplaceScreen.tsx');
+assert.match(marketplaceScreenSource, /showSuccessAfterModalClose/);
+assert.doesNotMatch(marketplaceScreenSource, /backend tarafından kilitlendi/);
+assert.doesNotMatch(marketplaceScreenSource, /authoritative pazar kaydından/);
+
+const marketplaceUiSafetySource = readSource('src/utils/marketplaceUiSafety.ts');
+assert.match(marketplaceUiSafetySource, /showSuccessAfterModalClose/);
+assert.match(marketplaceUiSafetySource, /variant: 'success'/);
+
 console.log('[vehicle-marketplace-ui-test] PASS', {
   featureFlagHidden: true,
   devFeatureEnabled: true,
@@ -134,4 +154,6 @@ console.log('[vehicle-marketplace-ui-test] PASS', {
   dedupedListings: merged.length,
   structuredErrors: 4,
   authoritativeTruckAdded: reconciliation.trucks.length,
+  createSheetKeyboardSafe: true,
+  successDialogCopy: true,
 });

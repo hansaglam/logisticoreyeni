@@ -8,6 +8,7 @@ import type {
   DeliveryFailureReason,
 } from '../types/game';
 import type { DeadlineRiskLevel } from '../utils/deadlineUx';
+import { clamp } from '../utils/math';
 import type { DeliveryPunctuality } from '../simulation/reputationSettlement';
 
 export const DELIVERY_SETTLEMENT_HISTORY_MAX = 20;
@@ -56,6 +57,8 @@ export interface DeliverySettlementRecord {
   estimatedTravelHours: number;
   deadlineHours: number;
   actualTravelHours: number;
+  /** Ham oyun saati — arka plan catch-up dahil; yalnızca şeffaflık için */
+  wallClockTravelHours?: number;
   latenessHours: number;
   latenessRatio: number;
   punctualityResult: DeliveryPunctuality | 'cancelled';
@@ -132,6 +135,51 @@ export function isPendingIncidentBlocking(delivery: Pick<Delivery, 'incident' | 
   );
 }
 
+/** Beklenmeyen olay / yakıt duraklamalarının toplamı (saat). */
+export function computePausedHours(
+  diagnostics: DeliveryDelayDiagnostics | undefined,
+): number {
+  const normalized = normalizeDelayDiagnostics(diagnostics);
+  return (
+    normalized.outOfFuelHours +
+    normalized.incidentPendingHours +
+    normalized.otherPausedHours +
+    (normalized.incidentChoiceDelayHours ?? 0)
+  );
+}
+
+/**
+ * Son teslim hesabında kullanılan efektif yol süresi.
+ * Arka plan saati şişirmesini ve kayıtlı duraklamaları düşer; ilerlemeye göre tavan uygular.
+ */
+export function computeEffectiveTravelHours(
+  delivery: Pick<
+    Delivery,
+    'startedAt' | 'travelHours' | 'progress' | 'delayDiagnostics'
+  >,
+  currentTime: number,
+): number {
+  const wallClockHours = Math.max(0, currentTime - delivery.startedAt);
+  const pausedHours = computePausedHours(delivery.delayDiagnostics);
+  const afterPause = Math.max(0, wallClockHours - pausedHours);
+
+  const travelHours = Math.max(delivery.travelHours ?? 0.1, 0.1);
+  const progress = clamp(delivery.progress ?? 0, 0, 1);
+  const progressCeiling =
+    progress >= 1 - 1e-6
+      ? travelHours
+      : Math.max(travelHours * progress, travelHours * 0.01);
+
+  return Math.min(afterPause, progressCeiling);
+}
+
+export function computeWallClockTravelHours(
+  delivery: Pick<Delivery, 'startedAt'>,
+  currentTime: number,
+): number {
+  return Math.max(0, currentTime - delivery.startedAt);
+}
+
 export function accumulateDeliveryTickDiagnostics(
   delivery: Delivery,
   hoursPassed: number,
@@ -161,13 +209,18 @@ export function accumulateDeliveryTickDiagnostics(
     diagnostics = addDelayHours(diagnostics, 'otherPausedHours', hoursPassed);
   }
 
-  const bumpEta = options.incidentBlocking || options.otherPaused;
+  const deadlinePaused =
+    options.isOutOfFuel || options.incidentBlocking || options.otherPaused;
+  const bumpEta = deadlinePaused;
   return {
     ...delivery,
     delayDiagnostics: diagnostics,
     estimatedArrivalTime: bumpEta
       ? delivery.estimatedArrivalTime + hoursPassed
       : delivery.estimatedArrivalTime,
+    deadlineTime: deadlinePaused
+      ? delivery.deadlineTime + hoursPassed
+      : delivery.deadlineTime,
     currentSpeedKmh:
       options.isOutOfFuel || options.incidentBlocking || options.otherPaused
         ? 0
@@ -265,6 +318,7 @@ export function buildDeliverySettlementRecord(input: {
   contractId: string;
   completedAt: number;
   actualTravelHours: number;
+  wallClockTravelHours?: number;
   deadlineHours: number;
   punctualityResult: DeliveryPunctuality | 'cancelled';
   failureReason?: DeliveryFailureReason;
@@ -274,7 +328,11 @@ export function buildDeliverySettlementRecord(input: {
   const start = input.delivery.startReadiness;
   const estimatedTravelHours =
     start?.estimatedTravelHours ?? input.delivery.travelHours;
-  const latenessHours = Math.max(0, input.actualTravelHours - input.deadlineHours);
+  const effectiveTravelHours = Math.max(0, input.actualTravelHours);
+  const wallClockTravelHours =
+    input.wallClockTravelHours ??
+    computeWallClockTravelHours(input.delivery, input.completedAt);
+  const latenessHours = Math.max(0, effectiveTravelHours - input.deadlineHours);
   const latenessRatio = latenessHours / Math.max(input.deadlineHours, 0.1);
   const { primaryCause, contributingCauses } = deriveDeliveryDelayCauses({
     failureReason: input.failureReason,
@@ -302,7 +360,8 @@ export function buildDeliverySettlementRecord(input: {
     completedAt: input.completedAt,
     estimatedTravelHours,
     deadlineHours: input.deadlineHours,
-    actualTravelHours: input.actualTravelHours,
+    actualTravelHours: effectiveTravelHours,
+    wallClockTravelHours,
     latenessHours,
     latenessRatio,
     punctualityResult: input.punctualityResult,

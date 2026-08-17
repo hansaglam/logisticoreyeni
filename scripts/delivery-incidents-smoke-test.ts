@@ -9,6 +9,7 @@ import {
   createDebugDeliveryIncident,
   formatIncidentChoiceEffectSummary,
   generateDeliveryIncident,
+  getDeliveryIncidentRollIndex,
   getIncidentTriggerProgress,
   maybeRollDeliveryIncident,
   normalizeDelivery,
@@ -94,19 +95,19 @@ console.log('\nDelivery Incident V1 smoke tests\n');
 
 console.log('Eligibility gates');
 {
-  const player = basePlayer({ completedContracts: 1 });
+  const player = basePlayer({ completedContracts: 0 });
   const delivery = baseDelivery({ progress: 0.4 });
   assert(
     !shouldGenerateDeliveryIncident(delivery, player, baseContract()),
-    'completedContracts < 2 ise incident çıkmaz',
+    'completedContracts < 1 ise incident çıkmaz',
   );
 }
 
 {
-  const delivery = baseDelivery({ travelHours: 3, progress: 0.4 });
+  const delivery = baseDelivery({ travelHours: 2.5, progress: 0.4 });
   assert(
     !shouldGenerateDeliveryIncident(delivery, basePlayer(), baseContract()),
-    'estimatedDuration < 4 ise çıkmaz',
+    'estimatedDuration < 3 ise çıkmaz',
   );
 }
 
@@ -142,11 +143,13 @@ console.log('\nGeneration limits');
     160,
   );
 
-  assert(delivery.incidentGenerated === true, 'incidentGenerated true ise tekrar üretmez');
-  assert(
-    delivery.incident?.id === firstIncidentId,
-    'standard delivery için max 1 incident',
-  );
+  assert(getDeliveryIncidentRollIndex(delivery) >= 1, 'en az bir roll denemesi tüketildi');
+  if (firstIncidentId) {
+    assert(
+      delivery.incident?.id === firstIncidentId,
+      'pending incident varken ikinci olay üretilmez',
+    );
+  }
 }
 
 console.log('\nResolve effects');

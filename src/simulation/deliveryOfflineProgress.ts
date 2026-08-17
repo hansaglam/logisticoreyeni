@@ -6,6 +6,10 @@
 import { getMsPerGameHour, realMsToGameHours } from '../config/balance';
 import type { Delivery } from '../types/game';
 import {
+  accumulateDeliveryTickDiagnostics,
+  isPendingIncidentBlocking,
+} from '../domain/deliveryDelayDiagnostics';
+import {
   isDeliveryProgressComplete,
   updateDeliveryProgress,
 } from './delivery';
@@ -131,7 +135,17 @@ export function reconcileDeliveriesWithRealTime(params: {
     }
 
     const before = delivery.progress ?? 0;
-    let updated = updateDeliveryProgress(delivery, catchUpHours);
+    let updated: Delivery;
+    if (isPendingIncidentBlocking(delivery)) {
+      updated = accumulateDeliveryTickDiagnostics(delivery, catchUpHours, {
+        wasOutOfFuel: false,
+        isOutOfFuel: false,
+        incidentBlocking: true,
+        otherPaused: false,
+      });
+    } else {
+      updated = updateDeliveryProgress(delivery, catchUpHours);
+    }
     updated = {
       ...updated,
       lastProgressedRealAtMs: params.nowMs,
@@ -144,13 +158,15 @@ export function reconcileDeliveriesWithRealTime(params: {
       progressedCount += 1;
     }
 
-    if (updated.incident?.status === 'pending') {
-      updated = {
-        ...updated,
-        incident: undefined,
-        incidentGenerated: true,
-        incidentResolved: true,
-      };
+    // Bekleyen operasyon kararı korunur — offline dönüşte oyuncu karar verir.
+    if (
+      updated.incident?.status === 'pending' &&
+      updated.incidentResolved !== true
+    ) {
+      if (isDeliveryProgressComplete(updated.progress)) {
+        completedIds.push(updated.id);
+      }
+      return updated;
     }
 
     if (isDeliveryProgressComplete(updated.progress)) {

@@ -23,6 +23,7 @@ import {
 import TutorialOverlay from './src/components/tutorial/TutorialOverlay';
 import { ENABLE_SPOTLIGHT_TUTORIAL } from './src/tutorial/featureFlags';
 import { useGameLoop } from './src/hooks/useGameLoop';
+import { maybeSubmitLeaderboardForSeasonChange } from './src/services/leaderboardSeasonSync';
 import { useSpotlightTutorialTriggers } from './src/hooks/useSpotlightTutorialTriggers';
 import { useSpotlightTutorialStore } from './src/store/spotlightTutorialStore';
 import { useGameStore } from './src/store/gameStore';
@@ -552,6 +553,7 @@ export default function App() {
         useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
         useGameStore.getState().applyOfflineProgressionIfNeeded('foreground');
         useGameStore.getState().maybeRefreshMarketSnapshot('foreground');
+        void maybeSubmitLeaderboardForSeasonChange();
       }
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {

@@ -63,7 +63,7 @@ export function getFuelWarningForJob(
       key: 'out-of-fuel',
       title: 'ARAÇ YAKITSIZ KALDI',
       message:
-        'Teslimat ilerlemiyor ancak son teslim süresi işlemeye devam ediyor. Gecikme cezası almamak için araca yakıt ekle.',
+        'Teslimat ilerlemiyor ve son teslim süresi durdu. Gecikme cezası almamak için araca yakıt ekle.',
       priority: 1,
       fuelPercent,
       remainingRangeKm: 0,

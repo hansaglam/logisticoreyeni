@@ -63,7 +63,9 @@ assert.doesNotMatch(backendIndex, /record\.companyScore/);
 assert.match(backendIndex, /'uid' in record \|\| 'score' in record \|\| 'companyScore' in record/);
 console.log('  ✓ Score server-owned; client cannot spoof score/uid');
 
-assert.match(leaderboardBackend, /getLeaderboardSeasonKey\(nowMs\)/);
+assert.match(leaderboardBackend, /ensureLeaderboardSeasonSeeded/);
+assert.match(read('backend/src/index.ts'), /seedWeeklyLeaderboard/);
+console.log('  ✓ Season rollover seed + get-time backfill');
 assert.match(leaderboardBackend, /calculateLeaderboardScore/);
 assert.match(leaderboardBackend, /extractCanonicalPlayerStateFromServerState/);
 assert.match(read('backend/src/leaderboardScore.ts'), /reputation: state\.reputation/);

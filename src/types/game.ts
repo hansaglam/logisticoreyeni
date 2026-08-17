@@ -707,8 +707,10 @@ export interface Delivery {
   settlementId?: string;
   /** Aktif operasyon olayı */
   incident?: DeliveryIncident;
-  /** Bu teslimat için olay roll'ü yapıldı mı (max 1) */
+  /** Bu teslimat için olay roll'ü yapıldı mı */
   incidentGenerated?: boolean;
+  /** Kaç kez olay roll denemesi yapıldı (başarılı/başarısız) */
+  incidentRollsAttempted?: number;
   /** Olay kararı verildi mi */
   incidentResolved?: boolean;
   /** Çözülmüş operasyon kararları (audit) */

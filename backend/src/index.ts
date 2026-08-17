@@ -16,6 +16,7 @@ import {
   migrateLegacyServerStateTransaction,
 } from './serverState';
 import { reconcileAuthoritativeFleetTransaction } from './authoritativeFleetReconciliation';
+import { parseMarketplaceListRequest } from './vehicleMarketplaceListRequest';
 import { isValidLeaderboardSeasonKey } from './leaderboardSeason';
 import {
   checkUsernameAvailabilityTransaction,
@@ -459,38 +460,25 @@ export const purchaseVehicleListing = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTION
 export const getVehicleMarketplaceListings = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS, async (request) => {
   const identity = callableIdentity(request);
   if (!identity) return unauthenticatedResult(request.data ?? {});
-  const record = requestRecord(request.data);
-  const cursor = requestRecord(record.cursor);
-  const limitRaw = record.limit === undefined ? 20 : Number(record.limit);
-  const limit = Math.min(50, Math.max(1, Math.floor(limitRaw)));
-  if (
-    !hasOnlyKeys(record, ['limit', 'cursor']) ||
-    (record.limit !== undefined &&
-      (!Number.isFinite(limitRaw) || limitRaw < 1 || limitRaw > 50)) ||
-    (record.cursor !== undefined &&
-      (!hasOnlyKeys(cursor, ['createdAt', 'id']) ||
-        !Number.isFinite(cursor.createdAt) ||
-        Number(cursor.createdAt) <= 0 ||
-        !isBoundedId(cursor.id)))
-  ) {
-    return invalidRequestResult(record);
+  const parsedRequest = parseMarketplaceListRequest(request.data);
+  if (!parsedRequest) {
+    logger.warn('[vehicle-marketplace-list-invalid-request]', {
+      uidHash: uidHash(identity.uid),
+      keys: Object.keys(requestRecord(request.data)),
+      cursorType: typeof requestRecord(request.data).cursor,
+    });
+    return invalidRequestResult(requestRecord(request.data));
   }
-  if (!(await consumeRateLimit(identity.uid, 'list'))) return rateLimitedResult(record);
-  const cursorCreatedAt = Number(cursor.createdAt);
-  const cursorId = cursor.id;
+  const { limit, cursor } = parsedRequest;
+  if (!(await consumeRateLimit(identity.uid, 'list'))) return rateLimitedResult(requestRecord(request.data));
   try {
     let query = getFirestore()
       .collection('vehicleMarketplaceListings')
       .where('status', '==', 'active')
       .orderBy('createdAt', 'desc')
       .orderBy(FieldPath.documentId(), 'desc');
-    if (
-      Number.isFinite(cursorCreatedAt) &&
-      cursorCreatedAt > 0 &&
-      typeof cursorId === 'string' &&
-      cursorId.length > 0
-    ) {
-      query = query.startAfter(Timestamp.fromMillis(cursorCreatedAt), cursorId);
+    if (cursor) {
+      query = query.startAfter(Timestamp.fromMillis(cursor.createdAt), cursor.id);
     }
     const snapshot = await query.limit(limit + 1).get();
     const visibleDocs = snapshot.docs.slice(0, limit);

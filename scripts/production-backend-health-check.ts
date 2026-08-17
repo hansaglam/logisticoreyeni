@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -11,16 +11,25 @@ const projectId = (JSON.parse(readFileSync(resolve(ROOT, '.firebaserc'), 'utf8')
 }).projects?.default;
 if (projectId !== 'logisticore-53ab4') throw new Error(`UNEXPECTED_FIREBASE_PROJECT:${projectId}`);
 const executable = resolve(ROOT, 'node_modules/firebase-tools/lib/bin/firebase.js');
-const parsed = JSON.parse(execFileSync(process.execPath, [executable, 'functions:list', '--json'], {
-  cwd: ROOT,
-  encoding: 'utf8',
-})) as { result?: Array<Record<string, unknown>> };
+const firebaseCliJson = (args: string[]) => {
+  const result = spawnSync(process.execPath, [executable, ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: 'y\n',
+  });
+  const stdout = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  const jsonStart = stdout.indexOf('{');
+  const jsonEnd = stdout.lastIndexOf('}');
+  if (jsonStart < 0 || jsonEnd <= jsonStart) {
+    throw new Error(`NO_JSON_IN_FIREBASE_CLI_OUTPUT:${stdout.slice(0, 160)}`);
+  }
+  return JSON.parse(stdout.slice(jsonStart, jsonEnd + 1)) as unknown;
+};
+const parsed = firebaseCliJson(['functions:list', '--json']) as {
+  result?: Array<Record<string, unknown>>;
+};
 const functions = parsed.result ?? [];
-const indexResult = JSON.parse(execFileSync(process.execPath, [
-  executable,
-  'firestore:indexes',
-  '--json',
-], { cwd: ROOT, encoding: 'utf8' })) as {
+const indexResult = firebaseCliJson(['firestore:indexes', '--json']) as {
   result?: { indexes?: Array<{ collectionGroup?: string; fields?: Array<{ fieldPath?: string }> }> };
 };
 const indexes = indexResult.result?.indexes ?? [];

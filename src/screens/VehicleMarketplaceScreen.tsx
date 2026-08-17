@@ -372,6 +372,10 @@ export default function VehicleMarketplaceScreen({
             publicResult.reason as VehicleMarketplaceFailureReason | undefined,
           ),
         });
+        if (myResult.ok) {
+          setScreenState(applyMarketplaceFetchSuccess([]));
+          return;
+        }
         setScreenState(
           applyMarketplaceFetchError(
             mapFailureReasonToMarketplaceKind(

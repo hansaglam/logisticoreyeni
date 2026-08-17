@@ -373,7 +373,16 @@ export async function getVehicleMarketplaceListings(
   const result = await invokeMarketplaceCallable<
     { limit: number; cursor?: VehicleMarketplaceCursor },
     Record<string, unknown>
-  >(VEHICLE_MARKETPLACE_CALLABLES.list, { limit, cursor });
+  >(
+    VEHICLE_MARKETPLACE_CALLABLES.list,
+    cursor &&
+      Number.isFinite(cursor.createdAt) &&
+      cursor.createdAt > 0 &&
+      typeof cursor.id === 'string' &&
+      cursor.id.length > 0
+      ? { limit, cursor }
+      : { limit },
+  );
   if (!result.ok) {
     logMarketplaceLoadError({
       code: result.reason,

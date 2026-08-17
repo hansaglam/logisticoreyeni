@@ -39,6 +39,10 @@ import {
   getIdleDrivers,
   selectIdleTruckForContract,
 } from './delivery';
+import {
+  getEffectiveTruckCapacity,
+  isTruckSuitableForRiskyContract,
+} from './truckUpgrades';
 
 const URGENT_URGENCY_THRESHOLD = 0.75;
 const URGENT_DEADLINE_SLACK = 0.95;

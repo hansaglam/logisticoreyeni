@@ -10777,18 +10777,29 @@ const elapsed = plan.elapsed;
       return { success: false, reason, message };
     }
 
+    const normalizedTruck = normalizeTruckFuel(truck);
+    const capacity = normalizedTruck.fuelTankCapacityL ?? 0;
+    const currentFuel = normalizedTruck.currentFuelL ?? 0;
+    const litersAdded = Math.min(
+      assistance.liters,
+      Math.max(0, capacity - currentFuel),
+    );
+
     set((live) => {
       const liveTruck = live.player.trucks.find((candidate) => candidate.id === job.truckId);
       if (!liveTruck) return {};
       const normalizedLive = normalizeTruckFuel(liveTruck);
-      const capacity = normalizedLive.fuelTankCapacityL ?? 0;
-      const currentFuel = normalizedLive.currentFuelL ?? 0;
-      const litersAdded = Math.min(assistance.liters, Math.max(0, capacity - currentFuel));
-      const newFuelL = currentFuel + litersAdded;
+      const liveCapacity = normalizedLive.fuelTankCapacityL ?? 0;
+      const liveCurrentFuel = normalizedLive.currentFuelL ?? 0;
+      const liveLitersAdded = Math.min(
+        assistance.liters,
+        Math.max(0, liveCapacity - liveCurrentFuel),
+      );
+      const newFuelL = liveCurrentFuel + liveLitersAdded;
       const applied = applyPurchasedFuelToVehicle({
         truck: liveTruck,
         newFuelL,
-        litersAdded,
+        litersAdded: liveLitersAdded,
         deliveries: live.activeDeliveries,
         transfers: live.activeTransfers ?? [],
         warehouseTransfers: live.activeWarehouseStockTransfers ?? [],
@@ -10812,7 +10823,7 @@ const elapsed = plan.elapsed;
           category: 'fuel',
           amount: 0,
           title: 'Sınırlı yol yardımı',
-          description: `${liveTruck.name} · ${litersAdded.toFixed(1)} L yardım · normal bedel ${formatNotificationMoney(assistance.avoidedCost)}`,
+          description: `${liveTruck.name} · ${liveLitersAdded.toFixed(1)} L yardım · normal bedel ${formatNotificationMoney(assistance.avoidedCost)}`,
           source: 'roadside-emergency',
         }),
       };
@@ -10822,7 +10833,7 @@ const elapsed = plan.elapsed;
       time: state.currentTime,
       type: 'info',
       title: 'Sınırlı yol yardımı',
-      message: `${litersAddedPreview.toFixed(1)} L yakıt sağlandı. Bu yardım cooldown süresine tabidir.`,
+      message: `${litersAdded.toFixed(1)} L yakıt sağlandı. Bu yardım cooldown süresine tabidir.`,
       actionLabel: 'Haritada Gör',
       actionTarget: 'map',
     });
@@ -10830,8 +10841,8 @@ const elapsed = plan.elapsed;
     get().autoSave('roadside_fuel');
     return {
       success: true,
-      message: `${litersAddedPreview.toFixed(1)} L sınırlı yol yardımı sağlandı.`,
-      litersAdded: litersAddedPreview,
+      message: `${litersAdded.toFixed(1)} L sınırlı yol yardımı sağlandı.`,
+      litersAdded,
       totalCost: 0,
       source: 'roadside-emergency',
     };

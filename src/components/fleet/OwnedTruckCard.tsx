@@ -10,7 +10,6 @@ import {
 
 import { getTruckArtwork } from '../../assets/fleetAssets';
 import { getTruckCatalogId } from '../../data/trucks';
-import { timeBalance } from '../../config/balance';
 import { VEHICLE_MARKETPLACE_ENABLED } from '../../config/backendRoadmap';
 import AdRewardButton from '../monetization/AdRewardButton';
 import { GameIcon, ProgressBar, StatusBadge } from '../ui';
@@ -18,8 +17,13 @@ import type { StatusBadgeVariant } from '../ui';
 import { calculateTruckRepairCost, resolveTruckCityId } from '../../simulation/delivery';
 import { getTruckEffectiveCapacityTons } from '../../simulation/capacity';
 import { getAttachedTrailerForTruck } from '../../simulation/trailerAttachment';
-import { isActiveLeasedTruck, getTruckWeeklyLeaseCost } from '../../simulation/dailyOperatingCosts';
+import { isActiveLeasedTruck } from '../../simulation/dailyOperatingCosts';
 import { isRentalReturnPending } from '../../simulation/rentalTruckLifecycle';
+import {
+  formatLeaseRemainingDays,
+  formatTruckLeaseCostLabel,
+  formatTruckLeaseFleetSummary,
+} from '../../utils/truckLeasePresentation';
 import { MAX_UPGRADE_LEVEL } from '../../simulation/truckUpgrades';
 import {
   calculateDiscountedRepairCost,
@@ -65,13 +69,6 @@ function formatRemainingHours(currentTime: number, estimatedArrivalTime: number)
   const mins = Math.round((remaining - hrs) * 60);
   if (hrs > 0) return `${hrs}s ${mins}dk`;
   return `${mins}dk`;
-}
-
-function formatLeaseRemainingDays(currentTime: number, leaseExpiresAt?: number | null): string {
-  if (leaseExpiresAt == null) return '—';
-  const hoursLeft = Math.max(0, leaseExpiresAt - currentTime);
-  const days = Math.ceil(hoursLeft / timeBalance.hoursPerDay);
-  return `${days} gün`;
 }
 
 function getConditionColor(condition: number): string {
@@ -326,8 +323,8 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           ) : isLeased ? (
             <>
               <Text style={styles.valueLabel}>Kira</Text>
-              <Text style={styles.leaseAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                {formatLeaseRemainingDays(currentTime, liveTruck.leaseExpiresAt)}
+              <Text style={styles.leaseAmount} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
+                {formatTruckLeaseFleetSummary(liveTruck, currentTime)}
               </Text>
             </>
           ) : null}
@@ -547,7 +544,7 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           ) : null}
           {isLeased ? (
             <Text style={styles.moreMeta} numberOfLines={2}>
-              Haftalık {formatMoney(getTruckWeeklyLeaseCost(truck))} · Kalan{' '}
+              {formatTruckLeaseCostLabel(liveTruck)} · Kalan{' '}
               {formatLeaseRemainingDays(currentTime, liveTruck.leaseExpiresAt)}
             </Text>
           ) : null}

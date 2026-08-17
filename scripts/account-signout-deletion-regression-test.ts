@@ -38,10 +38,16 @@ assert(connectionTab.includes('Çıkış Yap'), 'sign-out label present');
 assert(hook.includes('handleGoogleSignOut'), 'sign-out handler exported');
 assert(hook.includes('signOutGoogleAccountToGuest'), 'firebase signOut path');
 assert(hook.includes('Çıkış yapmak istiyor musun?'), 'sign-out confirmation title');
-assert(hook.includes('Buluta kaydedilmiş ilerlemen korunur'), 'sign-out confirmation body');
+assert(
+  hook.includes('bu cihazdaki oyun sıfırlanır'),
+  'sign-out confirmation explains local reset',
+);
 assert(hook.includes('syncBeforeSignOutBestEffort'), 'best-effort pre-sync');
 assert(!hook.includes('Çıkış iptal edildi'), 'sign-out no longer hard-blocked on sync fail');
-assert(hook.includes('rebindLocalSaveToAuth'), 'ownerUid rebound after sign-out');
+assert(
+  hook.includes('resetLocalSessionAfterLinkedAccountSignOut'),
+  'local session reset after linked sign-out',
+);
 assert(hook.includes('clearAccountScopedClientState'), 'scoped client state cleared');
 assert(hook.includes('setUsernameProfile(null)'), 'username cache cleared on sign-out');
 assert(hook.includes('logAccountSignOut'), 'structured sign-out logging');

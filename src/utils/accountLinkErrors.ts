@@ -41,6 +41,15 @@ export function getAccountLinkConflictFooter(_provider: 'google' | 'apple'): str
   return 'Seçim yapmadan buluta otomatik yazım yapılmaz.';
 }
 
+export function getEmptyCloudAccountConflictTitle(): string {
+  return 'Bu hesapta kayıt yok';
+}
+
+export function getEmptyCloudAccountConflictMessage(provider: 'google' | 'apple'): string {
+  const providerLabel = provider === 'google' ? 'Google' : 'Apple';
+  return `Seçtiğin ${providerLabel} hesabında henüz bulut kaydı yok. Bu cihazda başka bir oturuma ait ilerleme görünüyor. Yeni oyun başlatabilir veya bu cihazdaki kaydı bu hesaba bağlayabilirsin.`;
+}
+
 export function getAccountLinkGeneralErrorMessage(): string {
   return 'Hesap bağlanamadı. Lütfen tekrar dene.';
 }

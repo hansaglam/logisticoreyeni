@@ -146,9 +146,14 @@ assert(
 );
 assert(appSource.includes('DeliveryIncidentModal'), 'event modalı aktif render zincirine bağlı');
 assert(
-  appSource.includes("activeTab === 'dashboard'") &&
-    appSource.includes('pendingOfflineProgressSummary == null'),
-  'modal kritik offline özetiyle üst üste binmez',
+  !appSource.includes("activeTab === 'dashboard'") ||
+    !appSource.match(/DeliveryIncidentModal[\s\S]{0,400}activeTab === 'dashboard'/),
+  'incident modalı ana sekmeye kilitli değil',
+);
+assert(
+  appSource.includes('pendingOfflineProgressSummary == null') &&
+    appSource.includes('pendingDeliveryResultSummary == null'),
+  'modal kritik özet sheetleriyle üst üste binmez',
 );
 assert(modalSource.includes("maxWidth: 430"), 'modal 360–430 px mobil genişliğe uyumlu');
 assert(modalSource.includes("maxHeight: '82%'"), 'modal küçük ekranda bounded ve scroll edilebilir');

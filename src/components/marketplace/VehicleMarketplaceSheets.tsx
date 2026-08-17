@@ -139,6 +139,7 @@ export function VehiclePurchaseConfirmSheet({
   cash,
   fleetCount,
   fleetLimit,
+  preparing,
   purchasing,
   onClose,
   onConfirm,
@@ -147,25 +148,30 @@ export function VehiclePurchaseConfirmSheet({
   cash: number;
   fleetCount: number;
   fleetLimit: number | null;
+  preparing?: boolean;
   purchasing: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) {
   if (!listing) return null;
   const after = cash - listing.askingPrice;
+  const canConfirm = !preparing && !purchasing && after >= 0;
   return (
-    <SheetFrame visible onClose={purchasing ? () => undefined : onClose}>
+    <SheetFrame visible onClose={purchasing || preparing ? () => undefined : onClose}>
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Araç satın alınacak</Text>
           <Text style={styles.subtitle}>{getMarketplaceTruckName(listing.truckSnapshot.templateId)}</Text>
         </View>
-        {!purchasing ? <CloseButton onPress={onClose} /> : null}
+        {!purchasing && !preparing ? <CloseButton onPress={onClose} /> : null}
       </View>
       <View style={styles.confirmContent}>
         <ConfirmRow label="Araç fiyatı" value={formatMoney(listing.askingPrice)} accent />
-        <ConfirmRow label="Mevcut nakit" value={formatMoney(cash)} />
-        <ConfirmRow label="Satın alma sonrası" value={formatMoney(after)} danger={after < 0} />
+        <ConfirmRow
+          label={preparing ? 'Kullanılabilir nakit (sunucu)…' : 'Kullanılabilir nakit (sunucu)'}
+          value={preparing ? '—' : formatMoney(cash)}
+        />
+        <ConfirmRow label="Satın alma sonrası" value={preparing ? '—' : formatMoney(after)} danger={!preparing && after < 0} />
         <ConfirmRow
           label="Filo"
           value={fleetLimit ? `${fleetCount} / ${fleetLimit} → ${fleetCount + 1} / ${fleetLimit}` : `${fleetCount} → ${fleetCount + 1}`}
@@ -176,14 +182,20 @@ export function VehiclePurchaseConfirmSheet({
         </View>
       </View>
       <ActionButton
-        label={purchasing ? 'Satın alınıyor…' : 'Satın Almayı Onayla'}
+        label={
+          purchasing
+            ? 'Satın alınıyor…'
+            : preparing
+              ? 'Nakit kontrol ediliyor…'
+              : 'Satın Almayı Onayla'
+        }
         onPress={onConfirm}
-        disabled={purchasing || after < 0}
+        disabled={!canConfirm}
         fullWidth
         icon="success"
         style={styles.primaryAction}
       />
-      {purchasing ? <ActivityIndicator color={colors.accentBlue} style={styles.loading} /> : null}
+      {purchasing || preparing ? <ActivityIndicator color={colors.accentBlue} style={styles.loading} /> : null}
     </SheetFrame>
   );
 }

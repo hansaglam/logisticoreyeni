@@ -101,10 +101,10 @@ assert.equal(
   'Kendi ilanını satın alamazsın.',
 );
 
-// 9. Yetersiz para
-assert.equal(
+// 9. Yetersiz para (sunucu nakdi)
+assert.match(
   getMarketplaceErrorMessage('insufficient-funds'),
-  'Bu aracı satın almak için yeterli nakdin yok.',
+  /yeterli sunucu nakdin yok/i,
 );
 
 // 10. Double purchase idempotency reason surfaces as conflict family

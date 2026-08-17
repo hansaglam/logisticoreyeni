@@ -45,7 +45,13 @@ import type { AccountLinkResult, AccountSwitchResult } from './authService';
 
 export type ProviderAccountSaveOutcome =
   | { type: 'completed'; message?: string }
-  | { type: 'conflict'; provider: 'google' | 'apple'; authenticatedUid: string }
+  | {
+      type: 'conflict';
+      provider: 'google' | 'apple';
+      authenticatedUid: string;
+      /** Hedef hesapta bulut kaydı yok; cihazda anlamlı ilerleme var. */
+      cloudSaveMissing?: boolean;
+    }
   | {
       type: 'cloud_load_failed';
       provider: 'google' | 'apple';
@@ -384,8 +390,14 @@ export async function runPostSignInSaveFlow(
   if (!cloud.ok) {
     if (cloud.reason === 'cloud-save-not-found') {
       if (localMeaning.meaningful) {
-        await uploadLocalSaveForUid(authenticatedUid, provider);
-        return { type: 'completed', message: 'Bu cihazdaki kayıt hesabına bağlandı.' };
+        setAccountSaveFlowPhase('conflict');
+        beginAccountSaveConflictSession({ provider, authenticatedUid });
+        return {
+          type: 'conflict',
+          provider,
+          authenticatedUid,
+          cloudSaveMissing: true,
+        };
       }
       await bindStarterSaveToUid(authenticatedUid, provider);
       return { type: 'completed', message: 'Hesabınla yeni oyun başlatıldı.' };
@@ -507,7 +519,7 @@ function mapSaveOutcomeToLinkResult(
 
 export async function resolveSaveConflict(input: {
   authenticatedUid: string;
-  choice: 'cloud' | 'local';
+  choice: 'cloud' | 'local' | 'fresh';
   provider: 'google' | 'apple';
 }): Promise<AccountSwitchResult> {
   const { authenticatedUid, choice, provider } = input;
@@ -519,6 +531,10 @@ export async function resolveSaveConflict(input: {
   try {
     if (choice === 'cloud') {
       await restoreCloudSaveForUid(authenticatedUid, provider);
+    } else if (choice === 'fresh') {
+      const { useGameStore } = await import('../store/gameStore');
+      await useGameStore.getState().clearSave();
+      await bindStarterSaveToUid(authenticatedUid, provider);
     } else {
       await uploadLocalSaveForUid(authenticatedUid, provider);
     }

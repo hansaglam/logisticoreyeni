@@ -71,17 +71,19 @@ import {
   buildCloudSaveSummaryForState,
   type CloudSaveStatusState,
 } from '../storage/cloudSaveSync';
-import { saveGameState } from '../storage/saveGame';
 import {
   getAccountDeletionErrorMessage,
   type AccountDeletionErrorCode,
 } from '../utils/accountDeletion';
 import { logAccountSignOut } from '../utils/accountLifecycleLog';
+import { resetLocalSessionAfterLinkedAccountSignOut } from '../utils/accountSessionReset';
 import {
   getAccountLinkConflictFooter,
   getAccountLinkConflictMessage,
   getAccountLinkConflictTitle,
   getAccountLinkGeneralErrorMessage,
+  getEmptyCloudAccountConflictMessage,
+  getEmptyCloudAccountConflictTitle,
   isAccountLinkConflictError,
 } from '../utils/accountLinkErrors';
 import {
@@ -235,6 +237,7 @@ export function useAccountCenter({
     authenticatedUid: string;
     errorReason?: CloudSaveConflictReason;
     cloudDisabled?: boolean;
+    cloudSaveMissing?: boolean;
   } | null>(null);
   const conflictResolutionInFlightRef = useRef(false);
   const accountSwitchConflictRef = useRef(false);
@@ -450,9 +453,11 @@ export function useAccountCenter({
       errorReason?: CloudSaveConflictReason;
       cloudDisabled?: boolean;
       fromAccountSwitch?: boolean;
+      cloudSaveMissing?: boolean;
     } = {},
   ) => {
     const fromAccountSwitch = options.fromAccountSwitch ?? accountSwitchConflictRef.current;
+    const cloudSaveMissing = options.cloudSaveMissing === true;
     accountSwitchConflictRef.current = fromAccountSwitch;
     ensureAccountSaveConflictSession({
       provider,
@@ -468,7 +473,50 @@ export function useAccountCenter({
       authenticatedUid,
       errorReason: options.errorReason,
       cloudDisabled,
+      cloudSaveMissing,
     });
+    const cancelConflictDialog = () => {
+      if (fromAccountSwitch) {
+        void handleCancelGoogleLinkConflict();
+        return;
+      }
+      setPendingAccountConflict(null);
+      clearAccountSaveConflictSession();
+      accountSwitchConflictRef.current = false;
+      hideDialog();
+    };
+    if (cloudSaveMissing) {
+      showDialog({
+        title: getEmptyCloudAccountConflictTitle(),
+        message: errorMessage
+          ? `${errorMessage}\n\n${getEmptyCloudAccountConflictMessage(provider)}`
+          : getEmptyCloudAccountConflictMessage(provider),
+        footerNote: getAccountLinkConflictFooter(provider),
+        variant: 'warning',
+        actions: [
+          {
+            label: 'Yeni Oyun Başlat',
+            variant: 'primary',
+            onPress: () => {
+              void handleResolveAccountSaveConflict('fresh', provider, authenticatedUid);
+            },
+          },
+          {
+            label: 'Bu Cihazdaki Kayıt',
+            variant: 'secondary',
+            onPress: () => {
+              void handleResolveAccountSaveConflict('local', provider, authenticatedUid);
+            },
+          },
+          {
+            label: 'Vazgeç',
+            variant: 'secondary',
+            onPress: cancelConflictDialog,
+          },
+        ],
+      });
+      return;
+    }
     const showComparison = () => {
       const local = buildCloudSaveSummaryForState(useGameStore.getState());
       const cloud = cloudStatus.restoreCandidate?.cloudSummary ?? null;
@@ -502,6 +550,7 @@ export function useAccountCenter({
             errorReason: options.errorReason,
             cloudDisabled,
             fromAccountSwitch,
+            cloudSaveMissing,
           }),
       });
     };
@@ -536,12 +585,7 @@ export function useAccountCenter({
         {
           label: 'Vazgeç',
           variant: 'secondary',
-          onPress: () => {
-            setPendingAccountConflict(null);
-            clearAccountSaveConflictSession();
-            accountSwitchConflictRef.current = false;
-            hideDialog();
-          },
+          onPress: cancelConflictDialog,
         },
       ],
     });
@@ -572,6 +616,7 @@ export function useAccountCenter({
     if (outcome.type === 'conflict') {
       showAccountConflictDialog(provider, outcome.authenticatedUid, {
         fromAccountSwitch: accountSwitchConflictRef.current,
+        cloudSaveMissing: outcome.cloudSaveMissing === true,
       });
       return;
     }
@@ -726,7 +771,7 @@ export function useAccountCenter({
   };
 
   const handleResolveAccountSaveConflict = async (
-    choice: 'cloud' | 'local',
+    choice: 'cloud' | 'local' | 'fresh',
     provider: 'google' | 'apple',
     authenticatedUid: string,
   ) => {
@@ -755,21 +800,31 @@ export function useAccountCenter({
     }
 
     const providerLabel = provider === 'google' ? 'Google' : 'Apple';
+    const cloudSaveMissing = pendingAccountConflict?.cloudSaveMissing === true;
     setIsResolvingConflict(true);
     setIsLinking(provider);
     showDialog({
       title:
         choice === 'cloud'
           ? `${providerLabel} kaydına geçiliyor`
-          : 'Bu cihazdaki kayıt bağlanıyor',
+          : choice === 'fresh'
+            ? 'Yeni oyun başlatılıyor'
+            : 'Bu cihazdaki kayıt bağlanıyor',
       message:
         choice === 'cloud'
           ? 'Bulut kaydı doğrulanıyor ve güvenli şekilde hazırlanıyor.'
-          : 'Bu cihazdaki kayıt seçilen hesaba bağlanıyor ve buluta yazılıyor.',
+          : choice === 'fresh'
+            ? 'Seçilen hesap için sıfırdan başlangıç kaydı hazırlanıyor.'
+            : 'Bu cihazdaki kayıt seçilen hesaba bağlanıyor ve buluta yazılıyor.',
       variant: 'info',
       actions: [
         {
-          label: choice === 'cloud' ? 'Bulut Kaydı Yükleniyor…' : 'Kaydediliyor…',
+          label:
+            choice === 'cloud'
+              ? 'Bulut Kaydı Yükleniyor…'
+              : choice === 'fresh'
+                ? 'Hazırlanıyor…'
+                : 'Kaydediliyor…',
           variant: 'primary',
           loading: true,
           disabled: true,
@@ -798,10 +853,16 @@ export function useAccountCenter({
         accountSwitchConflictRef.current = false;
         hideDialog();
         showAlert(
-          choice === 'cloud' ? `${providerLabel} kaydına geçildi` : 'Bu cihazdaki kayıt bağlandı',
+          choice === 'cloud'
+            ? `${providerLabel} kaydına geçildi`
+            : choice === 'fresh'
+              ? 'Yeni oyun başlatıldı'
+              : 'Bu cihazdaki kayıt bağlandı',
           choice === 'cloud'
             ? 'Hesabına bağlı oyun kaydı yüklendi.'
-            : 'Bu cihazdaki ilerleme hesabına bağlandı ve buluta kaydedildi.',
+            : choice === 'fresh'
+              ? 'Seçilen hesap için yeni oyun başlatıldı.'
+              : 'Bu cihazdaki ilerleme hesabına bağlandı ve buluta kaydedildi.',
         );
         useGameStore.setState({ navigationRequest: { tab: 'dashboard' } });
         return;
@@ -815,11 +876,13 @@ export function useAccountCenter({
         authenticatedUid,
         errorReason: result.error,
         cloudDisabled: permanent && choice === 'cloud',
+        cloudSaveMissing,
       });
       showAccountConflictDialog(provider, authenticatedUid, {
         errorReason: result.error,
         cloudDisabled: permanent && choice === 'cloud',
         fromAccountSwitch: accountSwitchConflictRef.current,
+        cloudSaveMissing,
       });
     } catch (error) {
       console.warn('[account] resolve save conflict failed', error);
@@ -830,10 +893,12 @@ export function useAccountCenter({
           provider,
           authenticatedUid,
           errorReason: 'unknown',
+          cloudSaveMissing,
         });
         showAccountConflictDialog(provider, authenticatedUid, {
           errorReason: 'unknown',
           fromAccountSwitch: accountSwitchConflictRef.current,
+          cloudSaveMissing,
         });
       }
     } finally {
@@ -903,12 +968,6 @@ export function useAccountCenter({
     } catch {
       return 'failed';
     }
-  };
-
-  const rebindLocalSaveToAuth = async () => {
-    const uid = getCurrentUserId();
-    if (!uid) return;
-    await saveGameState(useGameStore.getState(), { ownerUid: uid });
   };
 
   const syncBeforeAccountTransition = async (): Promise<boolean> => {
@@ -1122,7 +1181,7 @@ export function useAccountCenter({
         return;
       }
       clearAccountScopedClientState();
-      await rebindLocalSaveToAuth();
+      await resetLocalSessionAfterLinkedAccountSignOut();
       refreshAccount();
       refreshCloudStatus();
       logAccountSignOut({
@@ -1135,8 +1194,8 @@ export function useAccountCenter({
       showAlert(
         'Çıkış yapıldı',
         syncResult === 'failed'
-          ? 'Çıkış yaptın. Son bulut kaydı tamamlanamadı; bağlı hesabındaki son kayıtlı ilerleme korunur.'
-          : 'Çıkış yaptın. Buluta kaydedilmiş ilerlemen korunur.',
+          ? 'Çıkış yaptın. Son bulut kaydı tamamlanamadı; bağlı hesabındaki son kayıtlı ilerleme korunur. Bu cihazda yeni bir oturum başladın.'
+          : 'Çıkış yaptın. Buluta kaydedilmiş ilerlemen korunur; bu cihazda yeni bir oturum başladın.',
       );
     } finally {
       setIsSigningOut(false);
@@ -1146,7 +1205,8 @@ export function useAccountCenter({
   const handleGoogleSignOut = () => {
     showDialog({
       title: 'Çıkış yapmak istiyor musun?',
-      message: 'Hesabından çıkış yapacaksın. Buluta kaydedilmiş ilerlemen korunur.',
+      message:
+        'Hesabından çıkış yapacaksın. Buluta kaydedilmiş ilerlemen korunur; bu cihazdaki oyun sıfırlanır.',
       variant: 'warning',
       cancelLabel: 'Vazgeç',
       confirmLabel: 'Çıkış Yap',

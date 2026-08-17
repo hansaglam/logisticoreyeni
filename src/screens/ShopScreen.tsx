@@ -42,6 +42,14 @@ import {
 } from '../data/drivers';
 import { getTrailerTypeLabel } from '../simulation/trailerOps';
 import { getLevelProgress } from '../simulation/leveling';
+import {
+  formatLeaseDailyEquivalent,
+  formatLeaseOfferCost,
+  getLeasePeriodDurationLabel,
+  getLeasePeriodLabel,
+  resolveLeaseOfferCost,
+  type TruckLeaseOfferPeriod,
+} from '../utils/truckLeasePresentation';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, spacing } from '../theme';
@@ -197,14 +205,100 @@ export default function ShopScreen() {
         setStatusMessage({ type: 'error', text: 'Kiralama henüz kullanılamıyor' });
         return;
       }
-      const result = leaseTruck(catalogId);
-      if (!result.success) {
-        setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
+
+      const template = TRUCK_MARKET.find((item) => item.id === catalogId);
+      if (!template) {
+        setStatusMessage({ type: 'error', text: 'Kamyon bulunamadı' });
         return;
       }
-      setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon kiralandı' });
+
+      const weeklyLeaseCost = template.weeklyLeaseCost ?? 0;
+      if (weeklyLeaseCost <= 0) {
+        setStatusMessage({ type: 'error', text: 'Bu kamyon için kiralama seçeneği yok' });
+        return;
+      }
+
+      const requiredLevel = resolveTruckMarketRequiredLevel(template);
+      if (playerLevel < requiredLevel) {
+        setStatusMessage({
+          type: 'error',
+          text: `Bu kamyon için şirket seviyen Level ${requiredLevel} olmalı.`,
+        });
+        return;
+      }
+
+      const confirmLease = (period: TruckLeaseOfferPeriod) => {
+        const result = leaseTruck(catalogId, period);
+        if (!result.success) {
+          setStatusMessage({ type: 'error', text: result.message ?? 'İşlem başarısız' });
+          return;
+        }
+        setStatusMessage({ type: 'success', text: result.message ?? 'Kamyon kiralandı' });
+      };
+
+      const weeklyCost = resolveLeaseOfferCost(weeklyLeaseCost, 'weekly');
+      const monthlyCost = resolveLeaseOfferCost(weeklyLeaseCost, 'monthly');
+      const canAffordWeekly = playerMoney >= weeklyCost;
+      const canAffordMonthly = playerMoney >= monthlyCost;
+
+      showDialog({
+        title: `${template.name} kirala`,
+        message: 'Kira bedeli peşin tahsil edilir. Süre bitince araç otomatik iade edilir.',
+        variant: 'warning',
+        details: [
+          {
+            label: 'Haftalık kira',
+            value: `${formatLeaseOfferCost(weeklyLeaseCost, 'weekly')} · ${getLeasePeriodDurationLabel('weekly')}`,
+            tone: 'warning',
+          },
+          {
+            label: 'Günlük karşılık',
+            value: formatLeaseDailyEquivalent(weeklyLeaseCost, 'weekly'),
+            tone: 'muted',
+          },
+          {
+            label: 'Aylık kira',
+            value: `${formatLeaseOfferCost(weeklyLeaseCost, 'monthly')} · ${getLeasePeriodDurationLabel('monthly')}`,
+            tone: 'warning',
+          },
+          {
+            label: 'Günlük karşılık',
+            value: formatLeaseDailyEquivalent(weeklyLeaseCost, 'monthly'),
+            tone: 'muted',
+          },
+          {
+            label: 'Nakit',
+            value: formatMoney(playerMoney),
+            tone: 'success',
+          },
+        ],
+        footerNote: 'Kira, günlük işletme giderinden ayrıdır ve tekrar kesilmez.',
+        actions: [
+          {
+            label: canAffordWeekly
+              ? `${getLeasePeriodLabel('weekly')} kirala · ${formatMoney(weeklyCost)}`
+              : `${getLeasePeriodLabel('weekly')} · nakit yetersiz`,
+            variant: 'primary',
+            disabled: !canAffordWeekly,
+            onPress: () => confirmLease('weekly'),
+          },
+          {
+            label: canAffordMonthly
+              ? `${getLeasePeriodLabel('monthly')} kirala · ${formatMoney(monthlyCost)}`
+              : `${getLeasePeriodLabel('monthly')} · nakit yetersiz`,
+            variant: 'secondary',
+            disabled: !canAffordMonthly,
+            onPress: () => confirmLease('monthly'),
+          },
+          {
+            label: 'Vazgeç',
+            variant: 'secondary',
+            onPress: () => {},
+          },
+        ],
+      });
     },
-    [leaseTruck],
+    [leaseTruck, playerLevel, playerMoney, showDialog],
   );
 
   const handleBuyTrailer = useCallback(
@@ -250,7 +344,12 @@ export default function ShopScreen() {
           { label: 'Satın alma', value: formatMoney(template.purchasePrice), tone: 'success' },
           {
             label: 'Haftalık kira',
-            value: weeklyLeaseCost > 0 ? formatMoney(weeklyLeaseCost) : 'Yok',
+            value: weeklyLeaseCost > 0 ? formatLeaseOfferCost(weeklyLeaseCost, 'weekly') : 'Yok',
+            tone: 'muted',
+          },
+          {
+            label: 'Aylık kira',
+            value: weeklyLeaseCost > 0 ? formatLeaseOfferCost(weeklyLeaseCost, 'monthly') : 'Yok',
             tone: 'muted',
           },
           { label: 'Kapasite', value: `${template.capacity} t` },

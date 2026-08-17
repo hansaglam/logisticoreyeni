@@ -2,7 +2,7 @@ import type { CloudSaveConflictReason } from '../utils/cloudSaveConflict';
 import { isRetryableCloudSaveConflictReason } from '../utils/cloudSaveConflict';
 import { setCloudSaveAccountConflictPending } from './cloudSaveConflictState';
 
-export type AccountSaveConflictChoice = 'cloud' | 'local';
+export type AccountSaveConflictChoice = 'cloud' | 'local' | 'fresh';
 
 export type AccountSaveConflictStatus =
   | 'active'

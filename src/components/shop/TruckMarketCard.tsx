@@ -11,6 +11,10 @@ import {
 import { getTruckArtworkByTemplateId } from '../../assets/fleetAssets';
 import { resolveTruckMarketRequiredLevel, type TruckMarketItem } from '../../data/trucks';
 import { formatMoney } from '../../theme';
+import {
+  formatLeaseOfferCost,
+  resolveLeaseOfferCost,
+} from '../../utils/truckLeasePresentation';
 import { ActionButton, GameIcon } from '../ui';
 import {
   formatLevelRequirement,
@@ -88,10 +92,15 @@ const TruckMarketCard = React.memo(function TruckMarketCard({
     [isCompact, template.id],
   );
   const weeklyLeaseCost = template.weeklyLeaseCost ?? 0;
+  const monthlyLeaseCost =
+    weeklyLeaseCost > 0 ? resolveLeaseOfferCost(weeklyLeaseCost, 'monthly') : 0;
+  const canAffordWeeklyLease = weeklyLeaseCost > 0 && playerMoney >= weeklyLeaseCost;
+  const canAffordAnyLease =
+    weeklyLeaseCost > 0 &&
+    (playerMoney >= weeklyLeaseCost || playerMoney >= monthlyLeaseCost);
   const canAffordBuy = playerMoney >= template.purchasePrice;
-  const canAffordLease = weeklyLeaseCost > 0 && playerMoney >= weeklyLeaseCost;
   const buyDisabled = !canBuy || !canAffordBuy || isLevelLocked;
-  const leaseDisabled = !canLease || !canAffordLease || isLevelLocked || weeklyLeaseCost <= 0;
+  const leaseDisabled = !canLease || !canAffordAnyLease || isLevelLocked || weeklyLeaseCost <= 0;
   const subtitle = useMemo(() => formatTruckMarketSubtitle(template), [template]);
   const classLabel = useMemo(() => subtitle.split(' · ')[0], [subtitle]);
 
@@ -109,8 +118,10 @@ const TruckMarketCard = React.memo(function TruckMarketCard({
     leaseButtonLabel = `Level ${requiredLevel} gerekli`;
   } else if (!canLease || weeklyLeaseCost <= 0) {
     leaseButtonLabel = 'Kiralama yok';
-  } else if (!canAffordLease) {
+  } else if (!canAffordAnyLease) {
     leaseButtonLabel = 'Nakit yetersiz';
+  } else {
+    leaseButtonLabel = `Kirala · ${formatLeaseOfferCost(weeklyLeaseCost, 'weekly')}`;
   }
 
   const handleBuyPress = useCallback(() => {
@@ -187,9 +198,25 @@ const TruckMarketCard = React.memo(function TruckMarketCard({
         </Pressable>
 
         <View style={styles.footerRow}>
-          <Text style={styles.price} numberOfLines={1}>
-            {formatMoney(template.purchasePrice)}
-          </Text>
+          <View style={styles.priceRow}>
+            <View style={styles.priceCol}>
+              <Text style={styles.priceLabel}>Satın al</Text>
+              <Text style={styles.price} numberOfLines={1}>
+                {formatMoney(template.purchasePrice)}
+              </Text>
+            </View>
+            {weeklyLeaseCost > 0 ? (
+              <View style={styles.leaseCol}>
+                <Text style={styles.leasePriceLabel}>Kira</Text>
+                <Text style={styles.leasePrice} numberOfLines={1}>
+                  {formatLeaseOfferCost(weeklyLeaseCost, 'weekly')}
+                </Text>
+                <Text style={styles.leasePriceAlt} numberOfLines={1}>
+                  {formatLeaseOfferCost(weeklyLeaseCost, 'monthly')}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <View style={styles.actionCol}>
             {weeklyLeaseCost > 0 ? (
               <View style={styles.dualActions}>
@@ -363,12 +390,50 @@ const styles = StyleSheet.create({
   },
   footerRow: {
     marginTop: 8,
-    gap: 6,
+    gap: 8,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  priceCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  leaseCol: {
+    alignItems: 'flex-end',
+    gap: 1,
+  },
+  priceLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: SHOP_MUTED_COLOR,
+    textTransform: 'uppercase',
   },
   price: {
     fontSize: 16,
     fontWeight: '800',
     color: SHOP_PRICE_COLOR,
+  },
+  leasePriceLabel: {
+    marginTop: 4,
+    fontSize: 9,
+    fontWeight: '700',
+    color: SHOP_MUTED_COLOR,
+    textTransform: 'uppercase',
+  },
+  leasePrice: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#F5C26B',
+  },
+  leasePriceAlt: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#B8A06A',
   },
   actionCol: {
     width: '100%',

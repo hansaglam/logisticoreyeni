@@ -77,13 +77,17 @@ export function getTruckWeeklyLeaseCost(truck: Truck): number {
   if (!isActiveLeasedTruck(truck)) {
     return 0;
   }
-  if (truck.leaseWeeklyCost != null && truck.leaseWeeklyCost > 0) {
-    return truck.leaseWeeklyCost;
+  const prepaid = truck.leaseWeeklyCost ?? 0;
+  if (prepaid <= 0) {
+    return 0;
+  }
+  if (truck.leasePeriod === 'monthly') {
+    return Math.round((prepaid / timeBalance.daysPerMonth) * timeBalance.daysPerWeek);
   }
   if (truck.leaseDailyCost != null && truck.leaseDailyCost > 0) {
     return truck.leaseDailyCost * timeBalance.daysPerWeek;
   }
-  return 0;
+  return prepaid;
 }
 
 /** Aktif kiralık kamyonların toplam haftalık kira yükü — peşin ödenmiş dönem için bilgi amaçlı */

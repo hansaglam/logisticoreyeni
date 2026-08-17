@@ -76,9 +76,11 @@ assert(
 console.log('\n7. Raw-first checksum policy');
 assert(cloud.includes('verifyRawSaveChecksum'), 'raw-first checksum on cloud load');
 
-console.log('\n8. Local choice still works');
+console.log('\n8. Local and fresh choice paths');
 assert(login.includes('uploadLocalSaveForUid'), 'local bind path');
+assert(login.includes("choice === 'fresh'"), 'fresh bind path');
 assert(hook.includes("handleResolveAccountSaveConflict('local'"), 'local CTA wired');
+assert(hook.includes("handleResolveAccountSaveConflict('fresh'"), 'fresh CTA wired');
 assert(login.includes('bypassAccountConflictLock: true'), 'local upload bypasses lock');
 
 console.log('\n9. Double tap guard');

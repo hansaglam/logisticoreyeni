@@ -338,6 +338,15 @@ import {
 } from '../utils/cashPolicy';
 import { formatDeliveryCompleteLocationToast } from '../utils/truckLocationUx';
 import {
+  getLeaseDurationDays,
+  getLeaseDurationHours,
+  getLeasePeriodDurationLabel,
+  getLeasePeriodLabel,
+  resolveLeaseDailyCost,
+  resolveLeaseOfferCost,
+  type TruckLeaseOfferPeriod,
+} from '../utils/truckLeasePresentation';
+import {
   finalizeTruckFuelAfterJob,
   getTruckFuelReadiness,
   normalizeTruckFuel,
@@ -1950,7 +1959,7 @@ export interface GameStore extends StoreGameState {
   buyTrailer: (catalogId: string) => TradeActionResult;
   attachTrailerToTruck: (trailerId: string, truckId: string) => TradeActionResult;
   detachTrailerFromTruck: (trailerId: string) => TradeActionResult;
-  leaseTruck: (catalogId: string) => TradeActionResult;
+  leaseTruck: (catalogId: string, period?: TruckLeaseOfferPeriod) => TradeActionResult;
   hireDriver: (poolId: string) => TradeActionResult;
   sellTruck: (truckId: string) => TradeActionResult;
   fireDriver: (driverId: string) => TradeActionResult;
@@ -8129,7 +8138,7 @@ const elapsed = plan.elapsed;
     return { success: true, message: 'Dorse ayrıldı.' };
   },
 
-  leaseTruck: (catalogId: string): TradeActionResult => {
+  leaseTruck: (catalogId: string, period: TruckLeaseOfferPeriod = 'weekly'): TradeActionResult => {
     if (leaseTruckInFlight) {
       return {
         success: false,
@@ -8156,6 +8165,12 @@ const elapsed = plan.elapsed;
         };
       }
 
+      const leasePeriod: TruckLeaseOfferPeriod = period === 'monthly' ? 'monthly' : 'weekly';
+      const prepaidLeaseCost = resolveLeaseOfferCost(weeklyLeaseCost, leasePeriod);
+      const leaseDurationDays = getLeaseDurationDays(leasePeriod);
+      const periodLabel = getLeasePeriodLabel(leasePeriod);
+      const durationLabel = getLeasePeriodDurationLabel(leasePeriod);
+
       const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
       const requiredLevel = resolveTruckMarketRequiredLevel(template);
       if (playerLevel < requiredLevel) {
@@ -8165,16 +8180,16 @@ const elapsed = plan.elapsed;
         };
       }
 
-      if (!canAffordVoluntaryPurchase(state.player.money, weeklyLeaseCost)) {
+      if (!canAffordVoluntaryPurchase(state.player.money, prepaidLeaseCost)) {
         return {
           success: false,
           errorCode: 'INSUFFICIENT_FUNDS',
-          message: `Haftalık kira için ${formatNotificationMoney(weeklyLeaseCost)} gerekli.`,
+          message: `${periodLabel} kira için ${formatNotificationMoney(prepaidLeaseCost)} gerekli.`,
         };
       }
 
       const instanceId = `${catalogId}-lease-${Date.now()}`;
-      const leaseExpiresAt = state.currentTime + operatingCostBalance.leaseDurationHours;
+      const leaseExpiresAt = state.currentTime + getLeaseDurationHours(leasePeriod);
       const newTruck: Truck = normalizeTruckFuel({
         id: instanceId,
         catalogId,
@@ -8188,9 +8203,9 @@ const elapsed = plan.elapsed;
         condition: template.condition,
         purchasePrice: template.purchasePrice,
         ownershipType: 'leased',
-        leasePeriod: 'weekly',
-        leaseWeeklyCost: weeklyLeaseCost,
-        leaseDailyCost: Math.round(weeklyLeaseCost / timeBalance.daysPerWeek),
+        leasePeriod,
+        leaseWeeklyCost: prepaidLeaseCost,
+        leaseDailyCost: resolveLeaseDailyCost(prepaidLeaseCost, leasePeriod),
         leaseStartedAt: state.currentTime,
         leaseExpiresAt,
         leaseExpired: false,
@@ -8200,7 +8215,7 @@ const elapsed = plan.elapsed;
       });
       const leaseTransaction = applyCashTransaction({
         currentCash: state.player.money,
-        amount: weeklyLeaseCost,
+        amount: prepaidLeaseCost,
         kind: 'voluntary-expense',
         referenceId: `truck:${instanceId}:lease`,
         transactionId: `truck-lease:${instanceId}`,
@@ -8217,7 +8232,7 @@ const elapsed = plan.elapsed;
           type: 'expense',
           category: 'truck_lease',
           amount: leaseTransaction.amount,
-          description: `${template.name} · 7 günlük kira (peşin)`,
+          description: `${template.name} · ${durationLabel} kira (peşin)`,
           transactionId: leaseTransaction.transactionId,
           referenceId: leaseTransaction.referenceId,
         }),
@@ -8227,7 +8242,7 @@ const elapsed = plan.elapsed;
             time: state.currentTime,
             type: 'fleet',
             title: 'Kamyon kiralandı',
-            message: `${template.name} 7 gün için kiralandı. Haftalık kira peşin tahsil edildi.`,
+            message: `${template.name} ${durationLabel} için kiralandı. ${periodLabel} kira peşin tahsil edildi.`,
             importance: 'medium',
           },
           state.currentTime,
@@ -8236,7 +8251,7 @@ const elapsed = plan.elapsed;
       get().autoSave('purchase');
       return {
         success: true,
-        message: `${template.name} 7 gün kiralandı.`,
+        message: `${template.name} ${durationLabel} kiralandı (${formatNotificationMoney(prepaidLeaseCost)} peşin).`,
       };
     } finally {
       leaseTruckInFlight = false;

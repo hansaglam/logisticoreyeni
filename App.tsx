@@ -371,7 +371,6 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
       <DeliveryIncidentModal
         pendingDeliveryId={pendingIncidentDeliveryId}
         enabled={
-          activeTab === 'dashboard' &&
           pendingOfflineProgressSummary == null &&
           pendingDeliveryResultSummary == null
         }

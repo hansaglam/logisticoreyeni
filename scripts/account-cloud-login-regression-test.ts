@@ -131,5 +131,16 @@ assert(
   'similar saves not in conflict',
 );
 
+console.log('\n11. Empty cloud account conflict');
+assert(
+  login.includes('cloudSaveMissing: true'),
+  'missing cloud with local progress returns conflict',
+);
+assert(login.includes("choice: 'cloud' | 'local' | 'fresh'"), 'fresh resolve choice');
+assert(
+  read('src/utils/accountLinkErrors.ts').includes('getEmptyCloudAccountConflictMessage'),
+  'empty cloud copy helper',
+);
+
 console.log(`\nResult: ${pass} passed, ${fail} failed\n`);
 process.exit(fail > 0 ? 1 : 0);

@@ -33,16 +33,18 @@ assert.match(selectionSource, /prepareAccountSwitch/);
 assert.match(selectionSource, /rollbackAccountSwitch/);
 
 const cloudFailureStart = selectionSource.indexOf(
-  "if (!cloud.ok && cloud.reason !== 'cloud-save-not-found')",
+  'const saveOutcome = await runPostSignInSaveFlowForAccountSwitch',
 );
-const cloudFailureEnd = selectionSource.indexOf('if (cloud.ok)', cloudFailureStart);
+const cloudFailureEnd = selectionSource.indexOf('return {', cloudFailureStart);
 const cloudFailureSource = selectionSource.slice(cloudFailureStart, cloudFailureEnd);
-assert.match(cloudFailureSource, /rollbackAccountSwitch/);
+assert.match(cloudFailureSource, /saveOutcome\.type === 'conflict'/);
+assert.match(selectionSource, /rollbackAccountSwitch/);
 
-const noCloudDialogStart = accountUiSource.indexOf("title: 'Yeni Google Hesabı'");
-const noCloudDialogEnd = accountUiSource.indexOf(']);', noCloudDialogStart);
-const noCloudDialogSource = accountUiSource.slice(noCloudDialogStart, noCloudDialogEnd);
-assert.match(noCloudDialogSource, /rollbackAccountSwitch\('user-cancelled'\)/);
+const cancelDialogStart = accountUiSource.indexOf('const cancelConflictDialog = () => {');
+const cancelDialogEnd = accountUiSource.indexOf('if (cloudSaveMissing) {', cancelDialogStart);
+const cancelDialogSource = accountUiSource.slice(cancelDialogStart, cancelDialogEnd);
+assert.match(cancelDialogSource, /handleCancelGoogleLinkConflict/);
+assert.match(accountUiSource, /label: 'Yeni Oyun Başlat'/);
 
 const conflictCancelStart = accountUiSource.indexOf(
   'const handleCancelGoogleLinkConflict = async',

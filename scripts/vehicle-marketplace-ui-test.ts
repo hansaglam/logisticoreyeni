@@ -92,9 +92,9 @@ assert.equal(
   getMarketplaceErrorMessage('listing-not-active'),
   'Bu araç kısa süre önce satıldı.',
 );
-assert.equal(
+assert.match(
   getMarketplaceErrorMessage('insufficient-funds'),
-  'Bu aracı satın almak için yeterli nakdin yok.',
+  /yeterli sunucu nakdin yok/i,
 );
 assert.equal(getMarketplaceErrorMessage('fleet-limit'), 'Filo kapasiten dolu.');
 assert.equal(
@@ -108,7 +108,7 @@ assert.match(
 );
 assert.match(
   getMarketplaceErrorMessage('save-conflict'),
-  /senkronizasyonu tamamlanmadan/,
+  /senkronizasyonu tamamlanmadı/i,
 );
 
 const reconciliation = reconcileFleetWithVehicleMarketplace([], {
@@ -139,7 +139,17 @@ assert.match(createSheetSource, /scrollToEnd/);
 const marketplaceScreenSource = readSource('src/screens/VehicleMarketplaceScreen.tsx');
 assert.match(marketplaceScreenSource, /showSuccessAfterModalClose/);
 assert.doesNotMatch(marketplaceScreenSource, /backend tarafından kilitlendi/);
-assert.doesNotMatch(marketplaceScreenSource, /authoritative pazar kaydından/);
+assert.match(marketplaceScreenSource, /prepareMarketplacePurchaseFunds/);
+assert.match(marketplaceScreenSource, /clientSaveVersion: prep\.clientSaveVersion/);
+assert.match(marketplaceScreenSource, /purchaseAuthoritativeCash/);
+
+const purchaseSheetSource = readSource('src/components/marketplace/VehicleMarketplaceSheets.tsx');
+assert.match(purchaseSheetSource, /Kullanılabilir nakit \(sunucu\)/);
+assert.match(purchaseSheetSource, /preparing/);
+
+const purchasePrepSource = readSource('src/domain/vehicleMarketplacePurchasePrep.ts');
+assert.match(purchasePrepSource, /prepareMarketplacePurchaseFunds/);
+assert.match(purchasePrepSource, /resolveMarketplaceClientSaveVersion/);
 
 const marketplaceUiSafetySource = readSource('src/utils/marketplaceUiSafety.ts');
 assert.match(marketplaceUiSafetySource, /showSuccessAfterModalClose/);

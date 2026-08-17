@@ -127,7 +127,7 @@ export function getMarketplaceErrorMessage(reason?: string): string {
     case 'marketplace-state-missing':
       return 'Araç Pazarı hesabın henüz hazırlanmadı. Hesabını senkronize edip tekrar dene.';
     case 'save-conflict':
-      return 'Kayıt senkronizasyonu tamamlanmadan araç ilanı oluşturamazsın.';
+      return 'Kayıt senkronizasyonu tamamlanmadı. Birkaç saniye sonra tekrar dene.';
     case 'truck-not-found':
       return 'Seçilen araç authoritative filo kaydında bulunamadı. Hesabını senkronize edip tekrar dene.';
     case 'not-owner':
@@ -152,7 +152,7 @@ export function getMarketplaceErrorMessage(reason?: string): string {
     case 'stale-listing-version':
       return 'İlan bilgileri güncellendi. Tekrar kontrol et.';
     case 'insufficient-funds':
-      return 'Bu aracı satın almak için yeterli nakdin yok.';
+      return 'Satın alma için yeterli sunucu nakdin yok. Bulut kaydın senkronize edildi; nakit güncelse tekrar dene.';
     case 'fleet-limit':
       return 'Filo kapasiten dolu.';
     case 'self-purchase':

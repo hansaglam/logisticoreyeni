@@ -59,6 +59,9 @@ import {
   type MarketplaceFilters,
   type MarketplaceTab,
 } from '../domain/vehicleMarketplacePresentation';
+import {
+  prepareMarketplacePurchaseFunds,
+} from '../domain/vehicleMarketplacePurchasePrep';
 import { subscribeAuthState } from '../services/authService';
 import { getFirebaseAuthSafe } from '../services/firebase';
 import { logMarketplaceAuthProbe } from '../utils/marketplaceAuthDiagnostics';
@@ -145,6 +148,8 @@ export default function VehicleMarketplaceScreen({
   const [filtersVisible, setFiltersVisible] = useState(false);
   const [selected, setSelected] = useState<VehicleMarketplaceListing | null>(null);
   const [purchaseTarget, setPurchaseTarget] = useState<VehicleMarketplaceListing | null>(null);
+  const [purchaseAuthoritativeCash, setPurchaseAuthoritativeCash] = useState<number | null>(null);
+  const [isPreparingPurchase, setIsPreparingPurchase] = useState(false);
   const [isBuyingVehicle, setIsBuyingVehicle] = useState(false);
   const [isDeletingListing, setIsDeletingListing] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
@@ -197,8 +202,9 @@ export default function VehicleMarketplaceScreen({
       setSelected(null);
       return true;
     }
-    if (purchaseTarget != null && !isBuyingVehicle) {
+    if (purchaseTarget != null && !isBuyingVehicle && !isPreparingPurchase) {
       setPurchaseTarget(null);
+      setPurchaseAuthoritativeCash(null);
       return true;
     }
     return false;
@@ -208,6 +214,7 @@ export default function VehicleMarketplaceScreen({
     filtersVisible,
     isBuyingVehicle,
     isCreatingListing,
+    isPreparingPurchase,
     purchaseTarget,
     selected,
   ]);
@@ -222,7 +229,7 @@ export default function VehicleMarketplaceScreen({
       isBuyingVehicle,
       screenStatus: screenState.status,
     });
-    if (isCreatingListing || isBuyingVehicle) {
+    if (isCreatingListing || isBuyingVehicle || isPreparingPurchase) {
       return;
     }
     if (closeBlockingSheets()) return;
@@ -233,6 +240,7 @@ export default function VehicleMarketplaceScreen({
     filtersVisible,
     isBuyingVehicle,
     isCreatingListing,
+    isPreparingPurchase,
     onBack,
     purchaseTarget,
     screenState.status,
@@ -532,20 +540,77 @@ export default function VehicleMarketplaceScreen({
     }
     setSelected(null);
     setPurchaseTarget(listing);
+    setPurchaseAuthoritativeCash(null);
+    setIsPreparingPurchase(true);
+    void (async () => {
+      try {
+        const prep = await prepareMarketplacePurchaseFunds();
+        setPurchaseAuthoritativeCash(prep.cash);
+        if (prep.fleetLimit != null) {
+          setFleetLimit(prep.fleetLimit);
+        }
+        if (!prep.ok) {
+          showAlertAfterModalClose(
+            showAlert,
+            'Nakit senkronize edilemedi',
+            getMarketplaceErrorMessage(prep.reason),
+          );
+        }
+      } finally {
+        setIsPreparingPurchase(false);
+      }
+    })();
   };
 
   const confirmPurchase = async () => {
-    if (!purchaseTarget || isBuyingVehicle) return;
+    if (!purchaseTarget || isBuyingVehicle || isPreparingPurchase) return;
     setIsBuyingVehicle(true);
     try {
+      const prep = await prepareMarketplacePurchaseFunds();
+      setPurchaseAuthoritativeCash(prep.cash);
+      if (prep.fleetLimit != null) {
+        setFleetLimit(prep.fleetLimit);
+      }
+      if (!prep.ok) {
+        showAlertAfterModalClose(
+          showAlert,
+          'Satın alma tamamlanamadı',
+          getMarketplaceErrorMessage(prep.reason),
+        );
+        return;
+      }
+      if (prep.cash < purchaseTarget.askingPrice) {
+        showAlertAfterModalClose(
+          showAlert,
+          'Satın alma tamamlanamadı',
+          getMarketplaceErrorMessage('insufficient-funds'),
+        );
+        return;
+      }
+
       const result = await purchaseVehicleListing({
         ...actionEnvelope('marketplace-purchase'),
         listingId: purchaseTarget.id,
         listingVersion: purchaseTarget.version,
         quotedPrice: purchaseTarget.askingPrice,
+        clientSaveVersion: prep.clientSaveVersion,
       });
       if (!result.ok) {
+        if (result.reason === 'insufficient-funds' || result.reason === 'save-conflict') {
+          const refresh = await prepareMarketplacePurchaseFunds();
+          setPurchaseAuthoritativeCash(refresh.cash);
+          if (refresh.fleetLimit != null) {
+            setFleetLimit(refresh.fleetLimit);
+          }
+          showAlertAfterModalClose(
+            showAlert,
+            'Satın alma tamamlanamadı',
+            getMarketplaceErrorMessage(result.reason),
+          );
+          return;
+        }
         setPurchaseTarget(null);
+        setPurchaseAuthoritativeCash(null);
         showAlertAfterModalClose(
           showAlert,
           'Satın alma tamamlanamadı',
@@ -558,6 +623,7 @@ export default function VehicleMarketplaceScreen({
       }
       await refreshAll();
       setPurchaseTarget(null);
+      setPurchaseAuthoritativeCash(null);
       showSuccessAfterModalClose(
         showDialog,
         'Satın alma tamamlandı',
@@ -882,13 +948,15 @@ export default function VehicleMarketplaceScreen({
       />
       <VehiclePurchaseConfirmSheet
         listing={purchaseTarget}
-        cash={player.money}
+        cash={purchaseAuthoritativeCash ?? player.money}
         fleetCount={player.trucks.length}
         fleetLimit={fleetLimit}
+        preparing={isPreparingPurchase}
         purchasing={isBuyingVehicle}
         onClose={() => {
-          if (isBuyingVehicle) return;
+          if (isBuyingVehicle || isPreparingPurchase) return;
           setPurchaseTarget(null);
+          setPurchaseAuthoritativeCash(null);
         }}
         onConfirm={() => void confirmPurchase()}
       />

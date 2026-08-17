@@ -34,6 +34,8 @@ import type {
   Driver,
   GameEvent,
   GlobalEconomy,
+  GlobalEconomySnapshot,
+  GlobalMarketHistoryEntry,
   GameNotification,
   GameNotificationActionTarget,
   FinanceLedgerEntry,
@@ -486,6 +488,7 @@ import {
   resolveFuelPriceQuote,
 } from '../simulation/fuelPriceQuote';
 import { getGlobalEconomyRepository } from '../services/globalEconomyRepository';
+import type { GlobalEconomyRepository } from '../services/globalEconomyRepository';
 import {
   canReadGlobalEconomy,
   categorizeGlobalEconomyClientError,
@@ -630,6 +633,57 @@ function logGlobalEconomyLoadResult(audit: GlobalEconomyLoadAudit): void {
   console.info('[global-economy-load-result]', audit);
 }
 
+async function resolveGlobalEconomyRepositoryForRefresh(): Promise<GlobalEconomyRepository | null> {
+  let repository = getGlobalEconomyRepository();
+  if (!repository) {
+    const [{ getFirestoreSafe }, { FirestoreGlobalEconomyRepository }] = await Promise.all([
+      import('../services/firebase'),
+      import('../services/firestoreGlobalEconomyRepository'),
+    ]);
+    const firestore = getFirestoreSafe();
+    if (firestore) {
+      repository = new FirestoreGlobalEconomyRepository(firestore);
+    }
+  }
+  return repository;
+}
+
+async function fetchGlobalMarketHistoryEntries(
+  repository: GlobalEconomyRepository,
+  snapshot: GlobalEconomySnapshot,
+): Promise<GlobalMarketHistoryEntry[]> {
+  const epochDurationMs = Math.max(1, snapshot.validUntil - snapshot.generatedAt);
+  const epochsPerDay = Math.max(1, Math.round(DAY_MS / epochDurationMs));
+  return withStartupTimeout(
+    repository.getHistory({
+      fromEpoch: Math.max(0, snapshot.epoch - epochsPerDay * INITIAL_GLOBAL_HISTORY_DAYS),
+      toEpoch: snapshot.epoch,
+      limit: INITIAL_GLOBAL_HISTORY_LIMIT,
+    }),
+    MARKET_HISTORY_FETCH_TIMEOUT_MS,
+    'market-history',
+  );
+}
+
+function shouldSkipMarketHistoryRefresh(
+  snapshot: GlobalEconomySnapshot,
+  historyLength: number,
+): boolean {
+  return lastAppliedMarketHistoryEpoch === snapshot.epoch && historyLength > 0;
+}
+
+function applyGlobalMarketHistory(
+  setState: (partial: Partial<StoreGameState>) => void,
+  snapshot: GlobalEconomySnapshot,
+  history: GlobalMarketHistoryEntry[],
+): void {
+  setState({
+    globalMarketHistory: history,
+    cities: materializeSnapshotCities(CITIES, snapshot, history),
+  });
+  lastAppliedMarketHistoryEpoch = snapshot.epoch;
+}
+
 // ---------------------------------------------------------------------------
 // Otomatik kayıt durumu (modül kapsamı)
 // ---------------------------------------------------------------------------
@@ -651,6 +705,8 @@ let globalMarketRefreshInFlight: Promise<{
   source: 'backend' | 'development-fallback' | 'cache' | 'unavailable';
   stale: boolean;
 }> | null = null;
+let globalMarketHistoryFetchInFlight: Promise<void> | null = null;
+let lastAppliedMarketHistoryEpoch: number | null = null;
 let lastMarketSnapshotRefreshAttemptMs: number | null = null;
 
 /** Teslimat tamamlama bildirimi tekrarını engeller (transient) */
@@ -1837,6 +1893,7 @@ export interface GameStore extends StoreGameState {
     trigger: 'screen-open' | 'foreground' | 'reconnect' | 'cold-start',
     options?: { force?: boolean },
   ) => void;
+  maybeRefreshMarketHistory: () => Promise<void>;
   refreshContractsFromMarket: (options?: {
     bypassCooldown?: boolean;
     emergency?: boolean;
@@ -2445,6 +2502,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().advanceOnboardingProgress();
     }
     get().maybeRefreshMarketSnapshot('screen-open');
+    InteractionManager.runAfterInteractions(() => {
+      void get().maybeRefreshMarketHistory();
+    });
   },
 
   completeMarketTutorial: () => {
@@ -5350,24 +5410,8 @@ const elapsed = plan.elapsed;
 
       try {
         if (includeHistory) {
-          const epochDurationMs = Math.max(1, snapshot.validUntil - snapshot.generatedAt);
-          const epochsPerDay = Math.max(1, Math.round(DAY_MS / epochDurationMs));
-          const history = await withStartupTimeout(
-            repository.getHistory({
-              fromEpoch: Math.max(
-                0,
-                snapshot.epoch - epochsPerDay * INITIAL_GLOBAL_HISTORY_DAYS,
-              ),
-              toEpoch: snapshot.epoch,
-              limit: INITIAL_GLOBAL_HISTORY_LIMIT,
-            }),
-            MARKET_HISTORY_FETCH_TIMEOUT_MS,
-            'market-history',
-          );
-          set({
-            globalMarketHistory: history,
-            cities: materializeSnapshotCities(CITIES, snapshot, history),
-          });
+          const history = await fetchGlobalMarketHistoryEntries(repository, snapshot);
+          applyGlobalMarketHistory(set, snapshot, history);
         }
       } catch (historyError) {
         console.warn('[global-economy-history-load-result]', {
@@ -5504,8 +5548,55 @@ const elapsed = plan.elapsed;
     }
     lastMarketSnapshotRefreshAttemptMs = nowMs;
     void get().refreshMarketSnapshot({
-      includeHistory: trigger === 'screen-open',
+      includeHistory: false,
     });
+  },
+
+  maybeRefreshMarketHistory: () => {
+    if (globalMarketHistoryFetchInFlight) {
+      return globalMarketHistoryFetchInFlight;
+    }
+
+    const operation = (async () => {
+      if (globalMarketRefreshInFlight) {
+        await globalMarketRefreshInFlight.catch(() => undefined);
+      }
+
+      const state = get();
+      const snapshot = state.cachedGlobalEconomySnapshot;
+      if (!snapshot) {
+        return;
+      }
+      if (shouldSkipMarketHistoryRefresh(snapshot, state.globalMarketHistory?.length ?? 0)) {
+        return;
+      }
+
+      const repository = await resolveGlobalEconomyRepositoryForRefresh();
+      if (!repository) {
+        return;
+      }
+
+      try {
+        const history = await fetchGlobalMarketHistoryEntries(repository, snapshot);
+        applyGlobalMarketHistory(set, snapshot, history);
+      } catch (historyError) {
+        console.warn('[global-economy-history-load-result]', {
+          success: false,
+          code: categorizeGlobalEconomyClientError(historyError),
+          currentSnapshotPreserved: true,
+          requestedLimit: INITIAL_GLOBAL_HISTORY_LIMIT,
+          deferred: true,
+        });
+      }
+    })();
+
+    globalMarketHistoryFetchInFlight = operation;
+    void operation.finally(() => {
+      if (globalMarketHistoryFetchInFlight === operation) {
+        globalMarketHistoryFetchInFlight = null;
+      }
+    });
+    return operation;
   },
 
   bootstrapContractsIfNeeded: () => {

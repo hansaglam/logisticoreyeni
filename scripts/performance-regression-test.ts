@@ -78,5 +78,6 @@ assert(more.includes('isActive'), 'More screen respects tab visibility');
 
 assert(read('src/screens/DashboardScreen.tsx').includes('useScreenRenderProfiler'), 'Dashboard render profiler');
 assert(read('src/screens/MapScreen.tsx').includes('useScreenRenderProfiler'), 'Map render profiler');
+assert(read('src/screens/MarketScreen.tsx').includes('marketGameDayAnchor'), 'Market uses game-day trend anchor');
 
 console.log('\nperformance-regression-test: PASSED\n');

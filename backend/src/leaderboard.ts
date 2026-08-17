@@ -16,6 +16,8 @@ import {
   buildBoundedLegacyMigrationFromCloudSave,
   buildDefaultServerState,
   buildServerStateFromMarketplaceState,
+  mergeLeaderboardStatsFromCloudSave,
+  pickLeaderboardServerStatePersistPatch,
   serverStateRef,
   validateServerState,
 } from './serverState';
@@ -163,6 +165,7 @@ export async function submitLeaderboardScoreTransaction(
       }
 
       let serverStateCreated = false;
+      let serverStateCreatedFromSave = false;
       let serverState: ServerStateDocument;
       if (serverSnap.exists) {
         serverState = serverSnap.data() as ServerStateDocument;
@@ -181,12 +184,23 @@ export async function submitLeaderboardScoreTransaction(
         );
         serverState = built.state;
         serverStateCreated = true;
+        serverStateCreatedFromSave = true;
       } else {
         serverState = buildDefaultServerState(
           identity.uid,
           Timestamp.fromMillis(nowMs),
         );
         serverStateCreated = true;
+      }
+
+      if (saveSnap.exists && !serverStateCreatedFromSave) {
+        serverState = mergeLeaderboardStatsFromCloudSave(
+          identity.uid,
+          serverState,
+          saveSnap.data() ?? {},
+          Timestamp.fromMillis(nowMs),
+          { preserveAuthoritativeFleet: marketplaceSnap.exists },
+        );
       }
 
       const usernameRaw = userSnap.data()?.username;
@@ -260,6 +274,7 @@ export async function submitLeaderboardScoreTransaction(
         transaction.set(
           serverRef,
           {
+            ...pickLeaderboardServerStatePersistPatch(serverState),
             leaderboardSeasonKey: seasonActivity.leaderboardSeasonKey,
             weeklySeasonBaselineCompleted: seasonActivity.weeklySeasonBaselineCompleted,
             leaderboardScore: breakdown.totalScore,
@@ -348,8 +363,13 @@ export async function getLeaderboardSnapshot(
   }
 
   try {
-    await ensureLeaderboardSeasonSeeded(firestore, seasonKey, nowMs, {
+    void ensureLeaderboardSeasonSeeded(firestore, seasonKey, nowMs, {
       maxDurationMs: 20_000,
+    }).catch((error) => {
+      console.error('[leaderboard-seed-on-get-failed]', {
+        seasonKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   } catch (error) {
     console.error('[leaderboard-seed-on-get-failed]', {

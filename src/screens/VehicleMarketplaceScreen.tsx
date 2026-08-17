@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BackHandler,
   FlatList,
+  InteractionManager,
   RefreshControl,
   StyleSheet,
   Text,
@@ -71,7 +72,9 @@ import {
   createVehicleListing,
   getMyVehicleListings,
   getVehicleMarketplaceListings,
+  peekVehicleMarketplacePublicListingsCache,
   purchaseVehicleListing,
+  resetVehicleMarketplacePublicListingsCache,
 } from '../services/vehicleMarketplaceService';
 import { useGameStore } from '../store/gameStore';
 import { SAVE_GAME_VERSION } from '../storage/saveGame';
@@ -255,6 +258,7 @@ export default function VehicleMarketplaceScreen({
   }, [closeBlockingSheets, isBuyingVehicle, isCreatingListing, onBack]);
 
   const resetMarketplaceData = useCallback(() => {
+    resetVehicleMarketplacePublicListingsCache();
     setScreenState({ status: 'idle' });
     setMyListings([]);
     setMyListingsError(null);
@@ -305,10 +309,16 @@ export default function VehicleMarketplaceScreen({
     return { ok: true, listings: merged };
   }, []);
 
-  const refreshAll = useCallback(async (options?: { isRetry?: boolean }) => {
+  const refreshAll = useCallback(async (options?: { isRetry?: boolean; forceSync?: boolean }) => {
     const requestSeq = ++requestSeqRef.current;
     setScreenState((current) => beginMarketplaceRefresh(current));
     if (options?.isRetry) setRetrying(true);
+
+    const finishRefresh = () => {
+      if (requestSeq === requestSeqRef.current) {
+        setRetrying(false);
+      }
+    };
 
     try {
       if (!isLinkedMarketplaceUser()) {
@@ -325,96 +335,97 @@ export default function VehicleMarketplaceScreen({
         );
         setMyListings([]);
         setMyListingsError('auth-required');
+        finishRefresh();
         return;
       }
 
-      const synced = await syncLocalSaveToCloud('manual', {
-        force: true,
-        state: useGameStore.getState(),
-      });
-      if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
-      }
-      const fleetReady = await ensureAuthoritativeFleetReady();
-      if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
-        logMarketplaceLoadError({
-          code: fleetReady.reason ?? 'service-unavailable',
-          message: fleetReady.reason ?? 'fleet-reconcile-failed',
-          callableName: 'reconcileAuthoritativeFleet',
-        });
-      }
-
-      const [publicResult, myResult] = await Promise.all([
-        loadFirstPage(),
-        syncMineAndReconcile(),
-      ]);
-
+      const publicResult = await loadFirstPage();
       if (requestSeq !== requestSeqRef.current) return;
 
-      if (!publicResult.ok) {
-        logMarketplaceLoadError({
-          code: publicResult.reason ?? 'unknown',
-          message: getMarketplaceKindMessage(
+      if (publicResult.ok) {
+        setScreenState(applyMarketplaceFetchSuccess(publicResult.listings ?? []));
+        markStartup('MARKETPLACE_INIT_DONE');
+      } else {
+        setScreenState((current) => {
+          const hasVisibleListings =
+            (current.status === 'ready' || current.status === 'refreshing') &&
+            current.listings.length > 0;
+          if (hasVisibleListings) {
+            return current.status === 'refreshing'
+              ? { status: 'ready', listings: current.listings }
+              : current;
+          }
+          return applyMarketplaceFetchError(
             mapFailureReasonToMarketplaceKind(
               publicResult.reason as VehicleMarketplaceFailureReason | undefined,
             ),
-          ),
-          callableName: 'getVehicleMarketplaceListings',
+          );
         });
-        logMarketplaceDev('listings load failed', {
-          reason: publicResult.reason ?? 'unknown',
-          kind: mapFailureReasonToMarketplaceKind(
-            publicResult.reason as VehicleMarketplaceFailureReason | undefined,
-          ),
-        });
-        void logMarketplaceAuthProbe('public-listings-failed', {
-          reason: publicResult.reason ?? 'unknown',
-          mappedKind: mapFailureReasonToMarketplaceKind(
-            publicResult.reason as VehicleMarketplaceFailureReason | undefined,
-          ),
-        });
-        if (myResult.ok) {
-          setScreenState(applyMarketplaceFetchSuccess([]));
-          return;
+        if (publicResult.reason) {
+          logMarketplaceLoadError({
+            code: publicResult.reason ?? 'unknown',
+            message: getMarketplaceKindMessage(
+              mapFailureReasonToMarketplaceKind(
+                publicResult.reason as VehicleMarketplaceFailureReason | undefined,
+              ),
+            ),
+            callableName: 'getVehicleMarketplaceListings',
+          });
         }
-        setScreenState(
-          applyMarketplaceFetchError(
-            mapFailureReasonToMarketplaceKind(
-              publicResult.reason as VehicleMarketplaceFailureReason | undefined,
-            ),
-          ),
-        );
-        return;
       }
 
-      setScreenState(applyMarketplaceFetchSuccess(publicResult.listings ?? []));
-      if (
-        !myResult.ok &&
-        (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
-      ) {
-        logMarketplaceDev('my listings auth failed', { reason: myResult.reason });
-        void logMarketplaceAuthProbe('my-listings-auth-failed', {
-          reason: myResult.reason,
-        });
-        setScreenState(
-          applyMarketplaceFetchError(
-            mapFailureReasonToMarketplaceKind('auth-required'),
-          ),
-        );
-      }
-    } finally {
-      if (requestSeq === requestSeqRef.current) {
-        setRetrying(false);
-      }
+      void (async () => {
+        try {
+          const synced = await syncLocalSaveToCloud('manual', {
+            force: options?.forceSync ?? false,
+            state: useGameStore.getState(),
+          });
+          if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
+            console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
+          }
+          const fleetReady = await ensureAuthoritativeFleetReady();
+          if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
+            logMarketplaceLoadError({
+              code: fleetReady.reason ?? 'service-unavailable',
+              message: fleetReady.reason ?? 'fleet-reconcile-failed',
+              callableName: 'reconcileAuthoritativeFleet',
+            });
+          }
+
+          const myResult = await syncMineAndReconcile();
+          if (requestSeq !== requestSeqRef.current) return;
+
+          if (
+            !myResult.ok &&
+            (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
+          ) {
+            logMarketplaceDev('my listings auth failed', { reason: myResult.reason });
+            void logMarketplaceAuthProbe('my-listings-auth-failed', {
+              reason: myResult.reason,
+            });
+          }
+        } finally {
+          finishRefresh();
+        }
+      })();
+    } catch {
+      finishRefresh();
     }
   }, [loadFirstPage, syncMineAndReconcile]);
 
   useEffect(() => {
     if (!VEHICLE_MARKETPLACE_ENABLED) return;
+    const cached = peekVehicleMarketplacePublicListingsCache();
+    if (cached && cached.length > 0) {
+      setScreenState({ status: 'ready', listings: cached });
+    }
     markStartup('MARKETPLACE_INIT_START');
-    void refreshAll().finally(() => {
-      markStartup('MARKETPLACE_INIT_DONE');
+    const handle = InteractionManager.runAfterInteractions(() => {
+      void refreshAll().finally(() => {
+        markStartup('MARKETPLACE_INIT_DONE');
+      });
     });
+    return () => handle.cancel();
   }, [refreshAll]);
 
   useEffect(() => {
@@ -464,7 +475,7 @@ export default function VehicleMarketplaceScreen({
 
   const onRefresh = async () => {
     if (retrying || isRefreshing) return;
-    await refreshAll({ isRetry: true });
+    await refreshAll({ isRetry: true, forceSync: true });
   };
 
   const activeMine = useMemo(

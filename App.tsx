@@ -96,7 +96,7 @@ const MAIN_TABS: TabDefinition[] = [
   { key: 'market', label: 'Piyasa', icon: 'market' },
 ];
 
-const TAB_KEEP_ALIVE: ReadonlySet<TabKey> = new Set(['more']);
+const TAB_KEEP_ALIVE: ReadonlySet<TabKey> = new Set(['more', 'vehicleMarketplace']);
 
 function renderActiveScreen(
   tab: TabKey,

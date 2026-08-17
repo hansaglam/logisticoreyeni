@@ -54,6 +54,36 @@ let createAuditLogged = false;
 let marketplaceOperationCount = 0;
 const callableConfigAudits = new Set<string>();
 
+const MARKETPLACE_PUBLIC_LISTINGS_CACHE_TTL_MS = 60_000;
+let cachedPublicListings: VehicleMarketplaceListing[] = [];
+let cachedPublicListingsAt = 0;
+
+export function peekVehicleMarketplacePublicListingsCache(): VehicleMarketplaceListing[] | null {
+  if (cachedPublicListings.length === 0) {
+    return null;
+  }
+  return cachedPublicListings;
+}
+
+export function rememberVehicleMarketplacePublicListingsCache(
+  listings: VehicleMarketplaceListing[],
+): void {
+  cachedPublicListings = listings;
+  cachedPublicListingsAt = Date.now();
+}
+
+export function isVehicleMarketplacePublicListingsCacheFresh(): boolean {
+  return (
+    cachedPublicListings.length > 0 &&
+    Date.now() - cachedPublicListingsAt < MARKETPLACE_PUBLIC_LISTINGS_CACHE_TTL_MS
+  );
+}
+
+export function resetVehicleMarketplacePublicListingsCache(): void {
+  cachedPublicListings = [];
+  cachedPublicListingsAt = 0;
+}
+
 export function isVehicleMarketplaceOperationActive(): boolean {
   return marketplaceOperationCount > 0;
 }
@@ -420,6 +450,9 @@ export async function getVehicleMarketplaceListings(
   }
 
   recordMarketplaceCallableResult({ success: true, code: null });
+  if (!cursor) {
+    rememberVehicleMarketplacePublicListingsCache(parsed.data.listings);
+  }
   return parsed.data;
 }
 

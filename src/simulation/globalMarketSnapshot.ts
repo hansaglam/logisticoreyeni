@@ -333,21 +333,45 @@ export function buildGlobalMarketHistoryEntries(
 }
 
 /** Converts the global snapshot/history into the legacy City view model. */
+export function buildGlobalMarketHistoryPriceIndex(
+  history: GlobalMarketHistoryEntry[],
+): Map<string, number[]> {
+  const buckets = new Map<string, Array<{ epoch: number; price: number }>>();
+  for (const entry of history) {
+    const key = `${entry.cityId}:${entry.productId}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(key, bucket);
+    }
+    bucket.push({ epoch: entry.epoch, price: entry.price });
+  }
+
+  const index = new Map<string, number[]>();
+  for (const [key, bucket] of buckets) {
+    bucket.sort((left, right) => left.epoch - right.epoch);
+    index.set(
+      key,
+      bucket.map((item) => item.price),
+    );
+  }
+  return index;
+}
+
+/** Converts the global snapshot/history into the legacy City view model. */
 export function materializeSnapshotCities(
   catalog: City[],
   snapshot: GlobalEconomySnapshot,
   history: GlobalMarketHistoryEntry[] = [],
 ): City[] {
+  const historyIndex = buildGlobalMarketHistoryPriceIndex(history);
   return catalog.map((city) => ({
     ...city,
     products: Object.fromEntries(
       Object.entries(city.products).map(([rawProductId, product]) => {
         const productId = rawProductId as ProductId;
         const sd = snapshot.supplyDemandState[city.id]?.[productId];
-        const prices = history
-          .filter((entry) => entry.cityId === city.id && entry.productId === productId)
-          .sort((a, b) => a.epoch - b.epoch)
-          .map((entry) => entry.price);
+        const prices = historyIndex.get(`${city.id}:${productId}`) ?? [];
         return [productId, {
           ...product,
           stock: sd?.supply ?? product.stock,

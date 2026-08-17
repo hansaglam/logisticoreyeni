@@ -970,7 +970,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     (state) => state.globalMarketLastSyncedAtMs,
   );
   const marketMovementSummary = useGameStore((state) => state.marketMovementSummary);
-  const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
+  /** Ürün kart trendleri — oyun günü değişince güncellenir (her tick değil). */
+  const marketGameDayAnchor = useGameStore(
+    (state) => Math.floor(state.currentTime / 24) * 24,
+  );
+  /** Dünya olayı süre etiketleri — 6 oyun saatlik adımlar yeterli. */
+  const worldEventClock = useGameStore((state) => Math.floor(state.currentTime / 6) * 6);
 
   const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
   const openContractsForMarketOpportunity = useGameStore(
@@ -1296,10 +1301,10 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       player: { money: playerMoney, warehouses: playerWarehouses },
       cities,
       products,
-      currentTime,
+      currentTime: worldEventClock,
       limit: 6,
     });
-  }, [activeTab, cities, currentTime, playerMoney, playerWarehouses, products]);
+  }, [activeTab, cities, worldEventClock, playerMoney, playerWarehouses, products]);
 
   const availableContracts = useMemo(
     () => contracts.filter((contract) => contract.status === 'available'),
@@ -1431,7 +1436,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
       return [];
     }
 
-    const gameDay = gameDayFromTime(currentTime);
+    const gameDay = gameDayFromTime(worldEventClock);
     const hasWarehouse = selectedCityWarehouses.length > 0;
     const cards: Array<{
       productId: ProductId;
@@ -1533,7 +1538,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
     selectedCityWarehouses,
     cityInventoryByProduct,
     activeWorldEvents,
-    currentTime,
+    worldEventClock,
     selectedCityTotalFreeCapacity,
     playerMoney,
   ]);
@@ -1953,7 +1958,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
           syncCaption={marketSyncCaption}
         />
 
-        <MarketWorldEventsStrip events={activeWorldEvents} currentTime={currentTime} />
+        <MarketWorldEventsStrip events={activeWorldEvents} currentTime={worldEventClock} />
 
         <MarketTabSegment activeTab={activeTab} onChange={setActiveTab} />
 
@@ -2020,7 +2025,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
                     <ProductMarketCard
                       key={cardData.productId}
                       cityId={cardData.cityId}
-                      currentTime={currentTime}
+                      currentTime={marketGameDayAnchor}
                       market={cardData.market}
                       hasWarehouse={cardData.hasWarehouse}
                       depotQuantity={cardData.depotQuantity}

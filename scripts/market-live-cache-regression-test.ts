@@ -185,6 +185,8 @@ console.log('\nPlatform parity + wiring');
   const appTsx = readFileSync('App.tsx', 'utf8');
 
   assert(gameStore.includes('maybeRefreshMarketSnapshot'), 'maybeRefreshMarketSnapshot exists');
+  assert(gameStore.includes('maybeRefreshMarketHistory'), 'deferred market history refresh exists');
+  assert(gameStore.includes('includeHistory: false'), 'market snapshot refresh skips inline history on open');
   assert(gameStore.includes('preserveLiveMarketSync'), 'offline progression preserves live sync');
   assert(marketScreen.includes('resolveMarketDataState'), 'MarketScreen uses canonical state');
   assert(marketScreen.includes('refreshMarketSnapshot'), 'refresh button calls real fetch');

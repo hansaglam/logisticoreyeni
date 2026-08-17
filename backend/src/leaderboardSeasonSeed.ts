@@ -17,7 +17,14 @@ import {
   resolveWeeklySeasonActivity,
 } from './leaderboardScore';
 import { getLeaderboardSeasonKey } from './leaderboardSeason';
-import { serverStateRef, validateServerState } from './serverState';
+import {
+  buildBoundedLegacyMigrationFromCloudSave,
+  cloudSaveRef,
+  mergeLeaderboardStatsFromCloudSave,
+  pickLeaderboardServerStatePersistPatch,
+  serverStateRef,
+  validateServerState,
+} from './serverState';
 import type { ServerStateDocument } from './serverStateTypes';
 
 const USERS_PAGE_SIZE = 100;
@@ -264,12 +271,37 @@ export async function seedLeaderboardSeason(
         }
 
         const serverSnap = await serverStateRef(firestore, userDoc.id).get();
-        if (!serverSnap.exists) {
+        const saveSnap = await cloudSaveRef(firestore, userDoc.id).get();
+        const marketplaceSnap = await firestore
+          .doc(`users/${userDoc.id}/marketplaceState/current`)
+          .get();
+
+        let serverState: ServerStateDocument | null = null;
+        if (serverSnap.exists) {
+          serverState = serverSnap.data() as ServerStateDocument;
+          if (saveSnap.exists) {
+            serverState = mergeLeaderboardStatsFromCloudSave(
+              userDoc.id,
+              serverState,
+              saveSnap.data() ?? {},
+              Timestamp.fromMillis(nowMs),
+              { preserveAuthoritativeFleet: marketplaceSnap.exists },
+            );
+          }
+        } else if (saveSnap.exists) {
+          const built = buildBoundedLegacyMigrationFromCloudSave(
+            userDoc.id,
+            saveSnap.data() ?? {},
+            Timestamp.fromMillis(nowMs),
+          );
+          serverState = built.state;
+        }
+
+        if (!serverState) {
           skipped += 1;
           continue;
         }
 
-        const serverState = serverSnap.data() as ServerStateDocument;
         const stateReason = validateServerState(userDoc.id, serverState);
         if (stateReason) {
           skipped += 1;
@@ -284,9 +316,19 @@ export async function seedLeaderboardSeason(
           nowMs,
         });
 
+        const serverWritePayload = serverSnap.exists
+          ? {
+              ...pickLeaderboardServerStatePersistPatch(serverState),
+              ...prepared.serverPatch,
+            }
+          : {
+              ...serverState,
+              ...prepared.serverPatch,
+            };
+
         batch.set(
           serverStateRef(firestore, userDoc.id),
-          prepared.serverPatch,
+          serverWritePayload,
           { merge: true },
         );
         batchOps += 1;

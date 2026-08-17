@@ -386,6 +386,125 @@ export function buildBoundedLegacyMigrationFromCloudSave(
   };
 }
 
+function readCloudSaveSourceVersion(save: DocumentData, gameState: Record<string, unknown>): number {
+  return Math.max(
+    1,
+    Math.floor(finite(save.saveVersion, finite(record(gameState.meta).saveVersion, 1))),
+  );
+}
+
+export type MergeLeaderboardStatsOptions = {
+  /** Marketplace filo/nakit otoritesini koru; yalnızca teslimat/itibar alanlarını güncelle. */
+  preserveAuthoritativeFleet?: boolean;
+};
+
+/**
+ * Cloud save'deki güncel ilerleme istatistiklerini serverState'e yansıtır.
+ * Liderlik submit/seed skoru bu belgeye dayanır; migration sonrası stale kalmasın diye.
+ */
+export function mergeLeaderboardStatsFromCloudSave(
+  uid: string,
+  existing: ServerStateDocument,
+  save: DocumentData,
+  now: Timestamp,
+  options?: MergeLeaderboardStatsOptions,
+): ServerStateDocument {
+  const gameState = record(save.gameState);
+  const player = record(gameState.player);
+  const homeCityId =
+    typeof player.homeCityId === 'string' ? player.homeCityId : 'izmir';
+
+  const companyLevel = clamp(
+    Math.floor(finite(player.level, finite(player.companyLevel, existing.companyLevel))),
+    1,
+    LEGACY_MIGRATION_BOUNDS.maxLevel,
+  );
+  const reputation = clamp(
+    finite(player.reputation, existing.reputation),
+    0,
+    LEGACY_MIGRATION_BOUNDS.maxReputation,
+  );
+  const completedDeliveries = clamp(
+    Math.floor(finite(player.completedContracts, existing.completedDeliveries)),
+    0,
+    LEGACY_MIGRATION_BOUNDS.maxCompletedDeliveries,
+  );
+  const failedDeliveries = clamp(
+    Math.floor(finite(player.failedDeliveries, existing.failedDeliveries)),
+    0,
+    LEGACY_MIGRATION_BOUNDS.maxCompletedDeliveries,
+  );
+  const lateDeliveries = clamp(
+    Math.floor(finite(player.lateDeliveries, existing.lateDeliveries)),
+    0,
+    LEGACY_MIGRATION_BOUNDS.maxCompletedDeliveries,
+  );
+  const companyNameRaw =
+    typeof player.companyName === 'string' ? player.companyName.trim() : '';
+  const companyName =
+    companyNameRaw.length > 0
+      ? companyNameRaw.slice(0, 48)
+      : existing.companyName;
+  const sourceVersion = Math.max(
+    existing.sourceVersion,
+    readCloudSaveSourceVersion(save, gameState),
+  );
+
+  let ownedTrucks = existing.ownedTrucks;
+  let ownedTruckIds = existing.ownedTruckIds;
+  let warehouses = existing.warehouses;
+  if (!options?.preserveAuthoritativeFleet) {
+    const truckParse = parseBoundedTrucksFromSave(array(player.trucks), homeCityId);
+    ownedTrucks = truckParse.trucks;
+    ownedTruckIds = ownedTrucks.map((truck) => truck.truckId);
+    warehouses = parseBoundedWarehousesFromSave(array(player.warehouses));
+  }
+
+  const base: Omit<ServerStateDocument, 'leaderboardScore'> = {
+    ...existing,
+    ownerUid: uid,
+    companyLevel,
+    reputation,
+    completedDeliveries,
+    failedDeliveries,
+    lateDeliveries,
+    companyName,
+    sourceVersion,
+    ownedTrucks,
+    ownedTruckIds,
+    warehouses,
+    updatedAt: now,
+  };
+
+  return {
+    ...base,
+    leaderboardScore: recalculateLeaderboardScore(base),
+  };
+}
+
+export function pickLeaderboardServerStatePersistPatch(
+  state: ServerStateDocument,
+): Partial<ServerStateDocument> {
+  return {
+    companyLevel: state.companyLevel,
+    reputation: state.reputation,
+    completedDeliveries: state.completedDeliveries,
+    failedDeliveries: state.failedDeliveries,
+    lateDeliveries: state.lateDeliveries,
+    companyName: state.companyName,
+    sourceVersion: state.sourceVersion,
+    ownedTrucks: state.ownedTrucks,
+    ownedTruckIds: state.ownedTruckIds,
+    warehouses: state.warehouses,
+    leaderboardScore: state.leaderboardScore,
+    updatedAt: state.updatedAt,
+  };
+}
+
+export function cloudSaveRef(firestore: Firestore, uid: string) {
+  return firestore.doc(`users/${uid}/saves/current`);
+}
+
 export function mirrorServerStateFromMarketplace(
   marketplaceState: MarketplacePlayerState,
   existing: ServerStateDocument | null,

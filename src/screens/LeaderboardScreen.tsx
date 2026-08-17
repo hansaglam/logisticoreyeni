@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
+  InteractionManager,
   RefreshControl,
   StyleSheet,
   Text,
@@ -377,16 +378,21 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const currentTime = useGameStore((state) => state.currentTime);
   const completedDeliveries = Math.max(0, player?.completedContracts ?? 0);
   const rankedEligible = isLeaderboardRankedEligible(completedDeliveries);
+  const scoreBreakdownReady = screenState.status !== 'loading';
   const localScoreBreakdown = useMemo(
-    () =>
-      getCompanyScoreBreakdown({
+    () => {
+      if (!scoreBreakdownReady) {
+        return null;
+      }
+      return getCompanyScoreBreakdown({
         player,
         cities,
         products,
         financeLedger,
         currentTime,
-      }),
-    [player, cities, products, financeLedger, currentTime],
+      });
+    },
+    [scoreBreakdownReady, player, cities, products, financeLedger, currentTime],
   );
 
   const fetchData =
@@ -420,72 +426,111 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
     setAccount(getAccountStatus() ?? DEFAULT_ACCOUNT_STATUS);
   }, []);
 
-  const loadLeaderboard = useCallback(async (refresh = false) => {
-    markStartup('LEADERBOARD_INIT_START');
-    const requestSeq = ++requestSeqRef.current;
-    setScreenState((current) => beginLeaderboardRefresh(current));
+  const syncLeaderboardScoreInBackground = useCallback(
+    async (forceSubmit: boolean) => {
+      try {
+        await maybeSubmitLeaderboardForSeasonChange();
+        const submitResult = await submitCurrentLeaderboardScore({ force: forceSubmit });
+        if (submitResult.ok && submitResult.seasonKey) {
+          await markLeaderboardSeasonSubmitted(submitResult.seasonKey);
+        } else if (
+          submitResult.errorCode &&
+          submitResult.errorCode !== 'score-not-improved' &&
+          submitResult.errorCode !== 'not-ranked-eligible'
+        ) {
+          logLeaderboardError(
+            typeof submitResult.errorCode === 'string' ? submitResult.errorCode : undefined,
+            submitResult.error,
+          );
+        }
+        if (submitResult.ok && submitResult.updated) {
+          const refreshed = await fetchWeeklyLeaderboard(uid);
+          if (refreshed.ok) {
+            setScreenState(applyLeaderboardFetchSuccess(refreshed));
+          }
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[leaderboard] background score sync failed', error);
+        }
+      }
+    },
+    [uid],
+  );
 
-    if (!isLeaderboardEligible()) {
+  const loadLeaderboard = useCallback(
+    async (options?: { forceSubmit?: boolean }) => {
+      const forceSubmit = options?.forceSubmit ?? false;
+      markStartup('LEADERBOARD_INIT_START');
+      const requestSeq = ++requestSeqRef.current;
+      setScreenState((current) => beginLeaderboardRefresh(current));
+
+      if (!isLeaderboardEligible()) {
+        if (requestSeq !== requestSeqRef.current) return;
+        setScreenState({ status: 'unauthenticated' });
+        return;
+      }
+
+      const [profile, result] = await Promise.all([
+        fetchUsernameProfile(),
+        fetchWeeklyLeaderboard(uid),
+      ]);
       if (requestSeq !== requestSeqRef.current) return;
-      setScreenState({ status: 'unauthenticated' });
-      return;
-    }
 
-    const profile = await fetchUsernameProfile();
-    if (requestSeq !== requestSeqRef.current) return;
-    const hasUsername = profile.ok && profile.profile.usernameSetupCompleted;
-    setUsernameReady(hasUsername);
-    if (!hasUsername) {
-      setScreenState({ status: 'username-required' });
-      return;
-    }
+      const hasUsername = profile.ok && profile.profile.usernameSetupCompleted;
+      setUsernameReady(hasUsername);
+      if (!hasUsername) {
+        setScreenState({ status: 'username-required' });
+        return;
+      }
 
-    await maybeSubmitLeaderboardForSeasonChange();
-    const submitResult = await submitCurrentLeaderboardScore({ force: true });
-    if (requestSeq !== requestSeqRef.current) return;
-    if (submitResult.ok && submitResult.seasonKey) {
-      await markLeaderboardSeasonSubmitted(submitResult.seasonKey);
-    } else if (
-      submitResult.errorCode &&
-      submitResult.errorCode !== 'score-not-improved' &&
-      submitResult.errorCode !== 'not-ranked-eligible'
-    ) {
-      logLeaderboardError(
-        typeof submitResult.errorCode === 'string' ? submitResult.errorCode : undefined,
-        submitResult.error,
-      );
-    }
+      if (!result.ok) {
+        setScreenState(
+          applyLeaderboardFetchError(
+            mapLeaderboardErrorCodeToKind(result.errorCode),
+          ),
+        );
+        logLeaderboardError(result.errorCode, result.error);
+        return;
+      }
 
-    const result = await fetchWeeklyLeaderboard(uid);
-    if (requestSeq !== requestSeqRef.current) return;
+      setScreenState(applyLeaderboardFetchSuccess(result));
+      markStartup('LEADERBOARD_INIT_DONE');
 
-    if (!result.ok) {
-      setScreenState(
-        applyLeaderboardFetchError(
-          mapLeaderboardErrorCodeToKind(result.errorCode),
-        ),
-      );
-      logLeaderboardError(result.errorCode, result.error);
-      return;
-    }
-
-    setScreenState(applyLeaderboardFetchSuccess(result));
-    markStartup('LEADERBOARD_INIT_DONE');
-  }, [uid]);
+      void syncLeaderboardScoreInBackground(forceSubmit);
+    },
+    [syncLeaderboardScoreInBackground, uid],
+  );
 
   useEffect(() => {
     refreshAccount();
+    let cancelled = false;
+    let interactionHandle: { cancel?: () => void } | null = null;
+    const scheduleLoad = (forceSubmit: boolean) => {
+      interactionHandle?.cancel?.();
+      interactionHandle = InteractionManager.runAfterInteractions(() => {
+        if (!cancelled) {
+          void loadLeaderboard({ forceSubmit });
+        }
+      });
+    };
     const unsub = subscribeAuthState((user) => {
       refreshAccount();
       const nextUid = user && !user.isAnonymous ? user.uid : null;
-      if (lastAuthUidRef.current !== null && lastAuthUidRef.current !== nextUid) {
+      const uidChanged =
+        lastAuthUidRef.current !== null && lastAuthUidRef.current !== nextUid;
+      if (uidChanged) {
         resetLeaderboardSubmitCache();
         setScreenState({ status: 'loading' });
       }
       lastAuthUidRef.current = nextUid;
-      void loadLeaderboard(true);
+      scheduleLoad(uidChanged);
     });
-    return unsub;
+    return () => {
+      cancelled = true;
+      interactionHandle?.cancel?.();
+      unsub();
+    };
   }, [loadLeaderboard, refreshAccount]);
 
   useEffect(() => {
@@ -493,28 +538,11 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
       setUsernameReady(null);
       return;
     }
-    let cancelled = false;
-    const loadProfile = () => {
-      void fetchUsernameProfile().then((result) => {
-        if (!cancelled) {
-          setUsernameReady(result.ok && result.profile.usernameSetupCompleted);
-        }
-      });
-    };
-    loadProfile();
-    const unsubProfile = subscribeUsernameProfileChanged(loadProfile);
-    return () => {
-      cancelled = true;
-      unsubProfile();
-    };
-  }, [eligible, account.uid]);
-
-  useEffect(() => {
-    const unsub = subscribeUsernameProfileChanged(() => {
-      void loadLeaderboard(true);
+    const unsubProfile = subscribeUsernameProfileChanged(() => {
+      void loadLeaderboard({ forceSubmit: false });
     });
-    return unsub;
-  }, [loadLeaderboard]);
+    return unsubProfile;
+  }, [eligible, loadLeaderboard]);
 
   const playerOutsideTop =
     Boolean(playerEntry) &&
@@ -587,7 +615,9 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
           </AppTutorialTarget>
         ) : null}
 
-        <ScoreExplainerCard breakdown={localScoreBreakdown} />
+        {localScoreBreakdown ? (
+          <ScoreExplainerCard breakdown={localScoreBreakdown} />
+        ) : null}
 
         <AppTutorialTarget tutorialId="leaderboard" targetId="company-ranking" layoutMode="stretch">
           <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
@@ -669,7 +699,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
               message={getLeaderboardKindMessage(errorKind)}
               icon="warning"
               actionLabel="Tekrar dene"
-              onAction={() => void loadLeaderboard(true)}
+              onAction={() => void loadLeaderboard({ forceSubmit: true })}
             />
           ) : screenState.status === 'empty' ? (
             <EmptyState
@@ -690,7 +720,7 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
-            onRefresh={() => void loadLeaderboard(true)}
+            onRefresh={() => void loadLeaderboard({ forceSubmit: true })}
             tintColor={colors.accentBlue}
           />
         }

@@ -11,6 +11,10 @@ import {
 
 import { useGameStore } from '../store/gameStore';
 import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
+import {
+  getJobRemainingDistanceKm,
+  getJobRemainingFuelRequiredL,
+} from '../simulation/fuelWarnings';
 import { colors, spacing, typography } from '../theme';
 import { formatMoney, formatMoneyDecimal, formatUnitPrice } from '../theme/format';
 import {
@@ -19,7 +23,7 @@ import {
   type RoadsideFuelJob,
 } from '../simulation/roadsideFuel';
 import { IOS_STACKED_MODAL_PROPS } from '../utils/modalPresentation';
-import { normalizeTruckFuel } from '../utils/truckFuel';
+import { getTruckRangeKm, normalizeTruckFuel } from '../utils/truckFuel';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import { ActionButton, GameIcon, IconButton } from './ui';
 
@@ -99,6 +103,21 @@ export default function RoadsideFuelSheet({
   const quote = truck
     ? calculateRoadsideFuelQuote(truck, requestedLiters, fuelPrice)
     : null;
+  const remainingRouteWarning = useMemo(() => {
+    if (!job || !truck || !quote) return null;
+    const remainingFuelRequiredL = getJobRemainingFuelRequiredL(job);
+    const remainingDistanceKm = getJobRemainingDistanceKm(job);
+    if (remainingFuelRequiredL <= 1e-6 || remainingDistanceKm <= 0) return null;
+    if (quote.newFuelL + 1e-6 >= remainingFuelRequiredL) return null;
+    const projectedRange = getTruckRangeKm({
+      ...normalizeTruckFuel(truck),
+      currentFuelL: quote.newFuelL,
+    });
+    return (
+      `Mevcut yakıt rota için yeterli değil. Tahmini gerekli menzil: ${Math.ceil(remainingDistanceKm)} km. ` +
+      `Mevcut menzil: ${Math.floor(projectedRange)} km.`
+    );
+  }, [job, quote, truck]);
 
   const handlePurchase = () => {
     if (!resolvedJobId || !quote || !truck) return;
@@ -125,7 +144,10 @@ export default function RoadsideFuelSheet({
       transactionKeyRef.current = '';
       return;
     }
-    onSuccess?.(result.message);
+    const successText = result.routeFuelWarning
+      ? `${result.message}\n${result.routeFuelWarning}`
+      : result.message;
+    onSuccess?.(successText);
     onClose();
   };
 
@@ -225,6 +247,10 @@ export default function RoadsideFuelSheet({
                 <View style={styles.row}><Text style={styles.label}>Toplam</Text><Text style={styles.total}>{formatMoneyDecimal(quote.totalCost)}</Text></View>
                 <View style={styles.row}><Text style={styles.label}>Nakit</Text><Text style={styles.value}>{formatMoney(cash)}</Text></View>
               </View>
+            ) : null}
+
+            {remainingRouteWarning ? (
+              <Text style={styles.warningText}>{remainingRouteWarning}</Text>
             ) : null}
 
             {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}

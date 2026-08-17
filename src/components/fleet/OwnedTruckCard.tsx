@@ -39,6 +39,8 @@ import {
   normalizeTruckFuel,
 } from '../../utils/truckFuel';
 import { getFuelWarningForJob } from '../../simulation/fuelWarnings';
+import { detectVehicleStateIssue } from '../../domain/vehicleStateRecovery';
+import VehicleRecoveryBanner from '../delivery/VehicleRecoveryBanner';
 import type { Delivery, Driver, Trailer, Truck, TruckTransfer } from '../../types/game';
 import type { MonetizationState } from '../../types/monetization';
 import {
@@ -158,6 +160,19 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           candidate.status === 'pending' ||
           candidate.status === 'paused'),
     ),
+  );
+  const openVehicleRecovery = useGameStore((state) => state.openVehicleRecovery);
+  const recoveryIssue = useMemo(
+    () =>
+      detectVehicleStateIssue({
+        truck: liveTruck,
+        currentTime,
+        homeCityId,
+        activeDelivery: delivery,
+        activeTransfer: transfer,
+        activeWarehouseTransfer: warehouseTransfer,
+      }),
+    [liveTruck, currentTime, homeCityId, delivery, transfer, warehouseTransfer],
   );
 
   const catalogId = getTruckCatalogId(liveTruck);
@@ -406,6 +421,11 @@ const OwnedTruckCard = React.memo(function OwnedTruckCard({
           ) : null}
         </View>
       ) : null}
+
+      <VehicleRecoveryBanner
+        issue={recoveryIssue}
+        onRecover={() => openVehicleRecovery(liveTruck.id)}
+      />
 
       <View style={styles.conditionBlock}>
         <View style={styles.conditionHeader}>

@@ -112,13 +112,22 @@ const priceChanged = validateTruckRefuelRequest({
 assert(priceChanged.result.reason === 'price-changed', 'fiyat değişimi structured reason');
 
 const busy = validateTruckRefuelRequest({
+  truck: makeTruck(70, 'marketplace_locked'),
+  requestedLiters: 25,
+  currentMoney: 1_000,
+  currentUnitPrice: price,
+  expectedUnitPrice: price,
+});
+assert(busy.result.reason === 'truck-busy', 'marketplace kilitli araç yakıt alamaz');
+
+const onRoute = validateTruckRefuelRequest({
   truck: makeTruck(70, 'on_route'),
   requestedLiters: 25,
   currentMoney: 1_000,
   currentUnitPrice: price,
   expectedUnitPrice: price,
 });
-assert(busy.result.reason === 'truck-busy', 'aktif görev structured reason');
+assert(onRoute.result.success && onRoute.quote != null, 'aktif görevdeki araç şehirden yakıt alabilir');
 
 const valid = validateTruckRefuelRequest({
   truck: makeTruck(70),

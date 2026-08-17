@@ -9,11 +9,18 @@ import {
   isTruckEligibleForNewAssignment,
 } from '../simulation/rentalTruckLifecycle';
 import {
+  evaluateRentalAssignmentFit,
+  formatRentalFitSummary,
+  getRentalFitBadgeLabel,
+  getRentalRemainingHours,
+  type RentalAssignmentFitResult,
+} from '../domain/rentalAssignmentFit';
+import {
   canTruckCarryCargo,
   getTruckEffectiveCapacityTons,
 } from '../simulation/capacity';
 import { getCityName } from './entityLookup';
-import type { Driver, Truck } from '../types/game';
+import type { Delivery, Driver, Trailer, Truck } from '../types/game';
 
 export const MIN_TRUCK_CONDITION = 30;
 export const LOW_CONDITION_WARNING = 50;
@@ -26,7 +33,9 @@ export type TruckIssue =
   | 'capacity'
   | 'condition_blocked'
   | 'condition_warning'
-  | 'lease_expired';
+  | 'lease_expired'
+  | 'rental_duration'
+  | 'rental_risky';
 
 export type DriverIssue = 'eligible' | 'on_route' | 'resting';
 
@@ -35,6 +44,7 @@ export interface TruckOption {
   issue: TruckIssue;
   label: string;
   selectable: boolean;
+  rentalFit?: RentalAssignmentFitResult | null;
 }
 
 export interface DriverOption {
@@ -48,9 +58,10 @@ export function evaluateTruckOption(
   truck: Truck,
   cargoWeight: number,
   originCityId: string,
-  trailers?: import('../types/game').Trailer[],
+  trailers?: Trailer[],
   currentTime?: number,
-  activeDeliveries?: import('../types/game').Delivery[],
+  activeDeliveries?: Delivery[],
+  estimatedTravelHours?: number,
 ): TruckOption {
   if (currentTime != null) {
     const activeDelivery = findActiveDeliveryForTruck(truck.id, activeDeliveries);
@@ -105,15 +116,63 @@ export function evaluateTruckOption(
       selectable: false,
     };
   }
+
+  if (currentTime != null && getRentalRemainingHours(truck, currentTime) != null) {
+    if (estimatedTravelHours == null) {
+      return {
+        truck,
+        issue: 'rental_duration',
+        label: 'Tahmini teslimat süresi hesaplanamadı',
+        selectable: false,
+      };
+    }
+  }
+
+  const rentalFit =
+    currentTime != null
+      ? evaluateRentalAssignmentFit({
+          truck,
+          currentTime,
+          estimatedTravelHours: estimatedTravelHours ?? 0,
+        })
+      : null;
+
+  if (rentalFit?.applicable && !rentalFit.canAssign) {
+    return {
+      truck,
+      issue: 'rental_duration',
+      label: formatRentalFitSummary(rentalFit),
+      selectable: false,
+      rentalFit,
+    };
+  }
+
+  if (rentalFit?.applicable && rentalFit.status === 'risky') {
+    return {
+      truck,
+      issue: 'rental_risky',
+      label: formatRentalFitSummary(rentalFit),
+      selectable: true,
+      rentalFit,
+    };
+  }
+
   if (condition < LOW_CONDITION_WARNING) {
     return {
       truck,
       issue: 'condition_warning',
       label: 'Kondisyon düşük, risk artar',
       selectable: true,
+      rentalFit,
     };
   }
-  return { truck, issue: 'eligible', label: 'Uygun', selectable: true };
+  return {
+    truck,
+    issue: 'eligible',
+    label: rentalFit?.applicable ? formatRentalFitSummary(rentalFit) : 'Uygun',
+    selectable: true,
+    rentalFit,
+  };
 }
 
 export function evaluateDriverOption(driver: Driver): DriverOption {
@@ -133,12 +192,21 @@ export function buildTruckOptions(
   trucks: Truck[],
   cargoWeight: number,
   originCityId: string,
-  trailers?: import('../types/game').Trailer[],
+  trailers?: Trailer[],
   currentTime?: number,
-  activeDeliveries?: import('../types/game').Delivery[],
+  activeDeliveries?: Delivery[],
+  estimatedTravelHoursForTruck?: (truck: Truck) => number,
 ): TruckOption[] {
   return trucks.map((truck) =>
-    evaluateTruckOption(truck, cargoWeight, originCityId, trailers, currentTime, activeDeliveries),
+    evaluateTruckOption(
+      truck,
+      cargoWeight,
+      originCityId,
+      trailers,
+      currentTime,
+      activeDeliveries,
+      estimatedTravelHoursForTruck?.(truck),
+    ),
   );
 }
 
@@ -153,6 +221,10 @@ export function pickBestTruckOption(options: TruckOption[]): TruckOption | null 
   }
 
   return [...eligible].sort((a, b) => {
+    const rentalRank = (option: TruckOption) => (option.issue === 'rental_risky' ? 1 : 0);
+    const rentalDiff = rentalRank(a) - rentalRank(b);
+    if (rentalDiff !== 0) return rentalDiff;
+
     const conditionDiff = (b.truck.condition ?? 0) - (a.truck.condition ?? 0);
     if (conditionDiff !== 0) return conditionDiff;
 
@@ -186,7 +258,13 @@ export function getTruckBadge(option: TruckOption): {
 } {
   switch (option.issue) {
     case 'eligible':
-      return { label: 'UYGUN', variant: 'success' };
+      return option.rentalFit?.applicable
+        ? { label: getRentalFitBadgeLabel(option.rentalFit.status).toUpperCase(), variant: 'success' }
+        : { label: 'UYGUN', variant: 'success' };
+    case 'rental_risky':
+      return { label: 'RİSKLİ', variant: 'warning' };
+    case 'rental_duration':
+      return { label: 'UYGUN DEĞİL', variant: 'danger' };
     case 'condition_warning':
       return { label: 'KONDİSYON DÜŞÜK', variant: 'warning' };
     case 'capacity':
@@ -227,6 +305,10 @@ export function summarizeNoTruckMessage(options: TruckOption[], cargoWeight: num
   const eligible = options.filter((option) => option.selectable);
   if (eligible.length > 0) {
     return '';
+  }
+
+  if (options.some((option) => option.issue === 'rental_duration')) {
+    return 'Kiralık araçların kalan süresi bu teslimat için yeterli değil.';
   }
 
   const atOrigin = options.filter((option) => option.issue !== 'wrong_city');

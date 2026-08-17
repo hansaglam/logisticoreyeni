@@ -17,6 +17,10 @@ import {
   type DriverOption,
   type TruckOption,
 } from '../../utils/assignmentOptions';
+import {
+  formatRentalHoursLabel,
+  getRentalFitBadgeLabel,
+} from '../../domain/rentalAssignmentFit';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
 import { IconButton, StatusBadge } from '../ui';
@@ -64,9 +68,10 @@ function CompactTruckRow({
         <Text style={styles.rowTitle} numberOfLines={1}>
           {truck.name}
         </Text>
-        <Text style={styles.rowMeta} numberOfLines={1}>
-          {truck.capacity ?? 0} t · {truck.speed ?? 0} km/h · Kondisyon %{condition} ·{' '}
-          {getCityName(truck.currentCityId ?? truck.homeCityId ?? '')}
+        <Text style={styles.rowMeta} numberOfLines={2}>
+          {option.rentalFit?.applicable
+            ? `${truck.capacity ?? 0} t · Kalan kira ${formatRentalHoursLabel(option.rentalFit.remainingHours)} · Tahmini ${formatRentalHoursLabel(option.rentalFit.estimatedTravelHours)} · ${getRentalFitBadgeLabel(option.rentalFit.status)}`
+            : `${truck.capacity ?? 0} t · ${truck.speed ?? 0} km/h · Kondisyon %${condition} · ${getCityName(truck.currentCityId ?? truck.homeCityId ?? '')}`}
         </Text>
       </View>
       <StatusBadge label={badge.label} variant={badge.variant} size="sm" />

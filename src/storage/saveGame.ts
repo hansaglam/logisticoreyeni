@@ -208,6 +208,7 @@ export interface SaveGamePayload {
   deliverySettlementHistory?: import('../domain/deliveryDelayDiagnostics').DeliverySettlementRecord[];
   osNotificationDedupeKeys?: string[];
   osNotificationPermissionAsked?: boolean;
+  vehicleRecovery?: import('../domain/vehicleStateRecovery').VehicleRecoveryUsage;
 }
 
 export interface SaveBackupStatus {
@@ -912,6 +913,24 @@ export function normalizeSavePayload(
           .slice(-32)
       : [],
     reputationHistory: normalizeReputationHistory(withFallbacks.reputationHistory),
+    vehicleRecovery: normalizeVehicleRecoveryUsage(withFallbacks.vehicleRecovery),
+  };
+}
+
+function normalizeVehicleRecoveryUsage(value: unknown): StoreGameState['vehicleRecovery'] {
+  if (!value || typeof value !== 'object') {
+    return { freeUsed: false, paidCount: 0 };
+  }
+  const record = value as Record<string, unknown>;
+  const paidCount = Number(record.paidCount);
+  const lastResolvedAt = Number(record.lastResolvedAt);
+  return {
+    freeUsed: record.freeUsed === true,
+    paidCount: Number.isFinite(paidCount) ? Math.max(0, Math.floor(paidCount)) : 0,
+    ...(Number.isFinite(lastResolvedAt) ? { lastResolvedAt } : {}),
+    ...(typeof record.lastIssueKind === 'string'
+      ? { lastIssueKind: record.lastIssueKind as NonNullable<StoreGameState['vehicleRecovery']>['lastIssueKind'] }
+      : {}),
   };
 }
 
@@ -1673,6 +1692,7 @@ export function serializeGameState(
     deliverySettlementHistory: normalizeSettlementHistory(state.deliverySettlementHistory),
     osNotificationDedupeKeys: normalizeOsDedupeKeys(state.osNotificationDedupeKeys),
     osNotificationPermissionAsked: state.osNotificationPermissionAsked === true,
+    vehicleRecovery: normalizeVehicleRecoveryUsage(state.vehicleRecovery),
   };
 }
 
@@ -1893,6 +1913,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     deliverySettlementHistory: normalizeSettlementHistory(payload.deliverySettlementHistory),
     osNotificationDedupeKeys: normalizeOsDedupeKeys(payload.osNotificationDedupeKeys),
     osNotificationPermissionAsked: payload.osNotificationPermissionAsked === true,
+    vehicleRecovery: normalizeVehicleRecoveryUsage(payload.vehicleRecovery),
   };
 }
 

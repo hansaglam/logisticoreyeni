@@ -17,7 +17,12 @@ export interface DeliveryHealthBannerProps {
   onRefuel?: () => void;
 }
 
-function statusColor(status: DeliveryHealthStatus): string {
+function statusColor(
+  status: DeliveryHealthStatus,
+  flags: { showOutOfFuelWarning: boolean; showLowFuelWarning: boolean },
+): string {
+  if (flags.showOutOfFuelWarning) return colors.danger;
+  if (flags.showLowFuelWarning && status === 'on_time') return colors.warning;
   switch (status) {
     case 'on_time':
       return colors.success;
@@ -40,7 +45,10 @@ export default function DeliveryHealthBanner({
   onRefuel,
 }: DeliveryHealthBannerProps) {
   const health = resolveDeliveryHealth({ delivery, currentTime, truck });
-  const color = statusColor(health.status);
+  const color = statusColor(health.status, {
+    showOutOfFuelWarning: health.showOutOfFuelWarning,
+    showLowFuelWarning: health.showLowFuelWarning,
+  });
 
   return (
     <View style={[styles.wrap, { borderColor: `${color}66` }]}>
@@ -59,7 +67,7 @@ export default function DeliveryHealthBanner({
         </Text>
       ) : null}
       {health.detailLine ? <Text style={styles.detail}>{health.detailLine}</Text> : null}
-      {health.status === 'out_of_fuel' && onRefuel ? (
+      {health.showRefuelCta && onRefuel ? (
         <ActionButton label="Yakıt Al" icon="fuel" onPress={onRefuel} style={styles.cta} />
       ) : null}
     </View>

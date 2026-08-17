@@ -19,6 +19,7 @@ import {
 import {
   getContractCargoWeight,
   isTruckAtContractOrigin,
+  estimateAssignmentDurationHours,
 } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
 import { getSnapshotFuelPrice } from '../../simulation/globalMarketSnapshot';
@@ -26,6 +27,7 @@ import { getRoute as findRoute } from '../../data/routes';
 import { evaluateDeliveryReadiness } from '../../domain/deliveryReadiness';
 import { getAttachedTrailerForTruck } from '../../simulation/trailerAttachment';
 import DeliveryReadinessCard from '../delivery/DeliveryReadinessCard';
+import RentalAssignmentFitBanner from '../delivery/RentalAssignmentFitBanner';
 import {
   buildDriverOptions,
   buildTruckOptions,
@@ -38,6 +40,10 @@ import {
   type DriverOption,
   type TruckOption,
 } from '../../utils/assignmentOptions';
+import {
+  formatRentalHoursLabel,
+  getRentalFitBadgeLabel,
+} from '../../domain/rentalAssignmentFit';
 import { getContractAvailabilityLabel } from '../../utils/contractAvailabilityDisplay';
 import { getCityName, getProductName } from '../../utils/entityLookup';
 import { colors, formatMoney, formatRatioPercent, spacing, typography } from '../../theme';
@@ -226,8 +232,26 @@ export default function ContractQuickActionSheet({
         trailers,
         currentTime,
         activeDeliveries,
+        contract
+          ? (truck) =>
+              estimateAssignmentDurationHours({
+                contract,
+                truck,
+                driver: drivers.find((candidate) => candidate.id === selectedDriverId) ?? null,
+                trailers,
+              })
+          : undefined,
       ),
-    [trucks, cargoWeight, contract?.originCityId, trailers, currentTime, activeDeliveries],
+    [
+      trucks,
+      cargoWeight,
+      contract,
+      trailers,
+      currentTime,
+      activeDeliveries,
+      drivers,
+      selectedDriverId,
+    ],
   );
 
   const driverOptions = useMemo(() => buildDriverOptions(drivers), [drivers]);
@@ -308,7 +332,7 @@ export default function ContractQuickActionSheet({
   useEffect(() => {
     if (!selectedTruckId) return;
     const selected = truckOptions.find((option) => option.truck.id === selectedTruckId);
-    if (selected && !selected.selectable && selected.issue === 'lease_expired') {
+    if (selected && !selected.selectable && (selected.issue === 'lease_expired' || selected.issue === 'rental_duration')) {
       setSelectedTruckId(null);
     }
   }, [selectedTruckId, truckOptions]);
@@ -358,7 +382,9 @@ export default function ContractQuickActionSheet({
 
   const truckCardTitle = selectedTruckOption?.truck.name ?? 'Kamyon seç';
   const truckCardMeta = selectedTruckOption
-    ? `${selectedTruckOption.truck.capacity ?? 0} t · ${selectedTruckOption.truck.speed ?? 0} km/h · Kondisyon %${Math.round(selectedTruckOption.truck.condition ?? 100)}`
+    ? selectedTruckOption.rentalFit?.applicable
+      ? `${selectedTruckOption.truck.capacity ?? 0} t · Kalan kira ${formatRentalHoursLabel(selectedTruckOption.rentalFit.remainingHours)} · Tahmini ${formatRentalHoursLabel(selectedTruckOption.rentalFit.estimatedTravelHours)} · ${getRentalFitBadgeLabel(selectedTruckOption.rentalFit.status)}`
+      : `${selectedTruckOption.truck.capacity ?? 0} t · ${selectedTruckOption.truck.speed ?? 0} km/h · Kondisyon %${Math.round(selectedTruckOption.truck.condition ?? 100)}`
     : '';
   const truckBadge = selectedTruckOption
     ? getTruckBadge(selectedTruckOption)
@@ -373,6 +399,10 @@ export default function ContractQuickActionSheet({
     : { label: 'SEÇİLMEDİ', variant: 'muted' as const };
 
   const handleStart = () => {
+    if (selectedTruckOption?.rentalFit && !selectedTruckOption.rentalFit.canAssign) {
+      setPickerMode('truck');
+      return;
+    }
     if (!selectedTruckId || !selectedDriverId || !canStart) return;
     if (fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')) {
       setFuelRequirementVisible(true);
@@ -611,6 +641,11 @@ export default function ContractQuickActionSheet({
                 onSelectAnotherVehicle={() => setPickerMode('truck')}
                 onBuyFuel={() => setFuelRequirementVisible(true)}
               />
+              <RentalAssignmentFitBanner
+                fit={selectedTruckOption?.rentalFit}
+                onSelectAnotherVehicle={() => setPickerMode('truck')}
+                onGoBack={onClose}
+              />
             </ScrollView>
 
             <View style={[styles.footer, { paddingBottom: spacing.sm }]}>
@@ -627,11 +662,17 @@ export default function ContractQuickActionSheet({
                       ? 'Yakıt gerekli'
                       : fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')
                         ? 'Başka Araç Seç'
-                        : 'Teslimatı Başlat'
+                        : selectedTruckOption?.issue === 'rental_duration'
+                          ? 'Başka Araç Seç'
+                          : 'Teslimatı Başlat'
                   }
                   icon="truck"
                   onPress={handleStart}
-                  disabled={!canStart && !fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')}
+                  disabled={
+                    !canStart &&
+                    !fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE') &&
+                    selectedTruckOption?.issue !== 'rental_duration'
+                  }
                   fullWidth
                   variant="primary"
                   style={styles.startButton}

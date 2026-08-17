@@ -118,7 +118,10 @@ const stoppedJob = makeJob({
 const stoppedTruck = makeTruck(0, 'out_of_fuel');
 const out = getFuelWarningForJob(stoppedJob, stoppedTruck);
 assert(out?.key === 'out-of-fuel', 'out-of-fuel en yüksek öncelik');
-assert(out?.message === 'Yakıt bitti. Araç rota üzerinde durdu.', 'out-of-fuel mesajı');
+assert(out?.message === 'Teslimat ilerlemiyor ancak son teslim süresi işlemeye devam ediyor. Gecikme cezası almamak için araca yakıt ekle.', 'out-of-fuel mesajı');
+
+const staleOut = getFuelWarningForJob(stoppedJob, makeTruck(25, 'out_of_fuel'));
+assert(staleOut?.key !== 'out-of-fuel', 'stale out_of_fuel status with fuel is not YAKITSIZ');
 
 const firstEvaluation = evaluateFuelWarning(stoppedJob, stoppedTruck);
 const secondEvaluation = evaluateFuelWarning(

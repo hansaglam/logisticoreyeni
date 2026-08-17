@@ -223,6 +223,30 @@ import {
 import { mergeReputationIntoStore } from '../simulation/reputationService';
 import { evaluateDeliveryReadiness } from '../domain/deliveryReadiness';
 import {
+  buildRecoveryOptions,
+  detectFleetVehicleStateIssues,
+  detectVehicleStateIssue,
+  emptyVehicleRecoveryUsage,
+  resolveVehicleStateIssue as resolveVehicleStateIssueDomain,
+  type VehicleRecoveryActionId,
+} from '../domain/vehicleStateRecovery';
+import {
+  emptyVehicleTrackingIntegrityReport,
+  formatMapSyncToast,
+  reconcileMapTrackingState,
+  validateVehicleTrackingIntegrity,
+  type VehicleTrackingIntegrityReport,
+} from '../domain/mapTrackingIntegrity';
+import {
+  evaluateRentalAssignmentFit,
+  formatRentalAssignmentBlockMessage,
+} from '../domain/rentalAssignmentFit';
+import {
+  applyPurchasedFuelToVehicle,
+  formatRefuelSuccessMessage,
+  formatRemainingRouteFuelWarning,
+} from '../domain/vehicleFuelApply';
+import {
   accumulateDeliveryTickDiagnostics,
   buildDeliverySettlementRecord,
   prependSettlementRecord,
@@ -319,6 +343,7 @@ import type { TruckRefuelResult } from '../utils/truckFuel';
 import {
   bumpCanonicalStateRevision,
   didTruckListChange,
+  mergeJobTickUpdates,
   mergeTruckTickUpdates,
   patchTruckById,
 } from '../utils/truckFleetState';
@@ -423,7 +448,6 @@ import {
 } from '../simulation/softLockRecovery';
 import { evaluateFuelWarning } from '../simulation/fuelWarnings';
 import {
-  resumeRoadsideJob,
   validateRoadsideFuelPurchase,
   type RoadsideFuelJob,
   type RoadsideFuelResult,
@@ -796,7 +820,8 @@ export type AutoSaveReason =
   | 'debug_cash_change'
   | 'time_tick'
   | 'delivery_incident'
-  | 'offline_progress';
+  | 'offline_progress'
+  | 'vehicle_recovery';
 
 const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'critical',
@@ -816,6 +841,7 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'background',
   'manual',
   'offline_progress',
+  'vehicle_recovery',
 ]);
 
 function resetAutoSaveTracking(gameTime = 0): void {
@@ -1251,6 +1277,7 @@ function createFreshGameStorePatch(): Partial<GameStore> {
     pendingMarketFocus: null,
     pendingOfflineProgressSummary: null,
     pendingDeliveryResultSummary: null,
+    pendingVehicleRecoveryTruckId: null,
     contractGenerationDebug: createEmptyContractGenerationDebug(0),
     deliverySettlementDebug: createEmptyDeliverySettlementDebug(),
     dailyOperatingCostDebug: buildDailyOperatingCostDebugSnapshot(
@@ -1696,6 +1723,7 @@ export function createInitialGameState(): StoreGameState {
     deliverySettlementHistory: [],
     osNotificationDedupeKeys: [],
     osNotificationPermissionAsked: false,
+    vehicleRecovery: { freeUsed: false, paidCount: 0 },
   };
 }
 
@@ -1851,6 +1879,13 @@ export interface GameStore extends StoreGameState {
   failWarehouseStockTransfer: (transferId: string, reason?: string) => TradeActionResult;
   completeDeliveryById: (deliveryId: string) => void;
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => void;
+  pendingVehicleRecoveryTruckId: string | null;
+  openVehicleRecovery: (truckId: string) => void;
+  closeVehicleRecovery: () => void;
+  resolveVehicleStateIssue: (
+    truckId: string,
+    actionId: VehicleRecoveryActionId,
+  ) => { success: boolean; message: string };
   buyTruck: (catalogId: string) => TradeActionResult;
   buyTrailer: (catalogId: string) => TradeActionResult;
   attachTrailerToTruck: (trailerId: string, truckId: string) => TradeActionResult;
@@ -1861,6 +1896,16 @@ export interface GameStore extends StoreGameState {
   fireDriver: (driverId: string) => TradeActionResult;
   processDailyOperatingCosts: (options?: ProcessDailyOperatingCostsOptions) => void;
   processExpiredLeases: (source?: 'hydrate-rental-expiry' | 'offline-rental-expiry' | 'game-tick') => void;
+  reconcileMapTracking: (source?: 'map-open' | 'manual' | 'hydrate') => {
+    toast: string;
+    fixedCount: number;
+    report: VehicleTrackingIntegrityReport;
+  };
+  inspectMapTracking: () => {
+    toast: string;
+    report: VehicleTrackingIntegrityReport;
+    firstIssueTruckId: string | null;
+  };
   repairTruck: (truckId: string) => void;
   upgradeTruck: (truckId: string, upgradeType: TruckUpgradeType) => void;
   refuelTruck: (params: {
@@ -2004,6 +2049,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
   pendingOfflineProgressSummary: null,
   pendingDeliveryResultSummary: null,
+  pendingVehicleRecoveryTruckId: null,
   marketMovementSummary: STABLE_MARKET_MOVEMENT_SUMMARY,
   saveStatus: createSaveStatusSnapshot(false),
   isGameReady: false,
@@ -3546,6 +3592,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().advanceOnboardingProgress();
       get().syncRetentionProgress();
       get().processExpiredLeases('hydrate-rental-expiry');
+      get().reconcileMapTracking('hydrate');
 
       const hydratedState = get();
       const pausedFuelJobs = [
@@ -4838,6 +4885,97 @@ const elapsed = plan.elapsed;
 
     get().markSaveDirty();
   },
+
+  reconcileMapTracking: (source = 'manual') => {
+    const beforeTruckIds = new Set((get().player?.trucks ?? []).map((truck) => truck.id));
+    get().processExpiredLeases(source === 'hydrate' ? 'hydrate-rental-expiry' : 'game-tick');
+
+    const live = get();
+    if (!live.player) {
+      return {
+        toast: formatMapSyncToast({ fixedCount: 0 }),
+        fixedCount: 0,
+        report: emptyVehicleTrackingIntegrityReport(),
+      };
+    }
+
+    const removedExpiredRentals = [...beforeTruckIds].filter(
+      (truckId) => !(live.player.trucks ?? []).some((truck) => truck.id === truckId),
+    ).length;
+
+    const result = reconcileMapTrackingState({
+      currentTime: live.currentTime,
+      player: live.player,
+      activeDeliveries: live.activeDeliveries,
+      contracts: live.contracts,
+      activeTransfers: live.activeTransfers ?? [],
+      activeWarehouseStockTransfers: live.activeWarehouseStockTransfers ?? [],
+    });
+
+    if (result.changed) {
+      bumpCanonicalStateRevision('map-tracking-reconcile');
+      set({
+        player: result.player,
+        activeDeliveries: result.activeDeliveries,
+        contracts: result.contracts,
+        activeTransfers: result.activeTransfers,
+        activeWarehouseStockTransfers: result.activeWarehouseStockTransfers,
+      });
+      get().markSaveDirty();
+    }
+
+    const fixedCount = result.fixedCount + removedExpiredRentals;
+    return {
+      toast: formatMapSyncToast({
+        fixedCount,
+        removedExpiredRentals,
+      }),
+      fixedCount,
+      report: result.report,
+    };
+  },
+
+  inspectMapTracking: () => {
+    const live = get();
+    if (!live.player) {
+      return {
+        toast: formatMapSyncToast({ inspectedOnly: true, fixedCount: 0 }),
+        report: emptyVehicleTrackingIntegrityReport(),
+        firstIssueTruckId: null,
+      };
+    }
+
+    const report = validateVehicleTrackingIntegrity({
+      currentTime: live.currentTime,
+      player: live.player,
+      activeDeliveries: live.activeDeliveries,
+      contracts: live.contracts,
+      activeTransfers: live.activeTransfers ?? [],
+      activeWarehouseStockTransfers: live.activeWarehouseStockTransfers ?? [],
+    });
+    const fleetIssues = detectFleetVehicleStateIssues({
+      trucks: live.player.trucks ?? [],
+      currentTime: live.currentTime,
+      homeCityId: live.player.homeCityId,
+      activeDeliveries: live.activeDeliveries,
+      activeTransfers: live.activeTransfers,
+      activeWarehouseStockTransfers: live.activeWarehouseStockTransfers,
+    });
+    const firstIssueTruckId =
+      fleetIssues[0]?.truckId ??
+      report.expiredRentals.find((item) => item.stillInFleet)?.vehicleId ??
+      null;
+
+    if (firstIssueTruckId) {
+      get().openVehicleRecovery(firstIssueTruckId);
+    }
+
+    return {
+      toast: formatMapSyncToast({ inspectedOnly: true, fixedCount: report.issueCount }),
+      report,
+      firstIssueTruckId,
+    };
+  },
   runEconomyTick: () => {
     // Global prices/events are backend-owned. A simulation tick only requests
     // the canonical current snapshot; it never rolls local market state.
@@ -5962,6 +6100,19 @@ const elapsed = plan.elapsed;
       };
     }
 
+    const rentalFit = evaluateRentalAssignmentFit({
+      truck,
+      currentTime: state.currentTime,
+      estimatedTravelHours: deliveryReadiness.etaHours,
+    });
+    if (!rentalFit.canAssign) {
+      return {
+        success: false,
+        errorCode: 'RENTAL_DURATION_INSUFFICIENT',
+        message: formatRentalAssignmentBlockMessage(rentalFit),
+      };
+    }
+
     let delivery: Delivery;
     try {
       logDeliveryStartCapacity({ contract, truck, trailers, product });
@@ -6378,7 +6529,11 @@ const elapsed = plan.elapsed;
     // Functional set: merge against the *latest* fleet at commit time so a concurrent
     // refuel between tick compute and set cannot be overwritten (iOS-prone race).
     set((live) => ({
-      activeDeliveries: updatedDeliveries,
+      activeDeliveries: mergeJobTickUpdates(
+        live.activeDeliveries,
+        state.activeDeliveries,
+        updatedDeliveries,
+      ),
       ...(trucksChanged
         ? {
             player: {
@@ -6567,7 +6722,11 @@ const elapsed = plan.elapsed;
 
     const trucksChanged = didTruckListChange(baselineTrucks, updatedTrucks);
     set((live) => ({
-      activeTransfers: updatedTransfers,
+      activeTransfers: mergeJobTickUpdates(
+        live.activeTransfers ?? [],
+        state.activeTransfers ?? [],
+        updatedTransfers,
+      ),
       ...(trucksChanged
         ? {
             player: {
@@ -7536,6 +7695,148 @@ const elapsed = plan.elapsed;
     emitGameplayOs(get, set, failedOs);
 
     get().autoSave('delivery_failed');
+  },
+
+  openVehicleRecovery: (truckId: string) => {
+    set({ pendingVehicleRecoveryTruckId: truckId });
+  },
+
+  closeVehicleRecovery: () => {
+    set({ pendingVehicleRecoveryTruckId: null });
+  },
+
+  resolveVehicleStateIssue: (truckId: string, actionId: VehicleRecoveryActionId) => {
+    const state = get();
+    const truck = state.player.trucks.find((item) => item.id === truckId);
+    if (!truck) {
+      return { success: false, message: 'Kamyon bulunamadı.' };
+    }
+    const warehouseTransfer =
+      (state.activeWarehouseStockTransfers ?? []).find(
+        (item) =>
+          item.truckId === truck.id &&
+          (item.status === 'active' || item.status === 'pending' || item.status === 'paused'),
+      ) ?? null;
+    const issue = detectVehicleStateIssue({
+      truck,
+      currentTime: state.currentTime,
+      homeCityId: state.player.homeCityId,
+      activeDelivery: findActiveDeliveryForTruck(truck.id, state.activeDeliveries),
+      activeTransfer:
+        (state.activeTransfers ?? []).find(
+          (transfer) =>
+            transfer.truckId === truck.id &&
+            (transfer.status === 'active' || transfer.status === 'paused'),
+        ) ?? null,
+      activeWarehouseTransfer: warehouseTransfer,
+    });
+    if (!issue) {
+      set({ pendingVehicleRecoveryTruckId: null });
+      return { success: false, message: 'Bu araçta onarılacak bir tutarsızlık kalmadı.' };
+    }
+    const usage = state.vehicleRecovery ?? emptyVehicleRecoveryUsage();
+    const options = buildRecoveryOptions(issue, usage);
+    const option = options.find((item) => item.id === actionId);
+    if (!option) {
+      return { success: false, message: 'Bu kurtarma eylemi kullanılamaz.' };
+    }
+    const resolved = resolveVehicleStateIssueDomain({
+      truckId,
+      actionId,
+      issue,
+      option,
+      state: {
+        currentTime: state.currentTime,
+        player: state.player,
+        activeDeliveries: state.activeDeliveries,
+        contracts: state.contracts,
+        activeTransfers: state.activeTransfers ?? [],
+        activeWarehouseStockTransfers: state.activeWarehouseStockTransfers ?? [],
+        vehicleRecovery: usage,
+      },
+    });
+    if (!resolved.ok) {
+      return { success: false, message: resolved.message };
+    }
+
+    let nextPlayer = resolved.player;
+    let ledgerPatch: ReturnType<typeof patchFinanceLedger> | null = null;
+    if (resolved.cashDelta < 0) {
+      const cashTx = applyCashTransaction({
+        currentCash: state.player.money,
+        amount: Math.abs(resolved.cashDelta),
+        kind: 'voluntary-expense',
+        referenceId: `vehicle-recovery:${truckId}:${actionId}`,
+        transactionId: `vehicle-recovery:${truckId}:${actionId}:${state.currentTime}`,
+        appliedTransactionIds: (state.financeLedger ?? [])
+          .map((entry) => entry.transactionId)
+          .filter((value): value is string => typeof value === 'string'),
+      });
+      if (!cashTx.ok) {
+        return { success: false, message: resolved.message };
+      }
+      nextPlayer = { ...nextPlayer, money: cashTx.cashAfter };
+      ledgerPatch = patchFinanceLedger(state, {
+        time: state.currentTime,
+        type: 'expense',
+        category: 'other_expense',
+        amount: cashTx.amount,
+        description: `Araç kurtarma · ${truck.name}`,
+        transactionId: cashTx.transactionId,
+        referenceId: cashTx.referenceId,
+      });
+    }
+
+    const reputationPatch =
+      resolved.reputationDelta !== 0
+        ? mergeReputationIntoStore(
+            { player: nextPlayer, reputationHistory: state.reputationHistory },
+            {
+              source: 'delivery-operation',
+              delta: resolved.reputationDelta,
+              reason: 'operation-negative',
+              displayReason: 'Araç kurtarma',
+              idempotencyKey: `vehicle-recovery:${truckId}:${actionId}:${state.currentTime}`,
+              createdAt: state.currentTime,
+            },
+          )
+        : {
+            player: nextPlayer,
+            reputationHistory: state.reputationHistory,
+          };
+
+    set({
+      player: reputationPatch.player,
+      activeDeliveries: resolved.activeDeliveries,
+      contracts: resolved.contracts,
+      activeTransfers: resolved.activeTransfers,
+      activeWarehouseStockTransfers: resolved.activeWarehouseStockTransfers,
+      vehicleRecovery: resolved.vehicleRecovery,
+      pendingVehicleRecoveryTruckId: null,
+      ...(ledgerPatch ?? {}),
+      reputationHistory: reputationPatch.reputationHistory,
+      eventLog: prependGameEvent(
+        state.eventLog,
+        {
+          time: state.currentTime,
+          type: 'system',
+          title: 'Araç kurtarma',
+          message: resolved.message,
+          importance: 'medium',
+        },
+        state.currentTime,
+      ),
+    });
+    get().addNotification({
+      time: state.currentTime,
+      type: 'success',
+      title: 'Araç kurtarıldı',
+      message: resolved.message,
+      autoDismissMs: 3500,
+    });
+    get().autoSave('vehicle_recovery');
+    get().markSaveDirty();
+    return { success: true, message: resolved.message };
   },
 
   buyTruck: (catalogId: string): TradeActionResult => {
@@ -9447,7 +9748,11 @@ const elapsed = plan.elapsed;
 
     const trucksChanged = didTruckListChange(baselineTrucks, updatedTrucks);
     set((live) => ({
-      activeWarehouseStockTransfers: updatedTransfers,
+      activeWarehouseStockTransfers: mergeJobTickUpdates(
+        live.activeWarehouseStockTransfers ?? [],
+        state.activeWarehouseStockTransfers ?? [],
+        updatedTransfers,
+      ),
       ...(trucksChanged
         ? {
             player: {
@@ -9857,7 +10162,14 @@ const elapsed = plan.elapsed;
     }
 
     type RefuelCommit =
-      | { kind: 'success'; result: TruckRefuelResult; expectedFuelL: number; cashAfter: number }
+      | {
+          kind: 'success';
+          result: TruckRefuelResult;
+          expectedFuelL: number;
+          cashAfter: number;
+          beforeRefuelFuel: number;
+          purchasedAmount: number;
+        }
       | { kind: 'failure'; result: TruckRefuelResult }
       | { kind: 'noop-idempotent'; result: TruckRefuelResult };
 
@@ -9954,31 +10266,64 @@ const elapsed = plan.elapsed;
         return {};
       }
 
-      // Apply liters onto the live truck (never a modal snapshot).
-      const fueledTruck = normalizeTruckFuel({
-        ...liveTruck,
-        currentFuelL: quote.newFuelL,
+      // Apply liters onto the live truck AND any attached job in one mutation.
+      const applied = applyPurchasedFuelToVehicle({
+        truck: liveTruck,
+        newFuelL: quote.newFuelL,
+        litersAdded: quote.litersToAdd,
+        deliveries: live.activeDeliveries,
+        transfers: live.activeTransfers ?? [],
+        warehouseTransfers: live.activeWarehouseStockTransfers ?? [],
       });
       const updatedTrucks = live.player.trucks.map((candidate) =>
-        candidate.id === truckId ? fueledTruck : candidate,
+        candidate.id === truckId ? applied.truck : candidate,
       );
 
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
         console.log('[refuelTruck] before-commit', {
           vehicleId: liveTruck.id,
-          fuelBefore,
-          fuelAfterCalculation: quote.newFuelL,
-          purchasedLiters: quote.litersToAdd,
+          beforeRefuelFuel: fuelBefore,
+          purchasedAmount: quote.litersToAdd,
+          afterRefuelFuel: applied.fuelAfter,
+          persistedFuel: applied.fuelAfter,
           cashBefore,
           cashAfter: cashTransaction.cashAfter,
+          truckStatusBefore: applied.truckStatusBefore,
+          truckStatusAfter: applied.truckStatusAfter,
+          deliveryStatusBefore: applied.deliveryStatusBefore,
+          deliveryStatusAfter: applied.deliveryStatusAfter,
+        });
+        console.log('[FUEL_IOS_TRACE]', {
+          phase: 'refuelTruck-before-commit',
+          vehicleId: liveTruck.id,
+          fuelBefore,
+          litersPurchased: quote.litersToAdd,
+          fuelAfterMutation: applied.fuelAfter,
+          deliveryStatusBefore: applied.deliveryStatusBefore,
+          deliveryStatusAfter: applied.deliveryStatusAfter,
+          truckStatusBefore: applied.truckStatusBefore,
+          truckStatusAfter: applied.truckStatusAfter,
         });
       }
 
       commitBox.value = {
         kind: 'success',
-        expectedFuelL: quote.newFuelL,
+        expectedFuelL: applied.fuelAfter,
         cashAfter: cashTransaction.cashAfter,
-        result: validation.result,
+        beforeRefuelFuel: fuelBefore,
+        purchasedAmount: quote.litersToAdd,
+        result: {
+          ...validation.result,
+          message: formatRefuelSuccessMessage(applied),
+          newFuelL: applied.fuelAfter,
+          fuelTankCapacityL: applied.fuelTankCapacityL,
+          resumedJob: applied.resumedJob,
+          remainingFuelRequiredL: applied.remainingFuelRequiredL,
+          remainingDistanceKm: applied.remainingDistanceKm,
+          currentRangeKm: applied.currentRangeKm,
+          sufficientForRemainingRoute: applied.sufficientForRemainingRoute,
+          routeFuelWarning: formatRemainingRouteFuelWarning(applied) ?? undefined,
+        },
       };
 
       return {
@@ -9987,6 +10332,9 @@ const elapsed = plan.elapsed;
           money: cashTransaction.cashAfter,
           trucks: updatedTrucks,
         },
+        activeDeliveries: applied.deliveries,
+        activeTransfers: applied.transfers,
+        activeWarehouseStockTransfers: applied.warehouseTransfers,
         ...patchFinanceLedger(live, {
           time: live.currentTime,
           type: 'expense',
@@ -10034,12 +10382,28 @@ const elapsed = plan.elapsed;
       ? normalizeTruckFuel(committedTruck).currentFuelL
       : null;
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      const committedDelivery = get().activeDeliveries.find((item) => item.truckId === truckId);
       console.log('[refuelTruck] after-commit', {
         vehicleId: truckId,
-        fuelReadBackFromStore,
+        beforeRefuelFuel: commit.beforeRefuelFuel,
+        purchasedAmount: commit.purchasedAmount,
+        afterRefuelFuel: fuelReadBackFromStore,
+        persistedFuel: fuelReadBackFromStore,
         expectedFuelL: commit.expectedFuelL,
         cashAfter: get().player.money,
+        truckStatusAfter: committedTruck?.status,
+        deliveryStatusAfter: committedDelivery?.status,
+      });
+      console.log('[FUEL_IOS_TRACE]', {
+        phase: 'refuelTruck-after-commit',
+        vehicleId: truckId,
+        beforeRefuelFuel: commit.beforeRefuelFuel,
+        litersPurchased: commit.purchasedAmount,
+        canonicalFuelAfterMutation: fuelReadBackFromStore,
         persistedFuel: fuelReadBackFromStore,
+        expectedFuelL: commit.expectedFuelL,
+        truckStatusAfter: committedTruck?.status,
+        deliveryStatusAfter: committedDelivery?.status,
       });
     }
     if (
@@ -10054,15 +10418,6 @@ const elapsed = plan.elapsed;
     }
 
     bumpCanonicalStateRevision('refuel-truck');
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[FUEL_IOS_TRACE]', {
-        phase: 'refuelTruck-after-commit',
-        vehicleId: truckId,
-        canonicalFuelAfterMutation: fuelReadBackFromStore,
-        persistedFuel: fuelReadBackFromStore,
-        expectedFuelL: commit.expectedFuelL,
-      });
-    }
 
     get().markSaveDirty();
     get().autoSave('fuel_purchase');
@@ -10157,18 +10512,26 @@ const elapsed = plan.elapsed;
         return {};
       }
 
-      const resumedTruckStatus = delivery ? ('on_route' as const) : ('transferring' as const);
-      const fueledTruck = normalizeTruckFuel({
-        ...truck,
-        currentFuelL: quote.newFuelL,
-        status: resumedTruckStatus,
+      const applied = applyPurchasedFuelToVehicle({
+        truck,
+        newFuelL: quote.newFuelL,
+        litersAdded: quote.litersToAdd,
+        deliveries: live.activeDeliveries,
+        transfers: live.activeTransfers ?? [],
+        warehouseTransfers: live.activeWarehouseStockTransfers ?? [],
       });
       commitBox.value = {
         kind: 'success',
-        result: validation.result,
+        result: {
+          ...validation.result,
+          message: formatRefuelSuccessMessage(applied),
+          litersAdded: quote.litersToAdd,
+          newFuelL: applied.fuelAfter,
+          routeFuelWarning: formatRemainingRouteFuelWarning(applied) ?? undefined,
+        },
         truckId: truck.id,
         truckName: truck.name,
-        expectedFuelL: quote.newFuelL,
+        expectedFuelL: applied.fuelAfter,
         currentTime: live.currentTime,
       };
 
@@ -10177,27 +10540,12 @@ const elapsed = plan.elapsed;
           ...live.player,
           money: cashTransaction.cashAfter,
           trucks: live.player.trucks.map((candidate) =>
-            candidate.id === truck.id ? fueledTruck : candidate,
+            candidate.id === truck.id ? applied.truck : candidate,
           ),
         },
-        activeDeliveries: live.activeDeliveries.map((candidate) =>
-          candidate.id === jobId
-            ? resumeRoadsideJob(candidate, 'delivery', { litersAdded: quote.litersToAdd })
-            : candidate,
-        ),
-        activeTransfers: (live.activeTransfers ?? []).map((candidate) =>
-          candidate.id === jobId
-            ? resumeRoadsideJob(candidate, 'truck-transfer', { litersAdded: quote.litersToAdd })
-            : candidate,
-        ),
-        activeWarehouseStockTransfers: (live.activeWarehouseStockTransfers ?? []).map(
-          (candidate) =>
-            candidate.id === jobId
-              ? resumeRoadsideJob(candidate, 'warehouse-transfer', {
-                  litersAdded: quote.litersToAdd,
-                })
-              : candidate,
-        ),
+        activeDeliveries: applied.deliveries,
+        activeTransfers: applied.transfers,
+        activeWarehouseStockTransfers: applied.warehouseTransfers,
         ...patchFinanceLedger(live, {
           time: live.currentTime,
           type: 'expense',
@@ -10249,6 +10597,16 @@ const elapsed = plan.elapsed;
     const fuelReadBackFromStore = committedTruck
       ? normalizeTruckFuel(committedTruck).currentFuelL
       : null;
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[purchaseRoadsideFuel] after-commit', {
+        vehicleId: commit.truckId,
+        purchasedAmount: commit.result.litersAdded,
+        afterRefuelFuel: fuelReadBackFromStore,
+        persistedFuel: fuelReadBackFromStore,
+        expectedFuelL: commit.expectedFuelL,
+        truckStatusAfter: committedTruck?.status,
+      });
+    }
     if (
       fuelReadBackFromStore == null ||
       Math.abs(fuelReadBackFromStore - commit.expectedFuelL) > 0.05
@@ -10321,12 +10679,6 @@ const elapsed = plan.elapsed;
       return { success: false, reason, message };
     }
 
-    const litersAddedPreview = Math.min(
-      assistance.liters,
-      Math.max(0, (normalizeTruckFuel(truck).fuelTankCapacityL ?? 0) - (normalizeTruckFuel(truck).currentFuelL ?? 0)),
-    );
-    const resumedTruckStatus = delivery ? ('on_route' as const) : ('transferring' as const);
-
     set((live) => {
       const liveTruck = live.player.trucks.find((candidate) => candidate.id === job.truckId);
       if (!liveTruck) return {};
@@ -10335,42 +10687,26 @@ const elapsed = plan.elapsed;
       const currentFuel = normalizedLive.currentFuelL ?? 0;
       const litersAdded = Math.min(assistance.liters, Math.max(0, capacity - currentFuel));
       const newFuelL = currentFuel + litersAdded;
+      const applied = applyPurchasedFuelToVehicle({
+        truck: liveTruck,
+        newFuelL,
+        litersAdded,
+        deliveries: live.activeDeliveries,
+        transfers: live.activeTransfers ?? [],
+        warehouseTransfers: live.activeWarehouseStockTransfers ?? [],
+      });
+      const stampAssistance = <T extends { id: string; roadsideAssistanceGrantedAt?: number }>(
+        item: T,
+      ): T =>
+        item.id === jobId ? { ...item, roadsideAssistanceGrantedAt: live.currentTime } : item;
       return {
         player: {
           ...live.player,
-          trucks: patchTruckById(live.player.trucks, job.truckId, (candidate) =>
-            normalizeTruckFuel({
-              ...candidate,
-              currentFuelL: newFuelL,
-              status: resumedTruckStatus,
-            }),
-          ),
+          trucks: patchTruckById(live.player.trucks, job.truckId, () => applied.truck),
         },
-        activeDeliveries: live.activeDeliveries.map((candidate) =>
-          candidate.id === jobId
-            ? resumeRoadsideJob(candidate, 'delivery', {
-                litersAdded,
-                roadsideAssistanceGrantedAt: live.currentTime,
-              })
-            : candidate,
-        ),
-        activeTransfers: (live.activeTransfers ?? []).map((candidate) =>
-          candidate.id === jobId
-            ? resumeRoadsideJob(candidate, 'truck-transfer', {
-                litersAdded,
-                roadsideAssistanceGrantedAt: live.currentTime,
-              })
-            : candidate,
-        ),
-        activeWarehouseStockTransfers: (live.activeWarehouseStockTransfers ?? []).map(
-          (candidate) =>
-            candidate.id === jobId
-              ? resumeRoadsideJob(candidate, 'warehouse-transfer', {
-                  litersAdded,
-                  roadsideAssistanceGrantedAt: live.currentTime,
-                })
-              : candidate,
-        ),
+        activeDeliveries: applied.deliveries.map(stampAssistance),
+        activeTransfers: applied.transfers.map(stampAssistance),
+        activeWarehouseStockTransfers: applied.warehouseTransfers.map(stampAssistance),
         lastRoadsideFuelAssistanceAt: live.currentTime,
         ...patchFinanceLedger(live, {
           time: live.currentTime,

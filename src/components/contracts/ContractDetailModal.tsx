@@ -16,6 +16,10 @@ import type { ContractPreview } from '../../simulation/contractPreview';
 import { getContractCargoWeight } from '../../simulation/delivery';
 import { getContractAvailabilityLabel } from '../../utils/contractAvailabilityDisplay';
 import {
+  formatRentalHoursLabel,
+  getRentalFitBadgeLabel,
+} from '../../domain/rentalAssignmentFit';
+import {
   classifyDeadlineRisk,
   formatDeadlineRiskNote,
   formatLatePenaltyHint,
@@ -204,6 +208,32 @@ export default function ContractDetailModal({
                 value={formatTimeLeft(preview.estimatedTravelHours)}
                 tone={deadlineRisk ? 'warning' : 'default'}
               />
+            ) : null}
+            {preview.rentalFit?.applicable ? (
+              <>
+                <DetailRow
+                  label="Kalan kira süresi"
+                  value={formatRentalHoursLabel(preview.rentalFit.remainingHours)}
+                  tone={
+                    preview.rentalFit.status === 'unsuitable'
+                      ? 'danger'
+                      : preview.rentalFit.status === 'risky'
+                        ? 'warning'
+                        : 'success'
+                  }
+                />
+                <DetailRow
+                  label="Kira uygunluğu"
+                  value={getRentalFitBadgeLabel(preview.rentalFit.status)}
+                  tone={
+                    preview.rentalFit.status === 'unsuitable'
+                      ? 'danger'
+                      : preview.rentalFit.status === 'risky'
+                        ? 'warning'
+                        : 'success'
+                  }
+                />
+              </>
             ) : null}
             {deadlineRiskNote ? (
               <DetailRow label="Süre uyarısı" value={deadlineRiskNote} tone="danger" />

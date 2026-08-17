@@ -5,6 +5,7 @@ import { resolveTruckCityId, isDeliveryProgressComplete } from '../../simulation
 import {
   getRoadRoute,
   getRouteMarkerPose,
+  getTruckPositionAlongRoadRoute,
   normalizedPointToPixel,
   type MapBounds,
 } from './mapRoadUtils';
@@ -53,38 +54,56 @@ export function resolveTruckMapLocation(params: {
 
   if (isActiveRunningDelivery(activeDelivery)) {
     const roadRoute = getRoadRoute(activeDelivery.originCityId, activeDelivery.destinationCityId);
-    if (roadRoute && roadRoute.length >= 2 && mapBounds) {
-      const markerPose = getRouteMarkerPose({
-        routePoints: roadRoute,
-        progress: activeDelivery.progress,
-        mapBounds,
-        assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
-      });
+    if (roadRoute && roadRoute.length >= 2) {
+      if (mapBounds) {
+        const markerPose = getRouteMarkerPose({
+          routePoints: roadRoute,
+          progress: activeDelivery.progress,
+          mapBounds,
+          assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+        });
+        return {
+          kind: 'route',
+          cityId: normalizeCityId(activeDelivery.destinationCityId),
+          normalizedPoint: markerPose.position,
+          pixelPoint: markerPose.positionPx,
+          angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
+        };
+      }
+      const along = getTruckPositionAlongRoadRoute(roadRoute, activeDelivery.progress);
       return {
         kind: 'route',
         cityId: normalizeCityId(activeDelivery.destinationCityId),
-        normalizedPoint: markerPose.position,
-        pixelPoint: markerPose.positionPx,
-        angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
+        normalizedPoint: along.point,
+        angleRadians: along.angleRadians,
       };
     }
   }
 
   if (isActiveRunningTransfer(activeTransfer)) {
     const roadRoute = getRoadRoute(activeTransfer.fromCityId, activeTransfer.toCityId);
-    if (roadRoute && roadRoute.length >= 2 && mapBounds) {
-      const markerPose = getRouteMarkerPose({
-        routePoints: roadRoute,
-        progress: activeTransfer.progress,
-        mapBounds,
-        assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
-      });
+    if (roadRoute && roadRoute.length >= 2) {
+      if (mapBounds) {
+        const markerPose = getRouteMarkerPose({
+          routePoints: roadRoute,
+          progress: activeTransfer.progress,
+          mapBounds,
+          assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+        });
+        return {
+          kind: 'route',
+          cityId: normalizeCityId(activeTransfer.toCityId),
+          normalizedPoint: markerPose.position,
+          pixelPoint: markerPose.positionPx,
+          angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
+        };
+      }
+      const along = getTruckPositionAlongRoadRoute(roadRoute, activeTransfer.progress);
       return {
         kind: 'route',
         cityId: normalizeCityId(activeTransfer.toCityId),
-        normalizedPoint: markerPose.position,
-        pixelPoint: markerPose.positionPx,
-        angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
+        normalizedPoint: along.point,
+        angleRadians: along.angleRadians,
       };
     }
   }

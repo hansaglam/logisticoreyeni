@@ -5,6 +5,7 @@
 import type { Delivery, Truck } from '../types/game';
 import { isPendingIncidentBlocking } from './deliveryDelayDiagnostics';
 import { normalizeTruckFuel } from '../utils/truckFuel';
+import { clamp } from '../utils/math';
 
 export type DeliveryHealthStatus =
   | 'on_time'
@@ -23,6 +24,31 @@ export interface DeliveryHealthSnapshot {
   alreadyLate: boolean;
   clockContinues: boolean;
   detailLine: string | null;
+  canonicalFuelL: number | null;
+  fuelCapacityL: number | null;
+  showOutOfFuelWarning: boolean;
+  showLowFuelWarning: boolean;
+  showRefuelCta: boolean;
+}
+
+const FUEL_EPS = 1e-6;
+
+export function resolveCanonicalAssignedFuel(truck?: Truck | null): {
+  currentFuelL: number | null;
+  fuelCapacityL: number | null;
+} {
+  if (!truck) {
+    return { currentFuelL: null, fuelCapacityL: null };
+  }
+  const normalized = normalizeTruckFuel(truck);
+  return {
+    currentFuelL: normalized.currentFuelL ?? 0,
+    fuelCapacityL: normalized.fuelTankCapacityL ?? 0,
+  };
+}
+
+function remainingFuelRequiredL(delivery: Delivery): number {
+  return Math.max(0, delivery.fuelLitersTotal ?? 0) * (1 - clamp(delivery.progress, 0, 1));
 }
 
 export function resolveDeliveryHealth(input: {
@@ -35,11 +61,17 @@ export function resolveDeliveryHealth(input: {
   const deadlineHoursLeft = delivery.deadlineTime - currentTime;
   const alreadyLate = currentTime > delivery.deadlineTime;
   const latenessHours = alreadyLate ? currentTime - delivery.deadlineTime : 0;
-  const fuelEmpty =
-    delivery.pausedReason === 'out-of-fuel' ||
-    (delivery.status === 'paused' &&
-      input.truck != null &&
-      (normalizeTruckFuel(input.truck).currentFuelL ?? 0) <= 1e-6);
+  const canonical = resolveCanonicalAssignedFuel(input.truck);
+  const currentFuelL = canonical.currentFuelL;
+  // Out-of-fuel UI follows the live tank. Stale pausedReason / out_of_fuel
+  // flags must not show YAKITSIZ while the assigned vehicle still has fuel.
+  const fuelEmpty = currentFuelL != null && currentFuelL <= FUEL_EPS;
+  const remainingRequiredL = remainingFuelRequiredL(delivery);
+  const insufficientForRoute =
+    currentFuelL != null &&
+    currentFuelL > FUEL_EPS &&
+    remainingRequiredL > FUEL_EPS &&
+    currentFuelL + FUEL_EPS < remainingRequiredL;
   const incidentPending = isPendingIncidentBlocking(delivery);
   const remainingProgress = Math.max(0, 1 - delivery.progress);
   const remainingTravelHours = remainingProgress * Math.max(delivery.travelHours, 0.1);
@@ -63,19 +95,39 @@ export function resolveDeliveryHealth(input: {
 
   const clockContinues = status === 'out_of_fuel' || status === 'incident_pending';
 
+  const showOutOfFuelWarning = fuelEmpty && remainingProgress > 0;
+  const showLowFuelWarning = !showOutOfFuelWarning && insufficientForRoute && remainingProgress > 0;
+
   return {
     status,
-    label: getDeliveryHealthLabel(status),
+    label:
+      showLowFuelWarning && status === 'on_time'
+        ? 'YAKIT DÜŞÜK'
+        : getDeliveryHealthLabel(status),
     etaHoursLeft,
     deadlineHoursLeft: Math.max(0, deadlineHoursLeft),
     latenessHours,
     alreadyLate,
     clockContinues,
-    detailLine: getDeliveryHealthDetail(status, {
-      etaHoursLeft,
-      deadlineHoursLeft: Math.max(0, deadlineHoursLeft),
-      latenessHours,
-    }),
+    detailLine:
+      status === 'out_of_fuel' || status === 'incident_pending'
+        ? getDeliveryHealthDetail(status, {
+            etaHoursLeft,
+            deadlineHoursLeft: Math.max(0, deadlineHoursLeft),
+            latenessHours,
+          })
+        : showLowFuelWarning
+          ? 'Yakıt düşük — mevcut yakıt kalan rota için yeterli değil.'
+          : getDeliveryHealthDetail(status, {
+              etaHoursLeft,
+              deadlineHoursLeft: Math.max(0, deadlineHoursLeft),
+              latenessHours,
+            }),
+    canonicalFuelL: currentFuelL,
+    fuelCapacityL: canonical.fuelCapacityL,
+    showOutOfFuelWarning,
+    showLowFuelWarning,
+    showRefuelCta: showOutOfFuelWarning || showLowFuelWarning,
   };
 }
 

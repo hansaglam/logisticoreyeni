@@ -197,6 +197,19 @@ export function runContractAvailabilityScenarios(): void {
     false,
   );
 
+  assertScenario(
+    'Test 9: active lease shorter than trip + buffer cannot start',
+    getContractAvailability(
+      baseContract(14),
+      [baseLeasedTruck({ leaseExpiresAt: 104 })],
+      [DRIVER],
+      1,
+      100,
+    ),
+    'RENTAL_DURATION_INSUFFICIENT',
+    false,
+  );
+
   console.log('All contract availability scenarios passed.');
 }
 

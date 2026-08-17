@@ -29,7 +29,9 @@ import {
   getContractTypePenaltyMultiplier,
   normalizeContractType,
 } from './contractTypes';
-import { getEffectiveTruckCapacity, isTruckSuitableForRiskyContract } from './truckUpgrades';
+import {
+  evaluateRentalAssignmentFit,
+} from '../domain/rentalAssignmentFit';
 import {
   calculateTravelHours,
   getContractAvailability,
@@ -80,6 +82,7 @@ export interface ContractPreview {
   isUrgent: boolean;
   suggestedTruck?: Truck;
   suggestedDriver?: Driver;
+  rentalFit?: import('../domain/rentalAssignmentFit').RentalAssignmentFitResult | null;
   route?: Route;
   /** Olay etkisi — baz ödeme (sözleşme tabanı) */
   baseGrossPayment?: number;
@@ -355,6 +358,13 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
 
   const { riskLevel, riskLabel } = calculateContractRiskLevel(contract, route, product);
   const isUrgent = isUrgentContractPreview(contract, estimatedTravelHours);
+  const rentalFit = truck
+    ? evaluateRentalAssignmentFit({
+        truck,
+        currentTime,
+        estimatedTravelHours,
+      })
+    : null;
 
   return {
     estimatedTravelHours,
@@ -372,6 +382,7 @@ export function buildContractPreview(input: BuildContractPreviewInput): Contract
     riskLabel,
     availability,
     isUrgent,
+    rentalFit: rentalFit?.applicable ? rentalFit : null,
     suggestedTruck: input.truck ? undefined : truck,
     suggestedDriver: input.driver ? undefined : driver,
     route,

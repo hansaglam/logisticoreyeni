@@ -27,10 +27,13 @@ import {
   getContractAvailability,
   getContractCargoWeight,
   isTruckAtContractOrigin,
+  estimateAssignmentDurationHours,
 } from '../simulation/delivery';
 import {
   evaluateDriverOption,
   evaluateTruckOption,
+  getDriverBadge,
+  getTruckBadge,
   type DriverOption,
   type TruckOption,
 } from '../utils/assignmentOptions';
@@ -56,7 +59,12 @@ import TutorialOverlay from './tutorial/TutorialOverlay';
 import TruckRefuelSheet from './TruckRefuelSheet';
 import FuelRequirementModal from './FuelRequirementModal';
 import DeliveryReadinessCard from './delivery/DeliveryReadinessCard';
+import RentalAssignmentFitBanner from './delivery/RentalAssignmentFitBanner';
 import { evaluateDeliveryReadiness } from '../domain/deliveryReadiness';
+import {
+  formatRentalHoursLabel,
+  getRentalFitBadgeLabel,
+} from '../domain/rentalAssignmentFit';
 import { getAttachedTrailerForTruck } from '../simulation/trailerAttachment';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
@@ -121,37 +129,6 @@ function getConditionColor(condition: number): string {
   if (condition >= 70) return colors.success;
   if (condition >= 40) return colors.accentAmber;
   return colors.danger;
-}
-
-function getTruckBadge(option: TruckOption): { label: string; variant: StatusBadgeVariant } {
-  switch (option.issue) {
-    case 'eligible':
-      return { label: 'UYGUN', variant: 'success' };
-    case 'condition_warning':
-      return { label: 'KONDİSYON DÜŞÜK', variant: 'warning' };
-    case 'capacity':
-      return { label: 'KAPASİTE YETERSİZ', variant: 'danger' };
-    case 'condition_blocked':
-      return { label: 'KONDİSYON DÜŞÜK', variant: 'danger' };
-    case 'on_route':
-      return { label: 'YOLDA', variant: 'amber' };
-    case 'wrong_city':
-      return { label: 'KONUM UYGUN DEĞİL', variant: 'warning' };
-    case 'maintenance':
-      return { label: 'BAKIM', variant: 'danger' };
-    default:
-      return { label: 'MÜSAİT DEĞİL', variant: 'muted' };
-  }
-}
-
-function getDriverBadge(option: DriverOption): { label: string; variant: StatusBadgeVariant } {
-  if (option.issue === 'eligible') {
-    return { label: 'UYGUN', variant: 'success' };
-  }
-  if (option.issue === 'resting') {
-    return { label: 'DİNLENİYOR', variant: 'amber' };
-  }
-  return { label: 'YOLDA', variant: 'amber' };
 }
 
 function getDriverTrait(driver: Driver): { label: string; variant: StatusBadgeVariant } {
@@ -276,6 +253,19 @@ function TruckCard({ option, selected, onSelect }: TruckCardProps) {
             height={4}
           />
         </View>
+        {option.rentalFit?.applicable ? (
+          <View style={styles.rentalRow}>
+            <Text style={styles.rentalLine}>
+              Kalan kira: {formatRentalHoursLabel(option.rentalFit.remainingHours)}
+            </Text>
+            <Text style={styles.rentalLine}>
+              Tahmini teslimat: {formatRentalHoursLabel(option.rentalFit.estimatedTravelHours)}
+            </Text>
+            <Text style={styles.rentalLine}>
+              {getRentalFitBadgeLabel(option.rentalFit.status)}
+            </Text>
+          </View>
+        ) : null}
       </AppCard>
     </Pressable>
   );
@@ -403,6 +393,11 @@ export default function ContractAssignmentModal({
     );
   }, [contract, safeTrucks, safeDrivers, playerLevel, currentTime, playerReputation, homeCityId, trailers]);
 
+  const selectedDriver = useMemo(
+    () => safeDrivers.find((driver) => driver.id === selectedDriverId) ?? null,
+    [safeDrivers, selectedDriverId],
+  );
+
   const truckOptions = useMemo(
     () =>
       safeTrucks.map((truck) =>
@@ -413,9 +408,25 @@ export default function ContractAssignmentModal({
           trailers,
           currentTime,
           activeDeliveries,
+          contract
+            ? estimateAssignmentDurationHours({
+                contract,
+                truck,
+                driver: selectedDriver,
+                trailers,
+              })
+            : undefined,
         ),
       ),
-    [safeTrucks, cargoWeight, contract?.originCityId, trailers, currentTime, activeDeliveries],
+    [
+      safeTrucks,
+      cargoWeight,
+      contract,
+      trailers,
+      currentTime,
+      activeDeliveries,
+      selectedDriver,
+    ],
   );
 
   const driverOptions = useMemo(
@@ -538,6 +549,13 @@ export default function ContractAssignmentModal({
     : 'Kamyon ve şoför seçmelisin';
 
   const handleStartDelivery = () => {
+    if (selectedTruckOption?.rentalFit && !selectedTruckOption.rentalFit.canAssign) {
+      showAlert(
+        'Teslimat başlatılamadı',
+        `Bu kiralık aracın süresi bu teslimat için yeterli değil.\nKalan süre: ${formatRentalHoursLabel(selectedTruckOption.rentalFit.remainingHours)}\nTahmini teslimat: ${formatRentalHoursLabel(selectedTruckOption.rentalFit.estimatedTravelHours)}`,
+      );
+      return;
+    }
     if (!selectedTruckId || !selectedDriverId || !canConfirm) return;
     if (fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')) {
       setFuelRequirementVisible(true);
@@ -592,7 +610,8 @@ export default function ContractAssignmentModal({
       availability.reason === 'NO_IDLE_TRUCKS' ||
       availability.reason === 'NO_TRUCK_IN_ORIGIN_CITY' ||
       availability.reason === 'NO_TRUCK_WITH_CAPACITY' ||
-      availability.reason === 'CAPACITY_INSUFFICIENT';
+      availability.reason === 'CAPACITY_INSUFFICIENT' ||
+      availability.reason === 'RENTAL_DURATION_INSUFFICIENT';
 
     const showDriverButton =
       availability.reason === 'NO_DRIVERS' || availability.reason === 'NO_IDLE_DRIVERS';
@@ -646,12 +665,14 @@ export default function ContractAssignmentModal({
       return null;
     }
 
+    const rentalBlocked = truckOptions.some((option) => option.issue === 'rental_duration');
     return (
       <AppCard variant="soft" style={styles.emptyCard}>
         <Text style={styles.emptyTitle}>Uygun kamyon yok</Text>
         <Text style={styles.emptyMessage}>
-          Bu iş için {cargoWeight.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyon
-          kapasiten {maxIdleCapacity.toFixed(1)} ton.
+          {rentalBlocked
+            ? 'Kiralık araçların kalan süresi bu teslimat için yeterli değil. Başka bir araç seç veya filodan yeni araç al.'
+            : `Bu iş için ${cargoWeight.toFixed(1)} ton kapasite gerekiyor. Boşta en yüksek kamyon kapasiten ${maxIdleCapacity.toFixed(1)} ton.`}
         </Text>
         {onGoToFleet ? (
           <ActionButton
@@ -848,6 +869,11 @@ export default function ContractAssignmentModal({
             readiness={fuelReadiness}
             onSelectAnotherVehicle={() => setSelectedTruckId(null)}
             onBuyFuel={() => setFuelRequirementVisible(true)}
+          />
+          <RentalAssignmentFitBanner
+            fit={selectedTruckOption?.rentalFit}
+            onSelectAnotherVehicle={() => setSelectedTruckId(null)}
+            onGoBack={onClose}
           />
         </ScrollView>
 
@@ -1106,6 +1132,14 @@ const styles = StyleSheet.create({
   },
   conditionRow: {
     gap: 4,
+  },
+  rentalRow: {
+    marginTop: spacing.sm,
+    gap: 2,
+  },
+  rentalLine: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
   driverFooterRow: {
     flexDirection: 'row',

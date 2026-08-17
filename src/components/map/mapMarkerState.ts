@@ -118,14 +118,19 @@ export interface VisibleMapMarkers {
 export function buildVisibleMapMarkers(params: {
   activeDeliveries: Delivery[];
   activeTransfers: TruckTransfer[];
+  validTruckIds?: Set<string>;
 }): VisibleMapMarkers {
   const deliveries: VisibleDeliveryMapMarker[] = [];
   const seenDeliveryIds = new Set<string>();
+  const seenDeliveryTruckIds = new Set<string>();
 
   for (const delivery of params.activeDeliveries) {
     if (!isActiveRunningDelivery(delivery)) continue;
     if (seenDeliveryIds.has(delivery.id)) continue;
+    if (params.validTruckIds && !params.validTruckIds.has(delivery.truckId)) continue;
+    if (seenDeliveryTruckIds.has(delivery.truckId)) continue;
     seenDeliveryIds.add(delivery.id);
+    seenDeliveryTruckIds.add(delivery.truckId);
     deliveries.push({
       delivery,
       routeVersion: computeDeliveryRouteVersion(delivery),
@@ -135,11 +140,17 @@ export function buildVisibleMapMarkers(params: {
 
   const transfers: VisibleTransferMapMarker[] = [];
   const seenTransferIds = new Set<string>();
+  const seenTransferTruckIds = new Set<string>();
 
   for (const transfer of params.activeTransfers) {
     if (!isActiveRunningTransfer(transfer)) continue;
     if (seenTransferIds.has(transfer.id)) continue;
+    if (params.validTruckIds && !params.validTruckIds.has(transfer.truckId)) continue;
+    if (seenDeliveryTruckIds.has(transfer.truckId) || seenTransferTruckIds.has(transfer.truckId)) {
+      continue;
+    }
     seenTransferIds.add(transfer.id);
+    seenTransferTruckIds.add(transfer.truckId);
     transfers.push({
       transfer,
       routeVersion: computeTransferRouteVersion(transfer),
@@ -151,8 +162,8 @@ export function buildVisibleMapMarkers(params: {
     deliveries,
     transfers,
     overlayRenderVersion: buildMapOverlayRenderVersion({
-      deliveries: params.activeDeliveries,
-      transfers: params.activeTransfers,
+      deliveries: deliveries.map((item) => item.delivery),
+      transfers: transfers.map((item) => item.transfer),
     }),
   };
 }

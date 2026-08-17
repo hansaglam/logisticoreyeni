@@ -30,6 +30,8 @@ export interface RoadsideFuelResult {
   fuelCost?: number;
   serviceFee?: number;
   totalCost?: number;
+  newFuelL?: number;
+  routeFuelWarning?: string;
   source?: 'roadside-emergency';
 }
 

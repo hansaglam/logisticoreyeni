@@ -108,6 +108,7 @@ export type WorldMapCanvasHandle = InteractiveTurkeyMapHandle;
 export type WorldMapCanvasProps = {
   activeDeliveries?: Delivery[];
   activeTransfers?: TruckTransfer[];
+  validTruckIds?: Set<string>;
   selectedFilter: NetworkFilterKey;
   selectedDeliveryId?: string | null;
   onDeliveryPress?: (deliveryId: string) => void;
@@ -177,6 +178,7 @@ function WorldMapCanvasInner(
   {
     activeDeliveries = [],
     activeTransfers = [],
+    validTruckIds,
     selectedFilter,
     selectedDeliveryId,
     onDeliveryPress,
@@ -284,8 +286,9 @@ function WorldMapCanvasInner(
       buildVisibleMapMarkers({
         activeDeliveries,
         activeTransfers,
+        validTruckIds,
       }),
-    [activeDeliveries, activeTransfers],
+    [activeDeliveries, activeTransfers, validTruckIds],
   );
 
   const runningDeliveries = useMemo(

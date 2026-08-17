@@ -65,6 +65,7 @@ import DeliveryResultSheet from './src/components/delivery/DeliveryResultSheet';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 import { selectHasPendingDeliveryIncident } from './src/tutorial/app/selectors';
 import DeliveryIncidentModal from './src/components/delivery/DeliveryIncidentModal';
+import VehicleRecoverySheet from './src/components/delivery/VehicleRecoverySheet';
 import { UI } from './src/theme/ui';
 import {
   beginNavigationInteraction,
@@ -374,6 +375,7 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
           pendingDeliveryResultSummary == null
         }
       />
+      <VehicleRecoverySheet />
       {ENABLE_SPOTLIGHT_TUTORIAL ? <TutorialOverlay layer="root" /> : null}
       <GameTabBar
         tabs={MAIN_TABS}

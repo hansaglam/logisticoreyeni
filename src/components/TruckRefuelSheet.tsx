@@ -20,6 +20,10 @@ import { formatMoney, formatMoneyDecimal, formatUnitPrice } from '../theme/forma
 import type { GameIconName } from '../theme/icons';
 import { IOS_STACKED_MODAL_PROPS } from '../utils/modalPresentation';
 import {
+  getJobRemainingDistanceKm,
+  getJobRemainingFuelRequiredL,
+} from '../simulation/fuelWarnings';
+import {
   calculateTruckRefuelQuote,
   getTruckFuelPercent,
   getTruckRangeKm,
@@ -55,7 +59,7 @@ const REFUEL_ERROR_MESSAGES: Record<TruckRefuelReason, string> = {
   'insufficient-funds': 'Yakıt almak için yeterli nakdin yok.',
   'tank-full': 'Yakıt deposu zaten dolu.',
   'price-changed': 'Yakıt fiyatı güncellendi. Yeni toplamı kontrol et.',
-  'truck-busy': 'Aktif görevdeki araç şehir istasyonundan yakıt alamaz.',
+  'truck-busy': 'Bu araç şu anda yakıt alamaz.',
   'truck-not-found': 'Kamyon bulunamadı.',
   'invalid-quantity': 'Geçerli bir yakıt miktarı seç.',
   'market-unavailable': 'Yakıt fiyatına ulaşılamıyor.',
@@ -122,6 +126,24 @@ function TruckRefuelSheetContent({
   const liveTruck = useGameStore((state) =>
     state.player?.trucks.find((candidate) => candidate.id === truckId),
   );
+  const activeJob = useGameStore((state) => {
+    const delivery = state.activeDeliveries.find(
+      (item) =>
+        item.truckId === truckId &&
+        (item.status === 'preparing' || item.status === 'on_route' || item.status === 'paused'),
+    );
+    if (delivery) return delivery;
+    const transfer = (state.activeTransfers ?? []).find(
+      (item) =>
+        item.truckId === truckId && (item.status === 'active' || item.status === 'paused'),
+    );
+    if (transfer) return transfer;
+    return (state.activeWarehouseStockTransfers ?? []).find(
+      (item) =>
+        item.truckId === truckId &&
+        (item.status === 'active' || item.status === 'pending' || item.status === 'paused'),
+    );
+  });
   const cash = useGameStore((state) => state.player?.money ?? 0);
   const cachedSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
   const cachedSnapshotTrusted = useGameStore(
@@ -231,6 +253,23 @@ function TruckRefuelSheetContent({
     return calculateTruckRefuelQuote(normalizedTruck, requestedLiters, pricePerLiter);
   }, [normalizedTruck, requestedLiters, pricePerLiter, priceReady]);
 
+  const remainingRouteWarning = useMemo(() => {
+    if (!activeJob || !normalizedTruck) return null;
+    const remainingFuelRequiredL = getJobRemainingFuelRequiredL(activeJob);
+    const remainingDistanceKm = getJobRemainingDistanceKm(activeJob);
+    if (remainingFuelRequiredL <= 1e-6 || remainingDistanceKm <= 0) return null;
+    const projectedFuel = quote?.newFuelL ?? currentFuel;
+    if (projectedFuel + 1e-6 >= remainingFuelRequiredL) return null;
+    const projectedRange = getTruckRangeKm({
+      ...normalizedTruck,
+      currentFuelL: projectedFuel,
+    });
+    return (
+      `Mevcut yakıt rota için yeterli değil. Tahmini gerekli menzil: ${Math.ceil(remainingDistanceKm)} km. ` +
+      `Mevcut menzil: ${Math.floor(projectedRange)} km.`
+    );
+  }, [activeJob, normalizedTruck, quote, currentFuel]);
+
   const fuelPercent = normalizedTruck ? getTruckFuelPercent(normalizedTruck) : 0;
   const rangeKm = normalizedTruck ? getTruckRangeKm(normalizedTruck) : 0;
   const tankFull = availableTankSpace <= 1e-6;
@@ -305,11 +344,12 @@ function TruckRefuelSheetContent({
     }
 
     // Re-read canonical fleet fuel before celebrating success (guards stale UI).
+    const expectedFuel = result.newFuelL ?? quote.newFuelL;
     const verified = useGameStore.getState().player.trucks.find(
       (candidate) => candidate.id === normalizedTruck.id,
     );
     const verifiedFuel = verified ? normalizeTruckFuel(verified).currentFuelL ?? 0 : null;
-    if (verifiedFuel == null || Math.abs(verifiedFuel - quote.newFuelL) > 0.5) {
+    if (verifiedFuel == null || Math.abs(verifiedFuel - expectedFuel) > 0.5) {
       setErrorMessage('Yakıt güncellemesi doğrulanamadı. Tekrar dene.');
       setIsSubmitting(false);
       transactionKeyRef.current = '';
@@ -317,8 +357,11 @@ function TruckRefuelSheetContent({
     }
 
     setErrorMessage(null);
-    setSuccessMessage(result.message);
-    onSuccess?.(result.message);
+    const successText = result.routeFuelWarning
+      ? `${result.message}\n${result.routeFuelWarning}`
+      : result.message;
+    setSuccessMessage(successText);
+    onSuccess?.(successText);
     closeTimerRef.current = setTimeout(() => {
       setIsSubmitting(false);
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -334,7 +377,7 @@ function TruckRefuelSheetContent({
         });
       }
       onClose();
-    }, 450);
+    }, 1400);
   };
 
   if (!selectedTruck) return null;
@@ -545,6 +588,12 @@ function TruckRefuelSheetContent({
             {/* Action-level errors only; never also show price status danger twice */}
             {errorMessage && fuelPriceQuote.statusTone !== 'danger' ? (
               <Text style={styles.errorText}>{errorMessage}</Text>
+            ) : null}
+            {remainingRouteWarning && !successMessage ? (
+              <View style={styles.amberBanner}>
+                <GameIcon name="warning" size={15} color={colors.warning} />
+                <Text style={styles.amberBannerText}>{remainingRouteWarning}</Text>
+              </View>
             ) : null}
             {successMessage ? (
               <View style={styles.successFeedback}>

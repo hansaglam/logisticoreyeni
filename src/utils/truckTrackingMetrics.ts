@@ -5,15 +5,7 @@
 import { normalizeMapDeliveryProgress } from '../components/map/mapRoadUtils';
 import { isActiveRunningDelivery } from '../components/map/mapTruckLocation';
 import type { Delivery, Driver, Route, Truck, TruckTransfer } from '../types/game';
-import {
-  applyFuelConsumptionForProgress,
-  getFuelPercent,
-  getFuelRequiredForDistance,
-  getTruckFuelConsumptionPerKm,
-  getTruckFuelSnapshot,
-  normalizeTruckFuel,
-  toFuelNumber,
-} from './truckFuel';
+import { getTruckFuelSnapshot, normalizeTruckFuel } from './truckFuel';
 import { calculateVehicleTravelMetrics } from './vehiclePerformance';
 
 export interface TruckTrackingMetrics {
@@ -40,57 +32,11 @@ function normalizeProgress(progress: number | undefined | null): number {
 
 function resolveFuelState(
   truck: Truck,
-  fuelLitersAtStart: number | undefined,
-  fuelLitersTotal: number | undefined,
-  fuelConsumedL: number | undefined,
-  progress: number,
-  distanceKm?: number,
 ): { currentFuelL: number; fuelTankCapacityL: number; fuelPercent: number } {
   const snapshot = getTruckFuelSnapshot(truck);
-  const fuelTankCapacityL = snapshot.capacityLiters;
-  const normalized = normalizeTruckFuel(truck);
-
-  if (fuelConsumedL != null) {
-    const currentFuelL = toFuelNumber(normalized.currentFuelL) ?? snapshot.currentLiters;
-    return {
-      currentFuelL,
-      fuelTankCapacityL,
-      fuelPercent: getFuelPercent(currentFuelL, fuelTankCapacityL),
-    };
-  }
-
-  const startFuel = toFuelNumber(fuelLitersAtStart);
-  const totalFuel = toFuelNumber(fuelLitersTotal);
-
-  if (startFuel != null && totalFuel != null) {
-    const currentFuelL = applyFuelConsumptionForProgress(startFuel, totalFuel, progress);
-    return {
-      currentFuelL,
-      fuelTankCapacityL,
-      fuelPercent: getFuelPercent(currentFuelL, fuelTankCapacityL),
-    };
-  }
-
-  // Eski job kayıtları: mesafeden tahmini tüketim (yalnızca UI)
-  const distance = toFuelNumber(distanceKm);
-  if (distance != null && distance > 0 && progress > 0) {
-    const estimatedBurn = Math.round(
-      getFuelRequiredForDistance({
-        distanceKm: distance * progress,
-        fuelConsumptionPerKm: getTruckFuelConsumptionPerKm(truck),
-      }),
-    );
-    const currentFuelL = Math.max(0, snapshot.currentLiters - estimatedBurn);
-    return {
-      currentFuelL,
-      fuelTankCapacityL,
-      fuelPercent: getFuelPercent(currentFuelL, fuelTankCapacityL),
-    };
-  }
-
   return {
     currentFuelL: snapshot.currentLiters,
-    fuelTankCapacityL,
+    fuelTankCapacityL: snapshot.capacityLiters,
     fuelPercent: snapshot.percentage,
   };
 }
@@ -126,14 +72,7 @@ export function getTruckTrackingMetrics(
 
   if (activeDelivery) {
     const progress = normalizeProgress(activeDelivery.progress);
-    const fuel = resolveFuelState(
-      truck,
-      activeDelivery.fuelLitersAtStart,
-      activeDelivery.fuelLitersTotal,
-      activeDelivery.fuelConsumedL,
-      progress,
-      activeDelivery.distanceKm,
-    );
+    const fuel = resolveFuelState(truck);
     const remainingDistanceKm = Math.max(
       0,
       Math.round((activeDelivery.distanceKm ?? 0) * (1 - progress)),
@@ -159,14 +98,7 @@ export function getTruckTrackingMetrics(
 
   if (activeTransfer) {
     const progress = normalizeProgress(activeTransfer.progress);
-    const fuel = resolveFuelState(
-      truck,
-      activeTransfer.fuelLitersAtStart,
-      activeTransfer.fuelLitersTotal,
-      activeTransfer.fuelConsumedL,
-      progress,
-      activeTransfer.distanceKm,
-    );
+    const fuel = resolveFuelState(truck);
     const remainingDistanceKm = Math.max(
       0,
       Math.round(activeTransfer.distanceKm * (1 - progress)),
@@ -190,7 +122,6 @@ export function getTruckTrackingMetrics(
     };
   }
 
-  // Boşta / bakımdaki kamyon — canonical snapshot (Fleet ile aynı)
   const snapshot = getTruckFuelSnapshot(normalizeTruckFuel(truck));
 
   return {

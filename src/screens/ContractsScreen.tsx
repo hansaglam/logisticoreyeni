@@ -20,6 +20,7 @@ import ContractQuickActionSheet from '../components/contracts/ContractQuickActio
 import DeliveryHealthBanner from '../components/delivery/DeliveryHealthBanner';
 import DeliveryIncidentCard from '../components/delivery/DeliveryIncidentCard';
 import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
+import TruckRefuelSheet from '../components/TruckRefuelSheet';
 import DeliveryBoostPanel from '../components/monetization/DeliveryBoostPanel';
 import AdRewardButton from '../components/monetization/AdRewardButton';
 import { contractGenerationBalance } from '../config/balance';
@@ -71,6 +72,8 @@ import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
+import { resolveDeliveryHealth } from '../domain/deliveryHealthStatus';
+import { normalizeTruckFuel } from '../utils/truckFuel';
 import {
   formatIdleTruckSummaryLine,
   shouldShowPostDeliveryLocationHint,
@@ -99,6 +102,10 @@ type SegmentKey = 'available' | 'active' | 'completed';
 const EMPTY_CONTRACT_PREVIEW_MAP = new Map<string, ContractPreview>();
 
 type StatusMessage = { type: 'success' | 'error'; text: string } | null;
+
+function formatJobAcceptedMessage(originCityId: string, destinationCityId: string): string {
+  return `İş alındı · ${getCityName(originCityId)} → ${getCityName(destinationCityId)} teslimatı başladı.`;
+}
 
 function formatPercent(value: number): string {
   return formatRatioPercent(value);
@@ -628,29 +635,54 @@ const ContractCard = React.memo(function ContractCard({
 
 interface ActiveDeliveryCardProps {
   delivery: Delivery;
-  trucks: Truck[];
   drivers: Driver[];
   onBoostSuccess?: () => void;
 }
 
 const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
   delivery,
-  trucks,
   drivers,
   onBoostSuccess,
 }: ActiveDeliveryCardProps) {
   const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
+  const truck = useGameStore((state) =>
+    state.player.trucks.find((item) => item.id === delivery.truckId),
+  );
   const [roadsideJobId, setRoadsideJobId] = React.useState<string | null>(null);
+  const [refuelTruck, setRefuelTruck] = React.useState<Truck | null>(null);
   const deadlineHoursLeft = Math.max(0, delivery.deadlineTime - currentTime);
   const etaHoursLeft = Math.max(0, delivery.estimatedArrivalTime - currentTime);
   const isLateRisk = delivery.estimatedArrivalTime > delivery.deadlineTime;
-  const truck = (trucks ?? []).find((item) => item.id === delivery.truckId);
   const driver = (drivers ?? []).find((item) => item.id === delivery.driverId);
+  const health = resolveDeliveryHealth({ delivery, currentTime, truck });
   const showBoost =
     (delivery.status === 'on_route' ||
       delivery.status === 'preparing' ||
       delivery.status === 'paused') &&
     delivery.progress < 1;
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const canonical = truck ? normalizeTruckFuel(truck) : null;
+    console.log('[ACTIVE_JOB_FUEL]', {
+      deliveryId: delivery.id,
+      vehicleId: delivery.truckId,
+      canonicalFuel: canonical?.currentFuelL ?? null,
+      fuelCapacity: canonical?.fuelTankCapacityL ?? null,
+      vehicleStatus: truck?.status ?? null,
+      pausedReason: delivery.pausedReason ?? null,
+      showOutOfFuelWarning: health.showOutOfFuelWarning,
+    });
+  }
+
+  const handleRefuel = () => {
+    if (health.showOutOfFuelWarning) {
+      setRoadsideJobId(delivery.id);
+      return;
+    }
+    if (truck) {
+      setRefuelTruck(truck);
+    }
+  };
 
   return (
     <View style={styles.listCard}>
@@ -690,7 +722,7 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
         delivery={delivery}
         currentTime={currentTime}
         truck={truck}
-        onRefuel={() => setRoadsideJobId(delivery.id)}
+        onRefuel={health.showRefuelCta ? handleRefuel : undefined}
       />
       <View style={styles.activeProgressRow}>
         <ProgressBar progress={delivery.progress} color={COLORS.cyan} height={3} />
@@ -706,6 +738,12 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
         visible={roadsideJobId != null}
         jobId={roadsideJobId}
         onClose={() => setRoadsideJobId(null)}
+      />
+      <TruckRefuelSheet
+        visible={refuelTruck != null}
+        truck={refuelTruck}
+        source="job_assignment"
+        onClose={() => setRefuelTruck(null)}
       />
     </View>
   );
@@ -1135,16 +1173,19 @@ export default function ContractsScreen() {
 
   const handleQuickStartDelivery = (truckId: string, driverId: string) => {
     if (!quickSheetContract) return;
+    const accepted = quickSheetContract;
 
-    const result = startDelivery(quickSheetContract.id, truckId, driverId);
+    const result = startDelivery(accepted.id, truckId, driverId);
     if (!result.success) {
       showAlert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
       return;
     }
 
     closeQuickSheet();
-    setStatusMessage({ type: 'success', text: 'Teslimat başlatıldı' });
-    setActiveSegment('active');
+    setStatusMessage({
+      type: 'success',
+      text: formatJobAcceptedMessage(accepted.originCityId, accepted.destinationCityId),
+    });
   };
 
   const handleOpenAdvancedAssignment = () => {
@@ -1156,16 +1197,19 @@ export default function ContractsScreen() {
 
   const handleConfirmAssignment = (truckId: string, driverId: string) => {
     if (!assignmentContract) return;
+    const accepted = assignmentContract;
 
-    const result = startDelivery(assignmentContract.id, truckId, driverId);
+    const result = startDelivery(accepted.id, truckId, driverId);
     if (!result.success) {
       showAlert('Teslimat başlatılamadı', result.message ?? 'Bilinmeyen hata');
       return;
     }
 
     closeAssignmentModal();
-    setStatusMessage({ type: 'success', text: 'Teslimat başlatıldı' });
-    setActiveSegment('active');
+    setStatusMessage({
+      type: 'success',
+      text: formatJobAcceptedMessage(accepted.originCityId, accepted.destinationCityId),
+    });
   };
 
   const handleGoToFleet = (subTab?: 'trucks' | 'drivers' | 'shop') => {
@@ -1300,7 +1344,6 @@ export default function ContractsScreen() {
         const deliveryCard = (
           <ActiveDeliveryCard
             delivery={item.delivery}
-            trucks={player.trucks ?? []}
             drivers={player.drivers ?? []}
             onBoostSuccess={handleDeliveryBoostSuccess}
           />
@@ -1341,14 +1384,18 @@ export default function ContractsScreen() {
   const listExtraData = useMemo(() => {
     if (activeSegment === 'active') {
       return activeDeliveries
-        .map((delivery) => `${delivery.id}:${Math.floor(delivery.progress * 100)}:${delivery.status}`)
+        .map((delivery) => {
+          const assigned = (player?.trucks ?? []).find((item) => item.id === delivery.truckId);
+          const fuel = assigned ? Math.round((assigned.currentFuelL ?? 0) * 10) : 'na';
+          return `${delivery.id}:${Math.floor(delivery.progress * 100)}:${delivery.status}:${delivery.pausedReason ?? ''}:${fuel}`;
+        })
         .join('|');
     }
     if (activeSegment === 'available') {
       return `${highlightedContractId ?? ''}:${monetization.totalRewardedAdsToday}`;
     }
     return activeSegment;
-  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday]);
+  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday, player?.trucks]);
 
   const listHeader = useMemo(() => {
     if (activeSegment !== 'available') {

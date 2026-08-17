@@ -9,7 +9,14 @@ import {
   validateTruckRefuelRequest,
 } from '../src/utils/truckFuel';
 import { mergeTruckTickUpdates } from '../src/utils/truckFleetState';
-import type { Truck } from '../src/types/game';
+import {
+  applyPurchasedFuelToVehicle,
+  formatRefuelSuccessMessage,
+  formatRemainingRouteFuelWarning,
+} from '../src/domain/vehicleFuelApply';
+import { updateDeliveryProgressWithFuel } from '../src/simulation/delivery';
+import type { Delivery, Truck } from '../src/types/game';
+import { getTruckTrackingMetrics } from '../src/utils/truckTrackingMetrics';
 
 let passed = 0;
 let failed = 0;
@@ -157,6 +164,168 @@ assert(
   'no-op tick returns live fleet reference (does not clobber)',
 );
 
+console.log('\nMid-job refill must not roll tank back to start-consumed');
+{
+  const enRoute = makeTruck({
+    id: 'en-route-refuel',
+    status: 'on_route',
+    currentFuelL: 70.1,
+  });
+  const delivery: Delivery = {
+    id: 'del-refuel',
+    contractId: 'con-1',
+    truckId: enRoute.id,
+    driverId: 'drv-1',
+    originCityId: 'izmir',
+    destinationCityId: 'istanbul',
+    productId: 'machinery',
+    amount: 10,
+    distanceKm: 480,
+    progress: 0.1,
+    status: 'on_route',
+    startedAt: 0,
+    estimatedArrivalTime: 10,
+    deadlineTime: 24,
+    fuelCost: 100,
+    fuelLitersAtStart: 45.1,
+    fuelLitersTotal: 80,
+    fuelConsumedL: 0,
+    lastFuelProcessedProgress: 0.1,
+    distanceTraveledKm: 48,
+    currentSpeedKmh: 70,
+    maintenanceCost: 20,
+    estimatedProfit: 800,
+    travelHours: 8,
+    breakdownChance: 0,
+    accidentChance: 0,
+    conditionLoss: 1,
+  };
+  const continued = updateDeliveryProgressWithFuel(delivery, enRoute, 0.2, 12);
+  assert(
+    (continued.truck.currentFuelL ?? 0) > 60,
+    'tick after +25 L city refill keeps tank near 70, not 45',
+    `got ${continued.truck.currentFuelL}`,
+  );
+  assert(
+    (continued.delivery.fuelLitersAtStart ?? 0) >= 70,
+    'job fuelLitersAtStart absorbs the refill so later ticks stay consistent',
+  );
+}
+
+console.log('\nPaused out-of-fuel auto-resumes when tank has fuel');
+{
+  const pausedTruck = makeTruck({
+    id: 'paused-resume',
+    status: 'out_of_fuel',
+    currentFuelL: 25,
+  });
+  const pausedDelivery: Delivery = {
+    id: 'del-paused',
+    contractId: 'con-1',
+    truckId: pausedTruck.id,
+    driverId: 'drv-1',
+    originCityId: 'izmir',
+    destinationCityId: 'istanbul',
+    productId: 'machinery',
+    amount: 10,
+    distanceKm: 100,
+    progress: 0.3,
+    status: 'paused',
+    pausedReason: 'out-of-fuel',
+    startedAt: 0,
+    estimatedArrivalTime: 10,
+    deadlineTime: 24,
+    fuelCost: 100,
+    fuelLitersAtStart: 3,
+    fuelLitersTotal: 10,
+    fuelConsumedL: 3,
+    lastFuelProcessedProgress: 0.3,
+    distanceTraveledKm: 30,
+    maintenanceCost: 20,
+    estimatedProfit: 500,
+    travelHours: 10,
+    breakdownChance: 0,
+    accidentChance: 0,
+    conditionLoss: 1,
+  };
+  const resumed = updateDeliveryProgressWithFuel(pausedDelivery, pausedTruck, 1, 20);
+  assert(resumed.delivery.status === 'on_route', 'fuel in tank resumes paused delivery');
+  assert(resumed.truck.status === 'on_route', 'truck leaves out_of_fuel after refill');
+  assert(resumed.delivery.progress > 0.3, 'resumed delivery can move again');
+}
+
+console.log('\nAtomic applyPurchasedFuelToVehicle');
+{
+  const idle = makeTruck({ status: 'out_of_fuel', currentFuelL: 0 });
+  const delivery: Delivery = {
+    id: 'del-apply',
+    contractId: 'con-1',
+    truckId: idle.id,
+    driverId: 'drv-1',
+    originCityId: 'izmir',
+    destinationCityId: 'istanbul',
+    productId: 'machinery',
+    amount: 10,
+    distanceKm: 100,
+    progress: 0.3,
+    status: 'paused',
+    pausedReason: 'out-of-fuel',
+    startedAt: 0,
+    estimatedArrivalTime: 10,
+    deadlineTime: 24,
+    fuelCost: 100,
+    fuelLitersAtStart: 3,
+    fuelLitersTotal: 10,
+    fuelConsumedL: 3,
+    lastFuelProcessedProgress: 0.3,
+    distanceTraveledKm: 30,
+    maintenanceCost: 20,
+    estimatedProfit: 500,
+    travelHours: 10,
+    breakdownChance: 0,
+    accidentChance: 0,
+    conditionLoss: 1,
+  };
+  const applied = applyPurchasedFuelToVehicle({
+    truck: idle,
+    newFuelL: 25,
+    litersAdded: 25,
+    deliveries: [delivery],
+    transfers: [],
+    warehouseTransfers: [],
+  });
+  assert(closeTo(applied.fuelAfter, 25), 'apply writes tank');
+  assert(applied.truck.status === 'on_route', 'apply resumes truck');
+  assert(applied.deliveries[0].status === 'on_route', 'apply resumes delivery');
+  assert(applied.resumedJob, 'apply marks resumedJob');
+  assert(
+    formatRefuelSuccessMessage(applied).includes('25.0 L yakıt eklendi'),
+    'success copy includes liters added',
+  );
+  assert(
+    formatRefuelSuccessMessage(applied).includes('Teslimata devam edebilir'),
+    'success copy says delivery can continue',
+  );
+  const mapAfterApply = getTruckTrackingMetrics({
+    truck: applied.truck,
+    delivery: applied.deliveries[0],
+  });
+  assert(
+    closeTo(mapAfterApply.currentFuelL, 25),
+    'map tracking reads applied tank, not stale job start',
+  );
+  assert(
+    formatRemainingRouteFuelWarning({
+      ...applied,
+      remainingFuelRequiredL: 80,
+      remainingDistanceKm: 200,
+      currentRangeKm: 50,
+      sufficientForRemainingRoute: false,
+    })?.includes('Mevcut yakıt rota için yeterli değil') === true,
+    'range warning copy when remaining fuel is short',
+  );
+}
+
 {
   const store = readFileSync(
     resolve(__dirname, '../src/store/gameStore.ts'),
@@ -167,11 +336,10 @@ assert(
       store.includes('live.player.trucks'),
     'delivery/transfer ticks merge against live fleet inside functional set',
   );
+  assert(store.includes('mergeJobTickUpdates'), 'delivery ticks merge concurrent job refuel/resume');
+  assert(store.includes('applyPurchasedFuelToVehicle'), 'city and roadside refuel share one apply helper');
   assert(store.includes('[refuelTruck] after-commit'), 'refuel read-back logging present');
-  assert(
-    store.includes('set((live) => {') && store.includes('resumeRoadsideJob(candidate, \'delivery\''),
-    'roadside fuel commits against live fleet inside functional set',
-  );
+  assert(store.includes('beforeRefuelFuel'), 'refuel logs beforeRefuel fuel');
   assert(
     store.includes('calculateDeliveryFuelLiters'),
     'delivery start uses canonical fuel requirement helper',

@@ -58,11 +58,7 @@ export function getFuelWarningForJob(
     Number.isFinite(rangeFromJob) ? Math.floor(rangeFromJob) : 0,
   );
 
-  if (
-    job.pausedReason === 'out-of-fuel' ||
-    truck.status === 'out_of_fuel' ||
-    currentFuelL <= FUEL_EPSILON_L
-  ) {
+  if (currentFuelL <= FUEL_EPSILON_L) {
     return {
       key: 'out-of-fuel',
       title: 'ARAÇ YAKITSIZ KALDI',

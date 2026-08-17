@@ -51,6 +51,8 @@ export interface FuelConstrainedProgressResult {
   distanceTraveledKm: number;
   mileageDeltaKm: number;
   outOfFuel: boolean;
+  /** Mid-job refill raises the accounting baseline so ticks cannot clobber tank. */
+  fuelLitersAtStart: number;
 }
 
 export interface TruckFuelReadiness {
@@ -77,6 +79,14 @@ export interface TruckRefuelResult {
   litersAdded?: number;
   totalCost?: number;
   unitPrice?: number;
+  newFuelL?: number;
+  fuelTankCapacityL?: number;
+  resumedJob?: boolean;
+  remainingFuelRequiredL?: number;
+  remainingDistanceKm?: number;
+  currentRangeKm?: number;
+  sufficientForRemainingRoute?: boolean;
+  routeFuelWarning?: string;
 }
 
 export interface TruckRefuelQuote {
@@ -200,11 +210,12 @@ export function advanceFuelConstrainedProgress(
     0,
     input.fuelLitersAtStart - previousFuelConsumed,
   );
-  const availableFuel = clamp(
-    Math.min(input.currentFuelL, expectedFuelAtProcessedProgress),
-    0,
-    Math.max(0, input.fuelLitersAtStart),
-  );
+  const tankFuel = Math.max(0, input.currentFuelL);
+  const refillL = Math.max(0, tankFuel - expectedFuelAtProcessedProgress);
+  const fuelLitersAtStart = input.fuelLitersAtStart + refillL;
+  // Trust the tank. Capping to start-consumed ignored mid-job refuel and
+  // rolled successful purchases back to the pre-refuel liters.
+  const availableFuel = tankFuel;
   const requiredFuel = fuelLitersTotal * totalRequestedProgress;
   const reachableRatio =
     requiredFuel <= FUEL_EPSILON_L
@@ -250,6 +261,7 @@ export function advanceFuelConstrainedProgress(
     distanceTraveledKm: nextDistanceTraveled,
     mileageDeltaKm,
     outOfFuel,
+    fuelLitersAtStart,
   };
 }
 
@@ -428,12 +440,12 @@ export function validateTruckRefuelRequest(input: {
   expectedUnitPrice: number;
 }): TruckRefuelValidation {
   const unitPrice = Math.max(0, Number(input.currentUnitPrice) || 0);
-  if (input.truck.status !== 'idle') {
+  if (input.truck.status === 'marketplace_locked') {
     return {
       result: {
         success: false,
         reason: 'truck-busy',
-        message: 'Aktif görevdeki araç şehir istasyonundan yakıt alamaz.',
+        message: 'Bu araç şu anda yakıt alamaz.',
       },
     };
   }

@@ -175,6 +175,19 @@ console.log('\nProcessor');
     'return-pending not assignable',
   );
 
+  const ghostOnRoute = leasedTruck({ leaseExpiresAt: 50, status: 'on_route' });
+  const ghostExpiry = processExpiredRentalTrucks({
+    player: { trucks: [ghostOnRoute], drivers: [], trailers: [] },
+    activeDeliveries: [],
+    currentTime: 100,
+    source: 'game-tick',
+  });
+  assert(ghostExpiry.player.trucks.length === 0, 'expired on_route without delivery is removed');
+  assert(
+    getRentalTruckStatus({ truck: ghostOnRoute, nowMs: 100 }).shouldRemoveFromFleet,
+    'stale on_route status is not treated as an active job',
+  );
+
   const completedTruck = {
     ...pendingResult.player.trucks[0]!,
     status: 'idle' as const,

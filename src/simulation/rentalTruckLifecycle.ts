@@ -45,6 +45,7 @@ export interface ReturnExpiredRentalTruckInput {
   reason: RentalReturnReason;
   currentTime: number;
   player: Pick<Player, 'trucks' | 'drivers' | 'trailers'>;
+  activeDeliveries?: Delivery[];
   activeTransfers?: TruckTransfer[];
   activeWarehouseStockTransfers?: WarehouseStockTransfer[];
 }
@@ -112,13 +113,7 @@ export function isTruckInActiveDelivery(
   truck: Truck,
   activeDelivery?: Delivery | null,
 ): boolean {
-  if (activeDelivery) {
-    return true;
-  }
-  return (
-    truck.status === 'on_route' ||
-    truck.status === 'out_of_fuel'
-  );
+  return activeDelivery != null;
 }
 
 export function isRentalReturnPending(truck: Truck): boolean {
@@ -385,8 +380,8 @@ export function returnExpiredRentalTruck(
     };
   }
 
-  const activeDelivery = findActiveDeliveryForTruck(truck.id, []);
-  if (isTruckInActiveDelivery(truck, activeDelivery)) {
+  const activeDelivery = findActiveDeliveryForTruck(truck.id, input.activeDeliveries);
+  if (activeDelivery) {
     return {
       applied: false,
       truckName: truck.name,
@@ -512,6 +507,7 @@ export function processExpiredRentalTrucks(
         reason: 'rental-expired-after-delivery',
         currentTime: input.currentTime,
         player: { trucks, drivers, trailers },
+        activeDeliveries: input.activeDeliveries,
         activeTransfers,
         activeWarehouseStockTransfers,
       });
@@ -540,6 +536,7 @@ export function processExpiredRentalTrucks(
               : 'rental-expired-idle',
         currentTime: input.currentTime,
         player: { trucks, drivers, trailers },
+        activeDeliveries: input.activeDeliveries,
         activeTransfers,
         activeWarehouseStockTransfers,
       });

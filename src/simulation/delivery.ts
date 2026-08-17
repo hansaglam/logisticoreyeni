@@ -25,6 +25,10 @@ import { classifyDeadlineRisk } from '../utils/deadlineUx';
 import {
   createEmptyDelayDiagnostics,
 } from '../domain/deliveryDelayDiagnostics';
+import { getRoute } from '../data/routes';
+import {
+  evaluateRentalAssignmentFit,
+} from '../domain/rentalAssignmentFit';
 import { isTruckEligibleForNewAssignment } from './rentalTruckLifecycle';
 import { debugConfig } from '../config/debug';
 import {
@@ -189,6 +193,57 @@ export function isTruckAvailableForAssignment(
     return false;
   }
   return isTruckEligibleForNewAssignment(truck, currentTime, activeDelivery);
+}
+
+export function estimateAssignmentDurationHours(params: {
+  contract: Contract;
+  truck: Truck;
+  driver?: Driver | null;
+  trailers?: Trailer[];
+  route?: Route | null;
+}): number {
+  const route =
+    params.route ??
+    getRoute(params.contract.originCityId, params.contract.destinationCityId) ??
+    null;
+  const trailer = getAttachedTrailerForTruck(params.truck.id, params.trailers ?? []);
+  return calculateContractDurationHours({
+    distanceKm: route?.distanceKm ?? params.contract.distanceKm ?? 0,
+    cargoTons: getContractCargoWeight(params.contract),
+    routeDifficulty: route?.difficulty,
+    truck: params.truck,
+    truckSpeedKmh: params.truck.speed,
+    truckCapacityTons: params.truck.capacity,
+    truckCondition: params.truck.condition,
+    truckVehicleClass: params.truck.vehicleClass,
+    truckCatalogId: params.truck.catalogId,
+    driverSpeed: params.driver?.speed,
+    driverTier: params.driver?.tier,
+    trailerType: trailer?.type,
+    trailerCapacityBonusTons: trailer?.capacityBonusTons,
+  }).durationHours;
+}
+
+export function canRentalTruckCoverAssignment(
+  truck: Truck,
+  contract: Contract,
+  currentTime: number,
+  trailers?: Trailer[],
+  driver?: Driver | null,
+  route?: Route | null,
+): boolean {
+  const estimatedTravelHours = estimateAssignmentDurationHours({
+    contract,
+    truck,
+    driver,
+    trailers,
+    route,
+  });
+  return evaluateRentalAssignmentFit({
+    truck,
+    currentTime,
+    estimatedTravelHours,
+  }).canAssign;
 }
 
 /** Kamyon boş transferde mi? */
@@ -499,7 +554,8 @@ export function selectIdleTruckForContract(
       (truck) =>
         isTruckAvailableForAssignment(truck, currentTime) &&
         isTruckAtContractOrigin(truck, contract, fallbackHomeCityId) &&
-        canTruckCarryContract(truck, contract, resolved, trailers),
+        canTruckCarryContract(truck, contract, resolved, trailers) &&
+        canRentalTruckCoverAssignment(truck, contract, currentTime, trailers),
     )
     .sort(
       (a, b) =>
@@ -728,6 +784,9 @@ export function getContractAvailability(
   const assignableTrucksAtOrigin = healthyTrucksAtOrigin.filter((truck) =>
     isTruckAvailableForAssignment(truck, currentTime),
   );
+  const rentalCoveredTrucksAtOrigin = assignableTrucksAtOrigin.filter((truck) =>
+    canRentalTruckCoverAssignment(truck, contract, currentTime, trailerList),
+  );
 
   if (assignableTrucksAtOrigin.length === 0) {
     const onlyExpiredLeasedTrucks =
@@ -748,6 +807,15 @@ export function getContractAvailability(
       requiredCapacity,
       maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
       debug: buildOriginDebug('NO_IDLE_TRUCKS'),
+    });
+  }
+
+  if (rentalCoveredTrucksAtOrigin.length === 0) {
+    return buildUnavailableContractAvailability('RENTAL_DURATION_INSUFFICIENT', {
+      ...originContext,
+      requiredCapacity,
+      maxIdleTruckCapacity: maxIdleTruckCapacityAtOrigin,
+      debug: buildOriginDebug('RENTAL_DURATION_INSUFFICIENT'),
     });
   }
 
@@ -827,6 +895,8 @@ export function getContractAvailabilityWarningText(
       return 'Kamyon tamir gerekli';
     case 'LEASE_EXPIRED':
       return 'Kiralık kamyonun süresi doldu';
+    case 'RENTAL_DURATION_INSUFFICIENT':
+      return 'Kiralık aracın süresi bu teslimat için yeterli değil';
     case 'CONTRACT_EXPIRED':
       return 'Süresi doldu';
     default:
@@ -862,6 +932,8 @@ export function availabilityReasonToStartDeliveryErrorCode(
       return 'CONTRACT_EXPIRED';
     case 'LEASE_EXPIRED':
       return 'LEASE_EXPIRED';
+    case 'RENTAL_DURATION_INSUFFICIENT':
+      return 'RENTAL_DURATION_INSUFFICIENT';
     default:
       return 'DELIVERY_CREATE_FAILED';
   }
@@ -1524,20 +1596,22 @@ export function updateDeliveryProgressWithFuel(
   if (delivery.status === 'paused' && delivery.pausedReason === 'out-of-fuel') {
     const normalized = normalizeTruckFuel(truck);
     const availableFuel = normalized.currentFuelL ?? 0;
-    // If a concurrent refuel restored fuel, never clobber it back to 0.
     if (availableFuel > 1e-6) {
-      return {
-        delivery: {
-          ...delivery,
-          estimatedArrivalTime: delivery.estimatedArrivalTime + hoursPassed,
-          lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
-          currentSpeedKmh: 0,
-        },
-        truck: {
-          ...normalized,
-          status: 'out_of_fuel',
-        },
+      const resumedDelivery: Delivery = {
+        ...delivery,
+        status: 'on_route',
+        pausedReason: undefined,
       };
+      const resumedTruck: Truck = {
+        ...normalized,
+        status: 'on_route',
+      };
+      return updateDeliveryProgressWithFuel(
+        resumedDelivery,
+        resumedTruck,
+        hoursPassed,
+        processedAt,
+      );
     }
     return {
       delivery: {
@@ -1587,6 +1661,7 @@ export function updateDeliveryProgressWithFuel(
       lastFuelProcessedProgress: result.lastFuelProcessedProgress,
       lastFuelProcessedAt: processedAt ?? delivery.lastFuelProcessedAt,
       distanceTraveledKm: result.distanceTraveledKm,
+      fuelLitersAtStart: result.fuelLitersAtStart,
       currentSpeedKmh: calculateActualSpeedKmh({
         distanceDeltaKm: result.mileageDeltaKm,
         elapsedHoursDelta: hoursPassed,
@@ -1608,7 +1683,11 @@ export function updateDeliveryProgressWithFuel(
       currentFuelL: result.currentFuelL,
       totalMileageKm:
         (normalizedTruck.totalMileageKm ?? 0) + result.mileageDeltaKm,
-      status: result.outOfFuel ? 'out_of_fuel' : normalizedTruck.status,
+      status: result.outOfFuel
+        ? 'out_of_fuel'
+        : normalizedTruck.status === 'out_of_fuel'
+          ? 'on_route'
+          : normalizedTruck.status,
     },
   };
 }

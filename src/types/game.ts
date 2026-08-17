@@ -1614,6 +1614,8 @@ export interface StoreGameState {
   osNotificationDedupeKeys?: string[];
   /** Oyun içi OS izin isteği bir kez soruldu. */
   osNotificationPermissionAsked?: boolean;
+  /** Stuck araç kurtarma kullanımı — save'e yazılır. */
+  vehicleRecovery?: import('../domain/vehicleStateRecovery').VehicleRecoveryUsage;
 }
 
 /**
@@ -1647,6 +1649,7 @@ export type StartDeliveryErrorCode =
   | 'INSUFFICIENT_FUEL'
   | 'INSUFFICIENT_FUNDS'
   | 'DEADLINE_IMPOSSIBLE'
+  | 'RENTAL_DURATION_INSUFFICIENT'
   | 'DELIVERY_CREATE_FAILED'
   | 'TRUCK_NOT_AT_ORIGIN'
   | 'NO_TRUCK_AT_ORIGIN'
@@ -1669,6 +1672,7 @@ export type ContractAvailabilityReason =
   | 'DRIVER_LEVEL_TOO_LOW'
   | 'CONTRACT_EXPIRED'
   | 'LEASE_EXPIRED'
+  | 'RENTAL_DURATION_INSUFFICIENT'
   | 'INSUFFICIENT_FUNDS'
   | 'OK';
 

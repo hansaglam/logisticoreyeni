@@ -7,7 +7,7 @@ import './test-globals';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { Truck } from '../src/types/game';
+import type { Delivery, Truck } from '../src/types/game';
 import {
   formatFuelPercentLabel,
   getDefaultFuelFillRatio,
@@ -121,6 +121,59 @@ function run(): void {
   assert(mapMetrics.fuelPercent === 80, 'idle truck shows 80%', `got ${mapMetrics.fuelPercent}`);
   assert(mapMetrics.isMoving === false, 'idle truck isMoving false');
 
+  // Mid-job city refill: map/fleet must show the tank, never start-consumed (45.1).
+  const refueledOnRoute = normalizeTruckFuel(
+    baseTruck({
+      currentFuelL: 70.1,
+      fuelTankCapacityL: 400,
+      status: 'on_route',
+    }),
+  );
+  const staleJob = {
+    id: 'del-mid-refuel',
+    contractId: 'c1',
+    truckId: refueledOnRoute.id,
+    driverId: 'd1',
+    originCityId: 'izmir',
+    destinationCityId: 'istanbul',
+    productId: 'machinery',
+    amount: 10,
+    distanceKm: 480,
+    progress: 0.1,
+    status: 'on_route',
+    startedAt: 0,
+    estimatedArrivalTime: 10,
+    deadlineTime: 24,
+    fuelCost: 100,
+    fuelLitersAtStart: 45.1,
+    fuelLitersTotal: 80,
+    fuelConsumedL: 0,
+    maintenanceCost: 20,
+    estimatedProfit: 800,
+    travelHours: 8,
+    breakdownChance: 0,
+    accidentChance: 0,
+    conditionLoss: 1,
+  } as Delivery;
+  const mapAfterRefuel = getTruckTrackingMetrics({
+    truck: refueledOnRoute,
+    delivery: staleJob,
+  });
+  const fleetAfterRefuel = getTruckFuelSnapshot(refueledOnRoute);
+  assert(
+    mapAfterRefuel.currentFuelL !== 45.1 && mapAfterRefuel.currentFuelL > 60,
+    'map shows tank after refill, not reconstructed 45.1',
+    `got ${mapAfterRefuel.currentFuelL}`,
+  );
+  assert(
+    mapAfterRefuel.currentFuelL === fleetAfterRefuel.currentLiters,
+    'map liters === fleet liters after mid-job refill',
+  );
+  assert(
+    mapAfterRefuel.fuelPercent === fleetAfterRefuel.percentage,
+    'map percent === fleet percent after mid-job refill',
+  );
+
   // --- Source contracts ---
   const fuelSrc = readSrc('src/utils/truckFuel.ts');
   assert(fuelSrc.includes('export type TruckFuelSnapshot'), 'TruckFuelSnapshot type exported');
@@ -135,6 +188,10 @@ function run(): void {
   const metricsSrc = readSrc('src/utils/truckTrackingMetrics.ts');
   assert(metricsSrc.includes('getTruckFuelSnapshot'), 'truckTrackingMetrics uses canonical snapshot');
   assert(!metricsSrc.includes('Platform.OS'), 'truckTrackingMetrics has no Platform.OS fuel branch');
+  assert(
+    !metricsSrc.includes('applyFuelConsumptionForProgress'),
+    'map tracking does not reconstruct fuel from job start/progress',
+  );
 
   const mapCardSrc = readSrc('src/components/map/MapTruckTrackingCard.tsx');
   assert(mapCardSrc.includes('getTruckTrackingMetrics'), 'Map card uses tracking metrics');

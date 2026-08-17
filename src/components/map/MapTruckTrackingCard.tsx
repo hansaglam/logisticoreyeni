@@ -24,6 +24,9 @@ import {
   MAP_SURFACE,
 } from './mapTheme';
 import { isActiveRunningDelivery, resolveTruckTrackingCityId } from './mapTruckLocation';
+import { detectVehicleStateIssue } from '../../domain/vehicleStateRecovery';
+import VehicleRecoveryBanner from '../delivery/VehicleRecoveryBanner';
+import { useGameStore } from '../../store/gameStore';
 
 function getStatusBadge(status: Truck['status']): { label: string; variant: StatusBadgeVariant } {
   switch (status) {
@@ -169,6 +172,28 @@ function MapTruckTrackingCard({
   );
   const fuelJob = activeDelivery ?? transfer;
   const fuelWarning = getFuelWarningForJob(fuelJob, truck);
+  const warehouseTransfer = useGameStore((state) =>
+    (state.activeWarehouseStockTransfers ?? []).find(
+      (candidate) =>
+        candidate.truckId === truck.id &&
+        (candidate.status === 'active' ||
+          candidate.status === 'pending' ||
+          candidate.status === 'paused'),
+    ),
+  );
+  const openVehicleRecovery = useGameStore((state) => state.openVehicleRecovery);
+  const recoveryIssue = useMemo(
+    () =>
+      detectVehicleStateIssue({
+        truck,
+        currentTime: currentTime ?? 0,
+        homeCityId,
+        activeDelivery: delivery,
+        activeTransfer: transfer,
+        activeWarehouseTransfer: warehouseTransfer,
+      }),
+    [truck, currentTime, homeCityId, delivery, transfer, warehouseTransfer],
+  );
 
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
     console.log('[FUEL_DEBUG][MAP]', {
@@ -312,6 +337,11 @@ function MapTruckTrackingCard({
         </View>
       ) : null}
       </TouchableOpacity>
+
+      <VehicleRecoveryBanner
+        issue={recoveryIssue}
+        onRecover={() => openVehicleRecovery(truck.id)}
+      />
 
       {showDeliveryBoost && activeDelivery ? (
         <DeliveryBoostPanel

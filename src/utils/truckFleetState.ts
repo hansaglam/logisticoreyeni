@@ -146,6 +146,44 @@ export function mergeTruckTickUpdates(
   });
 }
 
+export function mergeJobTickUpdates<
+  T extends { id: string; status: string; pausedReason?: string; fuelLitersAtStart?: number },
+>(liveJobs: T[], baselineJobs: T[], updatedJobs: T[]): T[] {
+  if (updatedJobs === baselineJobs) {
+    return liveJobs;
+  }
+  const liveById = new Map(liveJobs.map((job) => [job.id, job]));
+  const baselineById = new Map(baselineJobs.map((job) => [job.id, job]));
+  return updatedJobs.map((tickJob) => {
+    const liveJob = liveById.get(tickJob.id);
+    const baselineJob = baselineById.get(tickJob.id);
+    if (!liveJob || !baselineJob) {
+      return tickJob;
+    }
+    const liveStart = liveJob.fuelLitersAtStart ?? 0;
+    const baseStart = baselineJob.fuelLitersAtStart ?? 0;
+    const tickStart = tickJob.fuelLitersAtStart ?? 0;
+    const refueledDuringTick = liveStart > baseStart + CONCURRENT_REFUEL_EPSILON_L && liveStart > tickStart + CONCURRENT_REFUEL_EPSILON_L;
+    const liveResumed =
+      liveJob.status !== 'paused' &&
+      tickJob.status === 'paused' &&
+      tickJob.pausedReason === 'out-of-fuel';
+    if (!refueledDuringTick && !liveResumed) {
+      return tickJob;
+    }
+    if (tickJob.status === 'paused' && tickJob.pausedReason === 'out-of-fuel') {
+      return liveJob;
+    }
+    return {
+      ...tickJob,
+      fuelLitersAtStart: Math.max(liveStart, tickStart),
+      status: liveResumed ? liveJob.status : tickJob.status,
+      pausedReason:
+        liveResumed || liveJob.pausedReason == null ? liveJob.pausedReason : tickJob.pausedReason,
+    };
+  });
+}
+
 export function didTruckListChange(
   baselineTrucks: Truck[],
   updatedTrucks: Truck[],

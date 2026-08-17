@@ -28,9 +28,9 @@ import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
 import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
 import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
 import { getVisibleFleetTrucks } from '../simulation/rentalTruckLifecycle';
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
+import MapHelpMenu from '../components/map/MapHelpMenu';
 import { GameIcon } from '../components/ui';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
@@ -237,6 +237,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
   const mapRef = useRef<WorldMapCanvasHandle>(null);
+  const didReconcileOnOpenRef = useRef(false);
 
   const mapTutorial = useScreenAppTutorial({
     tutorialId: 'map',
@@ -244,6 +245,15 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     blockingModals: roadsideFuelJobId != null,
     scrollRef,
   });
+
+  useEffect(() => {
+    if (!player || didReconcileOnOpenRef.current) return;
+    didReconcileOnOpenRef.current = true;
+    const result = useGameStore.getState().reconcileMapTracking('map-open');
+    if (result.fixedCount > 0) {
+      setStatusMessage(result.toast);
+    }
+  }, [player]);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -305,6 +315,15 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const trucks = useMemo(
     () => getVisibleFleetTrucks(player?.trucks, currentTime, activeDeliveries),
     [player?.trucks, currentTime, activeDeliveries],
+  );
+
+  const validTruckIdsKey = useMemo(
+    () => trucks.map((truck) => truck.id).sort().join('|'),
+    [trucks],
+  );
+  const validTruckIds = useMemo(
+    () => new Set(validTruckIdsKey ? validTruckIdsKey.split('|') : []),
+    [validTruckIdsKey],
   );
 
   const idleTrucks = useMemo(
@@ -446,6 +465,16 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     }
   };
 
+  const handleSyncMap = useCallback(() => {
+    const result = useGameStore.getState().reconcileMapTracking('manual');
+    setStatusMessage(result.toast);
+  }, []);
+
+  const handleInspectMapVehicles = useCallback(() => {
+    const result = useGameStore.getState().inspectMapTracking();
+    setStatusMessage(result.toast);
+  }, []);
+
   const handleDeliveryPress = (deliveryId: string) => {
     setSelectedDeliveryId(deliveryId);
     setSelectedMapFilter('trucks');
@@ -509,7 +538,15 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
       >
         <MapHeader
           onRefresh={handleRefreshMarket}
-          helpAction={<AppTutorialHelpButton {...mapTutorial.helpButtonProps} />}
+          helpAction={
+            <MapHelpMenu
+              tutorialOnPress={mapTutorial.helpButtonProps.onPress}
+              tutorialDisabled={mapTutorial.helpButtonProps.disabled}
+              tutorialAccessibilityLabel={mapTutorial.helpButtonProps.accessibilityLabel}
+              onSyncMap={handleSyncMap}
+              onInspectVehicles={handleInspectMapVehicles}
+            />
+          }
         />
 
         <AppTutorialTarget tutorialId="map" targetId="map-filters" layoutMode="stretch">
@@ -542,6 +579,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
               calibrationMode={debugConfig.mapCalibrationEnabled}
               activeDeliveries={activeDeliveries}
               activeTransfers={activeTransfers}
+              validTruckIds={validTruckIds}
               selectedFilter={selectedMapFilter}
               selectedDeliveryId={selectedDeliveryId}
               onDeliveryPress={handleDeliveryPress}

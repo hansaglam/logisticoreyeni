@@ -63,6 +63,8 @@ export function getContractAvailabilityLabel(
       return 'Süresi doldu';
     case 'LEASE_EXPIRED':
       return 'Kiralık kamyonun süresi doldu';
+    case 'RENTAL_DURATION_INSUFFICIENT':
+      return 'Kira süresi yetersiz';
     case 'NO_TRUCKS':
       return 'Kamyon yok';
     case 'NO_IDLE_TRUCKS':
@@ -205,6 +207,8 @@ export function buildContractAvailabilityMessage(
       return 'İşin süresi doldu.';
     case 'LEASE_EXPIRED':
       return 'Kiralık kamyonun süresi doldu.';
+    case 'RENTAL_DURATION_INSUFFICIENT':
+      return 'Bu kiralık aracın süresi bu teslimat için yeterli değil. Daha uzun kiralı veya sahip olduğun bir araç seç.';
     default:
       return 'Bu iş şu anda başlatılamıyor.';
   }

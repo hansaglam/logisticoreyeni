@@ -511,18 +511,19 @@ export function updateWarehouseStockTransferProgressWithFuel(
     const normalized = normalizeTruckFuel(truck);
     const availableFuel = normalized.currentFuelL ?? 0;
     if (availableFuel > 1e-6) {
-      return {
-        transfer: {
+      return updateWarehouseStockTransferProgressWithFuel(
+        {
           ...transfer,
-          estimatedCompletionAt: transfer.estimatedCompletionAt + hoursPassed,
-          lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
-          currentSpeedKmh: 0,
+          status: 'active',
+          pausedReason: undefined,
         },
-        truck: {
+        {
           ...normalized,
-          status: 'out_of_fuel',
+          status: 'transferring',
         },
-      };
+        hoursPassed,
+        processedAt,
+      );
     }
     return {
       transfer: {
@@ -574,6 +575,7 @@ export function updateWarehouseStockTransferProgressWithFuel(
       lastFuelProcessedProgress: result.lastFuelProcessedProgress,
       lastFuelProcessedAt: processedAt ?? transfer.lastFuelProcessedAt,
       distanceTraveledKm: result.distanceTraveledKm,
+      fuelLitersAtStart: result.fuelLitersAtStart,
       currentSpeedKmh: calculateActualSpeedKmh({
         distanceDeltaKm: result.mileageDeltaKm,
         elapsedHoursDelta: hoursPassed,
@@ -595,7 +597,11 @@ export function updateWarehouseStockTransferProgressWithFuel(
       currentFuelL: result.currentFuelL,
       totalMileageKm:
         (normalizedTruck.totalMileageKm ?? 0) + result.mileageDeltaKm,
-      status: result.outOfFuel ? 'out_of_fuel' : normalizedTruck.status,
+      status: result.outOfFuel
+        ? 'out_of_fuel'
+        : normalizedTruck.status === 'out_of_fuel'
+          ? 'transferring'
+          : normalizedTruck.status,
     },
   };
 }

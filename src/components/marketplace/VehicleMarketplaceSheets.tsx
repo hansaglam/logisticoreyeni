@@ -141,6 +141,7 @@ export function VehiclePurchaseConfirmSheet({
   fleetLimit,
   preparing,
   purchasing,
+  failed,
   onClose,
   onConfirm,
 }: {
@@ -150,12 +151,13 @@ export function VehiclePurchaseConfirmSheet({
   fleetLimit: number | null;
   preparing?: boolean;
   purchasing: boolean;
+  failed?: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) {
   if (!listing) return null;
   const after = cash - listing.askingPrice;
-  const canConfirm = !preparing && !purchasing && after >= 0;
+  const canConfirm = !preparing && !purchasing && (failed || after >= 0);
   return (
     <SheetFrame visible onClose={purchasing || preparing ? () => undefined : onClose}>
       <View style={styles.header}>
@@ -187,7 +189,9 @@ export function VehiclePurchaseConfirmSheet({
             ? 'Satın alınıyor…'
             : preparing
               ? 'Nakit kontrol ediliyor…'
-              : 'Satın Almayı Onayla'
+              : failed
+                ? 'Tekrar Dene'
+                : 'Satın Almayı Onayla'
         }
         onPress={onConfirm}
         disabled={!canConfirm}

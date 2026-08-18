@@ -34,6 +34,8 @@ import {
 import { isCloudSaveAccountConflictPending } from '../services/cloudSaveConflictState';
 import { isAutomaticCloudUploadBlockedBySaveFlow } from '../services/accountSaveFlowState';
 import { isFirebaseEnabled } from '../services/firebase';
+import { isVehicleMarketplaceOperationActive } from '../services/marketplaceOperationLock';
+import { isPostStartupMarketplaceCloudHoldActive } from '../services/marketplaceStartupCloudHold';
 import { SAVE_GAME_VERSION, serializeGameState, analyzeSavePayloadSize, type SaveGamePayload } from '../storage/saveGame';
 import type { StoreGameState } from '../types/game';
 import {
@@ -57,6 +59,10 @@ import {
   clearPendingCloudRestore,
   getInterruptedCloudRestore,
 } from './cloudRestoreJournal';
+import {
+  abandonHungCloudSaveInFlight,
+  joinCloudSaveInFlight,
+} from './cloudSaveInFlight';
 
 export type CloudSyncReason =
   | 'app_start'
@@ -405,8 +411,27 @@ export async function syncLocalSaveToCloud(
     return false;
   }
 
+  if (isVehicleMarketplaceOperationActive()) {
+    if (__DEV__) {
+      console.info('[cloud-save] sync skipped — marketplace purchase in flight');
+    }
+    return false;
+  }
+
+  if (isPostStartupMarketplaceCloudHoldActive()) {
+    if (__DEV__) {
+      console.info('[cloud-save] sync skipped — waiting for marketplace startup reconcile');
+    }
+    return false;
+  }
+
   if (syncInFlight) {
-    return syncInFlight;
+    const joined = syncInFlight;
+    const outcome = await joinCloudSaveInFlight(joined);
+    if (outcome.timedOut) {
+      syncInFlight = abandonHungCloudSaveInFlight(syncInFlight, joined);
+    }
+    return outcome.value;
   }
 
   const run = (async (): Promise<boolean> => {

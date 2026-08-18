@@ -8,6 +8,7 @@ import {
   serverStateRef,
 } from './serverState';
 import type { ServerStateDocument } from './serverStateTypes';
+import { resolveStaleCloudMarketplaceOverwrite } from '../../src/domain/vehicleMarketplaceCloudMerge';
 import {
   buildMarketplaceStateFromCloudSave,
 } from './vehicleMarketplaceState';
@@ -90,10 +91,27 @@ export function mergeCloudFleetIntoExistingMarketplaceState(
     mergedSnapshots.push(locked);
   }
 
+  const mergedIds = new Set(mergedSnapshots.map((truck) => truck.truckId));
+  for (const existingTruck of existing.ownedTruckSnapshots) {
+    if (tombstones.has(existingTruck.truckId) || mergedIds.has(existingTruck.truckId)) {
+      continue;
+    }
+    mergedSnapshots.push(existingTruck);
+    mergedIds.add(existingTruck.truckId);
+  }
+
+  const overwrite = resolveStaleCloudMarketplaceOverwrite({
+    existingCash: existing.canonicalCash,
+    cloudCash: fromCloud.canonicalCash,
+    existingVehicleIds: existing.ownedTruckSnapshots.map((truck) => truck.truckId),
+    cloudVehicleIds: fromCloud.ownedTruckSnapshots.map((truck) => truck.truckId),
+    soldTruckIds: existing.soldTruckTombstones ?? [],
+  });
+
   return {
     ...existing,
     ownerUid: fromCloud.ownerUid,
-    canonicalCash: fromCloud.canonicalCash,
+    canonicalCash: overwrite.cash,
     ownedTruckSnapshots: mergedSnapshots,
     activeListingIds: existing.activeListingIds ?? [],
     soldTruckTombstones: existing.soldTruckTombstones ?? [],

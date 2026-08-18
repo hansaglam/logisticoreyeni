@@ -18,6 +18,7 @@ import { saveGameState } from '../storage/saveGame';
 import { syncLocalSaveToCloud } from '../storage/cloudSaveSync';
 import { useGameStore } from '../store/gameStore';
 import { getFirestoreSafe, isFirebaseEnabled } from './firebase';
+import { isVehicleMarketplaceOperationActive } from './marketplaceOperationLock';
 import { subscribeAuthState } from './authService';
 
 const LOG_PREFIX = '[TEST_MONEY_SYNC]';
@@ -78,6 +79,10 @@ function nearlyEqual(a: number, b: number): boolean {
 }
 
 async function applyRemoteMoney(uid: string, remoteMoney: number): Promise<void> {
+  if (isVehicleMarketplaceOperationActive()) {
+    console.info(`${LOG_PREFIX} deferred — marketplace purchase in flight`);
+    return;
+  }
   if (applyInFlight) {
     pendingRemoteMoney = remoteMoney;
     return;

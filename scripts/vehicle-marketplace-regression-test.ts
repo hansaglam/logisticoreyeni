@@ -104,7 +104,7 @@ assert.equal(
 // 9. Yetersiz para (sunucu nakdi)
 assert.match(
   getMarketplaceErrorMessage('insufficient-funds'),
-  /yeterli sunucu nakdin yok/i,
+  /Yeterli nakdin yok/,
 );
 
 // 10. Double purchase idempotency reason surfaces as conflict family
@@ -115,12 +115,12 @@ assert.match(getMarketplaceErrorMessage('already-listed'), /aktif bir ilanda/);
 assert.match(getMarketplaceErrorMessage('active-job'), /Aktif görevdeki/);
 
 // 15. Başka kullanıcının ilanı
-assert.equal(getMarketplaceErrorMessage('not-owner'), 'Bu araç seçili hesaba ait değil.');
+assert.equal(getMarketplaceErrorMessage('not-owner'), 'Araç satıcının filosunda bulunamadı.');
 
 // 16. Expired listing
 assert.equal(
   getMarketplaceErrorMessage('listing-not-active'),
-  'Bu araç kısa süre önce satıldı.',
+  'Bu araç başka bir oyuncu tarafından satın alındı.',
 );
 
 // 17. Statistik kartları canonical listeden gelir

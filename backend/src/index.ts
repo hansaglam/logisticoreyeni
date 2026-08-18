@@ -488,6 +488,18 @@ export const purchaseVehicleListing = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTION
     identity,
     data,
   );
+  logger.info('[MARKETPLACE_PURCHASE] transaction committed', {
+    transactionId: data.transactionId,
+    listingId: data.listingId,
+    sellerUidHash: uidHash(sellerUid),
+    buyerUidHash: uidHash(identity.uid),
+    price: data.quotedPrice,
+    serverMoneyBefore: result.data?.buyerCashBefore ?? null,
+    serverMoneyAfter: result.data?.buyerCashAfter ?? null,
+    durationMs: Date.now() - startedAt,
+    result: result.ok ? 'success' : result.reason,
+    retryCount: result.retryCount ?? 0,
+  });
   logger.info('[vehicle-marketplace-purchase]', {
     transactionId: data.transactionId,
     listingId: data.listingId,

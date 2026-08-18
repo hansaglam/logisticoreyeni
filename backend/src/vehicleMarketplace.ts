@@ -97,11 +97,14 @@ type PurchaseActionData = {
   grossPrice: number;
   marketplaceFee: number;
   sellerNet: number;
+  buyerCashBefore: number;
+  buyerCashAfter: number;
 };
 
 function buildPurchaseSuccessResult(
   input: PurchaseVehicleListingInput,
   listing: MarketplaceListingDocument,
+  cash?: { buyerCashBefore: number; buyerCashAfter: number },
 ): MarketplaceActionResult<PurchaseActionData> {
   const marketplaceFee = normalizeMoney(
     listing.askingPrice * listing.marketplaceFeeRate,
@@ -116,6 +119,8 @@ function buildPurchaseSuccessResult(
       grossPrice: listing.askingPrice,
       marketplaceFee,
       sellerNet,
+      buyerCashBefore: cash?.buyerCashBefore ?? 0,
+      buyerCashAfter: cash?.buyerCashAfter ?? 0,
     },
   };
 }
@@ -198,6 +203,15 @@ async function readPurchaseTransactionContext(
 
   if (listing.sellerUid === identity.uid) {
     return { kind: 'return', result: failure(input, 'self-purchase') };
+  }
+  if (listing.status === 'sold') {
+    if (listing.buyerUid === identity.uid) {
+      return {
+        kind: 'return',
+        result: buildPurchaseSuccessResult(input, listing),
+      };
+    }
+    return { kind: 'return', result: failure(input, 'listing-sold') };
   }
   if (listing.status !== 'active') {
     return { kind: 'return', result: failure(input, 'listing-not-active') };
@@ -321,7 +335,12 @@ function writePurchaseTransactionOutcome(
     createdAt: now,
     version: 1,
   };
-  const result = buildPurchaseSuccessResult(input, listing);
+  const buyerCashBefore = normalizeMoney(buyer.canonicalCash);
+  const buyerCashAfter = normalizeMoney(buyer.canonicalCash - listing.askingPrice);
+  const result = buildPurchaseSuccessResult(input, listing, {
+    buyerCashBefore,
+    buyerCashAfter,
+  });
 
   if (!ctx.listingLockExists) {
     transaction.create(listingLockRef, {

@@ -131,30 +131,32 @@ export function getMarketplaceErrorMessage(reason?: string): string {
     case 'truck-not-found':
       return 'Seçilen araç authoritative filo kaydında bulunamadı. Hesabını senkronize edip tekrar dene.';
     case 'not-owner':
-      return 'Bu araç seçili hesaba ait değil.';
+      return 'Araç satıcının filosunda bulunamadı.';
     case 'network-error':
-      return 'İnternet bağlantısı bulunamadı.';
+      return 'Sunucudan yanıt alınamadı.';
     case 'timeout':
-      return 'Araç Pazarı yanıt vermedi. Tekrar deneyin.';
+      return 'Sunucudan yanıt alınamadı.';
     case 'invalid-request':
       return 'İlanlar şu anda yüklenemiyor. Tekrar dene.';
     case 'function-not-found':
       return 'Araç Pazarı servisi bu sürüm için deploy edilmemiş.';
     case 'permission-denied':
-      return 'Araç Pazarı işlemine izin verilmedi. Oturumu yenileyip tekrar dene.';
+      return 'Satın alma işlemi doğrulanamadı.';
     case 'service-unavailable':
     case 'marketplace-unavailable':
       return 'Araç Pazarı şu anda kullanılamıyor.';
     case 'listing-sold':
     case 'listing-not-active':
-      return 'Bu araç kısa süre önce satıldı.';
+      return 'Bu araç başka bir oyuncu tarafından satın alındı.';
+    case 'listing-not-found':
+      return 'İlan artık mevcut değil.';
     case 'stale-version':
     case 'stale-listing-version':
       return 'İlan bilgileri güncellendi. Tekrar kontrol et.';
     case 'insufficient-funds':
-      return 'Satın alma için yeterli sunucu nakdin yok. Bulut kaydın senkronize edildi; nakit güncelse tekrar dene.';
+      return 'Yeterli nakdin yok.';
     case 'fleet-limit':
-      return 'Filo kapasiten dolu.';
+      return 'Filonda boş yer yok.';
     case 'self-purchase':
       return 'Kendi ilanını satın alamazsın.';
     case 'truck-busy':

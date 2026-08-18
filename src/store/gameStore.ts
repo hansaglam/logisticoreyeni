@@ -25,6 +25,7 @@ import { markStartup, withStartupTimeout } from '../utils/startupPerformance';
 import { bumpSaveContentRevision, resetSaveRevisionState } from '../storage/saveRevision';
 import type { ShopCategory } from '../navigation/tabTypes';
 import { VEHICLE_MARKETPLACE_ENABLED } from '../config/backendRoadmap';
+import { beginPostStartupMarketplaceCloudHold } from '../services/marketplaceStartupCloudHold';
 import type {
   City,
   Contract,
@@ -3520,6 +3521,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
               current.lastSimulationGameSpeed ?? meta.lastSimulationGameSpeed ?? current.gameSpeed,
           });
         }
+        beginPostStartupMarketplaceCloudHold();
         set({ isGameReady: true });
         markStartup('STORE_HYDRATE_DONE');
         markStartup('GAME_READY');

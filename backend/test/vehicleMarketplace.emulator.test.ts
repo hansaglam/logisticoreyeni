@@ -666,7 +666,10 @@ test('concurrent double purchase has exactly one winner and duplicate request is
   const results = await Promise.all([buy('buyer-a'), buy('buyer-b')]);
   assert.equal(results.filter((result) => result.ok).length, 1);
   assert.equal(
-    results.filter((result) => result.reason === 'listing-not-active').length,
+    results.filter(
+      (result) =>
+        result.reason === 'listing-not-active' || result.reason === 'listing-sold',
+    ).length,
     1,
   );
   const winner = results.find((result) => result.ok)!;

@@ -48,6 +48,7 @@ export function mapFailureReasonToMarketplaceKind(
       return 'rate-limited';
     case 'function-not-found':
     case 'listing-not-found':
+    case 'listing-sold':
       return 'not-found';
     case 'save-conflict':
     case 'stale-listing-version':

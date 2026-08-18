@@ -39,6 +39,11 @@ import {
 } from './marketplaceCallable';
 import { recordMarketplaceCallableResult } from './backendDiagnostics';
 import { logMarketplaceLoadError } from '../utils/marketplaceSellDiagnostics';
+import {
+  beginVehicleMarketplaceOperation,
+  endVehicleMarketplaceOperation,
+  isVehicleMarketplaceOperationActive,
+} from './marketplaceOperationLock';
 
 export const VEHICLE_MARKETPLACE_FUNCTIONS_REGION = FIREBASE_FUNCTIONS_REGION;
 export const VEHICLE_MARKETPLACE_CALLABLES = {
@@ -51,7 +56,6 @@ export const VEHICLE_MARKETPLACE_CALLABLES = {
 } as const;
 
 let createAuditLogged = false;
-let marketplaceOperationCount = 0;
 const callableConfigAudits = new Set<string>();
 
 const MARKETPLACE_PUBLIC_LISTINGS_CACHE_TTL_MS = 60_000;
@@ -84,9 +88,11 @@ export function resetVehicleMarketplacePublicListingsCache(): void {
   cachedPublicListingsAt = 0;
 }
 
-export function isVehicleMarketplaceOperationActive(): boolean {
-  return marketplaceOperationCount > 0;
-}
+export {
+  beginVehicleMarketplaceOperation,
+  endVehicleMarketplaceOperation,
+  isVehicleMarketplaceOperationActive,
+};
 
 function getVehicleMarketplaceFunctions(): Functions | null {
   return getFirebaseFunctionsSafe(VEHICLE_MARKETPLACE_FUNCTIONS_REGION);
@@ -298,7 +304,7 @@ export async function createVehicleListing(input: MarketplaceActionEnvelope & {
     return failure(input, auth.reason);
   }
 
-  marketplaceOperationCount += 1;
+  beginVehicleMarketplaceOperation();
   try {
     const result = await invokeMarketplaceCallable<
       typeof input,
@@ -328,7 +334,7 @@ export async function createVehicleListing(input: MarketplaceActionEnvelope & {
     }
     return data;
   } finally {
-    marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
+    endVehicleMarketplaceOperation();
   }
 }
 
@@ -342,7 +348,7 @@ export async function cancelVehicleListing(input: MarketplaceActionEnvelope & {
     logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.cancel);
     return failure(input, auth.reason);
   }
-  marketplaceOperationCount += 1;
+  beginVehicleMarketplaceOperation();
   try {
     const result = await invokeMarketplaceCallable<
       typeof input,
@@ -351,7 +357,7 @@ export async function cancelVehicleListing(input: MarketplaceActionEnvelope & {
     if (!result.ok) return failure(input, result.reason);
     return result.data;
   } finally {
-    marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
+    endVehicleMarketplaceOperation();
   }
 }
 
@@ -365,6 +371,8 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
   grossPrice: number;
   marketplaceFee: number;
   sellerNet: number;
+  buyerCashBefore?: number;
+  buyerCashAfter?: number;
 }>> {
   if (!isVehicleMarketplaceMutationAllowed()) return failure(input, 'service-unavailable');
   const auth = await ensureMarketplaceAuthReady();
@@ -372,7 +380,12 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
     logAuthRequiredCallable(VEHICLE_MARKETPLACE_CALLABLES.purchase);
     return failure(input, auth.reason);
   }
-  marketplaceOperationCount += 1;
+  beginVehicleMarketplaceOperation();
+  console.info('[MARKETPLACE_PURCHASE] request sent', {
+    listingId: input.listingId,
+    transactionId: input.transactionId,
+    quotedPrice: input.quotedPrice,
+  });
   try {
     const result = await invokeMarketplaceCallable<
       typeof input,
@@ -381,12 +394,24 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
         grossPrice: number;
         marketplaceFee: number;
         sellerNet: number;
+        buyerCashBefore?: number;
+        buyerCashAfter?: number;
       }>
     >(VEHICLE_MARKETPLACE_CALLABLES.purchase, input);
-    if (!result.ok) return failure(input, result.reason);
+    if (!result.ok) {
+      console.info('[MARKETPLACE_PURCHASE] request failed', { reason: result.reason });
+      return failure(input, result.reason);
+    }
+    console.info('[MARKETPLACE_PURCHASE] receipt received', {
+      ok: result.data.ok,
+      reason: result.data.reason ?? null,
+      listingId: result.data.data?.listingId ?? input.listingId,
+      serverMoneyBefore: result.data.data?.buyerCashBefore ?? null,
+      serverMoneyAfter: result.data.data?.buyerCashAfter ?? null,
+    });
     return result.data;
   } finally {
-    marketplaceOperationCount = Math.max(0, marketplaceOperationCount - 1);
+    endVehicleMarketplaceOperation();
   }
 }
 

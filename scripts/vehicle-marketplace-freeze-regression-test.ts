@@ -168,6 +168,11 @@ const idleFleet = [baseTruck(), baseTruck({ id: 'truck-2', name: 'Second' })];
     /setIsCreatingListing\(true\);\s*try \{\s*const result = await createVehicleListing[\s\S]*showAlert\('İlan oluşturulamadı'/,
   );
   assert.match(screen, /finally \{\s*setIsCreatingListing\(false\)/);
+  assert.match(screen, /finally \{\s*endVehicleMarketplaceOperation/);
+  assert.doesNotMatch(
+    screen,
+    /const confirmPurchase = async \(\) => \{[\s\S]*await prepareMarketplacePurchaseFunds\(\)/,
+  );
 
   const sheet = read('src/components/marketplace/VehicleListingCreateSheet.tsx');
   assert.match(sheet, /eligibilityContext/);

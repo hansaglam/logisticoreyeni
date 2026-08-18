@@ -538,6 +538,7 @@ async function main(): Promise<void> {
         (result) =>
           !result.ok &&
           (result.reason === 'listing-not-active' ||
+            result.reason === 'listing-sold' ||
             result.reason === 'stale-listing-version'),
       ),
       'CONCURRENT_LOSER_REASON_INVALID',

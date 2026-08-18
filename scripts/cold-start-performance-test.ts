@@ -37,6 +37,8 @@ console.log('\nInstrumentation');
   assert(app.includes("markStartup('APP_START')"), 'App records APP_START');
   assert(app.includes("markStartup('FIRST_MAIN_SCREEN_RENDER')"), 'AppShell records first paint');
   assert(gameStore.includes("markStartup('GAME_READY')"), 'store records GAME_READY');
+  assert(!gameStore.includes('getMyVehicleListings'), 'hydrate does not fetch marketplace');
+  assert(app.includes('runPostStartupMarketplaceReconcile'), 'marketplace reconcile is post-ready');
 }
 
 console.log('\nLocal-first boot (does not block first render)');

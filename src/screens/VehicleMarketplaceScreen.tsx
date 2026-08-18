@@ -61,7 +61,17 @@ import {
 } from '../domain/vehicleMarketplacePresentation';
 import {
   prepareMarketplacePurchaseFunds,
+  resolveMarketplaceClientSaveVersion,
 } from '../domain/vehicleMarketplacePurchasePrep';
+import {
+  getMarketplacePurchaseAlertCopy,
+  isMarketplacePurchaseSuccess,
+  logMarketplacePurchase,
+  resolveMarketplacePurchaseAttempt,
+  resolveMarketplacePurchaseClientOutcome,
+  shouldReusePurchaseEnvelope,
+  withMarketplacePurchaseTimeout,
+} from '../domain/vehicleMarketplacePurchaseFlow';
 import { subscribeAuthState } from '../services/authService';
 import { getFirebaseAuthSafe } from '../services/firebase';
 import { logMarketplaceAuthProbe } from '../utils/marketplaceAuthDiagnostics';
@@ -78,6 +88,8 @@ import {
   peekVehicleMarketplacePublicListingsCache,
   purchaseVehicleListing,
   resetVehicleMarketplacePublicListingsCache,
+  beginVehicleMarketplaceOperation,
+  endVehicleMarketplaceOperation,
 } from '../services/vehicleMarketplaceService';
 import { useGameStore } from '../store/gameStore';
 import { SAVE_GAME_VERSION } from '../storage/saveGame';
@@ -151,6 +163,13 @@ export default function VehicleMarketplaceScreen({
   const [purchaseAuthoritativeCash, setPurchaseAuthoritativeCash] = useState<number | null>(null);
   const [isPreparingPurchase, setIsPreparingPurchase] = useState(false);
   const [isBuyingVehicle, setIsBuyingVehicle] = useState(false);
+  const [purchaseFailed, setPurchaseFailed] = useState(false);
+  const purchaseAttemptRef = useRef<{
+    listingId: string;
+    transactionId: string;
+    idempotencyKey: string;
+    clientSaveVersion: number;
+  } | null>(null);
   const [isDeletingListing, setIsDeletingListing] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [isCreatingListing, setIsCreatingListing] = useState(false);
@@ -205,6 +224,8 @@ export default function VehicleMarketplaceScreen({
     if (purchaseTarget != null && !isBuyingVehicle && !isPreparingPurchase) {
       setPurchaseTarget(null);
       setPurchaseAuthoritativeCash(null);
+      setPurchaseFailed(false);
+      purchaseAttemptRef.current = null;
       return true;
     }
     return false;
@@ -317,7 +338,11 @@ export default function VehicleMarketplaceScreen({
     return { ok: true, listings: merged };
   }, []);
 
-  const refreshAll = useCallback(async (options?: { isRetry?: boolean; forceSync?: boolean }) => {
+  const refreshAll = useCallback(async (options?: {
+    isRetry?: boolean;
+    forceSync?: boolean;
+    skipStaleCloudReconcile?: boolean;
+  }) => {
     const requestSeq = ++requestSeqRef.current;
     setScreenState((current) => beginMarketplaceRefresh(current));
     if (options?.isRetry) setRetrying(true);
@@ -384,20 +409,22 @@ export default function VehicleMarketplaceScreen({
 
       void (async () => {
         try {
-          const synced = await syncLocalSaveToCloud('manual', {
-            force: options?.forceSync ?? false,
-            state: useGameStore.getState(),
-          });
-          if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
-          }
-          const fleetReady = await ensureAuthoritativeFleetReady();
-          if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
-            logMarketplaceLoadError({
-              code: fleetReady.reason ?? 'service-unavailable',
-              message: fleetReady.reason ?? 'fleet-reconcile-failed',
-              callableName: 'reconcileAuthoritativeFleet',
+          if (!options?.skipStaleCloudReconcile) {
+            const synced = await syncLocalSaveToCloud('manual', {
+              force: options?.forceSync ?? false,
+              state: useGameStore.getState(),
             });
+            if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
+              console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
+            }
+            const fleetReady = await ensureAuthoritativeFleetReady();
+            if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
+              logMarketplaceLoadError({
+                code: fleetReady.reason ?? 'service-unavailable',
+                message: fleetReady.reason ?? 'fleet-reconcile-failed',
+                callableName: 'reconcileAuthoritativeFleet',
+              });
+            }
           }
 
           const myResult = await syncMineAndReconcile();
@@ -541,7 +568,10 @@ export default function VehicleMarketplaceScreen({
     setSelected(null);
     setPurchaseTarget(listing);
     setPurchaseAuthoritativeCash(null);
+    setPurchaseFailed(false);
+    purchaseAttemptRef.current = null;
     setIsPreparingPurchase(true);
+    logMarketplacePurchase('start', { listingId: listing.id, phase: 'prep' });
     void (async () => {
       try {
         const prep = await prepareMarketplacePurchaseFunds();
@@ -549,6 +579,15 @@ export default function VehicleMarketplaceScreen({
         if (prep.fleetLimit != null) {
           setFleetLimit(prep.fleetLimit);
         }
+        purchaseAttemptRef.current = {
+          ...resolveMarketplacePurchaseAttempt({
+            existing: null,
+            listingId: listing.id,
+            buyerUid: uid ?? 'buyer',
+            requestId: Crypto.randomUUID(),
+          }),
+          clientSaveVersion: prep.clientSaveVersion,
+        };
         if (!prep.ok) {
           showAlertAfterModalClose(
             showAlert,
@@ -565,71 +604,149 @@ export default function VehicleMarketplaceScreen({
   const confirmPurchase = async () => {
     if (!purchaseTarget || isBuyingVehicle || isPreparingPurchase) return;
     setIsBuyingVehicle(true);
+    setPurchaseFailed(false);
+    beginVehicleMarketplaceOperation();
+    logMarketplacePurchase('start', { listingId: purchaseTarget.id });
+    const finishFailure = (
+      reason?: VehicleMarketplaceFailureReason | string,
+      options?: { closeModal?: boolean },
+    ) => {
+      const copy = getMarketplacePurchaseAlertCopy(reason);
+      if (options?.closeModal) {
+        purchaseAttemptRef.current = null;
+        setPurchaseTarget(null);
+        setPurchaseAuthoritativeCash(null);
+        setPurchaseFailed(false);
+      } else {
+        setPurchaseFailed(true);
+      }
+      showAlertAfterModalClose(showAlert, copy.title, copy.message);
+    };
+
     try {
-      const prep = await prepareMarketplacePurchaseFunds();
-      setPurchaseAuthoritativeCash(prep.cash);
-      if (prep.fleetLimit != null) {
-        setFleetLimit(prep.fleetLimit);
-      }
-      if (!prep.ok) {
-        showAlertAfterModalClose(
-          showAlert,
-          'Satın alma tamamlanamadı',
-          getMarketplaceErrorMessage(prep.reason),
-        );
-        return;
-      }
-      if (prep.cash < purchaseTarget.askingPrice) {
-        showAlertAfterModalClose(
-          showAlert,
-          'Satın alma tamamlanamadı',
-          getMarketplaceErrorMessage('insufficient-funds'),
-        );
+      const uid = getFirebaseAuthSafe()?.currentUser?.uid;
+      if (!uid) {
+        finishFailure('auth-required', { closeModal: true });
         return;
       }
 
-      const result = await purchaseVehicleListing({
-        ...actionEnvelope('marketplace-purchase'),
-        listingId: purchaseTarget.id,
-        listingVersion: purchaseTarget.version,
-        quotedPrice: purchaseTarget.askingPrice,
-        clientSaveVersion: prep.clientSaveVersion,
+      const cash = purchaseAuthoritativeCash ?? player.money;
+      logMarketplacePurchase('server balance confirmed', {
+        cash,
+        price: purchaseTarget.askingPrice,
       });
-      if (!result.ok) {
-        if (result.reason === 'insufficient-funds' || result.reason === 'save-conflict') {
-          const refresh = await prepareMarketplacePurchaseFunds();
-          setPurchaseAuthoritativeCash(refresh.cash);
-          if (refresh.fleetLimit != null) {
-            setFleetLimit(refresh.fleetLimit);
-          }
-          showAlertAfterModalClose(
-            showAlert,
-            'Satın alma tamamlanamadı',
-            getMarketplaceErrorMessage(result.reason),
-          );
+      if (cash < purchaseTarget.askingPrice) {
+        finishFailure('insufficient-funds');
+        return;
+      }
+
+      const attempt = {
+        ...resolveMarketplacePurchaseAttempt({
+          existing: purchaseAttemptRef.current,
+          listingId: purchaseTarget.id,
+          buyerUid: uid,
+          requestId: Crypto.randomUUID(),
+        }),
+        clientSaveVersion:
+          purchaseAttemptRef.current?.listingId === purchaseTarget.id
+            ? purchaseAttemptRef.current.clientSaveVersion
+            : resolveMarketplaceClientSaveVersion(),
+      };
+      purchaseAttemptRef.current = attempt;
+
+      const submitPurchase = () =>
+        purchaseVehicleListing({
+          transactionId: attempt.transactionId,
+          idempotencyKey: attempt.idempotencyKey,
+          listingId: purchaseTarget.id,
+          listingVersion: purchaseTarget.version,
+          quotedPrice: purchaseTarget.askingPrice,
+          clientSaveVersion: attempt.clientSaveVersion,
+        });
+
+      let result: Awaited<ReturnType<typeof purchaseVehicleListing>>;
+      try {
+        result = await withMarketplacePurchaseTimeout(submitPurchase());
+      } catch (error) {
+        logMarketplacePurchase('timeout', { error });
+        result = { ok: false, reason: 'timeout', transactionId: attempt.transactionId, idempotencyKey: attempt.idempotencyKey };
+      }
+
+      if (!isMarketplacePurchaseSuccess(result) && shouldReusePurchaseEnvelope(result.reason)) {
+        logMarketplacePurchase('reconciling receipt', {
+          listingId: purchaseTarget.id,
+          reason: result.reason,
+        });
+        try {
+          result = await withMarketplacePurchaseTimeout(submitPurchase(), 8_000);
+        } catch (reconcileError) {
+          logMarketplacePurchase('done', { ok: false, error: reconcileError });
+          finishFailure('timeout');
           return;
         }
-        setPurchaseTarget(null);
-        setPurchaseAuthoritativeCash(null);
-        showAlertAfterModalClose(
-          showAlert,
-          'Satın alma tamamlanamadı',
-          getMarketplaceErrorMessage(result.reason),
-        );
-        if (result.reason === 'listing-not-active' || result.reason === 'stale-listing-version') {
-          await onRefresh();
+      }
+
+      const outcome = resolveMarketplacePurchaseClientOutcome(result, {
+        refreshFailed: false,
+      });
+      if (outcome.kind !== 'success') {
+        logMarketplacePurchase('done', { ok: false, reason: result.reason });
+        if (!outcome.reuseEnvelope) {
+          purchaseAttemptRef.current = null;
+        }
+        if (result.reason === 'insufficient-funds' || result.reason === 'save-conflict') {
+          void prepareMarketplacePurchaseFunds().then((refresh) => {
+            setPurchaseAuthoritativeCash(refresh.cash);
+            if (refresh.fleetLimit != null) {
+              setFleetLimit(refresh.fleetLimit);
+            }
+          });
+        }
+        const listingGone =
+          result.reason === 'listing-sold' ||
+          result.reason === 'listing-not-active' ||
+          result.reason === 'listing-not-found' ||
+          result.reason === 'stale-listing-version';
+        finishFailure(result.reason, { closeModal: listingGone });
+        if (listingGone) {
+          void refreshAll();
         }
         return;
       }
-      await refreshAll();
+
+      logMarketplacePurchase('receipt received', {
+        listingId: result.data?.listingId ?? purchaseTarget.id,
+        serverMoneyBefore: result.data?.buyerCashBefore ?? null,
+        serverMoneyAfter: result.data?.buyerCashAfter ?? null,
+      });
+      const truckName = getMarketplaceTruckName(purchaseTarget.truckSnapshot.templateId);
+      purchaseAttemptRef.current = null;
       setPurchaseTarget(null);
       setPurchaseAuthoritativeCash(null);
+      setPurchaseFailed(false);
+      logMarketplacePurchase('modal closing');
       showSuccessAfterModalClose(
         showDialog,
-        'Satın alma tamamlandı',
-        `${getMarketplaceTruckName(purchaseTarget.truckSnapshot.templateId)} filona eklendi.`,
+        'Araç satın alındı',
+        `${truckName} filona eklendi.`,
       );
+      void refreshAll({ skipStaleCloudReconcile: true }).then(
+        () => {
+          logMarketplacePurchase('listing refreshed');
+          logMarketplacePurchase('buyer state refreshed');
+          logMarketplacePurchase('done');
+        },
+        () => {
+          logMarketplacePurchase('listing refreshed');
+          logMarketplacePurchase('buyer state refreshed');
+          logMarketplacePurchase('done');
+        },
+      );
+    } catch (error) {
+      logMarketplacePurchase('done', { ok: false, error });
+      finishFailure('timeout');
     } finally {
+      endVehicleMarketplaceOperation();
       setIsBuyingVehicle(false);
     }
   };
@@ -953,10 +1070,13 @@ export default function VehicleMarketplaceScreen({
         fleetLimit={fleetLimit}
         preparing={isPreparingPurchase}
         purchasing={isBuyingVehicle}
+        failed={purchaseFailed}
         onClose={() => {
           if (isBuyingVehicle || isPreparingPurchase) return;
           setPurchaseTarget(null);
           setPurchaseAuthoritativeCash(null);
+          setPurchaseFailed(false);
+          purchaseAttemptRef.current = null;
         }}
         onConfirm={() => void confirmPurchase()}
       />

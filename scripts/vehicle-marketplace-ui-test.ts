@@ -90,13 +90,10 @@ assert.deepEqual(sorted.map((item) => item.id), ['two']);
 
 assert.equal(
   getMarketplaceErrorMessage('listing-not-active'),
-  'Bu araç kısa süre önce satıldı.',
+  'Bu araç başka bir oyuncu tarafından satın alındı.',
 );
-assert.match(
-  getMarketplaceErrorMessage('insufficient-funds'),
-  /yeterli sunucu nakdin yok/i,
-);
-assert.equal(getMarketplaceErrorMessage('fleet-limit'), 'Filo kapasiten dolu.');
+assert.equal(getMarketplaceErrorMessage('insufficient-funds'), 'Yeterli nakdin yok.');
+assert.equal(getMarketplaceErrorMessage('fleet-limit'), 'Filonda boş yer yok.');
 assert.equal(
   getMarketplaceErrorMessage('self-purchase'),
   'Kendi ilanını satın alamazsın.',
@@ -140,8 +137,10 @@ const marketplaceScreenSource = readSource('src/screens/VehicleMarketplaceScreen
 assert.match(marketplaceScreenSource, /showSuccessAfterModalClose/);
 assert.doesNotMatch(marketplaceScreenSource, /backend tarafından kilitlendi/);
 assert.match(marketplaceScreenSource, /prepareMarketplacePurchaseFunds/);
-assert.match(marketplaceScreenSource, /clientSaveVersion: prep\.clientSaveVersion/);
+assert.match(marketplaceScreenSource, /clientSaveVersion: attempt.clientSaveVersion/);
 assert.match(marketplaceScreenSource, /purchaseAuthoritativeCash/);
+assert.match(marketplaceScreenSource, /withMarketplacePurchaseTimeout/);
+assert.match(marketplaceScreenSource, /purchaseFailed/);
 
 const purchaseSheetSource = readSource('src/components/marketplace/VehicleMarketplaceSheets.tsx');
 assert.match(purchaseSheetSource, /Kullanılabilir nakit \(sunucu\)/);

@@ -44,6 +44,11 @@ import { logProductionBuildConfigOnce } from './src/services/productionBuildAudi
 import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
 import {
+  retryPostStartupMarketplaceReconcileIfNeeded,
+  runPostStartupMarketplaceReconcile,
+} from './src/services/vehicleMarketplaceStartupReconcile';
+import { endPostStartupMarketplaceCloudHold } from './src/services/marketplaceStartupCloudHold';
+import {
   flushPendingTestMoneySync,
   startTestMoneySync,
 } from './src/services/testMoneySyncService';
@@ -553,6 +558,7 @@ export default function App() {
         useGameStore.getState().applyOfflineProgressionIfNeeded('foreground');
         useGameStore.getState().maybeRefreshMarketSnapshot('foreground');
         void maybeSubmitLeaderboardForSeasonChange();
+        retryPostStartupMarketplaceReconcileIfNeeded();
       }
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {
@@ -581,11 +587,16 @@ export default function App() {
 
     void preloadMapAssets();
     void (async () => {
-      markStartup('CLOUD_SYNC_START');
       try {
-        await initCloudSaveSync(() => useGameStore.getState());
+        await runPostStartupMarketplaceReconcile();
+        markStartup('CLOUD_SYNC_START');
+        try {
+          await initCloudSaveSync(() => useGameStore.getState());
+        } finally {
+          markStartup('CLOUD_SYNC_DONE');
+        }
       } finally {
-        markStartup('CLOUD_SYNC_DONE');
+        endPostStartupMarketplaceCloudHold();
       }
     })();
     const stopTestMoneySync = startTestMoneySync();

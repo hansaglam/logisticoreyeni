@@ -65,6 +65,7 @@ export type VehicleMarketplaceFailureReason =
   | 'save-conflict'
   | 'listing-not-found'
   | 'listing-not-active'
+  | 'listing-sold'
   | 'stale-listing-version'
   | 'self-purchase'
   | 'insufficient-funds'

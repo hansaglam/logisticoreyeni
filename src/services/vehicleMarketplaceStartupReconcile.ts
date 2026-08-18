@@ -131,3 +131,49 @@ export function retryPostStartupMarketplaceReconcileIfNeeded(): void {
   if (isPostStartupMarketplaceCloudHoldActive()) return;
   void runPostStartupMarketplaceReconcile();
 }
+
+/**
+ * Foreground reconcile for offline sales / purchases while the app was backgrounded.
+ * Lightweight: fetches authoritative marketplace state and patches local fleet/cash when behind.
+ */
+export async function reconcileVehicleMarketplaceOnForeground(): Promise<void> {
+  if (!VEHICLE_MARKETPLACE_ENABLED || !isFirebaseEnabled()) return;
+  if (isPostStartupMarketplaceCloudHoldActive()) return;
+  if (reconcileInFlight) {
+    await reconcileInFlight;
+    return;
+  }
+
+  reconcileInFlight = (async () => {
+    try {
+      const mine = await withMarketplacePurchaseTimeout(
+        getMyVehicleListings(),
+        MARKETPLACE_STARTUP_RECONCILE_TIMEOUT_MS,
+      );
+      if (!mine.ok || !mine.reconciliation) return;
+
+      const live = useGameStore.getState();
+      const plan = planMarketplaceStartupReconcile({
+        localTruckIds: live.player.trucks.map((truck) => truck.id),
+        localCash: live.player.money,
+        localMarketplaceStateVersion: live.vehicleMarketplace?.marketplaceStateVersion ?? 0,
+        acknowledgedVehicleIds: await readRecoveredMarketplacePurchaseAcks(),
+        authoritative: mine.reconciliation,
+      });
+
+      if (plan.shouldApply) {
+        useGameStore.getState().applyVehicleMarketplaceReconciliation(mine.reconciliation);
+      }
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.info('[MARKETPLACE_FOREGROUND_RECONCILE] skipped', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } finally {
+      reconcileInFlight = null;
+    }
+  })();
+
+  await reconcileInFlight;
+}

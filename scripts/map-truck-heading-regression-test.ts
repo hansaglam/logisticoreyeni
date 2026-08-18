@@ -14,7 +14,8 @@ import {
   normalizeHeadingDegrees360,
   shortestHeadingDeltaDegrees,
 } from '../src/components/map/mapRoadUtils';
-import { TRUCK_ASSET_FORWARD_OFFSET_DEG } from '../src/components/map/mapTheme';
+import { TRUCK_ASSET_FORWARD_OFFSET_DEG, VEHICLE_MARKER_ZERO_HEADING_DEG } from '../src/components/map/mapTheme';
+import { getMapVehicleHeading, routeHeadingToMarkerRotationDeg } from '../src/components/map/mapVehicleHeading';
 import { getWorldMapCityPosition } from '../src/data/worldMapPositions';
 
 let pass = 0;
@@ -35,7 +36,7 @@ function angularDistance(a: number, b: number): number {
 }
 
 function displayHeading(tangentDeg: number): number {
-  return normalizeHeadingDegrees360(tangentDeg - TRUCK_ASSET_FORWARD_OFFSET_DEG);
+  return routeHeadingToMarkerRotationDeg(tangentDeg);
 }
 
 function geoBearing(from: string, to: string): number {
@@ -49,14 +50,19 @@ console.log('\n=== Map Truck Heading Regression ===\n');
 
 console.log('Asset base orientation');
 {
-  assert(TRUCK_ASSET_FORWARD_OFFSET_DEG === 180, 'TRUCK_ASSET_FORWARD_OFFSET_DEG is 180°');
+  assert(VEHICLE_MARKER_ZERO_HEADING_DEG === 0, 'chevron zero heading is east (+X)');
+  assert(TRUCK_ASSET_FORWARD_OFFSET_DEG === VEHICLE_MARKER_ZERO_HEADING_DEG, 'legacy alias matches chevron zero');
   const marker = readFileSync('src/components/map/AnimatedDeliveryTruckMarker.tsx', 'utf8');
   const roadUtils = readFileSync('src/components/map/mapRoadUtils.ts', 'utf8');
+  const heading = readFileSync('src/components/map/mapVehicleHeading.ts', 'utf8');
+  assert(!marker.includes('GameIcon'), 'live map marker uses chevron, not truck pictogram');
+  assert(marker.includes('VehicleDirectionChevron'), 'direction chevron component exists');
+  assert(marker.includes('chevronRotationStyle'), 'only chevron rotates, not the circle');
   assert(!marker.includes('scaleX: -1'), 'no scaleX mirror in marker');
   assert(!marker.includes("Platform.OS === 'ios'"), 'no iOS-specific heading hack in marker');
   assert(!marker.includes("Platform.OS === 'android'"), 'no Android-specific heading hack in marker');
   assert(roadUtils.includes('computePixelSpaceHeadingDeg'), 'heading uses pixel-space atan2');
-  assert(roadUtils.includes('getRouteMarkerPose'), 'canonical marker pose helper exists');
+  assert(heading.includes('getMapVehicleHeading'), 'canonical map vehicle heading helper exists');
   assert(roadUtils.includes('ROUTE_HEADING_LOOK_AHEAD_PX'), 'pixel-space look-ahead enabled');
 }
 
@@ -80,13 +86,20 @@ console.log('\nCardinal synthetic headings');
   const eastDisplay = getRouteHeadingDegrees({
     routePoints: east,
     progress: 0.5,
-    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+    assetBaseHeadingDegrees: VEHICLE_MARKER_ZERO_HEADING_DEG,
   });
-  assert(angularDistance(eastDisplay, 180) < 0.01, 'east marker rotation ≈ 180° with asset offset');
+  assert(angularDistance(eastDisplay, 0) < 0.01, 'east chevron rotation ≈ 0°');
+  assert(angularDistance(displayHeading(westTangent), 180) < 0.01, 'west chevron rotation ≈ 180°');
+  assert(angularDistance(displayHeading(southTangent), 90) < 0.01, 'south chevron rotation ≈ 90°');
+  assert(angularDistance(displayHeading(northTangent), 270) < 0.01, 'north chevron rotation ≈ 270°');
 }
 
 console.log('\nCatalog routes');
 for (const [from, to] of [
+  ['ankara', 'antalya', 'Ankara → Antalya'],
+  ['antalya', 'ankara', 'Antalya → Ankara'],
+  ['izmir', 'ankara', 'İzmir → Ankara'],
+  ['ankara', 'izmir', 'Ankara → İzmir'],
   ['ankara', 'bursa', 'Ankara → Bursa'],
   ['bursa', 'ankara', 'Bursa → Ankara'],
   ['izmir', 'bursa', 'İzmir → Bursa'],
@@ -119,7 +132,7 @@ for (const [from, to] of [
     const finalHeading = getRouteHeadingDegrees({
       routePoints: route,
       progress,
-      assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+      assetBaseHeadingDegrees: VEHICLE_MARKER_ZERO_HEADING_DEG,
       coordinateScaleX: 1080,
       coordinateScaleY: 720,
     });
@@ -128,7 +141,25 @@ for (const [from, to] of [
     assert(finalHeading >= 0 && finalHeading < 360, `${from} → ${to} p=${progress} normalized [0,360)`);
     assert(
       angularDistance(finalHeading, displayHeading(tangent)) < 0.01,
-      `${from} → ${to} p=${progress} final = tangent - assetForward`,
+      `${from} → ${to} p=${progress} chevron = route tangent`,
+    );
+  }
+
+  const forward = getMapVehicleHeading({
+    routePoints: route,
+    progress: 0.5,
+    mapBounds: { width: 1080, height: 720 },
+  });
+  const reverseRoute = getRoadRoute(to, from);
+  if (reverseRoute) {
+    const reverse = getMapVehicleHeading({
+      routePoints: reverseRoute,
+      progress: 0.5,
+      mapBounds: { width: 1080, height: 720 },
+    });
+    assert(
+      angularDistance(forward.routeHeadingDeg, reverse.routeHeadingDeg) > 90,
+      `${from} ↔ ${to} reverse tangents oppose`,
     );
   }
 }
@@ -176,9 +207,9 @@ console.log('\nDuplicate points + route end');
 console.log('\nShared marker transform structure');
 {
   const marker = readFileSync('src/components/map/AnimatedDeliveryTruckMarker.tsx', 'utf8');
-  assert(marker.includes('rotationLayer'), 'local rotation layer exists');
+  assert(marker.includes('chevronLayer'), 'chevron rotation layer exists');
   assert(marker.includes('scaleLayer'), 'inverse zoom scale isolated');
-  assert(marker.includes("transform: [{ rotate:"), 'rotation only on rotation layer');
+  assert(marker.includes('chevronRotationStyle'), 'rotation only on chevron layer');
 }
 
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===\n`);

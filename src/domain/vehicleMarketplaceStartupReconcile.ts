@@ -51,12 +51,20 @@ export function planMarketplaceStartupReconcile(input: {
   const toastVehicleIds = recoveredPurchaseVehicleIds.filter((id) => !acknowledged.has(id));
   const versionIncreased =
     input.authoritative.marketplaceStateVersion > input.localMarketplaceStateVersion;
+  const staleLocalSoldTrucks = input.localTruckIds.filter((id) => sold.has(id));
   const authoritativeCash = Number.isFinite(input.authoritative.cash)
     ? Number(input.authoritative.cash)
     : undefined;
+  const cashOutOfSync =
+    authoritativeCash != null &&
+    Math.abs(authoritativeCash - input.localCash) > 1e-9;
   const nextCash = authoritativeCash ?? input.localCash;
   return {
-    shouldApply: addedVehicleIds.length > 0 || versionIncreased,
+    shouldApply:
+      addedVehicleIds.length > 0 ||
+      versionIncreased ||
+      staleLocalSoldTrucks.length > 0 ||
+      (versionIncreased && cashOutOfSync),
     addedVehicleIds,
     recoveredPurchaseVehicleIds,
     toastVehicleIds,

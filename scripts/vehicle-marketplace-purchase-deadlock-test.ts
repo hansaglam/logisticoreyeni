@@ -300,6 +300,20 @@ async function runAsyncChecks(): Promise<void> {
       soldTruckIds: [],
     });
     assert(earnings.cash === 95_000, 'matching fleets still accept newer cloud cash');
+
+    const sellerSale = resolveStaleCloudMarketplaceOverwrite({
+      existingCash: 51_000,
+      cloudCash: 10_000,
+      existingVehicleIds: [],
+      cloudVehicleIds: ['truckA'],
+      soldTruckIds: ['truckA'],
+    });
+    assert(sellerSale.cash === 51_000, 'stale cloud cannot erase seller sale proceeds');
+    assert(
+      !sellerSale.preservedVehicleIds.includes('truckA'),
+      'stale cloud cannot re-add a tombstoned sold truck',
+    );
+    assert(sellerSale.keptMarketplaceMutation, 'seller sale mutation is preserved');
   }
 }
 
@@ -323,7 +337,8 @@ void runAsyncChecks()
       screen.includes('refreshAll({ skipStaleCloudReconcile: true })'),
       'post-purchase refresh does not upload stale local save first',
     );
-    assert(screen.includes('void refreshAll({ skipStaleCloudReconcile: true }).then('), 'success does not wait on full refresh');
+    assert(screen.includes('await refreshAll({ skipStaleCloudReconcile: true })'), 'success awaits buyer reconcile refresh');
+    assert(!screen.includes('void refreshAll({ skipStaleCloudReconcile: true }).then('), 'success does not fire-and-forget refresh');
     assert(screen.includes('withMarketplacePurchaseTimeout'), 'confirm wraps purchase in a timeout');
     assert(screen.includes('reconciling receipt'), 'timeout path reconciles the same receipt');
     assert(screen.includes('finally'), 'buying flag always clears');
@@ -337,16 +352,18 @@ void runAsyncChecks()
     assert(!prep.includes('syncLocalSaveToCloud'), 'cash prep no longer awaits force cloud sync');
     assert(!prep.includes('ensureAuthoritativeFleetReady'), 'cash prep no longer awaits fleet migrate');
     assert(service.includes('[MARKETPLACE_PURCHASE] request sent'), 'purchase request is logged');
-    assert(service.includes('finally {\n    endVehicleMarketplaceOperation();'), 'callable releases lock in finally');
-    assert(lock.includes('finally {\n    endVehicleMarketplaceOperation();'), 'lock helper always ends in finally');
+    assert(service.includes('endVehicleMarketplaceOperation()'), 'callable releases lock in finally');
+    assert(lock.includes('withVehicleMarketplaceOperationLock'), 'lock helper always ends in finally');
     assert(cloud.includes('marketplace purchase in flight'), 'cloud save skipped during purchase');
     assert(cloud.includes('abandonHungCloudSaveInFlight'), 'timed-out join abandons a hung syncInFlight');
     assert(money.includes('marketplace purchase in flight'), 'test money sync deferred during purchase');
     assert(backend.includes("failure(input, 'listing-sold')"), 'sold listing is a typed error');
     assert(backend.includes('listing.buyerUid === identity.uid'), 'same-buyer restart reconciles the committed sale');
-    assert(fleet.includes('resolveStaleCloudMarketplaceOverwrite'), 'cloud fleet merge preserves marketplace mutations');
-    assert(callable.includes('serverMoneyBefore'), 'server logs authoritative cash before');
-    assert(callable.includes('serverMoneyAfter'), 'server logs authoritative cash after');
+    assert(fleet.includes('shouldReconcileFleetFromCloud'), 'fleet reconcile guards stale cloud');
+    assert(fleet.includes('tombstones.has(id)'), 'tombstoned trucks block stale cloud fleet merge');
+    assert(backend.includes('[MARKETPLACE_TXN_BEFORE]'), 'server logs marketplace txn before state');
+    assert(backend.includes('[MARKETPLACE_TXN_AFTER]'), 'server logs marketplace txn after state');
+    assert(backend.includes('assertPurchaseInvariants'), 'purchase invariants enforced before commit');
 
     console.log(`\nResults: ${passed} passed, ${failed} failed`);
     if (failed > 0) {

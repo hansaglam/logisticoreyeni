@@ -7,7 +7,6 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 
-import { GameIcon } from '../ui';
 import { useMapScale } from './MapScaleContext';
 import { normalizeAngleRadians, shortestAngleDelta } from './mapRoadUtils';
 import {
@@ -22,12 +21,25 @@ import {
 export interface AnimatedDeliveryTruckMarkerProps {
   pixelX: number;
   pixelY: number;
-  /** Radians — asset base offset already applied by caller. */
+  /** Radians — canonical chevron rotation (route tangent in screen space). */
   angleRadians: number;
   progress: number;
   opacity?: number;
   mapScale?: SharedValue<number> | null;
   onPress?: () => void;
+}
+
+function VehicleDirectionChevron({ color }: { color: string }) {
+  return (
+    <View
+      style={[
+        styles.chevron,
+        {
+          borderLeftColor: color,
+        },
+      ]}
+    />
+  );
 }
 
 function AnimatedDeliveryTruckMarkerInner({
@@ -74,7 +86,7 @@ function AnimatedDeliveryTruckMarkerInner({
     };
   });
 
-  const rotationStyle = useAnimatedStyle(() => ({
+  const chevronRotationStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${(animatedAngle.value * 180) / Math.PI}deg` }],
   }));
 
@@ -91,29 +103,29 @@ function AnimatedDeliveryTruckMarkerInner({
     };
   });
 
+  const markerBody = (
+    <Animated.View style={[styles.scaleLayer, scaleStyle]}>
+      <View style={styles.glow} />
+      <View style={styles.circle}>
+        <Animated.View style={[styles.chevronLayer, chevronRotationStyle]}>
+          <VehicleDirectionChevron color={MAP_TRUCK_MARKER_BORDER} />
+        </Animated.View>
+      </View>
+    </Animated.View>
+  );
+
   return (
     <Animated.View
       style={[styles.container, positionStyle]}
       pointerEvents={onPress ? 'box-none' : 'none'}
     >
-      <Animated.View style={[styles.rotationLayer, rotationStyle]}>
-        <Animated.View style={[styles.scaleLayer, scaleStyle]}>
-          <Animated.View style={styles.glow} />
-          <View style={styles.touchTarget}>
-            {onPress ? (
-              <TouchableOpacity onPress={onPress} activeOpacity={0.88} hitSlop={4} style={styles.pressFill}>
-                <View style={styles.circle}>
-                  <GameIcon name="truck" size={14} color={MAP_TRUCK_MARKER_BORDER} />
-                </View>
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.circle}>
-                <GameIcon name="truck" size={14} color={MAP_TRUCK_MARKER_BORDER} />
-              </View>
-            )}
-          </View>
-        </Animated.View>
-      </Animated.View>
+      {onPress ? (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.88} hitSlop={4} style={styles.pressFill}>
+          {markerBody}
+        </TouchableOpacity>
+      ) : (
+        markerBody
+      )}
     </Animated.View>
   );
 }
@@ -144,11 +156,6 @@ const styles = StyleSheet.create({
     width: MAP_TRUCK_MARKER_SIZE,
     height: MAP_TRUCK_MARKER_SIZE,
   },
-  rotationLayer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   scaleLayer: {
     width: MAP_TRUCK_MARKER_SIZE,
     height: MAP_TRUCK_MARKER_SIZE,
@@ -160,11 +167,6 @@ const styles = StyleSheet.create({
     borderRadius: MAP_TRUCK_MARKER_SIZE / 2,
     backgroundColor: 'rgba(25,145,255,0.22)',
     transform: [{ scale: 1.15 }],
-  },
-  touchTarget: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   pressFill: {
     flex: 1,
@@ -180,5 +182,21 @@ const styles = StyleSheet.create({
     borderColor: MAP_TRUCK_MARKER_BORDER,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  chevronLayer: {
+    width: MAP_TRUCK_MARKER_SIZE,
+    height: MAP_TRUCK_MARKER_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chevron: {
+    width: 0,
+    height: 0,
+    marginLeft: 2,
+    borderTopWidth: 4.5,
+    borderBottomWidth: 4.5,
+    borderLeftWidth: 7,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
   },
 });

@@ -254,6 +254,7 @@ export interface PremiumMissionCardProps {
   completedAt?: number;
   currentTime: number;
   onClaim?: () => void;
+  isClaiming?: boolean;
 }
 
 export const PremiumMissionCard = React.memo(function PremiumMissionCard({
@@ -268,6 +269,7 @@ export const PremiumMissionCard = React.memo(function PremiumMissionCard({
   completedAt,
   currentTime,
   onClaim,
+  isClaiming = false,
 }: PremiumMissionCardProps) {
   const theme = STATUS_THEME[status];
   const icon = resolveMissionPresentationIcon(id, category);
@@ -331,16 +333,18 @@ export const PremiumMissionCard = React.memo(function PremiumMissionCard({
         </View>
         {status === 'ready' && onClaim ? (
           <ActionButton
-            label="Ödülü Al"
+            label={isClaiming ? 'Alınıyor...' : 'Ödülü Al'}
             onPress={onClaim}
             icon="success"
             iconSize={15}
             compact
+            disabled={isClaiming}
             style={styles.claimButton}
           />
         ) : completed ? (
           <View style={styles.completedCheck}>
             <GameIcon name="success" size={19} color={colors.success} />
+            <Text style={styles.completedLabel}>Alındı</Text>
           </View>
         ) : null}
       </View>
@@ -648,14 +652,22 @@ const styles = StyleSheet.create({
     borderColor: colors.primaryLight,
   },
   completedCheck: {
-    width: 40,
+    minWidth: 72,
     height: 32,
     flexShrink: 0,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
     borderRadius: radius.sm,
     backgroundColor: 'rgba(18,214,107,0.12)',
     borderWidth: 1,
     borderColor: 'rgba(18,214,107,0.3)',
+  },
+  completedLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.success,
   },
 });

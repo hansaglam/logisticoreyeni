@@ -78,15 +78,16 @@ export const MAP_TRUCK_MARKER_BORDER = '#5DD4FF';
 export const MAP_TRUCK_MARKER_FILL = '#031225';
 export const MAP_TRUCK_MARKER_ANIM_MS = 750;
 /**
- * MaterialCommunityIcons `truck-outline` — 0° rotation iken kabin sola (-X) bakar.
- * Route tangent 0° = sağa (+X); görsel hizalama +180° ile kabin hareket yönüne hizalanır.
- * Android ve iOS aynı sabit; platform-specific hack yok.
+ * Direction chevron at rotation 0° points to screen EAST (+X).
+ * Matches pixel-space atan2(dy, dx) on the normalized Turkey map image (Y increases downward).
  */
-export const TRUCK_ASSET_FORWARD_OFFSET_DEG = 180;
-/** @deprecated Use TRUCK_ASSET_FORWARD_OFFSET_DEG */
-export const TRUCK_ICON_BASE_ROTATION_DEG = TRUCK_ASSET_FORWARD_OFFSET_DEG;
-/** @deprecated Use TRUCK_ASSET_FORWARD_OFFSET_DEG */
-export const TRUCK_ASSET_HEADING_OFFSET_DEG = TRUCK_ASSET_FORWARD_OFFSET_DEG;
+export const VEHICLE_MARKER_ZERO_HEADING_DEG = 0;
+/** @deprecated Truck pictogram removed from live map marker — use VEHICLE_MARKER_ZERO_HEADING_DEG */
+export const TRUCK_ASSET_FORWARD_OFFSET_DEG = VEHICLE_MARKER_ZERO_HEADING_DEG;
+/** @deprecated Use VEHICLE_MARKER_ZERO_HEADING_DEG */
+export const TRUCK_ICON_BASE_ROTATION_DEG = VEHICLE_MARKER_ZERO_HEADING_DEG;
+/** @deprecated Use VEHICLE_MARKER_ZERO_HEADING_DEG */
+export const TRUCK_ASSET_HEADING_OFFSET_DEG = VEHICLE_MARKER_ZERO_HEADING_DEG;
 
 export const MAP_DELIVERY_PROGRESS_TRACK = '#132238';
 export const MAP_DELIVERY_PROGRESS_FILL = '#39A0FF';

@@ -20,7 +20,12 @@ import {
   getTruckEffectiveCapacityTons,
 } from '../simulation/capacity';
 import { getCityName } from './entityLookup';
-import type { Delivery, Driver, Trailer, Truck } from '../types/game';
+import type { Delivery, Driver, Trailer, Truck, TruckTransfer } from '../types/game';
+import {
+  buildDriverAssignmentContext,
+  getDriverOperationalState,
+  type DriverAssignmentContext,
+} from '../domain/driverOperationalState';
 
 export const MIN_TRUCK_CONDITION = 30;
 export const LOW_CONDITION_WARNING = 50;
@@ -175,14 +180,40 @@ export function evaluateTruckOption(
   };
 }
 
-export function evaluateDriverOption(driver: Driver): DriverOption {
-  if (driver.status === 'driving') {
-    return { driver, issue: 'on_route', label: 'Şu anda teslimatta', selectable: false };
+export function evaluateDriverOption(
+  driver: Driver,
+  context?: DriverAssignmentContext,
+): DriverOption {
+  const operational = getDriverOperationalState(
+    driver,
+    context ??
+      buildDriverAssignmentContext({
+        trucks: [],
+        activeDeliveries: [],
+        activeTransfers: [],
+      }),
+  );
+
+  if (operational.kind === 'on_delivery') {
+    return {
+      driver,
+      issue: 'on_route',
+      label: operational.assignmentBlockedReason ?? 'Şu anda teslimatta',
+      selectable: false,
+    };
   }
-  if (driver.status === 'resting') {
+  if (operational.kind === 'on_transfer') {
+    return {
+      driver,
+      issue: 'on_route',
+      label: operational.assignmentBlockedReason ?? 'Aktif transferde',
+      selectable: false,
+    };
+  }
+  if (operational.kind === 'resting') {
     return { driver, issue: 'resting', label: 'Dinleniyor', selectable: false };
   }
-  if (driver.status !== 'idle') {
+  if (!operational.selectableForDelivery) {
     return { driver, issue: 'on_route', label: 'Müsait değil', selectable: false };
   }
   return { driver, issue: 'eligible', label: 'Uygun', selectable: true };
@@ -210,8 +241,18 @@ export function buildTruckOptions(
   );
 }
 
-export function buildDriverOptions(drivers: Driver[]): DriverOption[] {
-  return drivers.map((driver) => evaluateDriverOption(driver));
+export function buildDriverOptions(
+  drivers: Driver[],
+  contextInput?: {
+    trucks: Truck[];
+    activeDeliveries: Delivery[];
+    activeTransfers?: TruckTransfer[];
+  },
+): DriverOption[] {
+  const context = contextInput
+    ? buildDriverAssignmentContext(contextInput)
+    : undefined;
+  return drivers.map((driver) => evaluateDriverOption(driver, context));
 }
 
 export function pickBestTruckOption(options: TruckOption[]): TruckOption | null {
@@ -284,10 +325,25 @@ export function getTruckBadge(option: TruckOption): {
   }
 }
 
-export function getDriverBadge(option: DriverOption): {
+export function getDriverBadge(
+  option: DriverOption,
+  context?: DriverAssignmentContext,
+): {
   label: string;
   variant: 'success' | 'warning' | 'danger' | 'amber' | 'muted';
 } {
+  if (context) {
+    const operational = getDriverOperationalState(option.driver, context);
+    if (operational.kind === 'on_delivery' || operational.kind === 'on_transfer') {
+      return { label: operational.statusBadgeLabel, variant: 'amber' };
+    }
+    if (operational.kind === 'resting') {
+      return { label: 'DİNLENİYOR', variant: 'amber' };
+    }
+    if (option.issue === 'eligible') {
+      return { label: 'UYGUN', variant: 'success' };
+    }
+  }
   if (option.issue === 'eligible') {
     return { label: 'UYGUN', variant: 'success' };
   }

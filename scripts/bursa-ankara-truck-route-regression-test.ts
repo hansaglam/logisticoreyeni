@@ -10,7 +10,7 @@ import {
   normalizeHeadingDegrees360,
   shortestHeadingDeltaDegrees,
 } from '../src/components/map/mapRoadUtils';
-import { TRUCK_ASSET_FORWARD_OFFSET_DEG } from '../src/components/map/mapTheme';
+import { VEHICLE_MARKER_ZERO_HEADING_DEG } from '../src/components/map/mapTheme';
 import { getWorldMapCityPosition } from '../src/data/worldMapPositions';
 
 let pass = 0;
@@ -87,7 +87,7 @@ if (route && bursa && ankara) {
   const displayHeading = getRouteHeadingDegrees({
     routePoints: route,
     progress: PROGRESS,
-    assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+    assetBaseHeadingDegrees: VEHICLE_MARKER_ZERO_HEADING_DEG,
     coordinateScaleX: SCALE_X,
     coordinateScaleY: SCALE_Y,
   });
@@ -95,7 +95,7 @@ if (route && bursa && ankara) {
   const toAnkaraDx = (ankara.x - pose.position.x) * SCALE_X;
   const toAnkaraDy = (ankara.y - pose.position.y) * SCALE_Y;
   const bearingToAnkara = normalizeHeadingDegrees360(
-    (Math.atan2(toAnkaraDy, toAnkaraDx) * 180) / Math.PI - TRUCK_ASSET_FORWARD_OFFSET_DEG,
+    (Math.atan2(toAnkaraDy, toAnkaraDx) * 180) / Math.PI,
   );
   const bearingToBursa = normalizeHeadingDegrees360(bearingToAnkara + 180);
 
@@ -145,14 +145,14 @@ console.log('\nAnkara → Bursa (reverse catalog route)');
     const displayHeading = getRouteHeadingDegrees({
       routePoints: route,
       progress: PROGRESS,
-      assetBaseHeadingDegrees: TRUCK_ASSET_FORWARD_OFFSET_DEG,
+      assetBaseHeadingDegrees: VEHICLE_MARKER_ZERO_HEADING_DEG,
       coordinateScaleX: SCALE_X,
       coordinateScaleY: SCALE_Y,
     });
     const toBursaDx = (bursa.x - pose.position.x) * SCALE_X;
     const toBursaDy = (bursa.y - pose.position.y) * SCALE_Y;
     const bearingToBursa = normalizeHeadingDegrees360(
-      (Math.atan2(toBursaDy, toBursaDx) * 180) / Math.PI - TRUCK_ASSET_FORWARD_OFFSET_DEG,
+      (Math.atan2(toBursaDy, toBursaDx) * 180) / Math.PI,
     );
     assert(
       angularDistance(displayHeading, bearingToBursa) < 75,

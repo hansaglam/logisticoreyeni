@@ -407,42 +407,40 @@ export default function VehicleMarketplaceScreen({
         }
       }
 
-      void (async () => {
-        try {
-          if (!options?.skipStaleCloudReconcile) {
-            const synced = await syncLocalSaveToCloud('manual', {
-              force: options?.forceSync ?? false,
-              state: useGameStore.getState(),
-            });
-            if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
-            }
-            const fleetReady = await ensureAuthoritativeFleetReady();
-            if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
-              logMarketplaceLoadError({
-                code: fleetReady.reason ?? 'service-unavailable',
-                message: fleetReady.reason ?? 'fleet-reconcile-failed',
-                callableName: 'reconcileAuthoritativeFleet',
-              });
-            }
+      try {
+        if (!options?.skipStaleCloudReconcile) {
+          const synced = await syncLocalSaveToCloud('manual', {
+            force: options?.forceSync ?? false,
+            state: useGameStore.getState(),
+          });
+          if (!synced && typeof __DEV__ !== 'undefined' && __DEV__) {
+            console.warn('[vehicle-marketplace] cloud sync before fleet reconcile failed');
           }
-
-          const myResult = await syncMineAndReconcile();
-          if (requestSeq !== requestSeqRef.current) return;
-
-          if (
-            !myResult.ok &&
-            (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
-          ) {
-            logMarketplaceDev('my listings auth failed', { reason: myResult.reason });
-            void logMarketplaceAuthProbe('my-listings-auth-failed', {
-              reason: myResult.reason,
+          const fleetReady = await ensureAuthoritativeFleetReady();
+          if (!fleetReady.ok && fleetReady.reason !== 'function-not-found') {
+            logMarketplaceLoadError({
+              code: fleetReady.reason ?? 'service-unavailable',
+              message: fleetReady.reason ?? 'fleet-reconcile-failed',
+              callableName: 'reconcileAuthoritativeFleet',
             });
           }
-        } finally {
-          finishRefresh();
         }
-      })();
+
+        const myResult = await syncMineAndReconcile();
+        if (requestSeq !== requestSeqRef.current) return;
+
+        if (
+          !myResult.ok &&
+          (myResult.reason === 'auth-required' || myResult.reason === 'unauthenticated')
+        ) {
+          logMarketplaceDev('my listings auth failed', { reason: myResult.reason });
+          void logMarketplaceAuthProbe('my-listings-auth-failed', {
+            reason: myResult.reason,
+          });
+        }
+      } finally {
+        finishRefresh();
+      }
     } catch {
       finishRefresh();
     }
@@ -730,18 +728,15 @@ export default function VehicleMarketplaceScreen({
         'Araç satın alındı',
         `${truckName} filona eklendi.`,
       );
-      void refreshAll({ skipStaleCloudReconcile: true }).then(
-        () => {
-          logMarketplacePurchase('listing refreshed');
-          logMarketplacePurchase('buyer state refreshed');
-          logMarketplacePurchase('done');
-        },
-        () => {
-          logMarketplacePurchase('listing refreshed');
-          logMarketplacePurchase('buyer state refreshed');
-          logMarketplacePurchase('done');
-        },
-      );
+      try {
+        await refreshAll({ skipStaleCloudReconcile: true });
+        logMarketplacePurchase('listing refreshed');
+        logMarketplacePurchase('buyer state refreshed');
+        logMarketplacePurchase('done', { ok: true });
+      } catch (refreshError) {
+        logMarketplacePurchase('buyer state refreshed', { error: refreshError });
+        logMarketplacePurchase('done', { ok: false, error: refreshError });
+      }
     } catch (error) {
       logMarketplacePurchase('done', { ok: false, error });
       finishFailure('timeout');

@@ -7,6 +7,10 @@ import {
   View,
 } from 'react-native';
 
+import {
+  getDriverOperationalState,
+  type DriverAssignmentContext,
+} from '../../domain/driverOperationalState';
 import { resolveTruckCityId } from '../../simulation/delivery';
 import { resolveDriverDailySalary } from '../../simulation/fleetManagement';
 import { GameIcon, ProgressBar, StatusBadge } from '../ui';
@@ -23,7 +27,15 @@ import {
   FLEET_ASSIGN_BADGE_IDLE_TEXT,
   FLEET_CARD_BG,
   FLEET_CARD_BORDER,
+  FLEET_DRIVER_ACTION_DISABLED_TEXT,
+  FLEET_DRIVER_ACTION_FONT_SIZE,
+  FLEET_DRIVER_ASSIGNMENT_LINE,
   FLEET_DRIVER_CARD_MIN_HEIGHT,
+  FLEET_DRIVER_MORE_DOTS_COLOR,
+  FLEET_DRIVER_NEUTRAL_BG,
+  FLEET_DRIVER_NEUTRAL_BORDER,
+  FLEET_DRIVER_OUTLINE_TEXT,
+  FLEET_DRIVER_SKILL_LABEL,
   FLEET_AVATAR_BG,
   FLEET_AVATAR_BORDER,
   FLEET_LEVEL_COLOR,
@@ -43,29 +55,12 @@ function getDriverInitials(name: string): string {
   return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
 }
 
-function getDriverStatusBadge(
-  driver: Driver,
-  morale: number,
-): { label: string; variant: StatusBadgeVariant } {
-  if (driver.status === 'driving') {
-    return { label: 'TESLİMATTA', variant: 'blue' };
-  }
-  if (driver.status === 'resting') {
-    return { label: 'DİNLENİYOR', variant: 'info' };
-  }
-  if (morale < MORALE_CRITICAL_THRESHOLD) {
-    return { label: 'KRİTİK', variant: 'danger' };
-  }
-  if (morale < MORALE_WARNING_THRESHOLD) {
-    return { label: 'YORGUN', variant: 'amber' };
-  }
-  return { label: 'BOŞTA', variant: 'success' };
-}
-
-function getMoraleColor(morale: number): string {
-  if (morale >= MORALE_WARNING_THRESHOLD) return colors.success;
-  if (morale >= MORALE_CRITICAL_THRESHOLD) return colors.accentAmber;
-  return colors.danger;
+function operationalBadgeVariant(kind: string, morale: number): StatusBadgeVariant {
+  if (kind === 'on_delivery' || kind === 'on_transfer') return 'blue';
+  if (kind === 'resting') return 'info';
+  if (morale < MORALE_CRITICAL_THRESHOLD) return 'danger';
+  if (morale < MORALE_WARNING_THRESHOLD) return 'amber';
+  return 'success';
 }
 
 function formatSpeedSkillValue(speed: number): string {
@@ -76,6 +71,7 @@ function formatSpeedSkillValue(speed: number): string {
 export interface DriverCardProps {
   driver: Driver;
   trucks: Truck[];
+  driverContext: DriverAssignmentContext;
   homeCityId?: string;
   activeDelivery?: Delivery;
   onAssign: (driver: Driver) => void;
@@ -87,6 +83,7 @@ export interface DriverCardProps {
 const DriverCard = React.memo(function DriverCard({
   driver,
   trucks,
+  driverContext,
   homeCityId,
   activeDelivery,
   onAssign,
@@ -98,15 +95,16 @@ const DriverCard = React.memo(function DriverCard({
   const layout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
   const isNarrow = screenWidth < 360;
 
-  const isDriving = driver.status === 'driving';
-  const isResting = driver.status === 'resting';
-
-  const assignedTruck = useMemo(
-    () =>
-      trucks.find((truck) => truck.id === driver.assignedTruckId) ??
-      (activeDelivery ? trucks.find((truck) => truck.id === activeDelivery.truckId) : undefined),
-    [activeDelivery, driver.assignedTruckId, trucks],
+  const operational = useMemo(
+    () => getDriverOperationalState(driver, driverContext),
+    [driver, driverContext],
   );
+
+  const assignedTruck = useMemo(() => {
+    const truckId = operational.assignedTruckId ?? activeDelivery?.truckId ?? null;
+    if (!truckId) return undefined;
+    return trucks.find((truck) => truck.id === truckId);
+  }, [activeDelivery?.truckId, operational.assignedTruckId, trucks]);
 
   const driverCityId = useMemo(() => {
     if (assignedTruck) return resolveTruckCityId(assignedTruck, homeCityId);
@@ -115,11 +113,24 @@ const DriverCard = React.memo(function DriverCard({
 
   const driverLevel = driver.level ?? 1;
   const morale = Math.round(driver.morale ?? 80);
-  const statusBadge = useMemo(() => getDriverStatusBadge(driver, morale), [driver, morale]);
-  const moraleColor = getMoraleColor(morale);
+  const statusBadge = useMemo(
+    () => ({
+      label: operational.statusBadgeLabel,
+      variant: operationalBadgeVariant(operational.kind, morale),
+    }),
+    [morale, operational.kind, operational.statusBadgeLabel],
+  );
+  const moraleColor = morale >= MORALE_WARNING_THRESHOLD
+    ? colors.success
+    : morale >= MORALE_CRITICAL_THRESHOLD
+      ? colors.accentAmber
+      : colors.danger;
   const dailySalary = driver.salaryPerDay ?? driver.dailySalary ?? resolveDriverDailySalary(driver);
-  const isAssigned = !!driver.assignedTruckId || !!assignedTruck;
-  const assignDisabled = isDriving || isResting;
+  const isAssigned = operational.assignmentBadgeLabel === 'ATANMIŞ';
+  const assignDisabled =
+    operational.kind === 'on_delivery' ||
+    operational.kind === 'on_transfer' ||
+    operational.kind === 'resting';
   const assignLabel = isAssigned ? 'Değiştir' : 'Ata';
   const narrowAssignLabel = isAssigned ? 'Değ.' : 'Ata';
 
@@ -141,7 +152,7 @@ const DriverCard = React.memo(function DriverCard({
   }, [assignedTruck, driverCityId]);
 
   const showMoraleCaption =
-    morale < MORALE_CRITICAL_THRESHOLD || (isResting && morale < MORALE_WARNING_THRESHOLD);
+    morale < MORALE_CRITICAL_THRESHOLD || (operational.kind === 'resting' && morale < MORALE_WARNING_THRESHOLD);
 
   const handleMorePress = useCallback(() => {
     onMore(driver);
@@ -177,7 +188,7 @@ const DriverCard = React.memo(function DriverCard({
             <StatusBadge label={statusBadge.label} variant={statusBadge.variant} size="sm" />
             <View style={[styles.assignBadge, isAssigned ? styles.assignBadgeActive : styles.assignBadgeIdle]}>
               <Text style={[styles.assignBadgeText, isAssigned ? styles.assignBadgeTextActive : styles.assignBadgeTextIdle]}>
-                {isAssigned ? 'ATANMIŞ' : 'ATANMADI'}
+                {operational.assignmentBadgeLabel}
               </Text>
             </View>
           </View>
@@ -233,7 +244,7 @@ const DriverCard = React.memo(function DriverCard({
           onPress={() => onAssign(driver)}
           disabled={assignDisabled}
         >
-          <GameIcon name="truck" size={13} color={assignDisabled ? colors.textMuted : '#FFFFFF'} />
+          <GameIcon name="truck" size={13} color={assignDisabled ? FLEET_DRIVER_ACTION_DISABLED_TEXT : '#FFFFFF'} />
           <Text style={[styles.actionPrimaryText, assignDisabled && styles.actionDisabledText]} numberOfLines={1}>
             {isNarrow ? narrowAssignLabel : assignLabel}
           </Text>
@@ -247,7 +258,7 @@ const DriverCard = React.memo(function DriverCard({
         </Pressable>
 
         <Pressable style={[styles.actionBtn, styles.actionOutline]} onPress={() => onDetail(driver)}>
-          <GameIcon name="account" size={13} color={colors.accentBlue} />
+          <GameIcon name="account" size={13} color={FLEET_DRIVER_OUTLINE_TEXT} />
           <Text style={styles.actionOutlineText} numberOfLines={1}>
             Detay
           </Text>
@@ -295,7 +306,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     paddingHorizontal: 9,
-    gap: 2,
+    gap: 3,
   },
   driverName: {
     fontSize: 15.5,
@@ -353,8 +364,8 @@ const styles = StyleSheet.create({
   },
   assignmentLine: {
     fontSize: 9.5,
-    color: '#91A0B8',
-    lineHeight: 11,
+    color: FLEET_DRIVER_ASSIGNMENT_LINE,
+    lineHeight: 12,
   },
   rightCol: {
     alignItems: 'flex-end',
@@ -377,22 +388,22 @@ const styles = StyleSheet.create({
   skillRow: {
     flexDirection: 'row',
     gap: 6,
-    marginTop: 6,
+    marginTop: 8,
   },
   skillPill: {
     flex: 1,
     minWidth: 0,
-    height: 36,
+    height: 38,
     borderRadius: 11,
     backgroundColor: FLEET_SKILL_PILL_BG,
     paddingHorizontal: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 1,
+    gap: 2,
   },
   skillLabel: {
     fontSize: 8,
-    color: '#74839B',
+    color: FLEET_DRIVER_SKILL_LABEL,
     lineHeight: 10,
   },
   skillValue: {
@@ -402,8 +413,8 @@ const styles = StyleSheet.create({
     lineHeight: 13,
   },
   moraleBlock: {
-    marginTop: 6,
-    gap: 2,
+    marginTop: 8,
+    gap: 3,
   },
   moraleHeader: {
     flexDirection: 'row',
@@ -430,63 +441,63 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     gap: 6,
-    marginTop: 7,
+    marginTop: 9,
   },
   actionBtn: {
     flex: 1,
     minWidth: 0,
-    height: 37,
+    height: 38,
     borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    paddingHorizontal: 3,
+    gap: 4,
+    paddingHorizontal: 4,
   },
   actionPrimary: {
     backgroundColor: colors.accentBlue,
   },
   actionPrimaryText: {
-    fontSize: 9.5,
+    fontSize: FLEET_DRIVER_ACTION_FONT_SIZE,
     fontWeight: '700',
     color: '#FFFFFF',
   },
   actionTraining: {
     backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.45)',
+    borderColor: 'rgba(34,211,238,0.55)',
   },
   actionTrainingText: {
-    fontSize: 9.5,
+    fontSize: FLEET_DRIVER_ACTION_FONT_SIZE,
     fontWeight: '700',
     color: '#22D3EE',
   },
   actionOutline: {
     backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: 'rgba(90,135,195,0.40)',
+    borderColor: 'rgba(90,135,195,0.48)',
   },
   actionOutlineText: {
-    fontSize: 9.5,
+    fontSize: FLEET_DRIVER_ACTION_FONT_SIZE,
     fontWeight: '700',
-    color: colors.accentBlue,
+    color: FLEET_DRIVER_OUTLINE_TEXT,
   },
   actionNeutral: {
-    backgroundColor: '#0D1A2D',
+    backgroundColor: FLEET_DRIVER_NEUTRAL_BG,
     borderWidth: 1,
-    borderColor: 'rgba(70,120,190,0.22)',
+    borderColor: FLEET_DRIVER_NEUTRAL_BORDER,
   },
   moreDots: {
     fontSize: 12,
     fontWeight: '700',
-    color: colors.textSecondary,
+    color: FLEET_DRIVER_MORE_DOTS_COLOR,
     lineHeight: 14,
     letterSpacing: 1,
   },
   actionDisabled: {
-    opacity: 0.45,
+    opacity: 0.72,
   },
   actionDisabledText: {
-    color: colors.textMuted,
+    color: FLEET_DRIVER_ACTION_DISABLED_TEXT,
   },
 });

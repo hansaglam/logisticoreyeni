@@ -44,6 +44,7 @@ import { logProductionBuildConfigOnce } from './src/services/productionBuildAudi
 import { logFirebaseRuntimeConfigOnce } from './src/utils/firebaseRuntimeConfig';
 import { initCloudSaveSync } from './src/storage/cloudSaveSync';
 import {
+  reconcileVehicleMarketplaceOnForeground,
   retryPostStartupMarketplaceReconcileIfNeeded,
   runPostStartupMarketplaceReconcile,
 } from './src/services/vehicleMarketplaceStartupReconcile';
@@ -559,6 +560,7 @@ export default function App() {
         useGameStore.getState().maybeRefreshMarketSnapshot('foreground');
         void maybeSubmitLeaderboardForSeasonChange();
         retryPostStartupMarketplaceReconcileIfNeeded();
+        void reconcileVehicleMarketplaceOnForeground();
       }
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {

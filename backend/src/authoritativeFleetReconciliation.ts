@@ -106,7 +106,18 @@ export function mergeCloudFleetIntoExistingMarketplaceState(
     existingVehicleIds: existing.ownedTruckSnapshots.map((truck) => truck.truckId),
     cloudVehicleIds: fromCloud.ownedTruckSnapshots.map((truck) => truck.truckId),
     soldTruckIds: existing.soldTruckTombstones ?? [],
+    existingMarketplaceStateVersion: existing.stateVersion,
+    cloudSourceSaveVersion: fromCloud.sourceSaveVersion,
   });
+
+  if (overwrite.keptMarketplaceMutation) {
+    console.info('[MARKETPLACE_CLOUD_MERGE] kept marketplace mutation', {
+      rejectedStaleCashRestore: overwrite.rejectedStaleCashRestore,
+      rejectedStaleVehicleRemoval: overwrite.rejectedStaleVehicleRemoval,
+      existingCash: existing.canonicalCash,
+      cloudCash: fromCloud.canonicalCash,
+    });
+  }
 
   return {
     ...existing,
@@ -138,8 +149,29 @@ export function shouldReconcileFleetFromCloud(
   ) {
     return true;
   }
+
+  const tombstones = new Set(existing.soldTruckTombstones ?? []);
   const cloudIds = fleetIdSet(cloudBuilt);
   const existingIds = fleetIdSet(existing);
+
+  if ([...cloudIds].some((id) => tombstones.has(id))) {
+    return false;
+  }
+
+  for (const id of existingIds) {
+    if (!cloudIds.has(id) && !tombstones.has(id)) {
+      return false;
+    }
+  }
+
+  if (tombstones.size > 0 && existing.canonicalCash > cloudBuilt.canonicalCash + 1e-9) {
+    return false;
+  }
+
+  if (existing.stateVersion > cloudBuilt.sourceSaveVersion) {
+    return false;
+  }
+
   for (const id of cloudIds) {
     if (!existingIds.has(id)) return true;
   }

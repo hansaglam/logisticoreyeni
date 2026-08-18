@@ -4,12 +4,11 @@ import type { Delivery, Truck, TruckTransfer } from '../../types/game';
 import { resolveTruckCityId, isDeliveryProgressComplete } from '../../simulation/delivery';
 import {
   getRoadRoute,
-  getRouteMarkerPose,
   getTruckPositionAlongRoadRoute,
   normalizedPointToPixel,
   type MapBounds,
 } from './mapRoadUtils';
-import { TRUCK_ASSET_FORWARD_OFFSET_DEG } from './mapTheme';
+import { getMapVehicleHeading } from './mapVehicleHeading';
 
 const ACTIVE_DELIVERY_STATUSES = new Set<Delivery['status']>([
   'preparing',
@@ -56,18 +55,17 @@ export function resolveTruckMapLocation(params: {
     const roadRoute = getRoadRoute(activeDelivery.originCityId, activeDelivery.destinationCityId);
     if (roadRoute && roadRoute.length >= 2) {
       if (mapBounds) {
-        const markerPose = getRouteMarkerPose({
+        const markerPose = getMapVehicleHeading({
           routePoints: roadRoute,
           progress: activeDelivery.progress,
           mapBounds,
-          assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         });
         return {
           kind: 'route',
           cityId: normalizeCityId(activeDelivery.destinationCityId),
           normalizedPoint: markerPose.position,
           pixelPoint: markerPose.positionPx,
-          angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
+          angleRadians: markerPose.markerRotationRad,
         };
       }
       const along = getTruckPositionAlongRoadRoute(roadRoute, activeDelivery.progress);
@@ -84,18 +82,17 @@ export function resolveTruckMapLocation(params: {
     const roadRoute = getRoadRoute(activeTransfer.fromCityId, activeTransfer.toCityId);
     if (roadRoute && roadRoute.length >= 2) {
       if (mapBounds) {
-        const markerPose = getRouteMarkerPose({
+        const markerPose = getMapVehicleHeading({
           routePoints: roadRoute,
           progress: activeTransfer.progress,
           mapBounds,
-          assetForwardAngleDeg: TRUCK_ASSET_FORWARD_OFFSET_DEG,
         });
         return {
           kind: 'route',
           cityId: normalizeCityId(activeTransfer.toCityId),
           normalizedPoint: markerPose.position,
           pixelPoint: markerPose.positionPx,
-          angleRadians: (markerPose.markerHeadingDeg * Math.PI) / 180,
+          angleRadians: markerPose.markerRotationRad,
         };
       }
       const along = getTruckPositionAlongRoadRoute(roadRoute, activeTransfer.progress);

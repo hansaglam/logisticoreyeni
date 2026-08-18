@@ -73,6 +73,7 @@ export type CloudSyncReason =
   | 'trade'
   | 'purchase'
   | 'mission_claim'
+  | 'achievement_claim'
   | 'account_delete'
   | 'account_link'
   | 'account-link-apple'
@@ -114,6 +115,7 @@ const FORCE_SYNC_REASONS = new Set<CloudSyncReason>([
   'app_start',
   'manual',
   'mission_claim',
+  'achievement_claim',
   'delivery_complete',
   'purchase',
   'account_delete',

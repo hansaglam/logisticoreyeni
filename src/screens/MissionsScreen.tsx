@@ -23,6 +23,10 @@ import {
   getMissionById,
 } from '../config/missions';
 import { MILESTONE_DEFINITIONS } from '../data/milestones';
+import {
+  buildRewardReceiptKey,
+  isRewardClaimed,
+} from '../domain/rewardClaimIntegrity';
 import { getWeeklyObjectiveDefinitions } from '../data/weeklyObjectives';
 import {
   useOnboardingScreenVisit,
@@ -103,10 +107,12 @@ interface MissionsScreenProps {
 export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const [activeTab, setActiveTab] = useState<MissionsTabKey>('missions');
+  const [claimingRewardKeys, setClaimingRewardKeys] = useState<Set<string>>(() => new Set());
 
   const currentTime = useGameStore((state) => state.currentTime);
   const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
   const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
+  const rewardReceipts = useGameStore((state) => state.rewardReceipts) ?? {};
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
@@ -232,16 +238,84 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   ]);
 
   const handleClaimMissionReward = useCallback(
-    (missionId: string) => claimMissionReward(missionId),
-    [claimMissionReward],
+    async (missionId: string) => {
+      const claimKey = buildRewardReceiptKey('mission', missionId);
+      if (claimingRewardKeys.has(claimKey)) return;
+      setClaimingRewardKeys((prev) => new Set(prev).add(claimKey));
+      try {
+        await Promise.resolve(claimMissionReward(missionId));
+      } finally {
+        setClaimingRewardKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(claimKey);
+          return next;
+        });
+      }
+    },
+    [claimMissionReward, claimingRewardKeys],
   );
   const handleClaimWeeklyObjective = useCallback(
-    (objectiveId: string) => claimWeeklyObjectiveReward(objectiveId),
-    [claimWeeklyObjectiveReward],
+    async (objectiveId: string) => {
+      const claimKey = buildRewardReceiptKey('weekly', objectiveId, seasonKey);
+      if (claimingRewardKeys.has(claimKey)) return;
+      setClaimingRewardKeys((prev) => new Set(prev).add(claimKey));
+      try {
+        await Promise.resolve(claimWeeklyObjectiveReward(objectiveId));
+      } finally {
+        setClaimingRewardKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(claimKey);
+          return next;
+        });
+      }
+    },
+    [claimWeeklyObjectiveReward, claimingRewardKeys, seasonKey],
   );
   const handleClaimMilestone = useCallback(
-    (milestoneId: string) => claimMilestoneReward(milestoneId),
-    [claimMilestoneReward],
+    async (milestoneId: string) => {
+      const claimKey = buildRewardReceiptKey('achievement', milestoneId);
+      if (claimingRewardKeys.has(claimKey)) return;
+      setClaimingRewardKeys((prev) => new Set(prev).add(claimKey));
+      try {
+        await Promise.resolve(claimMilestoneReward(milestoneId));
+      } finally {
+        setClaimingRewardKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(claimKey);
+          return next;
+        });
+      }
+    },
+    [claimMilestoneReward, claimingRewardKeys],
+  );
+
+  const isMissionClaimed = useCallback(
+    (missionId: string) =>
+      missions.claimedMissionRewardIds.includes(missionId) ||
+      isRewardClaimed(rewardReceipts, buildRewardReceiptKey('mission', missionId)),
+    [missions.claimedMissionRewardIds, rewardReceipts],
+  );
+
+  const isAchievementClaimed = useCallback(
+    (milestoneId: string) => {
+      const entry = retention.milestones[milestoneId];
+      return (
+        entry?.isClaimed === true ||
+        isRewardClaimed(rewardReceipts, buildRewardReceiptKey('achievement', milestoneId))
+      );
+    },
+    [retention.milestones, rewardReceipts],
+  );
+
+  const isWeeklyClaimed = useCallback(
+    (objectiveId: string) => {
+      const entry = retention.weeklyObjectives[objectiveId];
+      return (
+        entry?.isClaimed === true ||
+        isRewardClaimed(rewardReceipts, buildRewardReceiptKey('weekly', objectiveId, seasonKey))
+      );
+    },
+    [retention.weeklyObjectives, rewardReceipts, seasonKey],
   );
 
   return (
@@ -355,7 +429,9 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
               progress: 0,
               isClaimed: false,
             };
-            const isReady = !entry.isClaimed && entry.progress >= objective.target;
+            const claimed = isWeeklyClaimed(objective.id);
+            const isReady = !claimed && entry.progress >= objective.target;
+            const claimKey = buildRewardReceiptKey('weekly', objective.id, seasonKey);
             return (
               <PremiumMissionCard
                 key={objective.id}
@@ -370,9 +446,10 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
                   objective.metric === 'weekly_trade_profit',
                 )}
                 rewardLabel={formatRetentionReward(objective.reward)}
-                status={getRetentionStatus(entry.isClaimed, isReady)}
+                status={getRetentionStatus(claimed, isReady)}
                 completedAt={entry.completedAt}
                 currentTime={currentTime}
+                isClaiming={claimingRewardKeys.has(claimKey)}
                 onClaim={() => handleClaimWeeklyObjective(objective.id)}
               />
             );
@@ -388,7 +465,9 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
               progress: 0,
               isClaimed: false,
             };
-            const isReady = !entry.isClaimed && entry.progress >= milestone.target;
+            const claimed = isAchievementClaimed(milestone.id);
+            const isReady = !claimed && entry.progress >= milestone.target;
+            const claimKey = buildRewardReceiptKey('achievement', milestone.id);
             const useMoney =
               milestone.metric.type === 'trade_profit_total' ||
               milestone.metric.type === 'trade_profit_product' ||
@@ -408,9 +487,10 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
                   useMoney,
                 )}
                 rewardLabel={formatRetentionReward(milestone.reward)}
-                status={getRetentionStatus(entry.isClaimed, isReady)}
+                status={getRetentionStatus(claimed, isReady)}
                 completedAt={entry.completedAt}
                 currentTime={currentTime}
+                isClaiming={claimingRewardKeys.has(claimKey)}
                 onClaim={() => handleClaimMilestone(milestone.id)}
               />
             );

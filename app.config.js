@@ -164,6 +164,7 @@ module.exports = () => {
         marketAlarmsEnabled: process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED ?? '',
         backendDiagnosticsEnabled:
           process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED ?? '',
+        enableTestMoneySync: process.env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC ?? '',
       },
       firebaseFunctionsRegion: 'us-central1',
     },

@@ -7,24 +7,31 @@
  * Loop prevention: while enabled, cloud profile writes omit `money` so autosave
  * cannot overwrite a console edit. Apply only when remote money differs from the
  * last accepted override for this uid (survives restart via AsyncStorage).
+ *
+ * After apply, force-upload the save and reconcile authoritative fleet so
+ * marketplace canonicalCash follows the injected amount.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
 
 import { isTestMoneySyncEnabled, parseRemoteTestMoney } from '../config/testMoneySync';
+import {
+  getAcceptedTestRemoteMoney,
+  setAcceptedTestRemoteMoney,
+} from '../config/testMoneySyncAccepted';
 import { bumpSaveContentRevision } from '../storage/saveRevision';
 import { saveGameState } from '../storage/saveGame';
 import { syncLocalSaveToCloud } from '../storage/cloudSaveSync';
 import { useGameStore } from '../store/gameStore';
 import { getFirestoreSafe, isFirebaseEnabled } from './firebase';
 import { isVehicleMarketplaceOperationActive } from './marketplaceOperationLock';
+import { reconcileAuthoritativeFleet } from './serverStateMigrationService';
 import { subscribeAuthState } from './authService';
 
 const LOG_PREFIX = '[TEST_MONEY_SYNC]';
 const LAST_APPLIED_KEY_PREFIX = '@logisticore/testMoneySync/lastApplied:';
 
-let acceptedRemoteMoney: number | null = null;
 let lastAppliedRemoteMoney: number | null = null;
 let pendingRemoteMoney: number | null = null;
 let authUnsubscribe: (() => void) | null = null;
@@ -47,7 +54,7 @@ async function loadLastAppliedRemoteMoney(uid: string): Promise<void> {
       const parsed = Number(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         lastAppliedRemoteMoney = parsed;
-        acceptedRemoteMoney = parsed;
+        setAcceptedTestRemoteMoney(parsed);
       }
     }
   } catch (error) {
@@ -64,9 +71,7 @@ async function persistLastAppliedRemoteMoney(uid: string, money: number): Promis
   }
 }
 
-export function getAcceptedTestRemoteMoney(): number | null {
-  return acceptedRemoteMoney;
-}
+export { getAcceptedTestRemoteMoney };
 
 export function shouldOmitProfileMoneyWrite(): boolean {
   return isTestMoneySyncEnabled();
@@ -106,7 +111,7 @@ async function applyRemoteMoney(uid: string, remoteMoney: number): Promise<void>
   const localBefore = state.player?.money ?? 0;
   if (nearlyEqual(localBefore, remoteMoney)) {
     lastAppliedRemoteMoney = remoteMoney;
-    acceptedRemoteMoney = remoteMoney;
+    setAcceptedTestRemoteMoney(remoteMoney);
     pendingRemoteMoney = null;
     await persistLastAppliedRemoteMoney(uid, remoteMoney);
     return;
@@ -118,7 +123,7 @@ async function applyRemoteMoney(uid: string, remoteMoney: number): Promise<void>
     console.info(`${LOG_PREFIX} remote money received=${remoteMoney}`);
     console.info(`${LOG_PREFIX} local before=${localBefore}`);
 
-    acceptedRemoteMoney = remoteMoney;
+    setAcceptedTestRemoteMoney(remoteMoney);
     lastAppliedRemoteMoney = remoteMoney;
 
     useGameStore.setState({
@@ -137,12 +142,15 @@ async function applyRemoteMoney(uid: string, remoteMoney: number): Promise<void>
     console.info(`${LOG_PREFIX} persisted=${persisted}`);
     await persistLastAppliedRemoteMoney(uid, remoteMoney);
 
-    // Keep saves/current aligned so cloud restore cannot revive stale cash.
-    void syncLocalSaveToCloud('manual', {
+    const synced = await syncLocalSaveToCloud('manual', {
       force: true,
       state: useGameStore.getState(),
       ownerUid: uid,
     });
+    console.info(`${LOG_PREFIX} cloudSaveSynced=${synced}`);
+
+    const fleet = await reconcileAuthoritativeFleet({ force: true });
+    console.info(`${LOG_PREFIX} fleetReconciled=${fleet.ok} reason=${fleet.reason ?? 'ok'}`);
   } finally {
     applyInFlight = false;
     if (
@@ -227,7 +235,7 @@ export function startTestMoneySync(): () => void {
     if (!user?.uid) {
       console.info(`${LOG_PREFIX} auth cleared — listener detached`);
       detachDocumentListener();
-      acceptedRemoteMoney = null;
+      setAcceptedTestRemoteMoney(null);
       lastAppliedRemoteMoney = null;
       pendingRemoteMoney = null;
       lastAppliedLoadedForUid = null;
@@ -245,7 +253,7 @@ export function stopTestMoneySync(): void {
     authUnsubscribe();
     authUnsubscribe = null;
   }
-  acceptedRemoteMoney = null;
+  setAcceptedTestRemoteMoney(null);
   lastAppliedRemoteMoney = null;
   pendingRemoteMoney = null;
   lastAppliedLoadedForUid = null;

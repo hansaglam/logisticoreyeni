@@ -28,6 +28,7 @@ import { evaluateDeliveryReadiness } from '../../domain/deliveryReadiness';
 import { getAttachedTrailerForTruck } from '../../simulation/trailerAttachment';
 import DeliveryReadinessCard from '../delivery/DeliveryReadinessCard';
 import RentalAssignmentFitBanner from '../delivery/RentalAssignmentFitBanner';
+import { buildDriverAssignmentContext } from '../../domain/driverOperationalState';
 import {
   buildDriverOptions,
   buildTruckOptions,
@@ -209,6 +210,7 @@ export default function ContractQuickActionSheet({
   );
   const currentTime = useGameStore((state) => state.currentTime);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries);
+  const activeTransfers = useGameStore((state) => state.activeTransfers ?? []);
   const trailers = useGameStore((state) => state.player?.trailers ?? []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
@@ -254,7 +256,25 @@ export default function ContractQuickActionSheet({
     ],
   );
 
-  const driverOptions = useMemo(() => buildDriverOptions(drivers), [drivers]);
+  const driverAssignmentContext = useMemo(
+    () =>
+      buildDriverAssignmentContext({
+        trucks,
+        activeDeliveries,
+        activeTransfers,
+      }),
+    [trucks, activeDeliveries, activeTransfers],
+  );
+
+  const driverOptions = useMemo(
+    () =>
+      buildDriverOptions(drivers, {
+        trucks,
+        activeDeliveries,
+        activeTransfers,
+      }),
+    [drivers, trucks, activeDeliveries, activeTransfers],
+  );
 
   const eligibleTrucks = truckOptions.filter((option) => option.selectable);
   const eligibleDrivers = driverOptions.filter((option) => option.selectable);
@@ -395,7 +415,7 @@ export default function ContractQuickActionSheet({
     ? `Deneyim ${Math.round(selectedDriverOption.driver.experience ?? 0)} · Dikkat ${Math.round(selectedDriverOption.driver.attention ?? 0)} · Maaş ${formatMoney(selectedDriverOption.driver.salaryPerDay ?? 0)}/gün`
     : '';
   const driverBadge = selectedDriverOption
-    ? getDriverBadge(selectedDriverOption)
+    ? getDriverBadge(selectedDriverOption, driverAssignmentContext)
     : { label: 'SEÇİLMEDİ', variant: 'muted' as const };
 
   const handleStart = () => {
@@ -690,6 +710,7 @@ export default function ContractQuickActionSheet({
         mode={pickerMode ?? 'truck'}
         truckOptions={truckOptions}
         driverOptions={driverOptions}
+        driverContext={driverAssignmentContext}
         selectedTruckId={selectedTruckId}
         selectedDriverId={selectedDriverId}
         onSelectTruck={setSelectedTruckId}

@@ -276,6 +276,10 @@ void (async () => {
     'offline failure retries on later foreground',
   );
   assert(
+    app.includes('reconcileVehicleMarketplaceOnForeground'),
+    'foreground reconcile runs for offline seller/buyer marketplace mutations',
+  );
+  assert(
     service.includes('getMyVehicleListings'),
     'startup reconcile uses the lightweight my-listings/state payload',
   );

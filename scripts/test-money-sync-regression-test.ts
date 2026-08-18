@@ -4,9 +4,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { parseRemoteTestMoney } from '../src/config/testMoneySyncPure';
+import { parseRemoteTestMoney, resolveCashAfterMarketplaceReconcile } from '../src/config/testMoneySyncPure';
 import { validateStoreProductionEnv } from '../src/config/storeProductionPolicy';
 import { loadBuildProfileEnv } from './build-env';
 
@@ -41,5 +42,46 @@ assert.equal(
   'true',
   'internal profile enables test money sync',
 );
+
+assert.equal(
+  resolveCashAfterMarketplaceReconcile({
+    localCash: 500_000,
+    authoritativeCash: 54_623,
+    acceptedTestRemoteMoney: 500_000,
+    testMoneySyncEnabled: true,
+  }),
+  500_000,
+  'injected cash must not snap back to stale canonicalCash',
+);
+assert.equal(
+  resolveCashAfterMarketplaceReconcile({
+    localCash: 400_000,
+    authoritativeCash: 400_000,
+    acceptedTestRemoteMoney: 500_000,
+    testMoneySyncEnabled: true,
+  }),
+  400_000,
+  'real marketplace spend still uses authoritative cash',
+);
+assert.equal(
+  resolveCashAfterMarketplaceReconcile({
+    localCash: 500_000,
+    authoritativeCash: 54_623,
+    acceptedTestRemoteMoney: 500_000,
+    testMoneySyncEnabled: false,
+  }),
+  54_623,
+  'production builds keep authoritative cash',
+);
+
+const appConfig = readFileSync(resolve(ROOT, 'app.config.js'), 'utf8');
+assert.match(
+  appConfig,
+  /enableTestMoneySync:\s*process\.env\.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC/,
+  'internal extra must bake test money sync flag',
+);
+const moneySync = readFileSync(resolve(ROOT, 'src/services/testMoneySyncService.ts'), 'utf8');
+assert.match(moneySync, /reconcileAuthoritativeFleet\(\{\s*force:\s*true\s*\}\)/);
+assert.match(moneySync, /syncLocalSaveToCloud\('manual'/);
 
 console.log('test-money-sync-regression-test: PASS');

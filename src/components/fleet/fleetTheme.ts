@@ -1,4 +1,4 @@
-import { StyleSheet, type ViewStyle } from 'react-native';
+import { Platform, type ViewStyle } from 'react-native';
 
 import { colors } from '../../theme';
 import type { TrailerType } from '../../types/game';
@@ -35,6 +35,22 @@ export const FLEET_SEGMENT_BORDER = 'rgba(70,120,190,0.25)';
 export const FLEET_RENTAL_BADGE_BG = 'rgba(245,158,11,0.13)';
 export const FLEET_RENTAL_BADGE_BORDER = 'rgba(245,158,11,0.55)';
 export const FLEET_RENTAL_BADGE_TEXT = '#F5A623';
+
+export const FLEET_DRIVER_ACTION_FONT_SIZE = Platform.OS === 'ios' ? 11 : 10;
+export const FLEET_DRIVER_ACTION_DISABLED_TEXT =
+  Platform.OS === 'ios' ? '#C8D6EC' : colors.textMuted;
+export const FLEET_DRIVER_MORE_DOTS_COLOR =
+  Platform.OS === 'ios' ? '#B4C4DC' : colors.textSecondary;
+export const FLEET_DRIVER_OUTLINE_TEXT =
+  Platform.OS === 'ios' ? '#72B8FF' : colors.accentBlue;
+export const FLEET_DRIVER_SKILL_LABEL =
+  Platform.OS === 'ios' ? '#9AADCC' : '#74839B';
+export const FLEET_DRIVER_ASSIGNMENT_LINE =
+  Platform.OS === 'ios' ? '#A8B8D0' : '#91A0B8';
+export const FLEET_DRIVER_NEUTRAL_BG =
+  Platform.OS === 'ios' ? '#12233D' : '#0D1A2D';
+export const FLEET_DRIVER_NEUTRAL_BORDER =
+  Platform.OS === 'ios' ? 'rgba(110,160,230,0.34)' : 'rgba(70,120,190,0.22)';
 
 export function getFleetTruckColumnWidths(screenWidth: number): {
   artworkCol: number;

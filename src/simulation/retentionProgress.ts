@@ -11,6 +11,10 @@ import {
 import { calculateCompanyScore } from './companyScore';
 import { normalizeWarehouse } from './trading';
 import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
+import {
+  buildRewardReceiptKey,
+  isRewardClaimed,
+} from '../domain/rewardClaimIntegrity';
 import type {
   FinanceLedgerEntry,
   RetentionLifetimeStats,
@@ -42,7 +46,7 @@ export type RetentionEvent =
 
 export type RetentionProgressState = Pick<
   StoreGameState,
-  'player' | 'financeLedger' | 'cities' | 'products' | 'currentTime' | 'retention'
+  'player' | 'financeLedger' | 'cities' | 'products' | 'currentTime' | 'retention' | 'rewardReceipts'
 >;
 
 function createEmptyWeeklyStats(): RetentionWeeklyStats {
@@ -509,8 +513,15 @@ export function syncRetentionProgressState(state: RetentionProgressState): Reten
   const milestones = { ...retention.milestones };
   for (const def of MILESTONE_DEFINITIONS) {
     const existing = milestones[def.id] ?? { progress: 0, isClaimed: false };
-    if (existing.isClaimed) {
-      milestones[def.id] = existing;
+    const claimedByReceipt = isRewardClaimed(
+      state.rewardReceipts,
+      buildRewardReceiptKey('achievement', def.id),
+    );
+    if (existing.isClaimed || claimedByReceipt) {
+      milestones[def.id] = {
+        ...existing,
+        isClaimed: true,
+      };
       continue;
     }
     const progress = computeMilestoneProgressValue(def, { ...state, retention });
@@ -526,8 +537,15 @@ export function syncRetentionProgressState(state: RetentionProgressState): Reten
   const weeklyObjectives = { ...retention.weeklyObjectives };
   for (const def of weeklyDefs) {
     const existing = weeklyObjectives[def.id] ?? { progress: 0, isClaimed: false };
-    if (existing.isClaimed) {
-      weeklyObjectives[def.id] = existing;
+    const claimedByReceipt = isRewardClaimed(
+      state.rewardReceipts,
+      buildRewardReceiptKey('weekly', def.id, seasonKey),
+    );
+    if (existing.isClaimed || claimedByReceipt) {
+      weeklyObjectives[def.id] = {
+        ...existing,
+        isClaimed: true,
+      };
       continue;
     }
     const stockTons = countWarehouseStockTons(state);

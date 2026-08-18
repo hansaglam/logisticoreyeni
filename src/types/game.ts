@@ -1407,6 +1407,12 @@ export interface RetentionMilestoneProgress {
   completedAt?: number;
 }
 
+/** Idempotent reward claim receipt (save) */
+export interface RewardReceipt {
+  claimedAt: number;
+  rewardVersion?: number;
+}
+
 /** Haftalık sezon görevi ilerleme kaydı (save) */
 export interface WeeklySeasonObjectiveProgress {
   progress: number;
@@ -1560,6 +1566,8 @@ export interface StoreGameState {
   missions: MissionsState;
   /** Retention Pack V1 — milestone ve haftalık sezon görevleri */
   retention: RetentionState;
+  /** Idempotent reward claim receipts — mission / achievement / weekly */
+  rewardReceipts?: Record<string, RewardReceipt>;
   /** Başlangıç rehberi (Onboarding Guide V1) */
   onboarding: OnboardingState;
   /** Piyasa ekranı eğitimi — ilk giriş / yardım */

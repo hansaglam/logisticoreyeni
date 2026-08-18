@@ -4,6 +4,9 @@
  * Does not reset the game or recreate missing vehicles.
  */
 
+import {
+  reconcileDriverAssignments,
+} from './driverOperationalState';
 import type {
   Contract,
   Delivery,
@@ -282,15 +285,24 @@ export function reconcileMapTrackingState(
       : transfer,
   );
 
+  const driverReconcile = reconcileDriverAssignments({
+    drivers: idleDriversForMissingTrucks(input.player.drivers ?? [], orphanVehicleIds),
+    trucks: input.player.trucks ?? [],
+    activeDeliveries: nextDeliveries,
+    activeTransfers: nextTransfers,
+  });
+
   const nextPlayer: Player = {
     ...input.player,
-    drivers: idleDriversForMissingTrucks(input.player.drivers ?? [], orphanVehicleIds),
+    drivers: driverReconcile.drivers,
   };
 
-  const driversChanged = (nextPlayer.drivers ?? []).some((driver, index) => {
-    const previous = (input.player.drivers ?? [])[index];
-    return previous?.assignedTruckId !== driver.assignedTruckId || previous?.status !== driver.status;
-  });
+  const driversChanged =
+    driverReconcile.changed ||
+    (nextPlayer.drivers ?? []).some((driver, index) => {
+      const previous = (input.player.drivers ?? [])[index];
+      return previous?.assignedTruckId !== driver.assignedTruckId || previous?.status !== driver.status;
+    });
   const warehouseChanged = nextWarehouseTransfers.some(
     (item, index) => item !== (input.activeWarehouseStockTransfers ?? [])[index],
   );
@@ -304,7 +316,8 @@ export function reconcileMapTrackingState(
     cancelledOrphanDeliveries +
     cancelledDuplicateDeliveries +
     cancelledOrphanTransfers +
-    cancelledWarehouse;
+    cancelledWarehouse +
+    driverReconcile.summary.fixedDrivers;
   const changed = fixedCount > 0 || driversChanged || warehouseChanged;
 
   return {

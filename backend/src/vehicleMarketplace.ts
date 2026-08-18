@@ -288,6 +288,52 @@ async function readPurchaseTransactionContext(
   };
 }
 
+function uidHash(uid: string): string {
+  return createHash('sha256').update(uid).digest('hex').slice(0, 12);
+}
+
+function assertPurchaseInvariants(params: {
+  listingId: string;
+  buyerUid: string;
+  sellerUid: string;
+  price: number;
+  marketplaceFee: number;
+  sellerNet: number;
+  buyerCashBefore: number;
+  buyerCashAfter: number;
+  sellerCashBefore: number;
+  sellerCashAfter: number;
+  transferredTruckId: string;
+  buyerTruckIdsAfter: string[];
+  sellerTruckIdsAfter: string[];
+}): void {
+  const expectedBuyerCash = normalizeMoney(params.buyerCashBefore - params.price);
+  const expectedSellerCash = normalizeMoney(params.sellerCashBefore + params.sellerNet);
+  if (params.buyerCashAfter !== expectedBuyerCash) {
+    throw new Error(
+      `[MARKETPLACE_TXN_INVARIANT] buyer cash mismatch listing=${params.listingId}`,
+    );
+  }
+  if (params.sellerCashAfter !== expectedSellerCash) {
+    throw new Error(
+      `[MARKETPLACE_TXN_INVARIANT] seller cash mismatch listing=${params.listingId}`,
+    );
+  }
+  const buyerCount = params.buyerTruckIdsAfter.filter(
+    (id) => id === params.transferredTruckId,
+  ).length;
+  if (buyerCount !== 1) {
+    throw new Error(
+      `[MARKETPLACE_TXN_INVARIANT] buyer must own transferred truck exactly once listing=${params.listingId}`,
+    );
+  }
+  if (params.sellerTruckIdsAfter.includes(params.transferredTruckId)) {
+    throw new Error(
+      `[MARKETPLACE_TXN_INVARIANT] seller still owns transferred truck listing=${params.listingId}`,
+    );
+  }
+}
+
 function writePurchaseTransactionOutcome(
   transaction: Transaction,
   firestore: Firestore,
@@ -337,9 +383,64 @@ function writePurchaseTransactionOutcome(
   };
   const buyerCashBefore = normalizeMoney(buyer.canonicalCash);
   const buyerCashAfter = normalizeMoney(buyer.canonicalCash - listing.askingPrice);
+  const sellerCashBefore = normalizeMoney(seller.canonicalCash);
+  const sellerCashAfter = normalizeMoney(seller.canonicalCash + sellerNet);
+  const buyerTruckIdsBefore = buyer.ownedTruckSnapshots.map((item) => item.truckId);
+  const sellerTruckIdsBefore = seller.ownedTruckSnapshots.map((item) => item.truckId);
+  const buyerTruckIdsAfter = [...buyerTruckIdsBefore, buyerVehicle.truckId];
+  const sellerTruckIdsAfter = sellerTruckIdsBefore.filter(
+    (id) => id !== sellerVehicle.truckId,
+  );
+
+  console.info('[MARKETPLACE_TXN_BEFORE]', {
+    listingId: listing.id,
+    transactionId: input.transactionId,
+    idempotencyKey: input.idempotencyKey,
+    receiptId: actionKey(identity.uid, input.transactionId),
+    buyerUidHash: uidHash(identity.uid),
+    sellerUidHash: uidHash(listing.sellerUid),
+    price: listing.askingPrice,
+    marketplaceFee,
+    sellerNet,
+    buyerCash: buyerCashBefore,
+    sellerCash: sellerCashBefore,
+    buyerTruckIds: buyerTruckIdsBefore,
+    sellerTruckIds: sellerTruckIdsBefore,
+  });
+
+  assertPurchaseInvariants({
+    listingId: listing.id,
+    buyerUid: identity.uid,
+    sellerUid: listing.sellerUid,
+    price: listing.askingPrice,
+    marketplaceFee,
+    sellerNet,
+    buyerCashBefore,
+    buyerCashAfter,
+    sellerCashBefore,
+    sellerCashAfter,
+    transferredTruckId: sellerVehicle.truckId,
+    buyerTruckIdsAfter,
+    sellerTruckIdsAfter,
+  });
+
   const result = buildPurchaseSuccessResult(input, listing, {
     buyerCashBefore,
     buyerCashAfter,
+  });
+
+  console.info('[MARKETPLACE_TXN_AFTER]', {
+    listingId: listing.id,
+    transactionId: input.transactionId,
+    idempotencyKey: input.idempotencyKey,
+    receiptId: actionKey(identity.uid, input.transactionId),
+    buyerCash: buyerCashAfter,
+    sellerCash: sellerCashAfter,
+    buyerTruckIds: buyerTruckIdsAfter,
+    sellerTruckIds: sellerTruckIdsAfter,
+    listingStatus: 'sold',
+    transferredTruckId: sellerVehicle.truckId,
+    ownerUid: identity.uid,
   });
 
   if (!ctx.listingLockExists) {

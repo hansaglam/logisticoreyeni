@@ -58,6 +58,11 @@ import { ensureFinanceTotals, FINANCE_LEDGER_MAX_COUNT } from '../utils/financeL
 import { normalizeCashBalance } from '../utils/cashPolicy';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
 import { normalizeRetentionState } from '../simulation/retentionProgress';
+import {
+  hydrateRewardClaimState,
+  normalizeRewardReceipts,
+} from '../domain/rewardClaimIntegrity';
+import { getWeeklySeasonKey } from '../utils/leaderboardSeason';
 import { gameDayFromTime, normalizeWorldEventsState } from '../simulation/worldEvents';
 import {
   inferLegacyOnboardingFromSave,
@@ -99,6 +104,7 @@ import type {
   MissionsState,
   ProductId,
   RetentionState,
+  RewardReceipt,
   WorldEvent,
   OnboardingState,
   MarketPriceAlert,
@@ -176,6 +182,7 @@ export interface SaveGamePayload {
   tutorial?: TutorialState;
   missions?: MissionsState;
   retention?: RetentionState;
+  rewardReceipts?: Record<string, RewardReceipt>;
   onboarding?: OnboardingState;
   spotlightTutorial?: SpotlightTutorialPersistence;
   marketTutorialCompleted?: boolean;
@@ -543,6 +550,30 @@ export function normalizeLoadedPlayer(player: Player): Player {
   return migratePlayerTruckNames(normalized);
 }
 
+function resolvePersistedRewardClaims(input: {
+  rewardReceipts?: unknown;
+  missions: MissionsState;
+  retention: RetentionState;
+  currentTime: number;
+}): {
+  rewardReceipts: Record<string, RewardReceipt>;
+  missions: MissionsState;
+  retention: RetentionState;
+} {
+  const seasonKey = input.retention.currentWeeklySeasonKey || getWeeklySeasonKey();
+  return hydrateRewardClaimState({
+    rewardReceipts: normalizeRewardReceipts(
+      isRecord(input.rewardReceipts)
+        ? (input.rewardReceipts as Record<string, unknown>)
+        : undefined,
+    ),
+    missions: input.missions,
+    retention: input.retention,
+    seasonKey,
+    fallbackClaimedAt: input.currentTime,
+  });
+}
+
 /** Eski save'lerde eksik alanlar için varsayılan değerler */
 export function createDefaultSaveFallbacks(
   payload: Partial<SaveGamePayload> & Record<string, unknown>,
@@ -762,6 +793,13 @@ export function normalizeSavePayload(
     currentTime,
   });
 
+  const rewardClaims = resolvePersistedRewardClaims({
+    rewardReceipts: payload.rewardReceipts,
+    missions: withFallbacks.missions as MissionsState,
+    retention: withFallbacks.retention as RetentionState,
+    currentTime,
+  });
+
   return {
     version: withFallbacks.version as number,
     meta: {
@@ -825,7 +863,9 @@ export function normalizeSavePayload(
     lastPlayableContractGeneratedTime: withFallbacks.lastPlayableContractGeneratedTime as number,
     lastManualContractRefreshTime: withFallbacks.lastManualContractRefreshTime as number,
     tutorial: withFallbacks.tutorial as TutorialState,
-    missions: withFallbacks.missions as MissionsState,
+    missions: rewardClaims.missions,
+    retention: rewardClaims.retention,
+    rewardReceipts: rewardClaims.rewardReceipts,
     onboarding: withFallbacks.onboarding as OnboardingState,
     spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
     ...normalizeMarketTutorialState({
@@ -1631,6 +1671,7 @@ export function serializeGameState(
     tutorial: structuredClone(state.tutorial),
     missions: structuredClone(state.missions),
     retention: structuredClone(state.retention),
+    rewardReceipts: structuredClone(state.rewardReceipts ?? {}),
     onboarding: structuredClone(state.onboarding),
     spotlightTutorial: structuredClone(state.spotlightTutorial),
     marketTutorialCompleted: state.marketTutorialCompleted === true,
@@ -1730,6 +1771,13 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       cachedSnapshot?.fuelPricePerLiter ?? payload.globalEconomy?.fuelPrice,
   });
 
+  const rewardClaims = resolvePersistedRewardClaims({
+    rewardReceipts: payload.rewardReceipts,
+    missions: normalizeMissionsState(payload.missions),
+    retention: normalizeRetentionState(payload.retention),
+    currentTime: safeCurrentTime,
+  });
+
   return {
     currentTime: safeCurrentTime,
     isPaused: payload.isPaused,
@@ -1780,8 +1828,9 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     financeLedger: payload.financeLedger ?? [],
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
     tutorial: normalizeTutorialState(payload.tutorial),
-    missions: normalizeMissionsState(payload.missions),
-    retention: normalizeRetentionState(payload.retention),
+    missions: rewardClaims.missions,
+    retention: rewardClaims.retention,
+    rewardReceipts: rewardClaims.rewardReceipts,
     onboarding: payload.onboarding
       ? normalizeOnboardingState(payload.onboarding)
       : inferLegacyOnboardingFromSave({

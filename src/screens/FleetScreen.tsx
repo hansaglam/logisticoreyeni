@@ -8,12 +8,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import { useAppDialog } from '../components/AppDialogProvider';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
 import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 
-import { useAppDialog } from '../components/AppDialogProvider';
+import {
+  buildDriverAssignmentContext,
+  getDriverOperationalState,
+} from '../domain/driverOperationalState';
 import OwnedTruckCard from '../components/fleet/OwnedTruckCard';
 import DriverCard from '../components/fleet/DriverCard';
 import OwnedTrailerCard from '../components/fleet/OwnedTrailerCard';
@@ -297,6 +301,16 @@ export default function FleetScreen() {
     return map;
   }, [activeDeliveries]);
 
+  const driverAssignmentContext = useMemo(
+    () =>
+      buildDriverAssignmentContext({
+        trucks,
+        activeDeliveries,
+        activeTransfers,
+      }),
+    [trucks, activeDeliveries, activeTransfers],
+  );
+
   const sellCheckByTruckId = useMemo(() => {
     const map = new Map<string, TruckSellCheck>();
     for (const truck of trucks) {
@@ -558,15 +572,18 @@ export default function FleetScreen() {
   }, [requestNavigationToShop]);
 
   const handleAssignDriver = useCallback((driver: Driver) => {
-    if (driver.status === 'driving') {
-      showAlert('Atama yapılamaz', 'Şoför aktif teslimatta.');
+    const operational = getDriverOperationalState(driver, driverAssignmentContext);
+    if (operational.kind === 'on_delivery' || operational.kind === 'on_transfer') {
+      showAlert('Atama yapılamaz', operational.assignmentBlockedReason ?? 'Şoför aktif teslimatta.');
       return;
     }
-    if (driver.status === 'resting') {
+    if (operational.kind === 'resting') {
       showAlert('Atama yapılamaz', 'Şoför dinleniyor.');
       return;
     }
-    const assignedTruck = trucks.find((truck) => truck.id === driver.assignedTruckId);
+    const assignedTruck = operational.assignedTruckId
+      ? trucks.find((truck) => truck.id === operational.assignedTruckId)
+      : undefined;
     if (assignedTruck) {
       showAlert(
         'Kamyon ataması',
@@ -578,7 +595,7 @@ export default function FleetScreen() {
       'Kamyon ata',
       'Boşta şoförü kamyona atamak için Sözleşmeler sekmesinden teslimat başlat.',
     );
-  }, [showAlert, trucks]);
+  }, [driverAssignmentContext, showAlert, trucks]);
 
   const handleDriverTraining = useCallback((driver: Driver) => {
     const xpProgress = getDriverXpProgress(driver);
@@ -613,8 +630,15 @@ export default function FleetScreen() {
     const assignedTruck = trucks.find((truck) => truck.id === driver.assignedTruckId);
     const completedCount = driver.completedDeliveries ?? 0;
     const onTimeRate = getDriverOnTimeRate(driver);
+    const operational = getDriverOperationalState(driver, driverAssignmentContext);
     const statusLabel =
-      driver.status === 'driving' ? 'Teslimatta' : driver.status === 'resting' ? 'Dinleniyor' : 'Boşta';
+      operational.kind === 'on_delivery' || operational.kind === 'on_transfer'
+        ? 'Teslimatta'
+        : operational.kind === 'resting'
+          ? 'Dinleniyor'
+          : operational.kind === 'assigned'
+            ? 'Atanmış'
+            : 'Boşta';
 
     showDialog({
       title: driver.name,
@@ -636,7 +660,7 @@ export default function FleetScreen() {
       cancelLabel: 'Kapat',
       confirmLabel: 'Tamam',
     });
-  }, [showDialog, trucks]);
+  }, [driverAssignmentContext, showDialog, trucks]);
 
   const handleDriverMore = useCallback((driver: Driver) => {
     const fireCheck = canFireDriver(driver.id, fleetManagementState);
@@ -928,6 +952,7 @@ export default function FleetScreen() {
                   key={driver.id}
                   driver={driver}
                   trucks={trucks}
+                  driverContext={driverAssignmentContext}
                   homeCityId={homeCityId}
                   activeDelivery={deliveryByDriverId.get(driver.id)}
                   onAssign={handleAssignDriver}

@@ -13,7 +13,9 @@ import {
   TRUCK_ASSET_FORWARD_OFFSET_DEG,
   TRUCK_ASSET_HEADING_OFFSET_DEG,
   TRUCK_ICON_BASE_ROTATION_DEG,
+  VEHICLE_MARKER_ZERO_HEADING_DEG,
 } from '../src/components/map/mapTheme';
+import { routeHeadingToMarkerRotationDeg } from '../src/components/map/mapVehicleHeading';
 
 let pass = 0;
 let fail = 0;
@@ -33,23 +35,19 @@ function angularDistance(a: number, b: number): number {
 }
 
 function displayRotation(headingDeg: number): number {
-  return normalizeHeadingDegrees(headingDeg - TRUCK_ASSET_FORWARD_OFFSET_DEG);
+  return routeHeadingToMarkerRotationDeg(headingDeg);
 }
 
 console.log('\n=== Truck Route Heading Test ===\n');
 
 console.log('Asset base rotation');
 assert(
-  TRUCK_ASSET_FORWARD_OFFSET_DEG === 180,
-  'truck-outline 0° faces left → TRUCK_ASSET_FORWARD_OFFSET_DEG is 180°',
+  VEHICLE_MARKER_ZERO_HEADING_DEG === 0,
+  'chevron 0° points east (+X)',
 );
 assert(
-  TRUCK_ICON_BASE_ROTATION_DEG === TRUCK_ASSET_FORWARD_OFFSET_DEG,
-  'legacy alias matches canonical forward offset',
-);
-assert(
-  TRUCK_ASSET_HEADING_OFFSET_DEG === TRUCK_ASSET_FORWARD_OFFSET_DEG,
-  'legacy heading alias matches canonical forward offset',
+  TRUCK_ASSET_FORWARD_OFFSET_DEG === VEHICLE_MARKER_ZERO_HEADING_DEG,
+  'legacy alias matches chevron zero',
 );
 
 console.log('\nCardinal synthetic headings');
@@ -68,8 +66,8 @@ assert(angularDistance(westH, 180) < 0.001, 'west = 180°');
 assert(angularDistance(eastH, westH) > 179.9, 'west = east + ~180°');
 assert(angularDistance(southH, 90) < 0.001, 'south = 90° (Y-down screen)');
 assert(angularDistance(northH, -90) < 0.001, 'north = -90° (Y-down screen)');
-assert(angularDistance(displayRotation(eastH), 180) < 0.001, 'east marker rotation ≈ 180° (cab faces east)');
-assert(angularDistance(displayRotation(westH), 0) < 0.001, 'west marker rotation ≈ 0° (cab faces west)');
+assert(angularDistance(displayRotation(eastH), 0) < 0.001, 'east chevron rotation ≈ 0°');
+assert(angularDistance(displayRotation(westH), 180) < 0.001, 'west chevron rotation ≈ 180°');
 
 console.log('\nEndpoint / duplicate safety');
 assert(

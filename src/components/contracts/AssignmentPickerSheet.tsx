@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import { getBottomInset, getSafeModalMaxHeight } from '../../constants/layout';
+import type { DriverAssignmentContext } from '../../domain/driverOperationalState';
 import { getCityName } from '../../utils/entityLookup';
 import {
   getDriverBadge,
@@ -35,6 +36,7 @@ export interface AssignmentPickerSheetProps {
   mode: PickerMode;
   truckOptions?: TruckOption[];
   driverOptions?: DriverOption[];
+  driverContext?: DriverAssignmentContext;
   selectedTruckId?: string | null;
   selectedDriverId?: string | null;
   onSelectTruck?: (truckId: string) => void;
@@ -82,13 +84,15 @@ function CompactTruckRow({
 function CompactDriverRow({
   option,
   selected,
+  driverContext,
   onPress,
 }: {
   option: DriverOption;
   selected: boolean;
+  driverContext?: DriverAssignmentContext;
   onPress: () => void;
 }) {
-  const badge = getDriverBadge(option);
+  const badge = getDriverBadge(option, driverContext);
   const { driver } = option;
 
   return (
@@ -119,6 +123,7 @@ export default function AssignmentPickerSheet({
   mode,
   truckOptions = [],
   driverOptions = [],
+  driverContext,
   selectedTruckId,
   selectedDriverId,
   onSelectTruck,
@@ -179,6 +184,7 @@ export default function AssignmentPickerSheet({
                     key={option.driver.id}
                     option={option}
                     selected={option.driver.id === selectedDriverId}
+                    driverContext={driverContext}
                     onPress={() => {
                       if (!option.selectable) return;
                       onSelectDriver?.(option.driver.id);

@@ -37,6 +37,11 @@ import {
   type DriverOption,
   type TruckOption,
 } from '../utils/assignmentOptions';
+import {
+  buildDriverAssignmentContext,
+  getDriverOperationalState,
+  type DriverAssignmentContext,
+} from '../domain/driverOperationalState';
 import { useGameStore } from '../store/gameStore';
 import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { colors, spacing, typography } from '../theme';
@@ -274,15 +279,24 @@ function TruckCard({ option, selected, onSelect }: TruckCardProps) {
 interface DriverCardProps {
   option: DriverOption;
   selected: boolean;
+  driverContext: DriverAssignmentContext;
   onSelect: () => void;
 }
 
-function DriverCard({ option, selected, onSelect }: DriverCardProps) {
+function DriverCard({ option, selected, driverContext, onSelect }: DriverCardProps) {
   const { alert: showAlert } = useAppDialog();
   const { driver } = option;
-  const badge = getDriverBadge(option);
+  const badge = getDriverBadge(option, driverContext);
+  const operational = getDriverOperationalState(driver, driverContext);
   const trait = getDriverTrait(driver);
-  const statusVariant: StatusBadgeVariant = driver.status === 'idle' ? 'success' : 'muted';
+  const statusVariant: StatusBadgeVariant =
+    operational.kind === 'on_delivery' || operational.kind === 'on_transfer'
+      ? 'amber'
+      : operational.kind === 'resting'
+        ? 'warning'
+        : option.selectable
+          ? 'success'
+          : 'muted';
 
   const handlePress = () => {
     if (option.selectable) {
@@ -327,7 +341,7 @@ function DriverCard({ option, selected, onSelect }: DriverCardProps) {
 
         <View style={styles.driverFooterRow}>
           <StatusBadge label={trait.label} variant={trait.variant} size="sm" />
-          <StatusBadge label={getDriverStatusLabel(driver.status)} variant={statusVariant} size="sm" />
+          <StatusBadge label={operational.statusBadgeLabel} variant={statusVariant} size="sm" />
           {(driver.fuelSaving ?? 0) >= 50 ? (
             <StatusBadge label={`Tasarruf ${Math.round(driver.fuelSaving ?? 0)}%`} variant="info" size="sm" />
           ) : null}
@@ -361,6 +375,7 @@ export default function ContractAssignmentModal({
   );
   const currentTime = useGameStore((state) => state.currentTime);
   const activeDeliveries = useGameStore((state) => state.activeDeliveries);
+  const activeTransfers = useGameStore((state) => state.activeTransfers ?? []);
   const trailers = useGameStore((state) => state.player?.trailers ?? []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId);
   const playerReputation = useGameStore((state) => state.player?.reputation ?? 0);
@@ -429,9 +444,19 @@ export default function ContractAssignmentModal({
     ],
   );
 
+  const driverAssignmentContext = useMemo(
+    () =>
+      buildDriverAssignmentContext({
+        trucks: safeTrucks,
+        activeDeliveries,
+        activeTransfers,
+      }),
+    [safeTrucks, activeDeliveries, activeTransfers],
+  );
+
   const driverOptions = useMemo(
-    () => safeDrivers.map((driver) => evaluateDriverOption(driver)),
-    [safeDrivers],
+    () => safeDrivers.map((driver) => evaluateDriverOption(driver, driverAssignmentContext)),
+    [safeDrivers, driverAssignmentContext],
   );
 
   const eligibleTrucks = truckOptions.filter((option) => option.selectable);
@@ -850,6 +875,7 @@ export default function ContractAssignmentModal({
                   key={option.driver.id}
                   option={option}
                   selected={option.driver.id === selectedDriverId}
+                  driverContext={driverAssignmentContext}
                   onSelect={() => setSelectedDriverId(option.driver.id)}
                 />
               );

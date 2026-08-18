@@ -24,7 +24,22 @@ import {
 import { markStartup, withStartupTimeout } from '../utils/startupPerformance';
 import { bumpSaveContentRevision, resetSaveRevisionState } from '../storage/saveRevision';
 import type { ShopCategory } from '../navigation/tabTypes';
+import {
+  buildDriverAssignmentContext,
+  getDriverOperationalState,
+  reconcileDriverAssignments,
+} from '../domain/driverOperationalState';
+import {
+  attemptRewardClaim,
+  hydrateRewardClaimState,
+  isRewardClaimed,
+  logAchievementClaimPersisted,
+  logAchievementHydrate,
+} from '../domain/rewardClaimIntegrity';
+import { getAcceptedTestRemoteMoney } from '../config/testMoneySyncAccepted';
 import { VEHICLE_MARKETPLACE_ENABLED } from '../config/backendRoadmap';
+import { isTestMoneySyncEnabled } from '../config/testMoneySync';
+import { resolveCashAfterMarketplaceReconcile } from '../config/testMoneySyncPure';
 import { beginPostStartupMarketplaceCloudHold } from '../services/marketplaceStartupCloudHold';
 import type {
   City,
@@ -81,6 +96,7 @@ import {
   addFinanceLedgerEntries,
   createEmptyFinanceTotals,
   hasDeliveryCompletionLedgerEntry,
+  hasFinanceLedgerTransaction,
 } from '../utils/financeLedger';
 import {
   findDriverPoolItem,
@@ -1182,6 +1198,18 @@ function commitXpResult(
   }
 }
 
+function persistRewardClaimSave(
+  get: () => GameStore,
+  cloudReason: 'mission_claim' | 'achievement_claim',
+): void {
+  get().markSaveDirty();
+  void get()
+    .saveGame()
+    .then(() => {
+      void syncLocalSaveToCloud(cloudReason, { force: true, state: get() });
+    });
+}
+
 function notifyLevelUps(
   get: () => GameStore,
   set: (partial: Partial<GameStore>) => void,
@@ -1773,6 +1801,7 @@ export function createInitialGameState(): StoreGameState {
     tutorial: createDefaultTutorialState(),
     missions: createDefaultMissionsState(),
     retention: createDefaultRetentionState(),
+    rewardReceipts: {},
     onboarding: createDefaultOnboardingState(),
     spotlightTutorial: createDefaultSpotlightTutorialState(),
     marketTutorialCompleted: false,
@@ -2159,7 +2188,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
         player: {
           ...live.player,
           trucks: result.trucks,
-          money: result.authoritativeCash ?? live.player.money,
+          money: resolveCashAfterMarketplaceReconcile({
+            localCash: live.player.money,
+            authoritativeCash: result.authoritativeCash,
+            acceptedTestRemoteMoney: getAcceptedTestRemoteMoney(),
+            testMoneySyncEnabled: isTestMoneySyncEnabled(),
+          }),
         },
         vehicleMarketplace: result.cache,
       };
@@ -3034,13 +3068,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
   claimMissionReward: (missionId) => {
     const state = get();
     const missions = syncMissionsState(state.missions ?? createDefaultMissionsState(), state);
+    const progress = getMissionProgress(missionId, { ...state, missions });
+    const receiptAttempt = attemptRewardClaim({
+      scope: 'mission',
+      rewardId: missionId,
+      currentTime: state.currentTime,
+      rewardReceipts: state.rewardReceipts,
+      isComplete: progress.isComplete,
+      isAlreadyMarkedClaimed: missions.claimedMissionRewardIds.includes(missionId),
+    });
 
-    if (missions.claimedMissionRewardIds.includes(missionId)) {
+    if (receiptAttempt.status === 'ALREADY_CLAIMED') {
       return { success: false, message: 'Ödül zaten alındı.' };
     }
-
-    const progress = getMissionProgress(missionId, { ...state, missions });
-    if (!progress.isComplete) {
+    if (receiptAttempt.status === 'NOT_COMPLETE') {
       return { success: false, message: 'Görev henüz tamamlanmadı.' };
     }
 
@@ -3052,13 +3093,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const moneyReward = mission.reward.money ?? 0;
     const xpReward = mission.reward.xp ?? 0;
     const reputationReward = mission.reward.reputation ?? 0;
-    const rewardTransaction = applyCashTransaction({
-      currentCash: state.player.money,
-      amount: moneyReward,
-      kind: 'income',
-      referenceId: `mission:${missionId}:reward`,
-      transactionId: `mission-reward:${missionId}`,
-    });
+    const transactionId = `mission-reward:${missionId}`;
+    const moneyAlreadyApplied = hasFinanceLedgerTransaction(state.financeLedger, transactionId);
+    const rewardTransaction = moneyAlreadyApplied
+      ? {
+          amount: 0,
+          cashAfter: state.player.money,
+          transactionId,
+          referenceId: `mission:${missionId}:reward`,
+        }
+      : applyCashTransaction({
+          currentCash: state.player.money,
+          amount: moneyReward,
+          kind: 'income',
+          referenceId: `mission:${missionId}:reward`,
+          transactionId,
+        });
 
     const ledgerPatch =
       rewardTransaction.amount > 0
@@ -3078,6 +3128,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const completedMissionIds = missions.completedMissionIds.includes(missionId)
       ? missions.completedMissionIds
       : [...missions.completedMissionIds, missionId];
+    const nextRewardReceipts = receiptAttempt.nextReceipts ?? state.rewardReceipts ?? {};
 
     const currentOnboarding = state.onboarding ?? createDefaultOnboardingState();
     const nextOnboarding =
@@ -3111,6 +3162,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         claimedMissionRewardIds,
         completedMissionIds,
       },
+      rewardReceipts: nextRewardReceipts,
       onboarding: nextOnboarding,
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
@@ -3143,13 +3195,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       console.warn('[gameStore] mission reward notification failed:', error);
     }
 
-    get().markSaveDirty();
     get().advanceOnboardingProgress();
-    void get()
-      .saveGame()
-      .then(() => {
-        void syncLocalSaveToCloud('mission_claim', { force: true, state: get() });
-      });
+    persistRewardClaimSave(get, 'mission_claim');
     return { success: true };
   },
 
@@ -3181,6 +3228,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
   claimMilestoneReward: (milestoneId) => {
     const state = get();
     const synced = syncRetentionProgressState(state);
+    const milestone = getMilestoneById(milestoneId);
+    if (!milestone) {
+      return { success: false, message: 'Başarı bulunamadı.' };
+    }
+
+    const entry = synced.milestones[milestoneId];
+    const receiptAttempt = attemptRewardClaim({
+      scope: 'achievement',
+      rewardId: milestoneId,
+      currentTime: state.currentTime,
+      rewardReceipts: state.rewardReceipts,
+      isComplete: Boolean(entry && entry.progress >= milestone.target),
+      isAlreadyMarkedClaimed: entry?.isClaimed === true,
+    });
+
+    if (receiptAttempt.status === 'ALREADY_CLAIMED') {
+      return { success: false, message: 'Ödül zaten alındı.' };
+    }
+    if (receiptAttempt.status === 'NOT_COMPLETE') {
+      return { success: false, message: 'Başarı henüz tamamlanmadı.' };
+    }
+
     const claimResult = claimMilestoneRewardState(synced, milestoneId, state.currentTime);
     if (!claimResult.ok) {
       if (claimResult.error === 'already-claimed') {
@@ -3192,21 +3261,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { success: false, message: 'Başarı bulunamadı.' };
     }
 
-    const milestone = getMilestoneById(milestoneId);
-    if (!milestone) {
-      return { success: false, message: 'Başarı bulunamadı.' };
-    }
-
     const moneyReward = milestone.reward.cash ?? 0;
     const xpReward = milestone.reward.xp ?? 0;
     const reputationReward = milestone.reward.reputation ?? 0;
-    const rewardTransaction = applyCashTransaction({
-      currentCash: state.player.money,
-      amount: moneyReward,
-      kind: 'income',
-      referenceId: `milestone:${milestoneId}:reward`,
-      transactionId: `milestone-reward:${milestoneId}`,
-    });
+    const transactionId = `milestone-reward:${milestoneId}`;
+    const moneyAlreadyApplied = hasFinanceLedgerTransaction(state.financeLedger, transactionId);
+    const rewardTransaction = moneyAlreadyApplied
+      ? {
+          amount: 0,
+          cashAfter: state.player.money,
+          transactionId,
+          referenceId: `milestone:${milestoneId}:reward`,
+        }
+      : applyCashTransaction({
+          currentCash: state.player.money,
+          amount: moneyReward,
+          kind: 'income',
+          referenceId: `milestone:${milestoneId}:reward`,
+          transactionId,
+        });
 
     const ledgerPatch =
       rewardTransaction.amount > 0
@@ -3236,13 +3309,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
           )
         : null;
 
+    const hydratedClaims = hydrateRewardClaimState({
+      rewardReceipts: receiptAttempt.nextReceipts,
+      missions: state.missions ?? createDefaultMissionsState(),
+      retention: claimResult.retention,
+      seasonKey: claimResult.retention.currentWeeklySeasonKey,
+      fallbackClaimedAt: state.currentTime,
+    });
+
     set({
       player: {
         ...(reputationPatch?.player ?? state.player),
         money: rewardTransaction.cashAfter,
       },
       reputationHistory: reputationPatch?.reputationHistory ?? state.reputationHistory,
-      retention: claimResult.retention,
+      retention: hydratedClaims.retention,
+      missions: hydratedClaims.missions,
+      rewardReceipts: hydratedClaims.rewardReceipts,
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
       eventLog: prependGameEvent(
@@ -3262,8 +3345,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().addCompanyXp(xpReward, 'milestone_reward');
     }
 
-    get().markSaveDirty();
-    get().syncRetentionProgress();
+    logAchievementClaimPersisted(milestoneId);
+    persistRewardClaimSave(get, 'achievement_claim');
     return { success: true };
   },
 
@@ -3271,6 +3354,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const seasonKey = getWeeklySeasonKey();
     const synced = syncRetentionProgressState(state);
+    const objective = getWeeklyObjectiveById(seasonKey, objectiveId);
+    if (!objective) {
+      return { success: false, message: 'Haftalık görev bulunamadı.' };
+    }
+
+    const entry = synced.weeklyObjectives[objectiveId];
+    const receiptAttempt = attemptRewardClaim({
+      scope: 'weekly',
+      rewardId: objectiveId,
+      seasonKey,
+      currentTime: state.currentTime,
+      rewardReceipts: state.rewardReceipts,
+      isComplete: Boolean(entry && entry.progress >= objective.target),
+      isAlreadyMarkedClaimed: entry?.isClaimed === true,
+    });
+
+    if (receiptAttempt.status === 'ALREADY_CLAIMED') {
+      return { success: false, message: 'Ödül zaten alındı.' };
+    }
+    if (receiptAttempt.status === 'NOT_COMPLETE') {
+      return { success: false, message: 'Haftalık görev henüz tamamlanmadı.' };
+    }
+
     const claimResult = claimWeeklyObjectiveRewardState(
       synced,
       objectiveId,
@@ -3287,21 +3393,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { success: false, message: 'Haftalık görev bulunamadı.' };
     }
 
-    const objective = getWeeklyObjectiveById(seasonKey, objectiveId);
-    if (!objective) {
-      return { success: false, message: 'Haftalık görev bulunamadı.' };
-    }
-
     const moneyReward = objective.reward.cash ?? 0;
     const xpReward = objective.reward.xp ?? 0;
     const reputationReward = objective.reward.reputation ?? 0;
-    const rewardTransaction = applyCashTransaction({
-      currentCash: state.player.money,
-      amount: moneyReward,
-      kind: 'income',
-      referenceId: `weekly:${seasonKey}:${objectiveId}:reward`,
-      transactionId: `weekly-reward:${seasonKey}:${objectiveId}`,
-    });
+    const transactionId = `weekly-reward:${seasonKey}:${objectiveId}`;
+    const moneyAlreadyApplied = hasFinanceLedgerTransaction(state.financeLedger, transactionId);
+    const rewardTransaction = moneyAlreadyApplied
+      ? {
+          amount: 0,
+          cashAfter: state.player.money,
+          transactionId,
+          referenceId: `weekly:${seasonKey}:${objectiveId}:reward`,
+        }
+      : applyCashTransaction({
+          currentCash: state.player.money,
+          amount: moneyReward,
+          kind: 'income',
+          referenceId: `weekly:${seasonKey}:${objectiveId}:reward`,
+          transactionId,
+        });
 
     const ledgerPatch =
       rewardTransaction.amount > 0
@@ -3331,13 +3441,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
           )
         : null;
 
+    const hydratedClaims = hydrateRewardClaimState({
+      rewardReceipts: receiptAttempt.nextReceipts,
+      missions: state.missions ?? createDefaultMissionsState(),
+      retention: claimResult.retention,
+      seasonKey,
+      fallbackClaimedAt: state.currentTime,
+    });
+
     set({
       player: {
         ...(reputationPatch?.player ?? state.player),
         money: rewardTransaction.cashAfter,
       },
       reputationHistory: reputationPatch?.reputationHistory ?? state.reputationHistory,
-      retention: claimResult.retention,
+      retention: hydratedClaims.retention,
+      missions: hydratedClaims.missions,
+      rewardReceipts: hydratedClaims.rewardReceipts,
       financeLedger: ledgerPatch?.financeLedger ?? state.financeLedger ?? [],
       financeTotals: ledgerPatch?.financeTotals ?? state.financeTotals,
       eventLog: prependGameEvent(
@@ -3357,8 +3477,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().addCompanyXp(xpReward, 'weekly_objective_reward');
     }
 
-    get().markSaveDirty();
-    get().syncRetentionProgress();
+    persistRewardClaimSave(get, 'achievement_claim');
     return { success: true };
   },
 
@@ -3664,6 +3783,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       get().checkMarketPriceAlerts({ sendLocal: false });
       get().advanceOnboardingProgress();
+      logAchievementHydrate(get().rewardReceipts ?? {});
       get().syncRetentionProgress();
       get().processExpiredLeases('hydrate-rental-expiry');
       get().reconcileMapTracking('hydrate');
@@ -6077,8 +6197,8 @@ const elapsed = plan.elapsed;
       };
     }
 
-    const driver = state.player.drivers.find((d) => d.id === driverId);
-    if (!driver) {
+    const rawDriver = state.player.drivers.find((d) => d.id === driverId);
+    if (!rawDriver) {
       return {
         success: false,
         errorCode: 'DRIVER_NOT_FOUND',
@@ -6086,13 +6206,32 @@ const elapsed = plan.elapsed;
       };
     }
 
-    if (driver.status !== 'idle') {
+    const driverReconcile = reconcileDriverAssignments({
+      drivers: state.player.drivers,
+      trucks: state.player.trucks,
+      activeDeliveries: state.activeDeliveries,
+      activeTransfers: state.activeTransfers ?? [],
+    });
+    const driversAfterReconcile = driverReconcile.drivers;
+    const reconciledDriver = driversAfterReconcile.find((d) => d.id === driverId) ?? rawDriver;
+    if (driverReconcile.changed) {
+      set({ player: { ...state.player, drivers: driversAfterReconcile } });
+    }
+
+    const driverContext = buildDriverAssignmentContext({
+      trucks: state.player.trucks,
+      activeDeliveries: state.activeDeliveries,
+      activeTransfers: state.activeTransfers ?? [],
+    });
+    const operational = getDriverOperationalState(reconciledDriver, driverContext);
+    if (!operational.selectableForDelivery) {
       return {
         success: false,
         errorCode: 'DRIVER_BUSY',
-        message: 'Seçilen şoför şu anda görevde.',
+        message: operational.assignmentBlockedReason ?? 'Seçilen şoför şu anda görevde.',
       };
     }
+    const driver = reconciledDriver;
 
     const originCityId = contract.originCityId;
     if (!originCityId) {

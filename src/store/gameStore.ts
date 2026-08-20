@@ -2180,10 +2180,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   applyVehicleMarketplaceReconciliation: (authoritative) => {
     set((live) => {
-      const result = reconcileFleetWithVehicleMarketplace(
-        live.player.trucks,
-        authoritative,
-      );
+      const trucks = live.player?.trucks ?? [];
+      const result = reconcileFleetWithVehicleMarketplace(trucks, authoritative);
+      if (!live.player) {
+        return { vehicleMarketplace: result.cache };
+      }
       return {
         player: {
           ...live.player,
@@ -3731,6 +3732,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({
         ...saved,
         player: normalizeLoadedPlayer(saved.player),
+        rewardReceipts: saved.rewardReceipts ?? {},
+        retention: saved.retention ?? createDefaultRetentionState(),
         cities: mergeCanonicalCities(saved.cities),
         routes: mergeCanonicalRoutes(saved.routes),
         monetization: normalizeMonetizationState(saved.monetization, saved.currentTime ?? 0),

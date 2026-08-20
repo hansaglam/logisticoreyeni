@@ -62,7 +62,6 @@ export function planMarketplaceStartupReconcile(input: {
   return {
     shouldApply:
       addedVehicleIds.length > 0 ||
-      versionIncreased ||
       staleLocalSoldTrucks.length > 0 ||
       (versionIncreased && cashOutOfSync),
     addedVehicleIds,

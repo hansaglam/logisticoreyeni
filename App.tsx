@@ -53,6 +53,13 @@ import {
   flushPendingTestMoneySync,
   startTestMoneySync,
 } from './src/services/testMoneySyncService';
+import { getBuildFingerprint, logBuildFingerprintOnce } from './src/config/buildFingerprint';
+import { isInternalBuildProfile } from './src/config/buildProfile';
+import {
+  logCloudSyncError,
+  logStartupError,
+  safeVoid,
+} from './src/utils/startupErrors';
 import type { ProductId } from './src/types/game';
 import {
   enableImmersiveGameMode,
@@ -90,6 +97,7 @@ import {
 } from './src/utils/startupPerformance';
 
 markStartup('APP_START');
+logBuildFingerprintOnce();
 
 const TAB_PERFORMANCE_LOG_ENABLED =
   (typeof __DEV__ !== 'undefined' && __DEV__) ||
@@ -394,10 +402,18 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
 }
 
 function GameLoadingScreen({ hint }: { hint: string }) {
+  const fingerprint = getBuildFingerprint();
+  const showFingerprint =
+    isInternalBuildProfile() || fingerprint.buildProfile === 'internal';
   return (
     <View style={styles.loadingRoot}>
       <ActivityIndicator size="large" color={UI.colors.primary} />
       <Text style={styles.loadingText}>{hint}</Text>
+      {showFingerprint ? (
+        <Text style={styles.fingerprintText}>
+          {fingerprint.appVersion} ({fingerprint.versionCode ?? '—'}) {fingerprint.gitCommitShort} {fingerprint.mapMarkerRevision}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -411,27 +427,37 @@ export default function App() {
   const appStateRef = useRef(AppState.currentState);
 
   const startGame = useCallback(async () => {
-    await useGameStore.getState().initializeGame();
-    setBootPhase('ready');
+    try {
+      await useGameStore.getState().initializeGame();
+      setBootPhase('ready');
+    } catch (error) {
+      logStartupError('initialize-game', error);
+      setBootPhase('ready');
+    }
   }, []);
 
   const handleRecoveryComplete = useCallback(() => {
     void (async () => {
-      const { invalidateSaveRecoveryColdStartProbe, probeSaveRecoveryWithCloudAttempt } =
-        await import('./src/services/saveRecoveryService');
-      invalidateSaveRecoveryColdStartProbe();
-      const probe = await probeSaveRecoveryWithCloudAttempt({ force: true });
-      if (probe.required && !probe.quarantine?.userChoseNewGame) {
-        setRecoveryProbe(probe);
-        setBootPhase('recovery');
-        return;
+      try {
+        const { invalidateSaveRecoveryColdStartProbe, probeSaveRecoveryWithCloudAttempt } =
+          await import('./src/services/saveRecoveryService');
+        invalidateSaveRecoveryColdStartProbe();
+        const probe = await probeSaveRecoveryWithCloudAttempt({ force: true });
+        if (probe.required && !probe.quarantine?.userChoseNewGame) {
+          setRecoveryProbe(probe);
+          setBootPhase('recovery');
+          return;
+        }
+        await startGame();
+      } catch (error) {
+        logStartupError('recovery-complete', error);
+        await startGame();
       }
-      await startGame();
     })();
   }, [startGame]);
 
   useEffect(() => {
-    void enableImmersiveGameMode();
+    safeVoid('immersive-mode', enableImmersiveGameMode());
     const unsubscribeImmersive = subscribeImmersiveModeRefresh();
     return () => {
       unsubscribeImmersive();
@@ -440,10 +466,20 @@ export default function App() {
 
   useEffect(() => {
     if (bootPhase !== 'ready') return;
-    void (async () => {
-      await gatherAdsConsentIfNeeded();
-      await initializeAdProvider();
-    })();
+    const handle = InteractionManager.runAfterInteractions(() => {
+      void (async () => {
+        markStartup('ADS_START');
+        try {
+          await gatherAdsConsentIfNeeded();
+          await initializeAdProvider();
+        } catch (error) {
+          logStartupError('ads-init', error);
+        } finally {
+          markStartup('ADS_DONE');
+        }
+      })();
+    });
+    return () => handle.cancel();
   }, [bootPhase]);
 
   useEffect(() => {
@@ -466,43 +502,64 @@ export default function App() {
     // Native Google Sign-In Expo Go'da çalışmayabilir; development build gerekir.
     let cancelled = false;
     void (async () => {
-      configureGoogleSignIn();
-      logFirebaseRuntimeConfigOnce();
-      setBootHint('Kayıt yükleniyor...');
-      const { probeSaveRecoveryOnColdStart } = await import(
-        './src/services/saveRecoveryService'
-      );
-      const probe = await probeSaveRecoveryOnColdStart();
-      if (cancelled) return;
-      logProductionBuildConfigOnce();
-      if (probe.required && !probe.quarantine?.userChoseNewGame) {
-        setRecoveryProbe(probe);
-        setBootPhase('recovery');
-        void (async () => {
-          markStartup('AUTH_INIT_START');
-          await initAnonymousAuth();
-          markStartup('AUTH_INIT_DONE');
-          if (cancelled) return;
-          const {
-            invalidateSaveRecoveryColdStartProbe,
-            probeSaveRecoveryWithCloudAttempt,
-          } = await import('./src/services/saveRecoveryService');
-          invalidateSaveRecoveryColdStartProbe();
-          const cloudProbe = await probeSaveRecoveryWithCloudAttempt({ force: true });
-          if (cancelled) return;
-          if (!cloudProbe.required || cloudProbe.quarantine?.userChoseNewGame) {
-            await startGame();
-          }
-        })();
-        return;
+      try {
+        configureGoogleSignIn();
+        logFirebaseRuntimeConfigOnce();
+        setBootHint('Kayıt yükleniyor...');
+        const { probeSaveRecoveryOnColdStart } = await import(
+          './src/services/saveRecoveryService'
+        );
+        const probe = await probeSaveRecoveryOnColdStart();
+        if (cancelled) return;
+        logProductionBuildConfigOnce();
+        if (probe.required && !probe.quarantine?.userChoseNewGame) {
+          setRecoveryProbe(probe);
+          setBootPhase('recovery');
+          void (async () => {
+            markStartup('AUTH_INIT_START');
+            try {
+              await initAnonymousAuth();
+            } catch (error) {
+              logStartupError('auth-init-recovery', error);
+            } finally {
+              markStartup('AUTH_INIT_DONE');
+            }
+            if (cancelled) return;
+            try {
+              const {
+                invalidateSaveRecoveryColdStartProbe,
+                probeSaveRecoveryWithCloudAttempt,
+              } = await import('./src/services/saveRecoveryService');
+              invalidateSaveRecoveryColdStartProbe();
+              const cloudProbe = await probeSaveRecoveryWithCloudAttempt({ force: true });
+              if (cancelled) return;
+              if (!cloudProbe.required || cloudProbe.quarantine?.userChoseNewGame) {
+                await startGame();
+              }
+            } catch (error) {
+              logStartupError('save-recovery-cloud-probe', error);
+              await startGame();
+            }
+          })();
+          return;
+        }
+        await startGame();
+      } catch (error) {
+        logStartupError('cold-start', error);
+        try {
+          await startGame();
+        } catch (startError) {
+          logStartupError('cold-start-fallback', startError);
+        }
       }
-      await startGame();
     })();
 
     const authPromise = (async () => {
       markStartup('AUTH_INIT_START');
       try {
         await initAnonymousAuth();
+      } catch (error) {
+        logStartupError('auth-init', error);
       } finally {
         markStartup('AUTH_INIT_DONE');
       }
@@ -510,7 +567,11 @@ export default function App() {
     void authPromise;
 
     markStartup('NOTIFICATIONS_INIT_START');
-    setupNotificationHandler();
+    try {
+      setupNotificationHandler();
+    } catch (error) {
+      logStartupError('notifications-init', error);
+    }
     markStartup('NOTIFICATIONS_INIT_DONE');
     const notificationSub = addNotificationResponseListener((response) => {
       if (isFleetRentalNotificationResponse(response)) {
@@ -555,12 +616,20 @@ export default function App() {
       setIsAppActive(isActive);
 
       if (!wasActive && isActive) {
-        useGameStore.getState().checkMarketPriceAlerts({ sendLocal: false });
-        useGameStore.getState().applyOfflineProgressionIfNeeded('foreground');
-        useGameStore.getState().maybeRefreshMarketSnapshot('foreground');
-        void maybeSubmitLeaderboardForSeasonChange();
-        retryPostStartupMarketplaceReconcileIfNeeded();
-        void reconcileVehicleMarketplaceOnForeground();
+        try {
+          const store = useGameStore.getState();
+          if (!store.isGameReady) {
+            return;
+          }
+          store.checkMarketPriceAlerts({ sendLocal: false });
+          store.applyOfflineProgressionIfNeeded('foreground');
+          store.maybeRefreshMarketSnapshot('foreground');
+          safeVoid('leaderboard-season', maybeSubmitLeaderboardForSeasonChange());
+          retryPostStartupMarketplaceReconcileIfNeeded();
+          safeVoid('marketplace-foreground-reconcile', reconcileVehicleMarketplaceOnForeground());
+        } catch (error) {
+          logStartupError('appstate-foreground', error);
+        }
       }
       // iOS inactive + background: son timestamp kaydet (force-close güvenliği)
       if (nextState === 'background' || nextState === 'inactive') {
@@ -587,24 +656,45 @@ export default function App() {
       return;
     }
 
-    void preloadMapAssets();
     void (async () => {
+      markStartup('MAP_PRELOAD_START');
       try {
-        await runPostStartupMarketplaceReconcile();
+        await preloadMapAssets();
+      } catch (error) {
+        logStartupError('map-preload', error);
+      } finally {
+        markStartup('MAP_PRELOAD_DONE');
+      }
+    })();
+
+    const handle = InteractionManager.runAfterInteractions(() => {
+      void (async () => {
+        try {
+          await runPostStartupMarketplaceReconcile();
+        } catch (error) {
+          logStartupError('marketplace-startup-reconcile', error);
+        }
         markStartup('CLOUD_SYNC_START');
         try {
           await initCloudSaveSync(() => useGameStore.getState());
+        } catch (error) {
+          logCloudSyncError(error);
         } finally {
           markStartup('CLOUD_SYNC_DONE');
+          endPostStartupMarketplaceCloudHold();
         }
-      } finally {
-        endPostStartupMarketplaceCloudHold();
-      }
-    })();
-    const stopTestMoneySync = startTestMoneySync();
-    flushPendingTestMoneySync();
+      })();
+    });
+    let stopTestMoneySync: (() => void) | undefined;
+    try {
+      stopTestMoneySync = startTestMoneySync();
+      flushPendingTestMoneySync();
+    } catch (error) {
+      logStartupError('test-money-sync', error);
+    }
     return () => {
-      stopTestMoneySync();
+      handle.cancel();
+      stopTestMoneySync?.();
     };
   }, [bootPhase, isGameReady]);
 
@@ -647,5 +737,11 @@ const styles = StyleSheet.create({
     color: UI.colors.textSecondary,
     fontSize: 15,
     fontWeight: '600',
+  },
+  fingerprintText: {
+    marginTop: 8,
+    color: UI.colors.textSecondary,
+    fontSize: 10,
+    opacity: 0.55,
   },
 });

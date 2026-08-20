@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const appJson = require('./app.json');
 const publicFirebase = require('./src/config/firebase.public.json');
 
@@ -51,6 +52,21 @@ applyEnvVars(parseEnvFile(path.join(root, '.env')));
 const buildProfile = process.env.LOGISTICORE_BUILD_PROFILE?.trim().toLowerCase() || 'internal';
 applyEnvVars(parseEnvFile(path.join(root, `.env.${buildProfile}`)), { override: true });
 process.env.LOGISTICORE_BUILD_PROFILE = buildProfile;
+
+function readGitCommit() {
+  const fromEnv =
+    typeof process.env.EXPO_PUBLIC_GIT_COMMIT === 'string'
+      ? process.env.EXPO_PUBLIC_GIT_COMMIT.trim()
+      : '';
+  if (fromEnv.length > 0) return fromEnv;
+  try {
+    return execSync('git rev-parse HEAD', { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return 'unknown';
+  }
+}
 
 module.exports = () => {
   const expo = appJson.expo ?? {};
@@ -131,9 +147,18 @@ module.exports = () => {
         },
       ],
     ],
-    extra: {
+      extra: {
       ...(expo.extra ?? {}),
       buildProfile,
+      buildFingerprint: {
+        gitCommit: readGitCommit(),
+        buildTimestamp: new Date().toISOString(),
+        buildProfile,
+        runtimeVersion: null,
+        updateChannel: null,
+        expoUpdatesEnabled: false,
+        mapMarkerRevision: 'chevron-circle-v2',
+      },
       firebase: {
         apiKey: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_API_KEY', 'apiKey'),
         authDomain: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN', 'authDomain'),

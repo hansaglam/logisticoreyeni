@@ -13,6 +13,7 @@ import {
 import { withMarketplacePurchaseTimeout } from '../domain/vehicleMarketplacePurchaseFlow';
 import { useGameStore } from '../store/gameStore';
 import { markStartup } from '../utils/startupPerformance';
+import { logMarketplaceReconcileError } from '../utils/startupErrors';
 import { isFirebaseEnabled } from './firebase';
 import {
   beginPostStartupMarketplaceCloudHold,
@@ -62,9 +63,12 @@ async function runPostStartupMarketplaceReconcileOnce(): Promise<void> {
     }
 
     const live = useGameStore.getState();
+    if (!live.isGameReady || !live.player) {
+      return;
+    }
     const acknowledged = await readRecoveredMarketplacePurchaseAcks();
     const plan = planMarketplaceStartupReconcile({
-      localTruckIds: live.player.trucks.map((truck) => truck.id),
+      localTruckIds: (live.player.trucks ?? []).map((truck) => truck.id),
       localCash: live.player.money,
       localMarketplaceStateVersion: live.vehicleMarketplace?.marketplaceStateVersion ?? 0,
       acknowledgedVehicleIds: acknowledged,
@@ -95,11 +99,7 @@ async function runPostStartupMarketplaceReconcileOnce(): Promise<void> {
     failedThisSession = false;
   } catch (error) {
     failedThisSession = true;
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.info('[MARKETPLACE_STARTUP_RECONCILE] skipped', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    logMarketplaceReconcileError(error);
   } finally {
     markStartup('MARKETPLACE_STARTUP_RECONCILE_DONE');
   }
@@ -129,7 +129,7 @@ export async function runPostStartupMarketplaceReconcile(): Promise<void> {
 export function retryPostStartupMarketplaceReconcileIfNeeded(): void {
   if (!failedThisSession || completedThisSession) return;
   if (isPostStartupMarketplaceCloudHoldActive()) return;
-  void runPostStartupMarketplaceReconcile();
+  void runPostStartupMarketplaceReconcile().catch(logMarketplaceReconcileError);
 }
 
 /**
@@ -139,6 +139,8 @@ export function retryPostStartupMarketplaceReconcileIfNeeded(): void {
 export async function reconcileVehicleMarketplaceOnForeground(): Promise<void> {
   if (!VEHICLE_MARKETPLACE_ENABLED || !isFirebaseEnabled()) return;
   if (isPostStartupMarketplaceCloudHoldActive()) return;
+  const ready = useGameStore.getState();
+  if (!ready.isGameReady || !ready.player) return;
   if (reconcileInFlight) {
     await reconcileInFlight;
     return;
@@ -153,8 +155,9 @@ export async function reconcileVehicleMarketplaceOnForeground(): Promise<void> {
       if (!mine.ok || !mine.reconciliation) return;
 
       const live = useGameStore.getState();
+      if (!live.isGameReady || !live.player) return;
       const plan = planMarketplaceStartupReconcile({
-        localTruckIds: live.player.trucks.map((truck) => truck.id),
+        localTruckIds: (live.player.trucks ?? []).map((truck) => truck.id),
         localCash: live.player.money,
         localMarketplaceStateVersion: live.vehicleMarketplace?.marketplaceStateVersion ?? 0,
         acknowledgedVehicleIds: await readRecoveredMarketplacePurchaseAcks(),
@@ -165,11 +168,7 @@ export async function reconcileVehicleMarketplaceOnForeground(): Promise<void> {
         useGameStore.getState().applyVehicleMarketplaceReconciliation(mine.reconciliation);
       }
     } catch (error) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.info('[MARKETPLACE_FOREGROUND_RECONCILE] skipped', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      logMarketplaceReconcileError(error);
     } finally {
       reconcileInFlight = null;
     }

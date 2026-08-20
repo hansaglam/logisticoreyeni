@@ -6,11 +6,13 @@ import Animated, {
   withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
+import Svg, { Polygon } from 'react-native-svg';
 
 import { useMapScale } from './MapScaleContext';
 import { normalizeAngleRadians, shortestAngleDelta } from './mapRoadUtils';
 import {
   MAP_TRUCK_MARKER_BORDER,
+  MAP_TRUCK_MARKER_CHEVRON_FILL,
   MAP_TRUCK_MARKER_FILL,
   MAP_TRUCK_MARKER_MAX_SCREEN,
   MAP_TRUCK_MARKER_MIN_SCREEN,
@@ -29,16 +31,16 @@ export interface AnimatedDeliveryTruckMarkerProps {
   onPress?: () => void;
 }
 
-function VehicleDirectionChevron({ color }: { color: string }) {
+function VehicleDirectionChevron() {
   return (
-    <View
-      style={[
-        styles.chevron,
-        {
-          borderLeftColor: color,
-        },
-      ]}
-    />
+    <Svg width={12} height={12} viewBox="0 0 12 12">
+      <Polygon
+        points="2,1.5 10.5,6 2,10.5"
+        fill={MAP_TRUCK_MARKER_CHEVRON_FILL}
+        stroke={MAP_TRUCK_MARKER_BORDER}
+        strokeWidth={0.8}
+      />
+    </Svg>
   );
 }
 
@@ -108,7 +110,7 @@ function AnimatedDeliveryTruckMarkerInner({
       <View style={styles.glow} />
       <View style={styles.circle}>
         <Animated.View style={[styles.chevronLayer, chevronRotationStyle]}>
-          <VehicleDirectionChevron color={MAP_TRUCK_MARKER_BORDER} />
+          <VehicleDirectionChevron />
         </Animated.View>
       </View>
     </Animated.View>
@@ -165,8 +167,8 @@ const styles = StyleSheet.create({
   glow: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: MAP_TRUCK_MARKER_SIZE / 2,
-    backgroundColor: 'rgba(25,145,255,0.22)',
-    transform: [{ scale: 1.15 }],
+    backgroundColor: 'rgba(93,212,255,0.28)',
+    transform: [{ scale: 1.18 }],
   },
   pressFill: {
     flex: 1,
@@ -178,7 +180,7 @@ const styles = StyleSheet.create({
     height: MAP_TRUCK_MARKER_SIZE,
     borderRadius: MAP_TRUCK_MARKER_SIZE / 2,
     backgroundColor: MAP_TRUCK_MARKER_FILL,
-    borderWidth: 2,
+    borderWidth: 2.5,
     borderColor: MAP_TRUCK_MARKER_BORDER,
     alignItems: 'center',
     justifyContent: 'center',
@@ -188,15 +190,5 @@ const styles = StyleSheet.create({
     height: MAP_TRUCK_MARKER_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  chevron: {
-    width: 0,
-    height: 0,
-    marginLeft: 2,
-    borderTopWidth: 4.5,
-    borderBottomWidth: 4.5,
-    borderLeftWidth: 7,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
   },
 });

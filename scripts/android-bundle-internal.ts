@@ -6,13 +6,16 @@
  * Run: npm run android:bundle:internal
  */
 
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { loadBuildProfileEnv } from './build-env';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const env = loadBuildProfileEnv(ROOT, 'internal');
+const gitCommit = execSync('git rev-parse HEAD', { cwd: ROOT }).toString().trim();
+env.EXPO_PUBLIC_GIT_COMMIT = gitCommit;
 
 if (env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC !== 'true') {
   console.error(
@@ -28,6 +31,20 @@ process.env.LOGISTICORE_BUILD_PROFILE = 'internal';
 
 console.log('[android-bundle-internal] profile=internal');
 console.log('[android-bundle-internal] test money sync=true');
+console.log('[android-bundle-internal] gitCommit', gitCommit);
+console.log('[android-bundle-internal] mapMarkerRevision=chevron-circle-v2');
+
+const staleJsBundle = resolve(
+  ROOT,
+  'android/app/build/generated/assets/createBundleReleaseJsAndAssets',
+);
+try {
+  rmSync(staleJsBundle, { recursive: true, force: true });
+  console.log('[android-bundle-internal] removed stale JS bundle assets');
+} catch (error) {
+  console.warn('[android-bundle-internal] could not remove stale JS bundle', error);
+}
+
 console.log('[android-bundle-internal] starting gradlew bundleRelease');
 
 const gradle = spawn('gradlew.bat', ['bundleRelease'], {

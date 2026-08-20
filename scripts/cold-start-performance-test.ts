@@ -80,9 +80,17 @@ console.log('\nDeferred / lazy online systems');
   assert(marketplace.includes("markStartup('MARKETPLACE_INIT_START')"), 'marketplace fetch is screen-scoped');
   assert(!gameStore.includes('fetchWeeklyLeaderboard'), 'gameStore boot does not fetch leaderboard');
   assert(
-    app.includes('void preloadMapAssets()') && app.includes('isGameReady'),
+    app.includes('preloadMapAssets()') &&
+      app.includes('isGameReady') &&
+      app.includes("markStartup('MAP_PRELOAD_START')"),
     'map asset preload is after first render',
   );
+  assert(
+    app.includes('InteractionManager.runAfterInteractions') &&
+      app.includes('runPostStartupMarketplaceReconcile'),
+    'marketplace reconcile waits until after first interactions',
+  );
+  assert(app.includes('[STARTUP_ERROR]') || app.includes('logStartupError'), 'startup errors are caught');
   assert(mapPreload.includes('preloadMapAssets'), 'map preload helper still exists');
   assert(
     !app.includes('await gatherAdsConsentIfNeeded()') ||

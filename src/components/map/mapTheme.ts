@@ -76,6 +76,7 @@ export const MAP_TRUCK_MARKER_MIN_SCREEN = 22;
 export const MAP_TRUCK_MARKER_MAX_SCREEN = 30;
 export const MAP_TRUCK_MARKER_BORDER = '#5DD4FF';
 export const MAP_TRUCK_MARKER_FILL = '#031225';
+export const MAP_TRUCK_MARKER_CHEVRON_FILL = '#F8FCFF';
 export const MAP_TRUCK_MARKER_ANIM_MS = 750;
 /**
  * Direction chevron at rotation 0° points to screen EAST (+X).

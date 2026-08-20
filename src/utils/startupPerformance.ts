@@ -24,6 +24,10 @@ export type StartupMarkName =
   | 'MARKETPLACE_STARTUP_RECONCILE_DONE'
   | 'NOTIFICATIONS_INIT_START'
   | 'NOTIFICATIONS_INIT_DONE'
+  | 'ADS_START'
+  | 'ADS_DONE'
+  | 'MAP_PRELOAD_START'
+  | 'MAP_PRELOAD_DONE'
   | 'GAME_READY'
   | 'FIRST_MAIN_SCREEN_RENDER'
   | 'MARKET_SNAPSHOT_START'
@@ -52,6 +56,10 @@ const STARTUP_LABELS: Record<StartupMarkName, string> = {
   MARKETPLACE_STARTUP_RECONCILE_DONE: 'marketplace startup reconcile done',
   NOTIFICATIONS_INIT_START: 'notifications init start',
   NOTIFICATIONS_INIT_DONE: 'notifications init done',
+  ADS_START: 'ads start',
+  ADS_DONE: 'ads done',
+  MAP_PRELOAD_START: 'map preload start',
+  MAP_PRELOAD_DONE: 'map preload done',
   GAME_READY: 'game ready',
   FIRST_MAIN_SCREEN_RENDER: 'first main screen render',
   MARKET_SNAPSHOT_START: 'market snapshot start',

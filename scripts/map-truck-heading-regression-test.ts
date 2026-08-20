@@ -57,6 +57,8 @@ console.log('Asset base orientation');
   const heading = readFileSync('src/components/map/mapVehicleHeading.ts', 'utf8');
   assert(!marker.includes('GameIcon'), 'live map marker uses chevron, not truck pictogram');
   assert(marker.includes('VehicleDirectionChevron'), 'direction chevron component exists');
+  assert(marker.includes('Polygon'), 'chevron is an SVG polygon, not a CSS triangle');
+  assert(!marker.includes("name=\"truck\""), 'live map marker does not use truck icon');
   assert(marker.includes('chevronRotationStyle'), 'only chevron rotates, not the circle');
   assert(!marker.includes('scaleX: -1'), 'no scaleX mirror in marker');
   assert(!marker.includes("Platform.OS === 'ios'"), 'no iOS-specific heading hack in marker');

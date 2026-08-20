@@ -176,6 +176,23 @@ console.log('\nTEST 4 — no recent marketplace activity is a no-op');
   assert(plan.shouldApply === false, 'no apply when version and fleet already match');
 }
 
+console.log('\nTEST 4b — version-only bump without fleet/cash delta is a no-op');
+{
+  const plan = planMarketplaceStartupReconcile({
+    localTruckIds: [STARTER_TRUCK.id],
+    localCash: 100_000,
+    localMarketplaceStateVersion: 0,
+    acknowledgedVehicleIds: [],
+    authoritative: {
+      marketplaceStateVersion: 4,
+      cash: 100_000,
+      soldTruckIds: [],
+      vehicles: [vehicleSnapshot(STARTER_TRUCK.id, STARTER_TRUCK.catalogId)],
+    },
+  });
+  assert(plan.shouldApply === false, 'version bump alone does not rewrite matching fleet/cash');
+}
+
 console.log('\nTEST 6 — stale pre-purchase cash cannot win');
 {
   const plan = planMarketplaceStartupReconcile({

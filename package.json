@@ -1,6 +1,6 @@
 {
   "name": "logisticore",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "private": true,
   "description": "LogistiCore — mobil lojistik şirketi yönetim simülasyonu",
   "main": "index.js",

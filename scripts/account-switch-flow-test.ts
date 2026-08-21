@@ -100,10 +100,8 @@ assert.equal(
 );
 assert.match(firebaseSource, /getFirebaseAuthSafe/);
 assert.doesNotMatch(firebaseSource, /getAuth\(app\)/);
-assert.doesNotMatch(
-  firebaseSource,
-  /auth already initialized but local reference lost/,
-);
+assert.match(firebaseSource, /getCachedAuthFromGlobal/);
+assert.match(firebaseSource, /auth reused after Fast Refresh/);
 assert.doesNotMatch(
   authSource.slice(
     authSource.indexOf('export async function beginGoogleAccountSwitchSelection'),

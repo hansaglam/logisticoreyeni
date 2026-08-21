@@ -18,7 +18,7 @@ assert.match(firebase, /getFirebaseAuthSafe/);
 assert.match(firebase, /FIREBASE_FUNCTIONS_REGION = 'us-central1'/);
 assert.match(firebase, /getFirebaseFunctionsSafe/);
 assert.match(firebase, /getFirebaseStorageSafe/);
-assert.doesNotMatch(firebase, /local reference lost/);
+assert.match(firebase, /getCachedAuthFromGlobal/);
 
 assert.equal(
   (auth.match(/onAuthStateChanged\(/g) ?? []).length,

@@ -13,7 +13,8 @@ const account = read('src/hooks/useAccountCenter.ts');
 
 assert.equal((firebase.match(/initializeApp\(/g) ?? []).length, 1);
 assert.equal((firebase.match(/initializeAuth\(app/g) ?? []).length, 1);
-assert.match(firebase, /getAuth\(app\)/);
+assert.doesNotMatch(firebase, /getAuth\(app\)/);
+assert.match(firebase, /getFirebaseAuthSafe/);
 assert.match(firebase, /FIREBASE_FUNCTIONS_REGION = 'us-central1'/);
 assert.match(firebase, /getFirebaseFunctionsSafe/);
 assert.match(firebase, /getFirebaseStorageSafe/);

@@ -98,7 +98,8 @@ assert.equal(
   1,
   'Firebase Auth must have one canonical initialization point',
 );
-assert.match(firebaseSource, /getAuth\(app\)/);
+assert.match(firebaseSource, /getFirebaseAuthSafe/);
+assert.doesNotMatch(firebaseSource, /getAuth\(app\)/);
 assert.doesNotMatch(
   firebaseSource,
   /auth already initialized but local reference lost/,

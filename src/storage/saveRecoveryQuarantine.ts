@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { APP_VERSION } from '../config/appVersion';
+import { clearColdStartSaveSession } from './coldStartSaveSession';
+
 /** Must match saveGame.ts SAVE_BACKUP_INVALID_KEY for legacy backup status. */
 const SAVE_BACKUP_INVALID_KEY = 'logisticore_save_backup_invalid';
 
@@ -36,30 +39,65 @@ export interface SaveRecoveryQuarantine {
   userChoseNewGame?: boolean;
 }
 
-import { APP_VERSION } from '../config/appVersion';
+type SaveRecoveryMeta = {
+  quarantine: SaveRecoveryQuarantine | null;
+  fatal: boolean;
+};
+
+let inFlightMeta: Promise<SaveRecoveryMeta> | null = null;
 
 function resolveAppVersion(): string {
   return APP_VERSION;
 }
 
-export async function getSaveRecoveryQuarantine(): Promise<SaveRecoveryQuarantine | null> {
-  try {
-    const raw = await AsyncStorage.getItem(SAVE_RECOVERY_QUARANTINE_META_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as SaveRecoveryQuarantine;
-    return parsed?.reason ? parsed : null;
-  } catch {
-    return null;
+async function loadSaveRecoveryMeta(): Promise<SaveRecoveryMeta> {
+  if (inFlightMeta) {
+    return inFlightMeta;
   }
+  inFlightMeta = (async () => {
+    try {
+      let quarantineRaw: string | null = null;
+      let fatalRaw: string | null = null;
+      if (typeof AsyncStorage.multiGet === 'function') {
+        const pairs = await AsyncStorage.multiGet([
+          SAVE_RECOVERY_QUARANTINE_META_KEY,
+          SAVE_RECOVERY_FATAL_KEY,
+        ]);
+        quarantineRaw =
+          pairs.find(([key]) => key === SAVE_RECOVERY_QUARANTINE_META_KEY)?.[1] ?? null;
+        fatalRaw = pairs.find(([key]) => key === SAVE_RECOVERY_FATAL_KEY)?.[1] ?? null;
+      } else {
+        [quarantineRaw, fatalRaw] = await Promise.all([
+          AsyncStorage.getItem(SAVE_RECOVERY_QUARANTINE_META_KEY),
+          AsyncStorage.getItem(SAVE_RECOVERY_FATAL_KEY),
+        ]);
+      }
+      let quarantine: SaveRecoveryQuarantine | null = null;
+      if (quarantineRaw) {
+        const parsed = JSON.parse(quarantineRaw) as SaveRecoveryQuarantine;
+        quarantine = parsed?.reason ? parsed : null;
+      }
+      return {
+        quarantine,
+        fatal: fatalRaw === '1',
+      };
+    } catch {
+      return { quarantine: null, fatal: false };
+    }
+  })().finally(() => {
+    inFlightMeta = null;
+  });
+  return inFlightMeta;
+}
+
+export async function getSaveRecoveryQuarantine(): Promise<SaveRecoveryQuarantine | null> {
+  const meta = await loadSaveRecoveryMeta();
+  return meta.quarantine;
 }
 
 export async function isSaveRecoveryFatal(): Promise<boolean> {
-  try {
-    const raw = await AsyncStorage.getItem(SAVE_RECOVERY_FATAL_KEY);
-    return raw === '1';
-  } catch {
-    return false;
-  }
+  const meta = await loadSaveRecoveryMeta();
+  return meta.fatal;
 }
 
 export async function markSaveRecoveryFatal(): Promise<void> {
@@ -118,6 +156,7 @@ export async function markUserChoseNewGameInRecovery(): Promise<void> {
 }
 
 export async function closeSaveRecoveryQuarantine(): Promise<void> {
+  clearColdStartSaveSession();
   await AsyncStorage.multiRemove([
     SAVE_RECOVERY_QUARANTINE_META_KEY,
     SAVE_RECOVERY_FATAL_KEY,

@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { getModalSheetPaddingBottom, getSafeModalMaxHeight } from '../../constants/layout';
+import { buildOfflineReturnHeadline } from '../../domain/deliveryResultPresentation';
 import type { OfflineProgressSummary } from '../../simulation/offlineProgression';
 import { formatOfflineElapsedDuration } from '../../simulation/offlineProgression';
 import { colors, formatMoney, spacing, typography } from '../../theme';
@@ -60,7 +61,7 @@ export default function OfflineProgressSummaryModal({
               <GameIcon name="dashboard" size={22} color={colors.accentBlue} />
             </View>
             <View style={styles.headerText}>
-              <Text style={styles.title}>Sen yokken operasyon devam etti</Text>
+              <Text style={styles.title}>{buildOfflineReturnHeadline(summary)}</Text>
               <Text style={styles.subtitle}>
                 Geçen süre: {elapsedLabel}
                 {cappedNote}

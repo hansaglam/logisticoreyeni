@@ -40,6 +40,9 @@ export interface AppDialogOptions {
   actions?: AppDialogAction[];
   onConfirm?: () => void;
   onCancel?: () => void;
+  /** Overlay / back dismiss. Default true. Set false while a blocking operation runs. */
+  dismissible?: boolean;
+  onDismiss?: () => void;
 }
 
 /** Alert.alert uyumluluğu için buton tanımı */
@@ -126,7 +129,8 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
         actions: options.actions,
         onConfirm: options.onConfirm,
         onCancel: options.onCancel,
-        onDismiss: hideDialog,
+        dismissible: options.dismissible !== false,
+        onDismiss: options.onDismiss ?? hideDialog,
       });
       setVisible(true);
     },
@@ -152,7 +156,7 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
   return (
     <AppDialogContext.Provider value={contextValue}>
       {children}
-      {dialogProps ? <AppDialog {...dialogProps} visible={visible} onDismiss={hideDialog} /> : null}
+      {dialogProps ? <AppDialog {...dialogProps} visible={visible} /> : null}
     </AppDialogContext.Provider>
   );
 }

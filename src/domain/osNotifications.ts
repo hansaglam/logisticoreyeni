@@ -188,7 +188,7 @@ export function buildIncidentOsNotification(input: {
     dedupeKey: buildIncidentOsKey(input.deliveryId, input.incidentId),
     channelId: 'critical-operations',
     title: 'Operasyon kararı gerekiyor',
-    body: 'Teslimat, karar verene kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.',
+    body: 'Teslimat, seçim yapana kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.',
     data: {
       type: 'delivery_incident',
       deliveryId: input.deliveryId,

@@ -11,6 +11,15 @@ import {
   isRetryableCloudSaveConflictReason,
   validateCloudSaveRestorePayload,
 } from '../src/utils/cloudSaveConflict';
+import {
+  beginAccountSaveConflictSession,
+  beginConflictResolveRequest,
+  completeAccountSaveConflictSession,
+  clearAccountSaveConflictSession,
+  isConflictResolveRequestCurrent,
+  isConflictResolveRequestStale,
+  resetAccountSaveConflictGuards,
+} from '../src/services/accountSaveConflictSession';
 
 let pass = 0;
 let fail = 0;
@@ -34,6 +43,7 @@ const session = read('src/services/accountSaveConflictSession.ts');
 const sync = read('src/storage/cloudSaveSync.ts');
 const errors = read('src/utils/cloudSaveConflict.ts');
 const cloud = read('src/services/cloudSaveService.ts');
+const dialog = read('src/components/ui/AppDialog.tsx');
 
 console.log('\n=== Account Cloud Conflict Resolver ===\n');
 
@@ -44,8 +54,14 @@ assert(login.includes("stage: 'success'"), 'success stage log');
 
 console.log('\n2. Restore success closes modal');
 assert(hook.includes('completeAccountSaveConflictSession'), 'session completed on success');
-assert(hook.includes('hideDialog()'), 'dialog hidden on success');
-assert(hook.includes('setPendingAccountConflict(null)'), 'pending conflict cleared');
+assert(hook.includes('isConflictResolveRequestStale'), 'stale-token check does not treat resolved as skip');
+assert(hook.includes('dismissible: false'), 'loading dialog blocks outside dismiss');
+assert(hook.includes('Bulut kaydı yüklendi'), 'success title after restore');
+assert(hook.includes('Devam Et'), 'success CTA after restore');
+assert(hook.includes('presentRestoreSuccess'), 'success presenter closes modal');
+assert(hook.includes('[CLOUD_RESTORE] loading=false'), 'loading flag always cleared');
+assert(login.includes("logCloudRestore('restore complete')"), 'restore-complete log before UI close');
+assert(!login.includes('await initCloudSaveSync'), 'modal does not wait for post-restore sync init');
 
 console.log('\n3. Network fail → retry without re-login');
 assert(
@@ -94,6 +110,36 @@ assert(!session.includes('credential:'), 'session has no credential field');
 console.log('\n11. Sync lock');
 assert(sync.includes('isCloudSaveAccountConflictPending()'), 'conflict lock');
 assert(sync.includes('isAutomaticCloudUploadBlockedBySaveFlow()'), 'save flow lock');
+
+console.log('\n12. Resolved/cleared session is not treated as stale');
+assert(session.includes('export function isConflictResolveRequestStale'), 'stale helper exported');
+assert(!hook.includes('if (!isConflictResolveRequestCurrent(request.token))'), 'success UI is not skipped after resolve');
+assert(hook.includes('setPendingAccountConflict(null)'), 'pending conflict cleared');
+assert(hook.includes('Buluttan Yükle'), 'cloud restore CTA label');
+assert(dialog.includes('dismissible?: boolean'), 'dialog supports blocking dismiss');
+
+resetAccountSaveConflictGuards();
+const created = beginAccountSaveConflictSession({
+  provider: 'google',
+  authenticatedUid: 'uid-1',
+});
+const request = beginConflictResolveRequest(created.conflictId);
+assert(request.ok === true, 'begin resolve request');
+if (request.ok) {
+  assert(isConflictResolveRequestCurrent(request.token), 'current while resolving');
+  assert(!isConflictResolveRequestStale(request.token), 'not stale while resolving');
+  completeAccountSaveConflictSession(request.token);
+  assert(!isConflictResolveRequestCurrent(request.token), 'current is false after complete');
+  assert(
+    !isConflictResolveRequestStale(request.token),
+    'resolved same token must still present UI',
+  );
+  clearAccountSaveConflictSession();
+  assert(
+    !isConflictResolveRequestStale(request.token),
+    'cleared session must still present UI',
+  );
+}
 
 console.log('\nPayload validation');
 assert(

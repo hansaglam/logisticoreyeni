@@ -20,6 +20,14 @@ import {
   logAccountConflictResolve,
 } from './accountSaveConflictSession';
 import { setCloudSaveAccountConflictPending } from './cloudSaveConflictState';
+
+function logCloudRestore(stage: string, extra?: Record<string, unknown>): void {
+  if (extra) {
+    console.info(`[CLOUD_RESTORE] ${stage}`, extra);
+    return;
+  }
+  console.info(`[CLOUD_RESTORE] ${stage}`);
+}
 import {
   setAccountAuthPhase,
   setAccountSaveFlowPhase,
@@ -165,6 +173,7 @@ async function restoreCloudSaveForUid(
   const { payloadToStoreState, saveGameState } = await import('../storage/saveGame');
 
   setAccountSaveFlowPhase('restoring');
+  logCloudRestore('start', { authenticatedUid, provider });
   logAccountConflictResolve({
     stage: 'cloud-meta-fetch',
     provider,
@@ -190,6 +199,7 @@ async function restoreCloudSaveForUid(
       if (auth.currentUser?.uid !== authenticatedUid) {
         throw new CloudSaveConflictError('auth-user-mismatch');
       }
+      logCloudRestore('cloud save fetched');
       return result.payload;
     },
     validate: (payload) => {
@@ -203,7 +213,11 @@ async function restoreCloudSaveForUid(
       ) {
         return 'owner-mismatch';
       }
-      return validateCloudSaveRestorePayload(payload, SAVE_GAME_VERSION);
+      const reason = validateCloudSaveRestorePayload(payload, SAVE_GAME_VERSION);
+      if (!reason) {
+        logCloudRestore('validation passed');
+      }
+      return reason;
     },
     migrate: (payload) => {
       const safePayload = {
@@ -240,10 +254,16 @@ async function restoreCloudSaveForUid(
         vehicleMarketplace: reconciled.cache,
       };
     },
-    persistLocal: (pendingCloudRestore) =>
-      saveGameState(pendingCloudRestore, { ownerUid: authenticatedUid }),
+    persistLocal: async (pendingCloudRestore) => {
+      const saved = await saveGameState(pendingCloudRestore, { ownerUid: authenticatedUid });
+      if (saved) {
+        logCloudRestore('local save persisted');
+      }
+      return saved;
+    },
     commitState: (pendingCloudRestore) => {
       useGameStore.setState(pendingCloudRestore);
+      logCloudRestore('local state applied');
     },
     getOwnerUid: (payload) =>
       typeof payload.ownerUid === 'string' && payload.ownerUid.length > 0
@@ -259,10 +279,15 @@ async function restoreCloudSaveForUid(
     validateState: isLocalSaveSafeForAccountTransition,
   });
 
+  logCloudRestore('restore complete');
+
   void useGameStore.getState().refreshMarketSnapshot();
-  await markUserProviderLinked(authenticatedUid, provider);
+  try {
+    await markUserProviderLinked(authenticatedUid, provider);
+  } catch (error) {
+    console.warn('[CLOUD_RESTORE] markUserProviderLinked failed', error);
+  }
   setCloudSaveAccountConflictPending(false);
-  clearAccountSaveConflictSession();
 
   try {
     const { invalidateSaveRecoveryColdStartProbe } = await import('./saveRecoveryService');
@@ -271,12 +296,11 @@ async function restoreCloudSaveForUid(
     // best-effort
   }
 
-  try {
-    const { initCloudSaveSync } = await import('../storage/cloudSaveSync');
-    await initCloudSaveSync(() => useGameStore.getState());
-  } catch {
-    // best-effort
-  }
+  void import('../storage/cloudSaveSync')
+    .then(({ initCloudSaveSync }) => initCloudSaveSync(() => useGameStore.getState()))
+    .catch(() => {
+      // Optional post-restore sync must not block the restore modal.
+    });
 
   setAccountSaveFlowPhase('ready');
   logAccountConflictResolve({ stage: 'success', provider, selectedSource: 'cloud', authUidPresent: true });
@@ -539,6 +563,7 @@ export async function resolveSaveConflict(input: {
       await uploadLocalSaveForUid(authenticatedUid, provider);
     }
     completeAccountSaveConflictSession();
+    clearAccountSaveConflictSession();
     return { ok: true, selectedAccountUid: authenticatedUid };
   } catch (error) {
     const reason =

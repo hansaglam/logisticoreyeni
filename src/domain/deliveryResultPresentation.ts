@@ -5,6 +5,7 @@
 import type { DeliveryFailureReason } from '../types/game';
 import type { DeadlineRiskLevel } from '../utils/deadlineUx';
 import { formatGameDuration } from '../utils/formatGameDuration';
+import { getCityName } from '../utils/entityLookup';
 import type {
   DeliveryDelayCause,
   DeliverySettlementRecord,
@@ -19,6 +20,8 @@ export interface DeliveryResultPresentation {
   reputationLine: string;
   causeTitle: string | null;
   causes: string[];
+  incidentTitle: string | null;
+  incidents: string[];
   tips: string[];
   failureDetail: string | null;
 }
@@ -91,13 +94,31 @@ export function buildDeliveryResultPresentation(
 ): DeliveryResultPresentation {
   const title = punctualityTitle(record.punctualityResult, record.failureReason);
   const late = record.latenessHours > 1 / 60;
-  const headline = late
-    ? `Teslimat ${formatGameDuration(record.latenessHours)} geç tamamlandı.`
-    : record.punctualityResult === 'early'
-      ? `Teslimat tahmini süreden erken tamamlandı.`
-      : 'Teslimat zamanında tamamlandı.';
+  const offline = record.settledWhileOffline === true;
+  const headline = record.failureReason
+    ? (record.failureReason === 'too_late'
+        ? buildTooLateFailureDetail(record)
+        : record.failureReason === 'breakdown'
+          ? 'Araç arızası teslimatı sonlandırdı.'
+          : record.failureReason === 'accident'
+            ? 'Kaza teslimatı sonlandırdı.'
+            : record.failureReason === 'cancelled'
+              ? 'Sözleşme iptal edildi.'
+              : 'Teslimat başarısız oldu.')
+    : late
+      ? offline
+        ? `Teslimat sen yokken ${formatGameDuration(record.latenessHours)} gecikmeli tamamlandı.`
+        : `Teslimat ${formatGameDuration(record.latenessHours)} geç tamamlandı.`
+      : record.punctualityResult === 'early'
+        ? offline
+          ? `Teslimat sen yokken tahmini süreden erken tamamlandı.`
+          : `Teslimat tahmini süreden erken tamamlandı.`
+        : offline
+          ? 'Teslimat sen yokken tamamlandı.'
+          : 'Teslimat zamanında tamamlandı.';
   const reputationLine = `İtibar: ${record.reputationDelta > 0 ? '+' : ''}${record.reputationDelta}`;
   const causes = buildCauseLines(record);
+  const incidents = buildIncidentSummaryLines(record);
   const tips = buildNextDeliveryTips(record);
   const failureDetail =
     record.failureReason === 'too_late'
@@ -109,11 +130,17 @@ export function buildDeliveryResultPresentation(
           : null;
 
   return {
-    title,
-    headline: failureDetail ?? headline,
+    title: offline && !record.failureReason
+      ? late
+        ? `Teslimat sen yokken ${formatGameDuration(record.latenessHours)} gecikmeli tamamlandı`
+        : 'Teslimat sen yokken tamamlandı'
+      : title,
+    headline,
     reputationLine,
     causeTitle: causes.length > 0 ? (causes.length > 1 ? 'Başlıca nedenler' : 'Neden gecikti?') : null,
     causes,
+    incidentTitle: incidents.length > 0 ? 'Beklenmedik olaylar' : null,
+    incidents,
     tips,
     failureDetail,
   };
@@ -137,6 +164,19 @@ function buildTooLateFailureDetail(record: DeliverySettlementRecord): string {
       ? `\nBeklenmeyen duraklama: ${formatGameDuration(paused)} (son teslime sayılmaz)`
       : '';
   return `Son teslim süresi ${formatGameDuration(record.deadlineHours)} idi.\nEfektif teslim süresi ${formatGameDuration(record.actualTravelHours)} olduğu için başarısız sayıldı.${wallClock}${pauseLine}`;
+}
+
+export function buildIncidentSummaryLines(record: DeliverySettlementRecord): string[] {
+  return (record.incidentSummaries ?? [])
+    .slice(0, 3)
+    .map((item) => {
+      const delta = item.timeDeltaHours;
+      if (!Number.isFinite(delta) || Math.abs(delta) < 1 / 60) {
+        return item.title;
+      }
+      const signed = delta > 0 ? `+${formatGameDuration(delta)}` : `-${formatGameDuration(Math.abs(delta))}`;
+      return `${item.title}: ${signed}`;
+    });
 }
 
 export function buildCauseLines(record: DeliverySettlementRecord): string[] {
@@ -231,6 +271,26 @@ export function deadlineRiskTone(level: DeadlineRiskLevel): 'success' | 'info' |
   }
 }
 
+export function buildOfflineReturnHeadline(input: {
+  completedDeliveries: number;
+  deliveryNotes?: string[];
+}): string {
+  if (input.completedDeliveries > 1) {
+    return `Sen yokken ${input.completedDeliveries} teslimat tamamlandı.`;
+  }
+  if (input.completedDeliveries === 1) {
+    const note = input.deliveryNotes?.[0];
+    if (note && (note.includes('arızası') || note.includes('kaza') || note.includes('başarısız'))) {
+      return note;
+    }
+    return 'Sen yokken 1 teslimat tamamlandı.';
+  }
+  if (input.deliveryNotes && input.deliveryNotes.length > 0) {
+    return input.deliveryNotes[0]!;
+  }
+  return 'Sen yokken operasyon devam etti';
+}
+
 export const LEGACY_SETTLEMENT_UNAVAILABLE =
   'Bu eski teslimat için ayrıntılı gecikme verisi kaydedilmemiş.';
 
@@ -265,8 +325,10 @@ export function buildReputationHistoryDetail(record: DeliverySettlementRecord | 
     Math.abs(record.wallClockTravelHours - record.actualTravelHours) >= 0.08;
   return {
     title: presentation.title,
-    routeLabel: null,
-    plannedLine: `Planlanan teslim: ${formatGameDuration(record.deadlineHours)}`,
+    routeLabel: record.originCityId && record.destinationCityId
+      ? `${getCityName(record.originCityId)} → ${getCityName(record.destinationCityId)}`
+      : null,
+    plannedLine: `Planlanan teslim: ${formatGameDuration(record.estimatedTravelHours)}`,
     actualLine: wallClockDiffers
       ? `Efektif teslim: ${formatGameDuration(record.actualTravelHours)} (toplam ${formatGameDuration(record.wallClockTravelHours!)})`
       : `Gerçek teslim: ${formatGameDuration(record.actualTravelHours)}`,

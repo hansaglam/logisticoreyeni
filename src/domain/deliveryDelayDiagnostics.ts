@@ -63,11 +63,19 @@ export interface DeliverySettlementRecord {
   latenessRatio: number;
   punctualityResult: DeliveryPunctuality | 'cancelled';
   failureReason?: DeliveryFailureReason;
+  terminalStatus?: 'completed' | 'failed' | 'cancelled';
+  settledWhileOffline?: boolean;
   timePausedOutOfFuel: number;
   timePausedIncident: number;
   incidentChoiceDelayHours: number;
   fuelOutEventCount: number;
   incidentCount: number;
+  incidentSummaries?: Array<{
+    title: string;
+    timeDeltaHours: number;
+    polarity?: 'negative' | 'positive' | 'neutral';
+    severity?: 'minor' | 'moderate' | 'major';
+  }>;
   vehicleEstimatedDurationAtStart: number;
   deadlineRiskAtStart: DeadlineRiskLevel | null;
   reputationDelta: number;
@@ -322,6 +330,7 @@ export function buildDeliverySettlementRecord(input: {
   deadlineHours: number;
   punctualityResult: DeliveryPunctuality | 'cancelled';
   failureReason?: DeliveryFailureReason;
+  settledWhileOffline?: boolean;
   reputationDelta: number;
 }): DeliverySettlementRecord {
   const diagnostics = normalizeDelayDiagnostics(input.delivery.delayDiagnostics);
@@ -334,8 +343,14 @@ export function buildDeliverySettlementRecord(input: {
     computeWallClockTravelHours(input.delivery, input.completedAt);
   const latenessHours = Math.max(0, effectiveTravelHours - input.deadlineHours);
   const latenessRatio = latenessHours / Math.max(input.deadlineHours, 0.1);
+  const successPunctuality =
+    input.punctualityResult === 'early' ||
+    input.punctualityResult === 'on-time' ||
+    input.punctualityResult === 'late-minor' ||
+    input.punctualityResult === 'late-major';
+  const failureReason = successPunctuality ? undefined : input.failureReason;
   const { primaryCause, contributingCauses } = deriveDeliveryDelayCauses({
-    failureReason: input.failureReason,
+    failureReason,
     punctuality: input.punctualityResult,
     outOfFuelHours: diagnostics.outOfFuelHours,
     incidentPendingHours: diagnostics.incidentPendingHours,
@@ -343,13 +358,20 @@ export function buildDeliverySettlementRecord(input: {
     vehicleEstimatedDurationAtStart: estimatedTravelHours,
     deadlineHours: input.deadlineHours,
   });
+  const incidentHistory = input.delivery.incidentResolutionHistory ?? [];
   const incidentCount = Math.max(
     input.delivery.incident ? 1 : 0,
     input.delivery.incidentGenerated ? 1 : 0,
-    input.delivery.incidentResolutionHistory?.length ?? 0,
+    incidentHistory.length,
   );
+  const incidentSummaries = incidentHistory.map((item) => ({
+    title: item.title ?? item.outcomeCode.split(':')[0] ?? 'Olay',
+    timeDeltaHours: item.deliveryTimeDeltaHours ?? (item.remainingTimeDeltaSeconds ?? 0) / 3600,
+    polarity: item.polarity,
+    severity: item.severity,
+  }));
 
-  return {
+  const rawRecord: DeliverySettlementRecord = {
     deliveryId: input.delivery.id,
     contractId: input.contractId,
     vehicleId: input.delivery.truckId,
@@ -365,18 +387,26 @@ export function buildDeliverySettlementRecord(input: {
     latenessHours,
     latenessRatio,
     punctualityResult: input.punctualityResult,
-    failureReason: input.failureReason,
+    failureReason,
+    terminalStatus: successPunctuality
+      ? 'completed'
+      : input.punctualityResult === 'cancelled' || failureReason === 'cancelled'
+        ? 'cancelled'
+        : 'failed',
+    settledWhileOffline: input.settledWhileOffline === true,
     timePausedOutOfFuel: diagnostics.outOfFuelHours,
     timePausedIncident: diagnostics.incidentPendingHours,
     incidentChoiceDelayHours: diagnostics.incidentChoiceDelayHours ?? 0,
     fuelOutEventCount: diagnostics.fuelOutCount,
     incidentCount,
+    incidentSummaries,
     vehicleEstimatedDurationAtStart: estimatedTravelHours,
     deadlineRiskAtStart: start?.deadlineRisk ?? null,
     reputationDelta: input.reputationDelta,
     primaryCause,
     contributingCauses,
   };
+  return rawRecord;
 }
 
 export function prependSettlementRecord(
@@ -401,16 +431,31 @@ export function normalizeSettlementHistory(value: unknown): DeliverySettlementRe
         typeof (item as DeliverySettlementRecord).actualTravelHours === 'number'
       );
     })
-    .map((item) => ({
-      ...item,
-      incidentChoiceDelayHours:
-        typeof item.incidentChoiceDelayHours === 'number' && Number.isFinite(item.incidentChoiceDelayHours)
-          ? Math.max(0, item.incidentChoiceDelayHours)
-          : 0,
-      timePausedOutOfFuel: Math.max(0, item.timePausedOutOfFuel ?? 0),
-      timePausedIncident: Math.max(0, item.timePausedIncident ?? 0),
-      contributingCauses: Array.isArray(item.contributingCauses) ? item.contributingCauses : [],
-    }))
+    .map((item) => {
+      const successPunctuality =
+        item.punctualityResult === 'early' ||
+        item.punctualityResult === 'on-time' ||
+        item.punctualityResult === 'late-minor' ||
+        item.punctualityResult === 'late-major';
+      return {
+        ...item,
+        incidentChoiceDelayHours:
+          typeof item.incidentChoiceDelayHours === 'number' && Number.isFinite(item.incidentChoiceDelayHours)
+            ? Math.max(0, item.incidentChoiceDelayHours)
+            : 0,
+        timePausedOutOfFuel: Math.max(0, item.timePausedOutOfFuel ?? 0),
+        timePausedIncident: Math.max(0, item.timePausedIncident ?? 0),
+        contributingCauses: Array.isArray(item.contributingCauses) ? item.contributingCauses : [],
+        failureReason: successPunctuality ? undefined : item.failureReason,
+        terminalStatus: successPunctuality
+          ? 'completed'
+          : item.punctualityResult === 'cancelled' || item.failureReason === 'cancelled'
+            ? 'cancelled'
+            : item.failureReason || item.punctualityResult === 'failed'
+              ? 'failed'
+              : item.terminalStatus,
+      };
+    })
     .slice(0, DELIVERY_SETTLEMENT_HISTORY_MAX);
 }
 

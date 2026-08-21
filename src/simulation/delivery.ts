@@ -1961,6 +1961,7 @@ export function completeDelivery(gameState: SimulationGameState, deliveryId: str
     ...d,
     status: 'completed' as const,
     progress: 1,
+    failureReason: undefined,
   }));
 
   const updatedContracts = updateById(gameState.contracts, contract.id, (c) => ({

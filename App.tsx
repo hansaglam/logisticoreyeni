@@ -92,7 +92,6 @@ import {
 } from './src/utils/performanceDiagnostics';
 import { preloadMapAssets } from './src/utils/mapAssetPreload';
 import {
-  getStartupElapsedMs,
   markStartup,
 } from './src/utils/startupPerformance';
 
@@ -481,18 +480,6 @@ export default function App() {
     });
     return () => handle.cancel();
   }, [bootPhase]);
-
-  useEffect(() => {
-    if (bootPhase === 'ready' && isGameReady) {
-      return;
-    }
-    const timer = setInterval(() => {
-      if (getStartupElapsedMs() >= 2000) {
-        setBootHint('Son kontroller...');
-      }
-    }, 400);
-    return () => clearInterval(timer);
-  }, [bootPhase, isGameReady]);
 
   useEffect(() => {
     markStartup('JS_READY');

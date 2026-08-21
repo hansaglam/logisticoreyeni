@@ -51,8 +51,8 @@ assert(marker.includes('Polygon'), 'live marker uses SVG chevron');
 assert(!marker.includes('GameIcon'), 'live marker has no truck pictogram');
 assert(!marker.includes('truck-outline'), 'live marker has no truck-outline');
 assert(canvas.includes('AnimatedDeliveryTruckMarker'), 'WorldMapCanvas renders AnimatedDeliveryTruckMarker');
-assert(appJson.includes('"version": "1.0.30"'), 'app version is 1.0.30');
-assert(appJson.includes('"versionCode": 31'), 'Android versionCode is 31');
+assert(appJson.includes('"version": "1.0.31"'), 'app version is 1.0.31');
+assert(appJson.includes('"versionCode": 32'), 'Android versionCode is 32');
 assert(
   startup.includes('versionIncreased && cashOutOfSync'),
   'startup reconcile does not apply on version bump alone',

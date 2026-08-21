@@ -98,7 +98,7 @@ function DeliveryIncidentCardInner({ delivery, compact = false }: DeliveryIncide
         {incident.description}
       </Text>
       <Text style={[styles.clockNote, compact && styles.clockNoteCompact]}>
-        Teslimat, karar verene kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.
+        Teslimat, seçim yapana kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.
       </Text>
       <Text style={[styles.prompt, compact && styles.promptCompact]}>
         Operasyon kararını seç.

@@ -4,14 +4,16 @@
  */
 
 import { getMsPerGameHour, realMsToGameHours } from '../config/balance';
-import type { Delivery } from '../types/game';
+import type { Delivery, Truck } from '../types/game';
 import {
   accumulateDeliveryTickDiagnostics,
   isPendingIncidentBlocking,
 } from '../domain/deliveryDelayDiagnostics';
 import {
+  isDeliveryFuelProgressComplete,
   isDeliveryProgressComplete,
   updateDeliveryProgress,
+  updateDeliveryProgressWithFuel,
 } from './delivery';
 import { MS_PER_MINUTE } from './economyClock';
 
@@ -101,16 +103,20 @@ export function resolveOfflineProgressMinMs(hasActiveDeliveries: boolean): numbe
  */
 export function reconcileDeliveriesWithRealTime(params: {
   deliveries: Delivery[];
+  trucks?: Truck[];
   nowMs: number;
   gameSpeed: number;
   baselineMs?: number | null;
+  currentTime?: number;
 }): {
   deliveries: Delivery[];
+  trucks: Truck[];
   completedIds: string[];
   progressedCount: number;
 } {
   const completedIds: string[] = [];
   let progressedCount = 0;
+  let trucks = params.trucks ?? [];
 
   const deliveries = params.deliveries.map((delivery) => {
     if (!isActiveRouteDelivery(delivery)) {
@@ -136,6 +142,7 @@ export function reconcileDeliveriesWithRealTime(params: {
 
     const before = delivery.progress ?? 0;
     let updated: Delivery;
+
     if (isPendingIncidentBlocking(delivery)) {
       updated = accumulateDeliveryTickDiagnostics(delivery, catchUpHours, {
         wasOutOfFuel: false,
@@ -143,9 +150,37 @@ export function reconcileDeliveriesWithRealTime(params: {
         incidentBlocking: true,
         otherPaused: false,
       });
+    } else if (delivery.pausedReason === 'out-of-fuel' || delivery.status === 'paused') {
+      updated = accumulateDeliveryTickDiagnostics(delivery, catchUpHours, {
+        wasOutOfFuel: delivery.pausedReason === 'out-of-fuel',
+        isOutOfFuel: delivery.pausedReason === 'out-of-fuel',
+        incidentBlocking: false,
+        otherPaused: delivery.pausedReason !== 'out-of-fuel',
+      });
     } else {
-      updated = updateDeliveryProgress(delivery, catchUpHours);
+      const truck = trucks.find((candidate) => candidate.id === delivery.truckId);
+      if (truck) {
+        const wasOutOfFuel = delivery.pausedReason === 'out-of-fuel';
+        const fueled = updateDeliveryProgressWithFuel(
+          delivery,
+          truck,
+          catchUpHours,
+          params.currentTime,
+        );
+        trucks = trucks.map((candidate) =>
+          candidate.id === truck.id ? fueled.truck : candidate,
+        );
+        updated = accumulateDeliveryTickDiagnostics(fueled.delivery, catchUpHours, {
+          wasOutOfFuel,
+          isOutOfFuel: fueled.delivery.pausedReason === 'out-of-fuel',
+          incidentBlocking: false,
+          otherPaused: false,
+        });
+      } else {
+        updated = updateDeliveryProgress(delivery, catchUpHours);
+      }
     }
+
     updated = {
       ...updated,
       lastProgressedRealAtMs: params.nowMs,
@@ -158,25 +193,31 @@ export function reconcileDeliveriesWithRealTime(params: {
       progressedCount += 1;
     }
 
-    // Bekleyen operasyon kararı korunur — offline dönüşte oyuncu karar verir.
     if (
       updated.incident?.status === 'pending' &&
       updated.incidentResolved !== true
     ) {
-      if (isDeliveryProgressComplete(updated.progress)) {
-        completedIds.push(updated.id);
-      }
       return updated;
     }
 
-    if (isDeliveryProgressComplete(updated.progress)) {
+    if (
+      updated.pausedReason === 'out-of-fuel' ||
+      updated.status === 'paused'
+    ) {
+      return updated;
+    }
+
+    if (
+      isDeliveryProgressComplete(updated.progress) &&
+      isDeliveryFuelProgressComplete(updated)
+    ) {
       completedIds.push(updated.id);
     }
 
     return updated;
   });
 
-  return { deliveries, completedIds, progressedCount };
+  return { deliveries, trucks, completedIds, progressedCount };
 }
 
 /** Kalan progress için gereken gerçek ms (bilgi / test) */

@@ -53,6 +53,8 @@ export interface AppDialogProps {
   onConfirm?: () => void;
   onCancel?: () => void;
   onDismiss?: () => void;
+  /** When false, overlay tap and Android back do not close the dialog. */
+  dismissible?: boolean;
 }
 
 const VARIANT_CONFIG: Record<
@@ -178,6 +180,7 @@ export default function AppDialog({
   onConfirm,
   onCancel,
   onDismiss,
+  dismissible = true,
 }: AppDialogProps) {
   const config = VARIANT_CONFIG[variant];
   const insets = useAppSafeAreaInsets();
@@ -188,6 +191,9 @@ export default function AppDialog({
   const confirmVariant = destructive ? 'destructive' : 'primary';
 
   const handleDismiss = () => {
+    if (!dismissible) {
+      return;
+    }
     onDismiss?.();
   };
 
@@ -209,7 +215,7 @@ export default function AppDialog({
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={handleDismiss}
+      onRequestClose={dismissible ? handleDismiss : () => {}}
       statusBarTranslucent
     >
       <Pressable
@@ -220,7 +226,7 @@ export default function AppDialog({
             paddingBottom: getSafeBottom(insets) + spacing.md,
           },
         ]}
-        onPress={handleDismiss}
+        onPress={dismissible ? handleDismiss : () => {}}
       >
         <Pressable
           style={[styles.card, shadows.glowBlue, { borderColor: config.border, maxHeight: cardMaxHeight }]}
@@ -274,6 +280,10 @@ export default function AppDialog({
                   key={action.label}
                   label={action.label}
                   onPress={() => {
+                    if (!dismissible) {
+                      action.onPress();
+                      return;
+                    }
                     // Eski dialogu önce kapat. Callback yeni bir dialog açarsa onu kapatma.
                     runDialogActionAfterDismiss(handleDismiss, action.onPress);
                   }}

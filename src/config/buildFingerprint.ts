@@ -45,13 +45,15 @@ export function getBuildFingerprint(): BuildFingerprint {
     readString(baked.gitCommit) ??
     readString(process.env.EXPO_PUBLIC_GIT_COMMIT) ??
     'unknown';
+  const bakedVersionCode =
+    typeof baked.versionCode === 'number' ? baked.versionCode : null;
+  const expoVersionCode =
+    Platform.OS === 'android' ? Constants.expoConfig?.android?.versionCode : null;
   const versionCodeRaw =
-    Platform.OS === 'android'
-      ? Constants.expoConfig?.android?.versionCode
-      : null;
+    bakedVersionCode ?? (typeof expoVersionCode === 'number' ? expoVersionCode : null);
   return {
-    appVersion: APP_VERSION,
-    versionCode: typeof versionCodeRaw === 'number' ? versionCodeRaw : null,
+    appVersion: readString(baked.appVersion) ?? APP_VERSION,
+    versionCode: versionCodeRaw,
     buildProfile: readString(baked.buildProfile) ?? resolveBuildProfile(),
     gitCommit,
     gitCommitShort: gitCommit.slice(0, 7),

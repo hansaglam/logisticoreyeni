@@ -121,6 +121,15 @@ export function isConflictResolveRequestCurrent(token: number): boolean {
   return session != null && session.requestToken === token && session.status === 'resolving';
 }
 
+/**
+ * True only when a newer resolve request replaced this token.
+ * A resolved/cleared session for the same request is NOT stale — the UI must still
+ * present success/error. Treating "resolved" as stale left the loading modal stuck.
+ */
+export function isConflictResolveRequestStale(token: number): boolean {
+  return session != null && session.requestToken !== token;
+}
+
 export function releaseConflictResolveRequest(token: number): void {
   if (!session || session.requestToken !== token) {
     return;

@@ -138,6 +138,12 @@ const OPTIONAL_UNDEFINED_FIELD_SUFFIXES = new Set([
   'incidentRollsAttempted',
   'incidentResolved',
   'incidentResolutionHistory',
+  'lastIncidentResolvedAt',
+  'lastIncidentResolvedProgress',
+  'severity',
+  'polarity',
+  'fuelLitersDelta',
+  'incidentSummaries',
 ]);
 
 function getPathLeafKey(path: string): string {

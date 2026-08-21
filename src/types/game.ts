@@ -586,7 +586,22 @@ export type DeliveryIncidentType =
   | 'emergency_delivery'
   | 'unexpected_cost'
   | 'company_reputation'
-  | 'local_operation';
+  | 'local_operation'
+  | 'roadwork'
+  | 'loading_queue'
+  | 'cargo_recheck'
+  | 'weather_slowdown'
+  | 'clear_traffic'
+  | 'fast_loading'
+  | 'discount_fuel'
+  | 'favorable_weather'
+  | 'driver_shortcut'
+  | 'weather_front'
+  | 'severe_weather'
+  | 'cargo_risk';
+
+export type DeliveryIncidentSeverity = 'minor' | 'moderate' | 'major';
+export type DeliveryIncidentPolarity = 'negative' | 'positive' | 'neutral';
 
 export type DeliveryIncidentStatus = 'pending' | 'resolved' | 'expired';
 
@@ -599,6 +614,7 @@ export interface DeliveryIncidentEffects {
   playerXpDelta?: number;
   reputationDelta?: number;
   fuelCostDelta?: number;
+  fuelLitersDelta?: number;
   riskDelta?: number;
 }
 
@@ -623,6 +639,8 @@ export interface DeliveryIncident {
   choices: DeliveryIncidentChoice[];
   resolvedChoiceId?: string;
   resolvedAtGameTime?: number;
+  severity?: DeliveryIncidentSeverity;
+  polarity?: DeliveryIncidentPolarity;
 }
 
 /** Operasyon kararı audit kaydı — save/load ile korunur. */
@@ -634,6 +652,14 @@ export interface DeliveryIncidentResolutionRecord {
   remainingTimeDeltaSeconds: number;
   deliveryId: string;
   outcomeCode: string;
+  type?: DeliveryIncidentType;
+  severity?: DeliveryIncidentSeverity;
+  polarity?: DeliveryIncidentPolarity;
+  title?: string;
+  triggeredAtProgress?: number;
+  triggeredAtGameTime?: number;
+  deliveryTimeDeltaHours?: number;
+  resolvedAtProgress?: number;
 }
 
 /** Aktif veya tamamlanmış bir taşıma görevi */
@@ -715,6 +741,10 @@ export interface Delivery {
   incidentResolved?: boolean;
   /** Çözülmüş operasyon kararları (audit) */
   incidentResolutionHistory?: DeliveryIncidentResolutionRecord[];
+  /** Son olay çözülme zamanı (oyun saati) — teslimat içi cooldown */
+  lastIncidentResolvedAt?: number;
+  /** Son olay çözüldüğündeki rota ilerlemesi */
+  lastIncidentResolvedProgress?: number;
   /** Ödüllü reklam ile hızlandırma geçmişi */
   deliveryAdBoost?: DeliveryAdBoostState;
   /** Aktif teslimatta biriken duraklama süreleri */

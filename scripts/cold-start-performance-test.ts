@@ -34,11 +34,16 @@ console.log('\nInstrumentation');
   assert(startup.includes('APP_START'), 'APP_START mark exists');
   assert(startup.includes('GAME_READY'), 'GAME_READY mark exists');
   assert(startup.includes('FIRST_MAIN_SCREEN_RENDER'), 'first render mark exists');
+  assert(startup.includes('ASYNC_STORAGE_READ_START'), 'async storage span exists');
+  assert(startup.includes('JSON_PARSE_START'), 'json parse span exists');
+  assert(startup.includes('STARTUP_SUMMARY'), 'startup summary log exists');
   assert(app.includes("markStartup('APP_START')"), 'App records APP_START');
   assert(app.includes("markStartup('FIRST_MAIN_SCREEN_RENDER')"), 'AppShell records first paint');
   assert(gameStore.includes("markStartup('GAME_READY')"), 'store records GAME_READY');
   assert(!gameStore.includes('getMyVehicleListings'), 'hydrate does not fetch marketplace');
   assert(app.includes('runPostStartupMarketplaceReconcile'), 'marketplace reconcile is post-ready');
+  assert(gameStore.includes('flushDeferredMigratedSavePersist'), 'migrated persist is deferred');
+  assert(gameStore.includes('void get().refreshSaveStatus()'), 'save status refresh is post-ready');
 }
 
 console.log('\nLocal-first boot (does not block first render)');
@@ -118,7 +123,8 @@ console.log('\nLoading UX');
   assert(app.includes('Şirket hazırlanıyor'), 'loading hint has a short phase');
   assert(app.includes('Kayıt yükleniyor'), 'save-load phase copy exists');
   assert(startup.includes('Son kontroller'), 'late-phase copy exists');
-  assert(startup.includes('startupPhaseHint'), 'phase hint is elapsed-based, not a fake delay');
+  assert(!app.includes("setBootHint('Son kontroller...')"), 'boot screen is not a fake elapsed-time phase');
+  assert(startup.includes('startupPhaseHint'), 'phase hint helper remains for diagnostics');
 }
 
 console.log(`\nResults: ${pass} passed, ${fail} failed`);

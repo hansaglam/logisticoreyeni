@@ -31,6 +31,7 @@ export type OperationResolutionState = 'idle' | 'resolving' | 'resolved';
 export interface ResolveDeliveryOperationChoiceEffects {
   cashDelta: number;
   fuelCostDelta: number;
+  fuelLitersDelta: number;
   truckConditionDelta: number;
   driverXpDelta: number;
   playerXpDelta: number;
@@ -176,6 +177,13 @@ export function formatOperationChoiceEffectSummary(
     } else {
       parts.push(`${formatMoneyAmount(effects.fuelCostDelta ?? 0)} tasarruf`);
     }
+  }
+
+  if ((effects.fuelLitersDelta ?? 0) !== 0) {
+    const liters = Math.round(Math.abs(effects.fuelLitersDelta ?? 0));
+    parts.push(
+      (effects.fuelLitersDelta ?? 0) > 0 ? `+${liters} L yakıt` : `-${liters} L yakıt`,
+    );
   }
 
   if (remainingTimeDeltaSeconds !== 0) {
@@ -372,11 +380,21 @@ export function resolveDeliveryOperationChoice(params: {
     remainingTimeDeltaSeconds,
     deliveryId: delivery.id,
     outcomeCode,
+    type: incident.type,
+    severity: incident.severity,
+    polarity: incident.polarity,
+    title: incident.title,
+    triggeredAtProgress: incident.triggerProgress,
+    triggeredAtGameTime: incident.createdAtGameTime,
+    deliveryTimeDeltaHours: effects.deliveryTimeDeltaHours ?? 0,
+    resolvedAtProgress: delivery.progress,
   };
 
   let nextDelivery: Delivery = {
     ...delivery,
     incidentResolved: true,
+    lastIncidentResolvedAt: currentGameTime,
+    lastIncidentResolvedProgress: delivery.progress,
     incidentResolutionHistory: [
       ...(delivery.incidentResolutionHistory ?? []),
       resolutionRecord,
@@ -417,6 +435,7 @@ export function resolveDeliveryOperationChoice(params: {
     effects: {
       cashDelta: effects.cashDelta ?? 0,
       fuelCostDelta: effects.fuelCostDelta ?? 0,
+      fuelLitersDelta: effects.fuelLitersDelta ?? 0,
       truckConditionDelta: effects.truckConditionDelta ?? 0,
       driverXpDelta: effects.driverXpDelta ?? 0,
       playerXpDelta: effects.playerXpDelta ?? 0,

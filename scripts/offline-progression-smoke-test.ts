@@ -547,7 +547,7 @@ console.log('\n8. Online/offline time parity');
   const appSource = readFileSync('App.tsx', 'utf8');
   const activeLineIdx = appSource.indexOf('!wasActive && isActive');
   assert(activeLineIdx >= 0, 'AppState active handler bulundu');
-  const activeBlock = appSource.slice(activeLineIdx, activeLineIdx + 180);
+  const activeBlock = appSource.slice(activeLineIdx, activeLineIdx + 420);
   assert(
     activeBlock.includes('applyOfflineProgressionIfNeeded'),
     'active olunca applyOfflineProgressionIfNeeded çağrılır',

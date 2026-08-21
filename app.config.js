@@ -154,6 +154,8 @@ module.exports = () => {
         gitCommit: readGitCommit(),
         buildTimestamp: new Date().toISOString(),
         buildProfile,
+        appVersion: expo.version ?? null,
+        versionCode: expo.android?.versionCode ?? null,
         runtimeVersion: null,
         updateChannel: null,
         expoUpdatesEnabled: false,

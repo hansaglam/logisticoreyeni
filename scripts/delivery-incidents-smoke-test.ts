@@ -11,6 +11,7 @@ import {
   generateDeliveryIncident,
   getDeliveryIncidentRollIndex,
   getIncidentTriggerProgress,
+  getMaxIncidentsForDelivery,
   maybeRollDeliveryIncident,
   normalizeDelivery,
   resolveDeliveryIncident,
@@ -104,31 +105,34 @@ console.log('Eligibility gates');
 }
 
 {
-  const delivery = baseDelivery({ travelHours: 2.5, progress: 0.4 });
+  const delivery = baseDelivery({ travelHours: 1, progress: 0.4 });
   assert(
     !shouldGenerateDeliveryIncident(delivery, basePlayer(), baseContract()),
-    'estimatedDuration < 3 ise çıkmaz',
+    'çok kısa rota incident çıkarmaz',
   );
 }
 
 {
-  const delivery = baseDelivery({ progress: 0.1 });
+  const delivery = baseDelivery({ progress: 0.04 });
   assert(
     !shouldGenerateDeliveryIncident(delivery, basePlayer(), baseContract()),
-    'progress < 0.2 ise çıkmaz',
+    'progress rota başında ise çıkmaz',
   );
 }
 
 {
-  const delivery = baseDelivery({ progress: 0.9 });
+  const delivery = baseDelivery({ progress: 0.96 });
   assert(
     !shouldGenerateDeliveryIncident(delivery, basePlayer(), baseContract()),
-    'progress > 0.85 ise çıkmaz',
+    'progress rota sonunda ise çıkmaz',
   );
 }
 
 console.log('\nGeneration limits');
 {
+  assert(getMaxIncidentsForDelivery(baseDelivery({ travelHours: 4 })) === 1, 'kısa rota max 1');
+  assert(getMaxIncidentsForDelivery(baseDelivery({ travelHours: 10 })) === 2, 'orta rota max 2');
+  assert(getMaxIncidentsForDelivery(baseDelivery({ travelHours: 20 })) === 3, 'uzun rota max 3');
   const player = basePlayer();
   const contract = baseContract();
   let delivery = baseDelivery({ progress: getIncidentTriggerProgress(baseDelivery()) + 0.01 });

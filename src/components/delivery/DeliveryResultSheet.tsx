@@ -46,6 +46,16 @@ export default function DeliveryResultSheet({
               ))}
             </>
           ) : null}
+          {presentation.incidentTitle ? (
+            <>
+              <Text style={styles.section}>{presentation.incidentTitle}</Text>
+              {presentation.incidents.map((line) => (
+                <Text key={line} style={styles.bullet}>
+                  • {line}
+                </Text>
+              ))}
+            </>
+          ) : null}
           {presentation.tips.length > 0 ? (
             <>
               <Text style={styles.section}>Bir sonraki teslimatta</Text>

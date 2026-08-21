@@ -90,6 +90,18 @@ import {
   measureSyncTask,
   readPerfNow,
 } from '../utils/performanceDiagnostics';
+import {
+  logStartupSaveAudit,
+  markStartup,
+  withStartupSpan,
+} from '../utils/startupPerformance';
+import {
+  clearColdStartSaveSession,
+  peekColdStartSaveSession,
+  rememberColdStartSaveSession,
+  scheduleDeferredMigratedPersist,
+  takeDeferredMigratedPersist,
+} from './coldStartSaveSession';
 import type {
   City,
   Contract,
@@ -1150,6 +1162,7 @@ async function persistLocalSavePayload(payload: SaveGamePayload): Promise<number
   const diskJson = JSON.stringify(payload);
   const storageKey = await resolveGameplaySaveStorageKey();
   await atomicWriteSaveJson(storageKey, diskJson);
+  clearColdStartSaveSession();
   return diskJson.length;
 }
 
@@ -1291,10 +1304,27 @@ async function parseAndMigrateRawSave(rawString: string): Promise<{
   migratedFromVersion: number | null;
   shouldPersistMigrated: boolean;
 }> {
+  const cached = peekColdStartSaveSession();
+  if (cached && cached.raw === rawString && cached.payload) {
+    markStartup('JSON_PARSE_START');
+    markStartup('JSON_PARSE_DONE');
+    markStartup('SAVE_MIGRATION_START');
+    markStartup('SAVE_MIGRATION_DONE');
+    return {
+      payload: cached.payload,
+      error: null,
+      migratedFromVersion: cached.migratedFromVersion,
+      shouldPersistMigrated: cached.shouldPersistMigrated,
+    };
+  }
+
   let parsed: unknown;
   try {
+    markStartup('JSON_PARSE_START');
     parsed = JSON.parse(rawString);
+    markStartup('JSON_PARSE_DONE');
   } catch (error) {
+    markStartup('JSON_PARSE_DONE');
     const message = '[saveGame] Save JSON parse failed. Quarantining corrupted save.';
     console.warn(message, error);
     await handleCorruptMainSave({
@@ -1330,9 +1360,28 @@ async function parseAndMigrateRawSave(rawString: string): Promise<{
   }
 
   const sourceVersion = isRecord(parsed) && typeof parsed.version === 'number' ? parsed.version : 0;
+  const checksumStarted = Date.now();
   const rawChecksumStatus = await verifyRawSaveChecksum(parsed);
+  const checksumMs = Date.now() - checksumStarted;
+  if (rawChecksumStatus === 'mismatch') {
+    await handleCorruptMainSave({
+      rawString,
+      reason: 'checksum-mismatch',
+      stage: 'checksum',
+      saveVersion,
+      checksumStatus: rawChecksumStatus,
+    });
+    return {
+      payload: null,
+      error: 'Kayıt bütünlük kontrolünden geçemedi — kurtarma gerekli.',
+      migratedFromVersion: null,
+      shouldPersistMigrated: false,
+    };
+  }
 
+  markStartup('SAVE_MIGRATION_START');
   const migrated = migrateSavePayload(parsed);
+  markStartup('SAVE_MIGRATION_DONE');
 
   if (!migrated) {
     const message = '[saveGame] Migration failed. Quarantining invalid save.';
@@ -1352,30 +1401,6 @@ async function parseAndMigrateRawSave(rawString: string): Promise<{
     };
   }
 
-  if (rawChecksumStatus === 'mismatch') {
-    await handleCorruptMainSave({
-      rawString,
-      reason: 'checksum-mismatch',
-      stage: 'checksum',
-      saveVersion: migrated.version,
-      checksumStatus: rawChecksumStatus,
-    });
-    return {
-      payload: null,
-      error: 'Kayıt bütünlük kontrolünden geçemedi — kurtarma gerekli.',
-      migratedFromVersion: null,
-      shouldPersistMigrated: false,
-    };
-  }
-
-  const previousChecksum = migrated.meta.integrityChecksum;
-  await sealSavePayloadIntegrity(migrated);
-  const checksumRecomputed =
-    rawChecksumStatus === 'missing' || previousChecksum !== migrated.meta.integrityChecksum;
-
-  const migratedFromVersion =
-    migrated.meta.migratedFromVersion ?? (sourceVersion < SAVE_GAME_VERSION ? sourceVersion : null);
-
   let ownerUidMigrated = false;
   if (!migrated.ownerUid) {
     try {
@@ -1390,12 +1415,27 @@ async function parseAndMigrateRawSave(rawString: string): Promise<{
     }
   }
 
+  const migratedFromVersion =
+    migrated.meta.migratedFromVersion ?? (sourceVersion < SAVE_GAME_VERSION ? sourceVersion : null);
+  const shouldPersistMigrated =
+    sourceVersion < SAVE_GAME_VERSION || ownerUidMigrated || rawChecksumStatus === 'missing';
+
+  rememberColdStartSaveSession({
+    raw: rawString,
+    rawBytes: rawString.length,
+    payload: migrated,
+    migratedFromVersion,
+    shouldPersistMigrated,
+    parseMs: 0,
+    checksumMs,
+    migrateMs: 0,
+  });
+
   return {
     payload: migrated,
     error: null,
     migratedFromVersion,
-    shouldPersistMigrated:
-      sourceVersion < SAVE_GAME_VERSION || ownerUidMigrated || checksumRecomputed,
+    shouldPersistMigrated,
   };
 }
 
@@ -1771,12 +1811,21 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       cachedSnapshot?.fuelPricePerLiter ?? payload.globalEconomy?.fuelPrice,
   });
 
-  const rewardClaims = resolvePersistedRewardClaims({
-    rewardReceipts: payload.rewardReceipts,
-    missions: normalizeMissionsState(payload.missions),
-    retention: normalizeRetentionState(payload.retention),
-    currentTime: safeCurrentTime,
-  });
+  const rewardClaims = withStartupSpan(
+    'REWARD_RECEIPT_MIGRATION_START',
+    'REWARD_RECEIPT_MIGRATION_DONE',
+    () =>
+      resolvePersistedRewardClaims({
+        rewardReceipts: payload.rewardReceipts,
+        missions: normalizeMissionsState(payload.missions),
+        retention: withStartupSpan(
+          'RETENTION_MIGRATION_START',
+          'RETENTION_MIGRATION_DONE',
+          () => normalizeRetentionState(payload.retention),
+        ),
+        currentTime: safeCurrentTime,
+      }),
+  );
 
   return {
     currentTime: safeCurrentTime,
@@ -1794,7 +1843,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     products:
       isArray(payload.products) && payload.products.length > 0
         ? (payload.products as Product[])
-        : structuredClone(PRODUCTS),
+        : PRODUCTS,
     routes: mergeCanonicalRoutes(payload.routes),
     contracts: normalizeLoadedContracts(payload.contracts ?? []),
     activeDeliveries: normalizeDeliveryFuelJobs(
@@ -1823,9 +1872,9 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       safeCurrentTime,
     ),
     globalEconomy: hydratedEconomy,
-    marketNews: payload.marketNews,
-    eventLog: payload.eventLog,
-    financeLedger: payload.financeLedger ?? [],
+    marketNews: Array.isArray(payload.marketNews) ? payload.marketNews.slice(0, 30) : [],
+    eventLog: Array.isArray(payload.eventLog) ? payload.eventLog.slice(0, 50) : [],
+    financeLedger: (payload.financeLedger ?? []).slice(0, FINANCE_LEDGER_MAX_COUNT),
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
     tutorial: normalizeTutorialState(payload.tutorial),
     missions: rewardClaims.missions,
@@ -1992,12 +2041,29 @@ export async function loadGameStateDetailed(): Promise<SaveLoadDetailedResult> {
     }
 
     const storageKey = await resolveGameplaySaveStorageKey();
+    markStartup('ASYNC_STORAGE_READ_START');
     const json = await AsyncStorage.getItem(storageKey);
+    markStartup('ASYNC_STORAGE_READ_DONE');
     if (!json) {
       return { payload: null, error: null, migratedFromVersion: null };
     }
 
-    const rawBeforeMigrate = json;
+    const cached = peekColdStartSaveSession();
+    if (cached?.payload && cached.raw === json) {
+      markStartup('JSON_PARSE_START');
+      markStartup('JSON_PARSE_DONE');
+      markStartup('SAVE_MIGRATION_START');
+      markStartup('SAVE_MIGRATION_DONE');
+      if (cached.shouldPersistMigrated) {
+        scheduleDeferredMigratedPersist();
+      }
+      return {
+        payload: cached.payload,
+        error: null,
+        migratedFromVersion: cached.migratedFromVersion,
+      };
+    }
+
     const parsed = await parseAndMigrateRawSave(json);
 
     if (!parsed.payload) {
@@ -2009,8 +2075,7 @@ export async function loadGameStateDetailed(): Promise<SaveLoadDetailedResult> {
     }
 
     if (parsed.shouldPersistMigrated) {
-      await backupMigratedSave(rawBeforeMigrate);
-      await activeSaveProvider.save(parsed.payload);
+      scheduleDeferredMigratedPersist();
     }
 
     return {
@@ -2035,7 +2100,6 @@ export async function loadGameState(): Promise<StoreGameState | null> {
 }
 
 export async function loadGameStateWithMeta(): Promise<SaveLoadResult> {
-  const backup = await getSaveBackupStatus();
   const detailed = await loadGameStateDetailed();
 
   if (!detailed.payload) {
@@ -2044,17 +2108,52 @@ export async function loadGameStateWithMeta(): Promise<SaveLoadResult> {
       error: detailed.error,
       migratedFromVersion: null,
       hasValidSave: false,
-      backup,
+      backup: { invalid: false, migrated: false },
     };
   }
 
+  const state = withStartupSpan('NORMALIZE_SAVE_START', 'NORMALIZE_SAVE_DONE', () =>
+    payloadToStoreState(detailed.payload!),
+  );
+  const cached = peekColdStartSaveSession();
+  logStartupSaveAudit({
+    rawBytes: cached?.rawBytes ?? 0,
+    trucks: state.player.trucks?.length ?? 0,
+    drivers: state.player.drivers?.length ?? 0,
+    deliveries: state.activeDeliveries?.length ?? 0,
+    completedDeliveries: state.player.completedContracts ?? 0,
+    financeLedger: state.financeLedger?.length ?? 0,
+    notifications: 0,
+    reputationHistory: state.reputationHistory?.length ?? 0,
+    missions: state.missions?.completedMissionIds?.length ?? 0,
+    transactions: state.financeLedger?.length ?? 0,
+    contracts: state.contracts?.length ?? 0,
+    marketNews: state.marketNews?.length ?? 0,
+    eventLog: state.eventLog?.length ?? 0,
+    settlementHistory: state.deliverySettlementHistory?.length ?? 0,
+  });
+
   return {
-    state: payloadToStoreState(detailed.payload),
+    state,
     error: null,
     migratedFromVersion: detailed.migratedFromVersion,
     hasValidSave: true,
-    backup,
+    backup: { invalid: false, migrated: false },
   };
+}
+
+export async function flushDeferredMigratedSavePersist(): Promise<void> {
+  const pending = takeDeferredMigratedPersist();
+  if (!pending?.payload) {
+    return;
+  }
+  try {
+    await backupMigratedSave(pending.raw);
+    const sealed = await sealSavePayloadIntegrity(pending.payload);
+    await activeSaveProvider.save(sealed);
+  } catch (error) {
+    console.warn('[saveGame] deferred migrated persist failed', error);
+  }
 }
 
 let inFlightSaveWrite: Promise<boolean> | null = null;
@@ -2151,6 +2250,9 @@ export async function clearSavedGame(): Promise<void> {
 /** Ana slotta ham veri var mı (bozuk dahil)? */
 export async function hasMainSaveSlot(): Promise<boolean> {
   try {
+    if (peekColdStartSaveSession()?.raw) {
+      return true;
+    }
     const json = await AsyncStorage.getItem(SAVE_STORAGE_KEY);
     return json != null && json.length > 0;
   } catch {
@@ -2161,6 +2263,9 @@ export async function hasMainSaveSlot(): Promise<boolean> {
 /** Geçerli veya migrate edilebilir kayıt var mı? */
 export async function hasValidSavedGame(): Promise<boolean> {
   try {
+    if (peekColdStartSaveSession()?.payload) {
+      return true;
+    }
     const quarantine = await getSaveRecoveryQuarantine();
     const storageKey =
       quarantine?.userChoseNewGame && quarantine.resolved !== true

@@ -47,6 +47,8 @@ import {
 } from './saveGame';
 import type { StoreGameState } from '../types/game';
 import { verifyRawSaveChecksum } from '../utils/saveIntegrity';
+import { markStartup } from '../utils/startupPerformance';
+import { peekColdStartSaveSession, rememberColdStartSaveSession } from './coldStartSaveSession';
 
 const FORBIDDEN_EXPORT_KEY_PATTERN =
   /(?:^|_)(token|apikey|api_key|password|credential|secret|refresh_token|access_token)(?:$|_)/i;
@@ -85,10 +87,13 @@ export function extractSaveVersionFromRaw(parsed: unknown): number | null {
 }
 
 export async function diagnoseRawSaveString(rawString: string): Promise<RawSaveDiagnosis> {
+  const parseStarted = Date.now();
+  markStartup('JSON_PARSE_START');
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawString);
   } catch {
+    markStartup('JSON_PARSE_DONE');
     return {
       ok: false,
       reason: 'json-parse-failed',
@@ -97,6 +102,8 @@ export async function diagnoseRawSaveString(rawString: string): Promise<RawSaveD
       checksumStatus: 'not-checked',
     };
   }
+  const parseMs = Date.now() - parseStarted;
+  markStartup('JSON_PARSE_DONE');
 
   const saveVersion = extractSaveVersionFromRaw(parsed);
   if (saveVersion != null && saveVersion > SAVE_GAME_VERSION) {
@@ -109,7 +116,9 @@ export async function diagnoseRawSaveString(rawString: string): Promise<RawSaveD
     };
   }
 
+  const checksumStarted = Date.now();
   const rawChecksumStatus = await verifyRawSaveChecksum(parsed);
+  const checksumMs = Date.now() - checksumStarted;
   if (rawChecksumStatus === 'mismatch') {
     return {
       ok: false,
@@ -120,7 +129,11 @@ export async function diagnoseRawSaveString(rawString: string): Promise<RawSaveD
     };
   }
 
+  const migrateStarted = Date.now();
+  markStartup('SAVE_MIGRATION_START');
   const migrated = migrateSavePayload(parsed);
+  markStartup('SAVE_MIGRATION_DONE');
+  const migrateMs = Date.now() - migrateStarted;
   if (!migrated) {
     return {
       ok: false,
@@ -134,7 +147,19 @@ export async function diagnoseRawSaveString(rawString: string): Promise<RawSaveD
     };
   }
 
-  await sealSavePayloadIntegrity(migrated);
+  const sourceVersion = isRecord(parsed) && typeof parsed.version === 'number' ? parsed.version : 0;
+  const shouldPersistMigrated =
+    sourceVersion < SAVE_GAME_VERSION || rawChecksumStatus === 'missing';
+  rememberColdStartSaveSession({
+    raw: rawString,
+    rawBytes: rawString.length,
+    payload: migrated,
+    migratedFromVersion: sourceVersion < SAVE_GAME_VERSION ? sourceVersion : null,
+    shouldPersistMigrated,
+    parseMs,
+    checksumMs,
+    migrateMs,
+  });
 
   return {
     ok: true,
@@ -175,7 +200,11 @@ export async function attemptAutomaticLocalSaveRecovery(): Promise<AutomaticLoca
     const startedAt = Date.now();
     let raw: string | null = null;
     try {
+      if (!peekColdStartSaveSession()) {
+        markStartup('ASYNC_STORAGE_READ_START');
+      }
       raw = await AsyncStorage.getItem(candidate.key);
+      markStartup('ASYNC_STORAGE_READ_DONE');
     } catch {
       logSaveBootstrap({
         stage: candidate.stage,

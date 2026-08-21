@@ -106,7 +106,7 @@ export async function verifyRawSaveChecksum(rawParsed: unknown): Promise<SaveRec
   }
   try {
     const version = readChecksumVersionFromMeta(meta);
-    const computed = await computeSaveChecksum(rawParsed, version);
+    const computed = await computeSaveChecksum(rawParsed, version, { shallow: true });
     return computed === expected ? 'valid' : 'mismatch';
   } catch {
     return 'mismatch';

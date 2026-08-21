@@ -9,33 +9,14 @@ import {
   View,
 } from 'react-native';
 
-import { formatIncidentChoiceEffectSummary } from '../../simulation/deliveryIncidents';
+import { formatIncidentChoiceEffectSummary, INCIDENT_CATEGORY_LABELS } from '../../simulation/deliveryIncidents';
 import {
   getOperationChoiceDisabledReason,
   getOperationChoiceNetCashDelta,
 } from '../../simulation/deliveryOperationChoice';
 import { useGameStore } from '../../store/gameStore';
 import { colors, spacing, typography } from '../../theme';
-import type { DeliveryIncidentType } from '../../types/game';
 import { GameIcon } from '../ui';
-
-const CATEGORY_LABELS: Record<DeliveryIncidentType, string> = {
-  traffic: 'Rota',
-  driver_break: 'Şoför',
-  tire_pressure: 'Araç',
-  fuel_deviation: 'Yakıt',
-  checkpoint: 'Kontrol',
-  truck_failure: 'Bakım',
-  customer_request: 'Müşteri',
-  warehouse_issue: 'Depo',
-  market_opportunity: 'Fırsat',
-  insurance_penalty: 'Sigorta',
-  staff_motivation: 'Personel',
-  emergency_delivery: 'Acil İş',
-  unexpected_cost: 'Maliyet',
-  company_reputation: 'İtibar',
-  local_operation: 'Yerel Operasyon',
-};
 
 export interface DeliveryIncidentModalProps {
   pendingDeliveryId?: string;
@@ -112,7 +93,7 @@ export default function DeliveryIncidentModal({
             </View>
             <View style={styles.headerCopy}>
               <Text style={styles.eyebrow}>
-                {resolved ? 'OPERASYON SONUCU' : CATEGORY_LABELS[incident.type]}
+                {resolved ? 'OPERASYON SONUCU' : INCIDENT_CATEGORY_LABELS[incident.type] ?? 'Olay'}
               </Text>
               <Text style={styles.title} numberOfLines={2}>{incident.title}</Text>
             </View>
@@ -136,7 +117,7 @@ export default function DeliveryIncidentModal({
               <Text style={styles.description} numberOfLines={3}>{incident.description}</Text>
               <Text style={styles.pendingTitle}>Karar bekleniyor</Text>
               <Text style={styles.clockNote}>
-                Teslimat, karar verene kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.
+                Teslimat, seçim yapana kadar ilerlemiyor. Son teslim süresi işlemeye devam ediyor.
               </Text>
               <Text style={styles.requiredText}>Devam etmek için bir karar seç.</Text>
               <ScrollView

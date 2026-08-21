@@ -16,7 +16,7 @@ import {
   diagnoseRawSaveString,
   extractSaveVersionFromRaw,
   isCloudSyncBlockedBySaveRecovery,
-  probeSaveRecoveryOnColdStart,
+  probeSaveRecoveryOnColdStart as probeSaveRecoveryOnColdStartUncached,
   readRawSaveForExport,
   restoreFromLocalBackup as restoreFromLocalBackupCore,
   validateOwnerUidForRestore,
@@ -25,6 +25,7 @@ import {
   type RawSaveDiagnosis,
   type SaveRecoveryProbeResult,
 } from '../storage/saveRecoveryCore';
+import { clearColdStartSaveSession } from '../storage/coldStartSaveSession';
 import { logSaveBootstrap } from '../storage/saveBootstrap';
 import type { SaveRecoveryQuarantine } from '../storage/saveRecoveryQuarantine';
 import {
@@ -45,7 +46,6 @@ export {
   diagnoseRawSaveString,
   extractSaveVersionFromRaw,
   isCloudSyncBlockedBySaveRecovery,
-  probeSaveRecoveryOnColdStart,
   verifyLocalSaveIntegrity,
 };
 
@@ -58,6 +58,21 @@ let coldStartProbeResult: SaveRecoveryProbeResult | null = null;
 export function invalidateSaveRecoveryColdStartProbe(): void {
   coldStartProbePromise = null;
   coldStartProbeResult = null;
+  clearColdStartSaveSession();
+}
+
+export async function probeSaveRecoveryOnColdStart(): Promise<SaveRecoveryProbeResult> {
+  if (coldStartProbeResult) {
+    return coldStartProbeResult;
+  }
+  if (coldStartProbePromise) {
+    return coldStartProbePromise;
+  }
+  coldStartProbePromise = probeSaveRecoveryOnColdStartUncached().then((probe) => {
+    coldStartProbeResult = probe;
+    return probe;
+  });
+  return coldStartProbePromise;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {

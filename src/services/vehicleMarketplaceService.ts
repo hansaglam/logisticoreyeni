@@ -373,6 +373,24 @@ export async function purchaseVehicleListing(input: MarketplaceActionEnvelope & 
   sellerNet: number;
   buyerCashBefore?: number;
   buyerCashAfter?: number;
+  transferredTruck?: {
+    truckId: string;
+    templateId: string;
+    customName?: string;
+    currentCityId: string;
+    condition: number;
+    totalMileageKm: number;
+    currentFuelL: number;
+    fuelTankCapacityL: number;
+    upgrades?: {
+      engine: number;
+      fuelEfficiency: number;
+      cargo: number;
+      durability: number;
+    };
+    status: 'idle';
+    marketplaceListingId: null;
+  };
 }>> {
   if (!isVehicleMarketplaceMutationAllowed()) return failure(input, 'service-unavailable');
   const auth = await ensureMarketplaceAuthReady();

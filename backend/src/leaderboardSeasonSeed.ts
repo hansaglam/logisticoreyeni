@@ -20,7 +20,6 @@ import { getLeaderboardSeasonKey } from './leaderboardSeason';
 import {
   buildBoundedLegacyMigrationFromCloudSave,
   cloudSaveRef,
-  mergeLeaderboardStatsFromCloudSave,
   pickLeaderboardServerStatePersistPatch,
   serverStateRef,
   validateServerState,
@@ -272,22 +271,11 @@ export async function seedLeaderboardSeason(
 
         const serverSnap = await serverStateRef(firestore, userDoc.id).get();
         const saveSnap = await cloudSaveRef(firestore, userDoc.id).get();
-        const marketplaceSnap = await firestore
-          .doc(`users/${userDoc.id}/marketplaceState/current`)
-          .get();
 
         let serverState: ServerStateDocument | null = null;
         if (serverSnap.exists) {
+          // Existing authoritative serverState: never merge client-writable cloud save stats.
           serverState = serverSnap.data() as ServerStateDocument;
-          if (saveSnap.exists) {
-            serverState = mergeLeaderboardStatsFromCloudSave(
-              userDoc.id,
-              serverState,
-              saveSnap.data() ?? {},
-              Timestamp.fromMillis(nowMs),
-              { preserveAuthoritativeFleet: marketplaceSnap.exists },
-            );
-          }
         } else if (saveSnap.exists) {
           const built = buildBoundedLegacyMigrationFromCloudSave(
             userDoc.id,

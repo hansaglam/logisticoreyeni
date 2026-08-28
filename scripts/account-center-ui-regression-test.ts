@@ -28,6 +28,8 @@ function assert(condition: boolean, label: string): void {
 }
 
 const screen = readFileSync('src/screens/AccountCenterScreen.tsx', 'utf8');
+const connectionTabSource = readFileSync('src/components/accountCenter/AccountConnectionTab.tsx', 'utf8');
+const prefsTabSource = readFileSync('src/components/accountCenter/AccountPreferencesTab.tsx', 'utf8');
 const accountCenterDir = [
   'src/components/accountCenter/AccountProfileTab.tsx',
   'src/components/accountCenter/AccountConnectionTab.tsx',
@@ -106,11 +108,10 @@ console.log('\nPreferences tab');
   assert(screenBundle.includes('Gelir özeti'), 'income summary toggle');
   assert(screenBundle.includes('Gizlilik Politikası'), 'privacy policy link');
   assert(screenBundle.includes('Gizlilik ve Çerez Ayarları'), 'privacy choices action');
-  assert(screenBundle.includes('Tehlikeli İşlemler'), 'danger zone');
-  assert(screenBundle.includes('Hesabı Sil'), 'delete account action');
-  assert(screenBundle.includes('Misafir Kaydını Sil'), 'guest delete label');
-  const dangerCard = readFileSync('src/components/accountCenter/DangerZoneCard.tsx', 'utf8');
-  assert(!dangerCard.includes('onSignOut'), 'logout removed from danger zone');
+  assert(connectionTabSource.includes('Hesap ve Gizlilik'), 'account privacy section on account tab');
+  assert(connectionTabSource.includes('Hesabı Sil'), 'delete account on account tab');
+  assert(connectionTabSource.includes('Misafir Kaydını Sil'), 'guest delete label on account tab');
+  assert(!prefsTabSource.includes('DangerZoneCard'), 'delete removed from hidden preferences danger zone');
 }
 
 console.log('\nLegal links');

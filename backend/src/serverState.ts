@@ -19,7 +19,7 @@ import type {
 import { SERVER_STATE_SCHEMA_VERSION } from './serverStateTypes';
 import type { MarketplacePlayerState } from './vehicleMarketplaceTypes';
 import {
-  buildMarketplaceStateFromCloudSave,
+  buildMarketplaceStateFromServerState,
 } from './vehicleMarketplaceState';
 import {
   mergeCloudFleetIntoExistingMarketplaceState,
@@ -399,8 +399,18 @@ export type MergeLeaderboardStatsOptions = {
 };
 
 /**
- * Cloud save'deki güncel ilerleme istatistiklerini serverState'e yansıtır.
- * Liderlik submit/seed skoru bu belgeye dayanır; migration sonrası stale kalmasın diye.
+ * @deprecated Do not call from leaderboard submit or season seed when serverState exists.
+ *
+ * Trust boundary: once `users/{uid}/serverState/current` exists, leaderboard scoring
+ * must use that document only. Client-writable cloud save must not refresh progression
+ * fields (deliveries, level, reputation, fleet, warehouses).
+ *
+ * Allowed bootstrap without existing serverState:
+ * - `buildBoundedLegacyMigrationFromCloudSave` (bounded one-time migration)
+ * - `buildServerStateFromMarketplaceState` (marketplace-authoritative fleet/cash)
+ * - `buildDefaultServerState`
+ *
+ * Retained for unit tests and legacy tooling only.
  */
 export function mergeLeaderboardStatsFromCloudSave(
   uid: string,
@@ -705,26 +715,27 @@ export async function migrateLegacyServerStateTransaction(
       saveSnap.data() ?? {},
       now,
     );
-    const marketplaceBuilt = buildMarketplaceStateFromCloudSave(
-      uid,
-      saveSnap.data() ?? {},
-      now,
-    );
     const report = { ...built.report, dryRun, migrated: !dryRun };
     if (!dryRun) {
-      if (marketplaceBuilt.ok) {
+      const marketplaceFromServer = buildMarketplaceStateFromServerState(
+        uid,
+        built.state,
+        now,
+      );
+      if (marketplaceFromServer.ok) {
         const marketplaceRef = firestore.doc(`users/${uid}/marketplaceState/current`);
-        const nextMarketplace = marketplaceSnap.exists
-          ? mergeCloudFleetIntoExistingMarketplaceState(
-              marketplaceSnap.data() as MarketplacePlayerState,
-              marketplaceBuilt.state,
-              now,
-            )
-          : marketplaceBuilt.state;
         if (marketplaceSnap.exists) {
-          transaction.set(marketplaceRef, nextMarketplace, { merge: true });
+          transaction.set(
+            marketplaceRef,
+            mergeCloudFleetIntoExistingMarketplaceState(
+              marketplaceSnap.data() as MarketplacePlayerState,
+              marketplaceFromServer.state,
+              now,
+            ),
+            { merge: true },
+          );
         } else {
-          transaction.create(marketplaceRef, nextMarketplace);
+          transaction.create(marketplaceRef, marketplaceFromServer.state);
         }
       }
       if (existingSnap.exists) {

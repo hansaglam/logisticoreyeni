@@ -197,6 +197,14 @@ async function runAsyncChecks(): Promise<void> {
       { refreshFailed: true },
     );
     assert(replayed.kind === 'success', 'receipt already-completed is still SUCCESS after refresh failure');
+    const localFail = resolveMarketplacePurchaseClientOutcome(
+      { ok: true, reason: undefined },
+      { localApplyFailed: true },
+    );
+    assert(
+      localFail.kind === 'retryable-failure' && localFail.reuseEnvelope,
+      'local apply failure keeps envelope for retry',
+    );
   }
 
   console.log('\nTimeout + replay keeps the same idempotency key');
@@ -336,6 +344,10 @@ void runAsyncChecks()
     assert(
       screen.includes('refreshAll({ skipStaleCloudReconcile: true })'),
       'post-purchase refresh does not upload stale local save first',
+    );
+    assert(
+      screen.includes('applyMarketplacePurchaseResult'),
+      'success applies cash+truck atomically before toast',
     );
     assert(screen.includes('await refreshAll({ skipStaleCloudReconcile: true })'), 'success awaits buyer reconcile refresh');
     assert(!screen.includes('void refreshAll({ skipStaleCloudReconcile: true }).then('), 'success does not fire-and-forget refresh');

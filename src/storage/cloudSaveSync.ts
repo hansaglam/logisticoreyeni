@@ -379,6 +379,8 @@ export function mapAutoSaveReasonToCloudSync(
     case 'delivery_started':
       return 'contract_start';
     case 'purchase':
+    case 'marketplace-purchase':
+    case 'marketplace-reconciliation':
       return 'purchase';
     case 'manual':
     case 'background':

@@ -34,6 +34,7 @@ export interface AccountConnectionTabProps {
   isDeleting: boolean;
   onAccountSwitch: () => void;
   onSignOut: () => void;
+  onDeleteAccount: () => void;
 }
 
 function cloudStatusColor(key: CloudSaveDisplayInfo['key']): string {
@@ -97,6 +98,7 @@ export default function AccountConnectionTab({
   isDeleting,
   onAccountSwitch,
   onSignOut,
+  onDeleteAccount,
 }: AccountConnectionTabProps) {
   const statusColor = cloudStatusColor(cloudDisplay.key);
   const showSecureMessage = cloudDisplay.key === 'synced';
@@ -252,6 +254,31 @@ export default function AccountConnectionTab({
           />
         </AccountSectionCard>
       ) : null}
+
+      <AccountSectionCard title="Hesap ve Gizlilik" compact>
+        <Text style={styles.privacyIntro}>
+          {isGuest
+            ? 'Misafir kaydını ve bu cihazdaki yerel ilerlemeni kalıcı olarak silebilirsin.'
+            : 'Hesabını, bulut kaydını ve bağlı profil verilerini kalıcı olarak silebilirsin.'}
+        </Text>
+        <ActionButton
+          label={
+            isDeleting
+              ? 'Siliniyor…'
+              : isGuest
+                ? 'Misafir Kaydını Sil'
+                : 'Hesabı Sil'
+          }
+          onPress={onDeleteAccount}
+          variant="danger"
+          compact
+          disabled={isDeleting || isSwitchingAccount || !isReady}
+          style={styles.deleteCta}
+        />
+        <Text style={styles.privacyFootnote}>
+          Silme işlemi geri alınamaz. Araç pazarı listelerin güvenli şekilde kaldırılır.
+        </Text>
+      </AccountSectionCard>
     </View>
   );
 }
@@ -376,5 +403,23 @@ const styles = StyleSheet.create({
   divider: {
     height: 1,
     backgroundColor: 'rgba(56, 129, 200, 0.1)',
+  },
+  privacyIntro: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 4,
+  },
+  deleteCta: {
+    alignSelf: 'stretch',
+    minHeight: 44,
+  },
+  privacyFootnote: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+    marginTop: 4,
   },
 });

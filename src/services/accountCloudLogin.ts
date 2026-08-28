@@ -244,6 +244,9 @@ async function restoreCloudSaveForUid(
         pendingCloudRestore.player.trucks,
         marketplace.reconciliation,
       );
+      if (!reconciled.isComplete) {
+        throw new CloudSaveConflictError('marketplace-reconciliation-failed');
+      }
       return {
         ...pendingCloudRestore,
         player: {

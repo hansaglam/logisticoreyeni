@@ -36,8 +36,7 @@ import {
 } from './src/services/notifications';
 import { initAnonymousAuth } from './src/services/authService';
 import { configureGoogleSignIn } from './src/services/googleAuthService';
-import { gatherAdsConsentIfNeeded } from './src/services/adsConsentService';
-import { initializeAdProvider } from './src/services/adProvider';
+import { initializeAdsPrivacyStack } from './src/services/adsPrivacyBootstrap';
 import type { SaveRecoveryProbeResult } from './src/services/saveRecoveryService';
 import SaveRecoveryScreen from './src/screens/SaveRecoveryScreen';
 import { logProductionBuildConfigOnce } from './src/services/productionBuildAudit';
@@ -470,8 +469,7 @@ export default function App() {
       void (async () => {
         markStartup('ADS_START');
         try {
-          await gatherAdsConsentIfNeeded();
-          await initializeAdProvider();
+          await initializeAdsPrivacyStack();
         } catch (error) {
           logStartupError('ads-init', error);
         } finally {

@@ -16,7 +16,6 @@ import {
   buildBoundedLegacyMigrationFromCloudSave,
   buildDefaultServerState,
   buildServerStateFromMarketplaceState,
-  mergeLeaderboardStatsFromCloudSave,
   pickLeaderboardServerStatePersistPatch,
   serverStateRef,
   validateServerState,
@@ -165,7 +164,6 @@ export async function submitLeaderboardScoreTransaction(
       }
 
       let serverStateCreated = false;
-      let serverStateCreatedFromSave = false;
       let serverState: ServerStateDocument;
       if (serverSnap.exists) {
         serverState = serverSnap.data() as ServerStateDocument;
@@ -184,7 +182,6 @@ export async function submitLeaderboardScoreTransaction(
         );
         serverState = built.state;
         serverStateCreated = true;
-        serverStateCreatedFromSave = true;
       } else {
         serverState = buildDefaultServerState(
           identity.uid,
@@ -193,15 +190,8 @@ export async function submitLeaderboardScoreTransaction(
         serverStateCreated = true;
       }
 
-      if (saveSnap.exists && !serverStateCreatedFromSave) {
-        serverState = mergeLeaderboardStatsFromCloudSave(
-          identity.uid,
-          serverState,
-          saveSnap.data() ?? {},
-          Timestamp.fromMillis(nowMs),
-          { preserveAuthoritativeFleet: marketplaceSnap.exists },
-        );
-      }
+      // Authoritative serverState is never refreshed from client cloud save on submit.
+      // First-time bootstrap only: marketplaceState, bounded legacy migration, or default.
 
       const usernameRaw = userSnap.data()?.username;
       const username =

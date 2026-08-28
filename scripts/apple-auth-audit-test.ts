@@ -90,14 +90,35 @@ function run(): void {
     'auth-unavailable literal is not returned from authService',
   );
 
-  const accountSrc = readSrc('src/components/AccountSection.tsx');
+  const accountCenterHook = readSrc('src/hooks/useAccountCenter.ts');
+  const accountConnectionTab = readSrc('src/components/accountCenter/AccountConnectionTab.tsx');
+  const accountCenterScreen = readSrc('src/screens/AccountCenterScreen.tsx');
   assert(
-    accountSrc.includes("Platform.OS === 'ios' && appleAvailable"),
+    accountCenterHook.includes("Platform.OS === 'ios' && appleAvailable"),
     'Apple button only on iOS when available',
   );
-  assert(accountSrc.includes("error === 'cancelled'"), 'cancel is not shown as error modal');
-  assert(accountSrc.includes('isLinking'), 'double-tap guard via isLinking');
-  assert(accountSrc.includes('AuthProviderButton'), 'uses shared AuthProviderButton');
+  assert(
+    accountConnectionTab.includes('showApple') && accountConnectionTab.includes('Apple ile Devam Et'),
+    'AccountConnectionTab conditionally renders Apple action',
+  );
+  assert(
+    accountCenterHook.includes("result.error === 'cancelled'") &&
+      accountCenterHook.includes('isAppleAuthCancelFailure'),
+    'cancel is not shown as error modal',
+  );
+  assert(
+    accountCenterHook.includes('isLinking') &&
+      accountCenterHook.includes('linkTapLock') &&
+      accountConnectionTab.includes('disabled={Boolean(isLinking)}'),
+    'double-tap guard via isLinking',
+  );
+  assert(
+    accountConnectionTab.includes('ActionButton') &&
+      accountConnectionTab.includes('Apple ile Devam Et') &&
+      accountConnectionTab.includes('onLinkApple') &&
+      accountCenterScreen.includes("onLinkApple={() => void vm.handleLink('apple')}"),
+    'Apple CTA wired through AccountConnectionTab',
+  );
 
   const entitlements = readSrc('ios/LogistiCore/LogistiCore.entitlements');
   assert(

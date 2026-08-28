@@ -37,16 +37,60 @@ assert.deepEqual(
 );
 
 assert.equal(validateCloudSaveRestorePayload(validPayload, 3), null);
+
+assert.equal(
+  validateCloudSaveRestorePayload({ ...validPayload, gameState: null }, 3),
+  'body-missing',
+  'gameState null',
+);
 assert.equal(
   validateCloudSaveRestorePayload(
-    { ...validPayload, gameState: null },
+    { schemaVersion: 1, saveVersion: 3 },
     3,
   ),
-  'cloud-save-corrupted',
+  'body-missing',
+  'gameState missing',
+);
+assert.equal(
+  validateCloudSaveRestorePayload({ ...validPayload, gameState: 'truncated' }, 3),
+  'body-missing',
+  'gameState non-object string',
+);
+assert.equal(
+  validateCloudSaveRestorePayload({ ...validPayload, gameState: [] }, 3),
+  'body-missing',
+  'gameState array',
+);
+assert.equal(
+  validateCloudSaveRestorePayload(
+    { ...validPayload, gameState: { version: 3 } },
+    3,
+  ),
+  'deserialize-failed',
+  'player missing',
+);
+assert.equal(
+  validateCloudSaveRestorePayload(
+    {
+      ...validPayload,
+      gameState: {
+        player: { money: Number.NaN, trucks: [], drivers: [], trailers: [], warehouses: [] },
+      },
+    },
+    3,
+  ),
+  'deserialize-failed',
+  'player.money non-finite',
+);
+assert.equal(
+  validateCloudSaveRestorePayload({ ...validPayload, schemaVersion: 99 }, 3),
+  'unsupported-save-version',
+  'unsupported schemaVersion',
 );
 assert.equal(
   validateCloudSaveRestorePayload({ ...validPayload, saveVersion: 99 }, 3),
   'unsupported-save-version',
+  'unsupported saveVersion',
 );
 
 const gate = { current: false };
@@ -175,7 +219,7 @@ console.log('[cloud-save-conflict-test] PASS', {
   loadingGate: true,
   atomicRestore: true,
   guestPreservedOnFailure: true,
-  corruptedRejected: true,
+  granularValidation: true,
   wrongAccountRejected: true,
   marketplaceReconciled: true,
   localSaveUpdated: true,

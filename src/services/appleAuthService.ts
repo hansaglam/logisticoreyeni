@@ -39,8 +39,31 @@ export type AppleSignInProfile = {
 };
 
 export type AppleCredentialResult =
-  | { ok: true; credential: AuthCredential; profile: AppleSignInProfile }
+  | {
+      ok: true;
+      credential: AuthCredential;
+      profile: AppleSignInProfile;
+      authorizationCode: string | null;
+    }
   | { ok: false; error: string; failure: AppleAuthFailure };
+
+let pendingAppleAuthorizationCode: string | null = null;
+
+export function consumePendingAppleAuthorizationCode(): string | null {
+  const code = pendingAppleAuthorizationCode;
+  pendingAppleAuthorizationCode = null;
+  return code;
+}
+
+export function rememberAppleAuthorizationCode(code: string | null | undefined): void {
+  if (typeof code === 'string' && code.trim().length > 0) {
+    pendingAppleAuthorizationCode = code.trim();
+  }
+}
+
+export function __resetAppleAuthorizationCodeForTests(): void {
+  pendingAppleAuthorizationCode = null;
+}
 
 function loadAppleAuthentication(): AppleAuthModule | null {
   if (Platform.OS !== 'ios') {
@@ -412,6 +435,8 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       }),
     );
 
+    rememberAppleAuthorizationCode(appleCredential.authorizationCode);
+
     const email =
       typeof appleCredential.email === 'string' && appleCredential.email.trim().length > 0
         ? appleCredential.email.trim()
@@ -424,6 +449,11 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
         fullName,
         email,
       },
+      authorizationCode:
+        typeof appleCredential.authorizationCode === 'string' &&
+        appleCredential.authorizationCode.trim().length > 0
+          ? appleCredential.authorizationCode.trim()
+          : null,
     };
   } catch (error: unknown) {
     const extracted = extractSafeAppleErrorFields(error);
@@ -465,4 +495,18 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       hasHashedNonce,
     });
   }
+}
+
+/** Fresh Apple authorization code for server-side token revocation (account deletion). */
+export async function obtainAppleAuthorizationCodeForRevocation(): Promise<string | null> {
+  const pending = consumePendingAppleAuthorizationCode();
+  if (pending) {
+    return pending;
+  }
+
+  const result = await signInWithAppleAccount();
+  if (!result.ok) {
+    return null;
+  }
+  return result.authorizationCode ?? consumePendingAppleAuthorizationCode();
 }

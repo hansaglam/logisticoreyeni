@@ -9,6 +9,7 @@ import { Timestamp, getFirestore } from 'firebase-admin/firestore';
 
 import {
   SERVER_DEFAULT_CASH,
+  SERVER_DEFAULT_STARTER_INSTANCE_ID,
   buildDefaultServerState,
   buildServerStateFromMarketplaceState,
 } from '../src/serverState';
@@ -213,7 +214,7 @@ test('valid listing locks vehicle, charges listing fee once and duplicate is ide
   assert.equal(duplicateTransaction.reason, 'already-completed');
 });
 
-test('new user marketplace state bootstraps from trusted cloud save fleet', async () => {
+test('new user marketplace state bootstraps from server defaults, not cloud save', async () => {
   const uid = 'new-user';
   await adminFirestore.doc(`users/${uid}`).set({
     uid,
@@ -268,13 +269,13 @@ test('new user marketplace state bootstraps from trusted cloud save fleet', asyn
     await adminFirestore.doc(`users/${uid}/marketplaceState/current`).get()
   ).data() as MarketplacePlayerState;
   assert.equal(state.ownerUid, uid);
-  assert.equal(state.canonicalCash, 75_000);
-  assert.equal(state.ownedTruckSnapshots.length, 2);
-  assert.equal(state.ownedTruckSnapshots[0]?.truckId, 'new-truck-1');
+  assert.equal(state.canonicalCash, SERVER_DEFAULT_CASH);
+  assert.equal(state.ownedTruckSnapshots.length, 1);
+  assert.equal(state.ownedTruckSnapshots[0]?.truckId, SERVER_DEFAULT_STARTER_INSTANCE_ID);
   const serverState = (
     await adminFirestore.doc(`users/${uid}/serverState/current`).get()
   ).data();
-  assert.equal(Number(serverState?.cash), 75_000);
+  assert.equal(Number(serverState?.cash), SERVER_DEFAULT_CASH);
 });
 
 test('stale default marketplace state reconciles from cloud save before listing create', async () => {
@@ -397,6 +398,68 @@ test('missing cloud save still bootstraps safe server-owned marketplace state', 
     await adminFirestore.doc(`users/${uid}/marketplaceState/current`).get()
   ).data() as MarketplacePlayerState;
   assert.equal(state.canonicalCash, SERVER_DEFAULT_CASH);
+});
+
+test('malicious cloud save cannot change canonical marketplace cash or fleet', async () => {
+  const uid = 'malicious-marketplace';
+  await seedState(uid, {
+    canonicalCash: 100_000,
+    ownedTruckSnapshots: [vehicle('trusted-truck-1'), vehicle('trusted-truck-2')],
+  });
+  await adminFirestore.doc(`users/${uid}/saves/current`).set({
+    saveVersion: 99,
+    deviceUpdatedAt: NOW_MS,
+    gameState: {
+      player: {
+        money: 987_654_321,
+        homeCityId: 'izmir',
+        trucks: [
+          {
+            id: 'forged-truck',
+            catalogId: 'truck-ford-cargo',
+            purchasePrice: 52_000,
+            ownershipType: 'owned',
+            status: 'idle',
+          },
+        ],
+        drivers: [],
+        trailers: [],
+      },
+      activeDeliveries: [],
+      activeTransfers: [],
+      activeWarehouseStockTransfers: [],
+    },
+  });
+
+  const reconciled = await reconcileAuthoritativeFleetTransaction(
+    adminFirestore,
+    uid,
+    NOW_MS,
+    { force: true },
+  );
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.state.canonicalCash, 100_000);
+  assert.deepEqual(
+    reconciled.state.ownedTruckSnapshots.map((truck) => truck.truckId).sort(),
+    ['trusted-truck-1', 'trusted-truck-2'],
+  );
+
+  const ensured = await ensureVehicleMarketplaceStateTransaction(
+    adminFirestore,
+    { uid },
+    {
+      transactionId: 'ensure-malicious',
+      idempotencyKey: 'ensure-malicious',
+      clientSaveVersion: 99,
+    },
+    NOW_MS,
+  );
+  assert.equal(ensured.ok, true);
+  const state = (
+    await adminFirestore.doc(`users/${uid}/marketplaceState/current`).get()
+  ).data() as MarketplacePlayerState;
+  assert.equal(state.canonicalCash, 100_000);
+  assert.equal(state.ownedTruckSnapshots.length, 2);
 });
 
 test('listing rejects busy, attached, leased, duplicate, unsupported and protected trucks', async () => {
@@ -762,13 +825,24 @@ test('cloud restore cannot resurrect sold truck', () => {
     currentCityId: 'izmir',
     status: 'idle',
   } satisfies Truck;
-  const result = reconcileFleetWithVehicleMarketplace([localTruck], {
+  const incomplete = reconcileFleetWithVehicleMarketplace([localTruck], {
     marketplaceStateVersion: 9,
     soldTruckIds: ['sold-truck'],
     vehicles: [],
   });
+  assert.equal(incomplete.isComplete, false);
+  assert.equal(incomplete.trucks.length, 1);
+
+  const result = reconcileFleetWithVehicleMarketplace([localTruck], {
+    marketplaceStateVersion: 9,
+    cash: 55_000,
+    soldTruckIds: ['sold-truck'],
+    vehicles: [],
+  });
+  assert.equal(result.isComplete, true);
   assert.equal(result.trucks.length, 0);
   assert.deepEqual(result.cache.soldTruckIds, ['sold-truck']);
+  assert.equal(result.authoritativeCash, 55_000);
 });
 
 test('account deletion cancels active listing and anonymizes history', async () => {

@@ -10,7 +10,6 @@ import {
 import AccountActionRow from './AccountActionRow';
 import AccountSectionCard from './AccountSectionCard';
 import AccountSettingRow from './AccountSettingRow';
-import DangerZoneCard from './DangerZoneCard';
 import { ACCOUNT_SECTION_GAP } from './accountCenterTheme';
 import { colors, typography } from '../../theme';
 
@@ -51,13 +50,6 @@ export interface AccountPreferencesTabProps {
   appVersion: string;
   buildNumber: string;
   registrationDateLabel: string;
-  dangerExpanded: boolean;
-  onToggleDanger: () => void;
-  isDeleting: boolean;
-  isSwitchingAccount: boolean;
-  isGuest: boolean;
-  isReady: boolean;
-  onDeleteAccount: () => void;
   onLanguagePress: () => void;
   onPrivacyPolicy: () => void;
   showPrivacyOptions: boolean;
@@ -72,13 +64,6 @@ export default function AccountPreferencesTab({
   appVersion,
   buildNumber,
   registrationDateLabel,
-  dangerExpanded,
-  onToggleDanger,
-  isDeleting,
-  isSwitchingAccount,
-  isGuest,
-  isReady,
-  onDeleteAccount,
   onLanguagePress,
   onPrivacyPolicy,
   showPrivacyOptions,
@@ -185,16 +170,6 @@ export default function AccountPreferencesTab({
           compact
         />
       </AccountSectionCard>
-
-      <DangerZoneCard
-        expanded={dangerExpanded}
-        onToggle={onToggleDanger}
-        isDeleting={isDeleting}
-        isSwitchingAccount={isSwitchingAccount}
-        isGuest={isGuest}
-        isReady={isReady}
-        onDelete={onDeleteAccount}
-      />
     </View>
   );
 }

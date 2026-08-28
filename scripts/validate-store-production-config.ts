@@ -50,10 +50,24 @@ function main(): void {
     console.log('  ✓ adProvider consent gate');
   }
 
-  if (!adProvider.includes('requestAttIfNeededForRewardedAd')) {
-    console.error('  ✗ adProvider must defer ATT to rewarded flow');
+  const adsBootstrap = loadSource('src/services/adsPrivacyBootstrap.ts');
+  if (!adsBootstrap.includes('resolveAttBeforeAdsInitialization')) {
+    console.error('  ✗ ads bootstrap must resolve ATT before UMP');
   } else {
-    console.log('  ✓ adProvider deferred ATT');
+    console.log('  ✓ ads bootstrap ATT before UMP');
+  }
+
+  if (!adProvider.includes('buildRewardedAdRequestOptions')) {
+    console.error('  ✗ adProvider must apply non-personalized ad requests when ATT denied');
+  } else {
+    console.log('  ✓ adProvider NPA request options');
+  }
+
+  const appTsx = loadSource('App.tsx');
+  if (!appTsx.includes('initializeAdsPrivacyStack')) {
+    console.error('  ✗ App must use initializeAdsPrivacyStack');
+  } else {
+    console.log('  ✓ App ads privacy bootstrap');
   }
 
   const failed = productionErrors.length + internalErrors.length;

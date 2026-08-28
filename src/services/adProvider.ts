@@ -21,7 +21,12 @@ import {
   type RewardedPlacement,
 } from '../config/rewardedPlacements';
 import { canRequestAdsAfterConsent, getAdsConsentSnapshot } from './adsConsentService';
-import { requestAttIfNeededForRewardedAd } from './attService';
+import {
+  getAttAdsPersonalizationMode,
+  getLastAttAuthorizationStatus,
+  requestAttIfNeededForRewardedAd,
+  shouldRequestNonPersonalizedAdsOnly,
+} from './attService';
 import type { AdRewardSlotId } from '../types/monetization';
 
 export type AdShowResult = 'completed' | 'skipped' | 'failed';
@@ -119,6 +124,30 @@ const placementPreloadState = new Map<AdRewardSlotId, PlacementPreloadEntry>();
 let placementStateListeners = new Set<() => void>();
 
 type MobileAdsModule = typeof import('react-native-google-mobile-ads');
+
+type RewardedAdRequestOptions = {
+  requestNonPersonalizedAdsOnly?: boolean;
+};
+
+export function buildRewardedAdRequestOptions(): RewardedAdRequestOptions {
+  if (shouldRequestNonPersonalizedAdsOnly()) {
+    return { requestNonPersonalizedAdsOnly: true };
+  }
+  return {};
+}
+
+/** iOS ATT → ad personalization eligibility (before Mobile Ads init). */
+export async function applyAdTrackingConfiguration(): Promise<void> {
+  if (Platform.OS !== 'ios') {
+    return;
+  }
+  console.info('[ads-tracking-config]', {
+    platform: Platform.OS,
+    attStatus: getLastAttAuthorizationStatus(),
+    personalization: getAttAdsPersonalizationMode(),
+    requestNonPersonalizedAdsOnly: shouldRequestNonPersonalizedAdsOnly(),
+  });
+}
 
 function isDevEnvironment(): boolean {
   return typeof __DEV__ !== 'undefined' && __DEV__ === true;
@@ -347,7 +376,7 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
   const loadingPromise = new Promise<void>((resolve) => {
     setPlacementEntry(slotId, { status: 'loading', loadingPromise });
     const { RewardedAd, RewardedAdEventType, AdEventType } = mod;
-    const rewarded = RewardedAd.createForAdRequest(unitId);
+    const rewarded = RewardedAd.createForAdRequest(unitId, buildRewardedAdRequestOptions());
     let settled = false;
 
     const finish = (status: RewardedPlacementRuntimeStatus, errorCode?: string) => {
@@ -762,7 +791,7 @@ async function showNativeRewardedAd(slotId: AdRewardSlotId): Promise<AdShowResul
 
   try {
     const { RewardedAd, RewardedAdEventType, AdEventType } = mod;
-    const rewarded = RewardedAd.createForAdRequest(unitId);
+    const rewarded = RewardedAd.createForAdRequest(unitId, buildRewardedAdRequestOptions());
 
     return await new Promise<AdShowResult>((resolve) => {
       let earned = false;

@@ -99,6 +99,7 @@ console.log('\nDeferred / lazy online systems');
   assert(mapPreload.includes('preloadMapAssets'), 'map preload helper still exists');
   assert(
     !app.includes('await gatherAdsConsentIfNeeded()') ||
+      app.includes('initializeAdsPrivacyStack') ||
       /bootPhase !== 'ready'[\s\S]*gatherAdsConsentIfNeeded/.test(app),
     'ads consent waits until UI is ready',
   );

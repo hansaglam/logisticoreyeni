@@ -74,8 +74,8 @@ export type MarketplaceStateBuildResult =
   | { ok: false; reason: MarketplaceFailureReason };
 
 /**
- * Trusted cloud-save belgesinden canonical marketplace ownership görünümü üretir.
- * Client payload'ı kabul etmez; yalnız Admin SDK ile okunmuş save/current kullanılır.
+ * Cloud-save snapshot parser for targeted fleet reconcile only.
+ * Client-writable save/current must never authoritatively bootstrap marketplace cash/fleet.
  */
 export function buildMarketplaceStateFromCloudSave(
   uid: string,

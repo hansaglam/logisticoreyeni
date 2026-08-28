@@ -67,33 +67,63 @@ export function calculatePeriodicCostPeriods(params: {
     return { periodsElapsed: 0, periodStarts: [], capped: false };
   }
 
-  // Offline sabit gider kapalı (maxPeriods=0). Not: Array#slice(-0) tüm diziye eşittir.
-  if (maxPeriods <= 0) {
+  const elapsedPeriods = Math.floor((now - last) / PERIOD_24H_MS);
+  if (elapsedPeriods <= 0) {
     return { periodsElapsed: 0, periodStarts: [], capped: false };
   }
 
-  const firstPeriodStart = Math.floor(last / PERIOD_24H_MS) * PERIOD_24H_MS;
-  // last tam period sınırındaysa bir sonraki period'dan başla
-  let cursor =
-    last > firstPeriodStart ? firstPeriodStart + PERIOD_24H_MS : firstPeriodStart;
-  if (cursor <= last) {
-    cursor = Math.floor(last / PERIOD_24H_MS) * PERIOD_24H_MS + PERIOD_24H_MS;
+  // Offline catch-up: enumerate elapsed debt for metadata, never charge.
+  if (maxPeriods <= 0) {
+    return {
+      periodsElapsed: elapsedPeriods,
+      periodStarts: [],
+      capped: true,
+    };
   }
 
-  const allStarts: number[] = [];
-  while (cursor + PERIOD_24H_MS <= now) {
-    allStarts.push(cursor);
-    cursor += PERIOD_24H_MS;
+  const periodsToProcess = Math.min(elapsedPeriods, maxPeriods);
+  const capped = elapsedPeriods > maxPeriods;
+  const periodStarts: number[] = [];
+  for (let index = 0; index < periodsToProcess; index += 1) {
+    periodStarts.push(last + index * PERIOD_24H_MS);
   }
-
-  const capped = allStarts.length > maxPeriods;
-  const periodStarts = capped ? allStarts.slice(-maxPeriods) : allStarts;
 
   return {
-    periodsElapsed: allStarts.length,
+    periodsElapsed: elapsedPeriods,
     periodStarts,
     capped,
   };
+}
+
+function resolveNewlyProcessedUntil(params: {
+  economyNowMs: number;
+  previousProcessedAt: number;
+  periodsElapsed: number;
+  periodSlotsProcessed: number;
+  maxPeriods: number;
+}): number {
+  const {
+    economyNowMs,
+    previousProcessedAt,
+    periodsElapsed,
+    periodSlotsProcessed,
+    maxPeriods,
+  } = params;
+
+  if (economyNowMs <= previousProcessedAt || periodsElapsed <= 0) {
+    return previousProcessedAt;
+  }
+
+  // Offline: forgive historical debt and jump to now once any full period elapsed.
+  if (maxPeriods <= 0) {
+    return economyNowMs;
+  }
+
+  if (periodSlotsProcessed <= 0) {
+    return previousProcessedAt;
+  }
+
+  return previousProcessedAt + periodSlotsProcessed * PERIOD_24H_MS;
 }
 
 /**
@@ -107,28 +137,51 @@ export function buildPeriodicCostDeductions(params: {
   maxOfflineCostPeriods?: number;
 }): PeriodicCostApplicationResult {
   const economyNowMs = params.economyNowMs ?? getEconomyNow();
+  const maxPeriods = Math.max(
+    0,
+    Math.floor(
+      params.maxOfflineCostPeriods ??
+        operatingCostBalance.maxOfflineChargeDays ??
+        0,
+    ),
+  );
+  const previousProcessedAt =
+    params.lastProcessedEconomyAt != null &&
+    Number.isFinite(params.lastProcessedEconomyAt)
+      ? params.lastProcessedEconomyAt
+      : economyNowMs;
+
   const { periodsElapsed, periodStarts, capped } = calculatePeriodicCostPeriods({
     economyNowMs,
     lastProcessedEconomyAt: params.lastProcessedEconomyAt,
     maxOfflineCostPeriods: params.maxOfflineCostPeriods,
   });
 
-  const previousProcessedAt =
-    params.lastProcessedEconomyAt != null &&
-    Number.isFinite(params.lastProcessedEconomyAt)
-      ? params.lastProcessedEconomyAt
-      : economyNowMs;
-  const newlyProcessedUntil =
-    economyNowMs <= previousProcessedAt
-      ? previousProcessedAt
-      : capped
-        ? economyNowMs
-        : Math.min(
-            economyNowMs,
-            previousProcessedAt + periodsElapsed * PERIOD_24H_MS,
-          );
+  const newlyProcessedUntil = resolveNewlyProcessedUntil({
+    economyNowMs,
+    previousProcessedAt,
+    periodsElapsed,
+    periodSlotsProcessed: periodStarts.length,
+    maxPeriods,
+  });
 
   if (periodStarts.length === 0) {
+    if (
+      operatingCostBalance.economyAuditLogsEnabled &&
+      periodsElapsed > 0 &&
+      maxPeriods <= 0
+    ) {
+      logTimeProgressionAudit({
+        kind: 'periodic_cost_skip',
+        previousCursor: previousProcessedAt,
+        now: economyNowMs,
+        elapsedPeriods: periodsElapsed,
+        periodsToProcess: 0,
+        newCursor: newlyProcessedUntil,
+        maxPeriods,
+      });
+    }
+
     return {
       periodsElapsed,
       periodsCharged: 0,
@@ -179,6 +232,19 @@ export function buildPeriodicCostDeductions(params: {
 
   const totalAmount = deductions.reduce((sum, d) => sum + d.amount, 0);
   const periodKeysApplied = [...new Set(deductions.map((d) => d.periodKey))];
+
+  if (operatingCostBalance.economyAuditLogsEnabled) {
+    logTimeProgressionAudit({
+      kind: 'periodic_cost_apply',
+      previousCursor: previousProcessedAt,
+      now: economyNowMs,
+      elapsedPeriods: periodsElapsed,
+      periodsToProcess: periodStarts.length,
+      periodsCharged: periodKeysApplied.length,
+      newCursor: newlyProcessedUntil,
+      maxPeriods,
+    });
+  }
 
   return {
     periodsElapsed,

@@ -15,6 +15,7 @@ import {
 } from './accountLifecycleLog';
 import {
   deleteCurrentFirebaseUser,
+  getAccountStatus,
   getAuthDeleteErrorCode,
   getCurrentUserId,
   initAnonymousAuth,
@@ -25,6 +26,7 @@ import {
   resetCloudFirestoreCache,
 } from '../services/cloudSaveService';
 import { isFirebaseEnabled } from '../services/firebase';
+import { revokeAppleSignInIfNeeded } from '../services/appleSignInRevocationService';
 import {
   beginAccountDeletion,
   endAccountDeletion,
@@ -92,8 +94,20 @@ export async function deleteAccountAndCloudData(options: {
 
   try {
     let cloudAlreadyDeleted = Boolean(options.skipCloudDelete);
+    const accountStatus = getAccountStatus();
+    const isGuest =
+      Boolean(accountStatus?.isAnonymous) || accountStatus?.provider === 'guest';
 
-    if (uid && isFirebaseEnabled() && !options.skipCloudDelete) {
+    if (uid && isFirebaseEnabled() && !options.skipCloudDelete && !isGuest) {
+      const revokeResult = await revokeAppleSignInIfNeeded();
+      logAccountDelete({
+        stage: 'apple-revoke',
+        authUidPresent: true,
+        diagnosticId,
+        success: revokeResult.ok,
+        errorCode: revokeResult.ok ? undefined : revokeResult.reason,
+      });
+
       const cloudResult = await deleteUserCloudData(uid);
       logAccountDelete({
         stage: 'cloud-delete',

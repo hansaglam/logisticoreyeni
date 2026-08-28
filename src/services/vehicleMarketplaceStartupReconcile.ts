@@ -76,7 +76,14 @@ async function runPostStartupMarketplaceReconcileOnce(): Promise<void> {
     });
 
     if (plan.shouldApply) {
-      useGameStore.getState().applyVehicleMarketplaceReconciliation(mine.reconciliation);
+      const applied = useGameStore
+        .getState()
+        .applyVehicleMarketplaceReconciliation(mine.reconciliation);
+      if (!applied) {
+        failedThisSession = true;
+        console.warn('[MARKETPLACE_STARTUP] reconcile refused incomplete payload');
+        return;
+      }
     }
 
     if (plan.toastVehicleIds.length > 0) {
@@ -165,7 +172,12 @@ export async function reconcileVehicleMarketplaceOnForeground(): Promise<void> {
       });
 
       if (plan.shouldApply) {
-        useGameStore.getState().applyVehicleMarketplaceReconciliation(mine.reconciliation);
+        const applied = useGameStore
+          .getState()
+          .applyVehicleMarketplaceReconciliation(mine.reconciliation);
+        if (!applied) {
+          console.warn('[MARKETPLACE_FOREGROUND] reconcile refused incomplete payload');
+        }
       }
     } catch (error) {
       logMarketplaceReconcileError(error);

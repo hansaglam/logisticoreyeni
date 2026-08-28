@@ -81,7 +81,10 @@ import type {
 } from '../types/game';
 import type { AdRewardGrantContext, AdRewardSlotId } from '../types/monetization';
 import type { AuthoritativeMarketplaceReconciliation } from '../domain/vehicleMarketplaceReconciliation';
-import { reconcileFleetWithVehicleMarketplace } from '../domain/vehicleMarketplaceReconciliation';
+import {
+  buildLocalPurchaseApplyPatch,
+  reconcileFleetWithVehicleMarketplace,
+} from '../domain/vehicleMarketplaceReconciliation';
 import { resolveNotificationDismissMs } from '../types/game';
 import { CITIES } from '../data/cities';
 import { PRODUCTS } from '../data/products';
@@ -905,6 +908,7 @@ export type AutoSaveReason =
   | 'contracts_generated'
   | 'warehouse'
   | 'marketplace-reconciliation'
+  | 'marketplace-purchase'
   | 'clear_save'
   | 'background'
   | 'manual'
@@ -933,6 +937,8 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'manual',
   'offline_progress',
   'vehicle_recovery',
+  'marketplace-purchase',
+  'marketplace-reconciliation',
 ]);
 
 function resetAutoSaveTracking(gameTime = 0): void {
@@ -1864,7 +1870,16 @@ export interface GameStore extends StoreGameState {
   clearNotifications: () => void;
   applyVehicleMarketplaceReconciliation: (
     authoritative: AuthoritativeMarketplaceReconciliation,
-  ) => void;
+  ) => boolean;
+  /**
+   * Atomic local apply after marketplace purchase success (cash + truck together).
+   * Returns false if the truck cannot be materialized — caller must keep hold/retry.
+   */
+  applyMarketplacePurchaseResult: (input: {
+    buyerCashAfter: number;
+    vehicle: AuthoritativeMarketplaceReconciliation['vehicles'][number];
+    marketplaceStateVersion?: number;
+  }) => boolean;
   requestNavigationFromNotification: (target: GameNotificationActionTarget) => void;
   clearNavigationRequest: () => void;
   clearPendingMoreSubRoute: () => void;
@@ -2185,18 +2200,34 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   applyVehicleMarketplaceReconciliation: (authoritative) => {
-    set((live) => {
-      const trucks = live.player?.trucks ?? [];
-      const result = reconcileFleetWithVehicleMarketplace(trucks, authoritative);
-      if (!live.player) {
+    const live = get();
+    const trucks = live.player?.trucks ?? [];
+    const result = reconcileFleetWithVehicleMarketplace(trucks, authoritative);
+    if (!result.isComplete) {
+      console.warn('[MARKETPLACE_RECONCILE] refused incomplete payload', {
+        rejectReason: result.rejectReason ?? null,
+        droppedVehicleIds: result.diagnostics.droppedVehicleIds,
+        removedSoldIds: result.diagnostics.removedSoldIds,
+        marketplaceStateVersion: authoritative.marketplaceStateVersion,
+        hasCash: Number.isFinite(authoritative.cash),
+      });
+      return false;
+    }
+    if (result.diagnostics.usedFallbackTemplateIds.length > 0) {
+      console.warn('[MARKETPLACE_RECONCILE] used fallback templates', {
+        templateIds: result.diagnostics.usedFallbackTemplateIds,
+      });
+    }
+    set((state) => {
+      if (!state.player) {
         return { vehicleMarketplace: result.cache };
       }
       return {
         player: {
-          ...live.player,
+          ...state.player,
           trucks: result.trucks,
           money: resolveCashAfterMarketplaceReconcile({
-            localCash: live.player.money,
+            localCash: state.player.money,
             authoritativeCash: result.authoritativeCash,
             acceptedTestRemoteMoney: getAcceptedTestRemoteMoney(),
             testMoneySyncEnabled: isTestMoneySyncEnabled(),
@@ -2207,6 +2238,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     bumpCanonicalStateRevision('marketplace-reconciliation');
     get().autoSave('marketplace-reconciliation');
+    return true;
+  },
+
+  applyMarketplacePurchaseResult: (input) => {
+    const live = get();
+    if (!live.player) return false;
+    const patch = buildLocalPurchaseApplyPatch({
+      localTrucks: live.player.trucks ?? [],
+      localCash: live.player.money,
+      buyerCashAfter: input.buyerCashAfter,
+      vehicle: input.vehicle,
+      marketplaceStateVersion: input.marketplaceStateVersion,
+    });
+    if (!patch.ok) {
+      console.warn('[MARKETPLACE_PURCHASE] local atomic apply refused', {
+        reason: patch.reason,
+        truckId: input.vehicle.truckId,
+        templateId: input.vehicle.templateId,
+      });
+      return false;
+    }
+    set({
+      player: {
+        ...live.player,
+        trucks: patch.trucks,
+        money: patch.money,
+      },
+      vehicleMarketplace: {
+        ...live.vehicleMarketplace,
+        ...patch.cache,
+      },
+    });
+    bumpCanonicalStateRevision('marketplace-purchase');
+    get().autoSave('marketplace-purchase');
+    return true;
   },
 
   requestNavigationFromNotification: (target) => {
@@ -4228,6 +4294,7 @@ const hasActiveDeliveries = countActiveRouteDeliveriesInList(state.activeDeliver
       lastOfflineProgressAppliedAt: state.lastOfflineProgressAppliedAt,
       lastSeenRealTimeMs: state.lastSeenRealTimeMs,
       metaLastSimulatedRealTimeMs: cachedOfflineMetaLastSimulated,
+      hasActiveDeliveries,
       gameState: state,
     });
     const baselineMs = plan.baselineMs;

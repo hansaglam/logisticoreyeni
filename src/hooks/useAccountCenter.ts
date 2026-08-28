@@ -1372,15 +1372,17 @@ export function useAccountCenter({
     showDialog({
       title: isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Sil',
       message: isGuest
-        ? 'Yerel ilerlemen kalıcı olarak silinecek.'
-        : 'Bulut kaydın, kullanıcı adın ve hesap verilerin kalıcı olarak silinecek.',
+        ? 'Bu cihazdaki yerel oyun kaydın kalıcı olarak silinecek.'
+        : 'LogistiCore hesabın, bulut kaydın, kullanıcı adın/profilin, liderlik tablosu kaydın ve araç pazarı hesap verilerin kalıcı olarak silinecek.',
       variant: 'danger',
       cancelLabel: 'Vazgeç',
       confirmLabel: 'Devam Et',
       onConfirm: () => {
         showDialog({
           title: isGuest ? 'Misafir Kaydını Sil' : 'Hesabı Kalıcı Olarak Sil',
-          message: 'Bu işlem geri alınamaz. Onaylıyor musun?',
+          message: isGuest
+            ? 'Tüm yerel ilerlemen silinecek ve yeni bir misafir oturumu başlayacak. Bu işlem geri alınamaz.'
+            : 'Hesabın, bulut kaydın ve bağlı profil verilerin silinecek. Aktif pazar listelerin güvenli şekilde kaldırılır. Bu işlem geri alınamaz — onaylıyor musun?',
           variant: 'danger',
           cancelLabel: 'Vazgeç',
           confirmLabel: 'Hesabı Kalıcı Olarak Sil',

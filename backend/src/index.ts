@@ -50,6 +50,11 @@ import type {
   CreateVehicleListingInput,
   PurchaseVehicleListingInput,
 } from './vehicleMarketplaceTypes';
+import { revokeAppleAuthorizationCode } from './appleTokenRevocation';
+import {
+  APPLE_SIGNIN_SECRETS,
+  readAppleSignInSecretValuesFromBinding,
+} from './appleSignInSecrets';
 
 initializeApp();
 
@@ -620,9 +625,21 @@ export const getMyVehicleListings = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
   const ownedSnapshots = Array.isArray(state.data()?.ownedTruckSnapshots)
     ? (state.data()?.ownedTruckSnapshots as Record<string, unknown>[])
     : [];
-  const vehicles = ownedSnapshots
-    .map((vehicle) => serializeReconciliationVehicleForClient(vehicle))
-    .filter((vehicle): vehicle is Record<string, unknown> => vehicle != null);
+  const serializedVehicles = ownedSnapshots.map((vehicle) =>
+    serializeReconciliationVehicleForClient(vehicle),
+  );
+  const vehicles = serializedVehicles.filter(
+    (vehicle): vehicle is Record<string, unknown> => vehicle != null,
+  );
+  const droppedOwnedCount = ownedSnapshots.length - vehicles.length;
+  if (droppedOwnedCount > 0) {
+    logger.error('[vehicle-marketplace-reconciliation-incomplete]', {
+      uidHash: uidHash(identity.uid),
+      ownedCount: ownedSnapshots.length,
+      serializedCount: vehicles.length,
+      droppedOwnedCount,
+    });
+  }
   const result = {
     ok: true,
     apiVersion: VEHICLE_MARKETPLACE_API_VERSION,
@@ -635,6 +652,8 @@ export const getMyVehicleListings = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
           fleetLimit: state.data()?.fleetLimit ?? 0,
           soldTruckIds: state.data()?.soldTruckTombstones ?? [],
           vehicles,
+          incomplete: droppedOwnedCount > 0,
+          droppedOwnedCount,
         }
       : null,
   };
@@ -649,6 +668,42 @@ export const getMyVehicleListings = onCall(VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
   });
   return result;
 });
+
+export const revokeAppleSignInTokens = onCall(
+  {
+    ...VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+    secrets: [...APPLE_SIGNIN_SECRETS],
+  },
+  async (request) => {
+    const identity = callableIdentity(request);
+    if (!identity) return unauthenticatedResult(request.data ?? {});
+    const record = requestRecord(request.data);
+    if (!hasOnlyKeys(record, ['authorizationCode'])) return invalidRequestResult(record);
+    if (
+      typeof record.authorizationCode !== 'string' ||
+      record.authorizationCode.trim().length === 0 ||
+      record.authorizationCode.length > 4096
+    ) {
+      return invalidRequestResult(record);
+    }
+    if (!(await consumeRateLimit(identity.uid, 'accountDeletion'))) {
+      return rateLimitedResult(record);
+    }
+    const result = await revokeAppleAuthorizationCode(
+      record.authorizationCode,
+      readAppleSignInSecretValuesFromBinding(),
+    );
+    if (result.ok) {
+      logger.info('[apple-revoke]', { uidHash: uidHash(identity.uid), revoked: true });
+      return { ok: true };
+    }
+    logger.warn('[apple-revoke]', {
+      uidHash: uidHash(identity.uid),
+      reason: result.reason,
+    });
+    return { ok: false, reason: result.reason };
+  },
+);
 
 export const prepareVehicleMarketplaceAccountDeletion = onCall(
   VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,

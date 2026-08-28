@@ -18,6 +18,7 @@ import {
   getLeaderboardSnapshot,
   submitLeaderboardScoreTransaction,
 } from '../src/leaderboard';
+import { seedLeaderboardSeason } from '../src/leaderboardSeasonSeed';
 import {
   calculateLeaderboardScore,
   extractCanonicalPlayerStateFromServerState,
@@ -103,6 +104,22 @@ async function seedServerState(uid: string, overrides: Partial<ServerStateDocume
   }
   await adminFirestore.doc(`users/${uid}/serverState/current`).set(state);
   return state;
+}
+
+async function submitScore(uid: string, suffix: string) {
+  return submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid, displayName: null },
+    { transactionId: `tx-${suffix}`, idempotencyKey: `idem-${suffix}` },
+  );
+}
+
+function expectedScoreFromState(state: ServerStateDocument): number {
+  const extracted = extractCanonicalPlayerStateFromServerState(state);
+  if (!extracted.ok) {
+    throw new Error(`invalid server state: ${extracted.reason}`);
+  }
+  return calculateLeaderboardScore(extracted.player, extracted.gameState).totalScore;
 }
 
 before(async () => {
@@ -321,37 +338,252 @@ test('getLeaderboard returns top list and own rank', async () => {
 });
 
 test('malicious cloud save write does not change leaderboard score', async () => {
-  await seedServerState('secure-player', {
+  const uid = 'secure-player';
+  const trustedState = await seedServerState(uid, {
     cash: 50_000,
     companyLevel: 3,
     reputation: 55,
     completedDeliveries: 4,
   });
-  const first = await submitLeaderboardScoreTransaction(
-    adminFirestore,
-    { uid: 'secure-player', displayName: null },
-    { transactionId: 'tx-secure-1', idempotencyKey: 'idem-secure-1' },
-  );
+  const expectedScore = expectedScoreFromState(trustedState);
+  const first = await submitScore(uid, 'secure-1');
   assert.equal(first.ok, true);
   if (!first.ok) return;
-  await adminFirestore.doc('users/secure-player/saves/current').set(
-    buildSave('secure-player', {
+  assert.equal(first.score, expectedScore);
+  await adminFirestore.doc(`users/${uid}/saves/current`).set(
+    buildSave(uid, {
       player: {
         money: 987_654_321,
+        level: 100,
+        reputation: 100,
+        completedContracts: 50_000,
+        trucks: [
+          {
+            id: 'phantom-truck',
+            purchasePrice: 500_000,
+            condition: 100,
+            ownershipType: 'owned',
+          },
+        ],
+        warehouses: [
+          { id: 'phantom-wh', cityId: 'ankara', capacityTons: 500, upgradeTier: 5 },
+        ],
+      },
+    }),
+  );
+  const second = await submitScore(uid, 'secure-2');
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.score, first.score);
+  assert.equal(second.score, expectedScore);
+
+  const entrySnap = await adminFirestore
+    .doc(`leaderboards/${first.seasonKey}/entries/${uid}`)
+    .get();
+  assert.equal(entrySnap.data()?.completedContracts, 4);
+  assert.equal(entrySnap.data()?.level, 3);
+  assert.equal(entrySnap.data()?.reputation, 55);
+});
+
+test('malicious save fields cannot spoof individual progression inputs', async () => {
+  const cases: Array<{ uid: string; player: Record<string, unknown> }> = [
+    {
+      uid: 'spoof-contracts',
+      player: { completedContracts: 50_000, money: 50_000, level: 3, reputation: 55 },
+    },
+    {
+      uid: 'spoof-level',
+      player: { level: 100, completedContracts: 4, money: 50_000, reputation: 55 },
+    },
+    {
+      uid: 'spoof-reputation',
+      player: { reputation: 100, completedContracts: 4, money: 50_000, level: 3 },
+    },
+    {
+      uid: 'spoof-money',
+      player: { money: 987_654_321, completedContracts: 4, level: 3, reputation: 55 },
+    },
+  ];
+
+  for (const testCase of cases) {
+    const trustedState = await seedServerState(testCase.uid, {
+      cash: 50_000,
+      companyLevel: 3,
+      reputation: 55,
+      completedDeliveries: 4,
+    });
+    const baseline = await submitScore(testCase.uid, `${testCase.uid}-base`);
+    assert.equal(baseline.ok, true, testCase.uid);
+    if (!baseline.ok) return;
+
+    await adminFirestore.doc(`users/${testCase.uid}/saves/current`).set(
+      buildSave(testCase.uid, { player: testCase.player }),
+    );
+    const afterForged = await submitScore(testCase.uid, `${testCase.uid}-forged`);
+    assert.equal(afterForged.ok, true, testCase.uid);
+    if (!afterForged.ok) return;
+    assert.equal(afterForged.score, baseline.score, testCase.uid);
+    assert.equal(afterForged.score, expectedScoreFromState(trustedState), testCase.uid);
+  }
+});
+
+test('malicious fleet and warehouse save does not inflate asset score', async () => {
+  const uid = 'spoof-fleet';
+  const trustedState = await seedServerState(uid, {
+    cash: 50_000,
+    companyLevel: 3,
+    reputation: 55,
+    completedDeliveries: 4,
+    ownedTrucks: [],
+    warehouses: [],
+  });
+  const baseline = await submitScore(uid, 'fleet-base');
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+
+  await adminFirestore.doc(`users/${uid}/saves/current`).set(
+    buildSave(uid, {
+      player: {
+        trucks: [
+          { id: 'forged-1', purchasePrice: 400_000, condition: 100, ownershipType: 'owned' },
+          { id: 'forged-2', purchasePrice: 400_000, condition: 100, ownershipType: 'owned' },
+        ],
+        warehouses: [
+          { id: 'forged-wh', cityId: 'ankara', capacityTons: 500, upgradeTier: 5 },
+        ],
+      },
+    }),
+  );
+  const afterForged = await submitScore(uid, 'fleet-forged');
+  assert.equal(afterForged.ok, true);
+  if (!afterForged.ok) return;
+  assert.equal(afterForged.score, baseline.score);
+  assert.equal(afterForged.score, expectedScoreFromState(trustedState));
+});
+
+test('repeated submit with new idempotency key returns same trusted score', async () => {
+  const uid = 'deterministic-player';
+  await seedServerState(uid, {
+    cash: 50_000,
+    companyLevel: 4,
+    reputation: 50,
+    completedDeliveries: 6,
+  });
+  const first = await submitScore(uid, 'det-1');
+  const second = await submitScore(uid, 'det-2');
+  const third = await submitScore(uid, 'det-3');
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(third.ok, true);
+  if (!first.ok || !second.ok || !third.ok) return;
+  assert.equal(second.score, first.score);
+  assert.equal(third.score, first.score);
+});
+
+test('trusted serverState progression updates increase score', async () => {
+  const uid = 'trusted-progress';
+  await seedServerState(uid, {
+    cash: 40_000,
+    companyLevel: 3,
+    reputation: 40,
+    completedDeliveries: 5,
+  });
+  const first = await submitScore(uid, 'prog-1');
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+
+  const upgraded = await seedServerState(uid, {
+    cash: 80_000,
+    companyLevel: 6,
+    reputation: 70,
+    completedDeliveries: 12,
+    ownedTrucks: [
+      {
+        truckId: `${uid}-truck-1`,
+        templateId: 'truck-ford-cargo',
+        currentCityId: 'izmir',
+        condition: 90,
+        totalMileageKm: 0,
+        currentFuelL: 100,
+        fuelTankCapacityL: 300,
+        purchasePrice: 80_000,
+        ownershipType: 'owned',
+        status: 'idle',
+        upgrades: { engine: 0, fuelEfficiency: 0, cargo: 0, durability: 0 },
+      },
+    ],
+  });
+  const second = await submitScore(uid, 'prog-2');
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.ok((second.score ?? 0) > (first.score ?? 0));
+  assert.equal(second.score, expectedScoreFromState(upgraded));
+});
+
+test('season seed ignores malicious cloud save when serverState exists', async () => {
+  const uid = 'season-seed-secure';
+  const seasonKey = getLeaderboardSeasonKey();
+  await adminFirestore.doc(`users/${uid}`).set({
+    uid,
+    username: 'seedsecure',
+    usernameNormalized: 'seedsecure',
+    usernameSetupCompleted: true,
+  });
+  const trustedState = await seedServerState(uid, {
+    cash: 50_000,
+    companyLevel: 3,
+    reputation: 55,
+    completedDeliveries: 4,
+  });
+  const expectedScore = expectedScoreFromState(trustedState);
+  await adminFirestore.doc(`users/${uid}/saves/current`).set(
+    buildSave(uid, {
+      player: {
+        money: 999_999_999,
         level: 100,
         reputation: 100,
         completedContracts: 50_000,
       },
     }),
   );
-  const second = await submitLeaderboardScoreTransaction(
-    adminFirestore,
-    { uid: 'secure-player', displayName: null },
-    { transactionId: 'tx-secure-2', idempotencyKey: 'idem-secure-2' },
+
+  const seeded = await seedLeaderboardSeason(adminFirestore, seasonKey, { force: true });
+  assert.equal(seeded.ran, true);
+
+  const entrySnap = await adminFirestore
+    .doc(`leaderboards/${seasonKey}/entries/${uid}`)
+    .get();
+  assert.equal(entrySnap.exists, true);
+  assert.equal(entrySnap.data()?.companyScore, expectedScore);
+});
+
+test('first-time submit bootstraps bounded score from cloud save when serverState missing', async () => {
+  const uid = 'legacy-bootstrap';
+  await adminFirestore.doc(`users/${uid}`).set({
+    uid,
+    username: 'legacy_user',
+    usernameNormalized: 'legacy_user',
+    usernameSetupCompleted: true,
+  });
+  await adminFirestore.doc(`users/${uid}/saves/current`).set(
+    buildSave(uid, {
+      player: {
+        money: 50_000,
+        level: 5,
+        reputation: 60,
+        completedContracts: 12,
+      },
+    }),
   );
-  assert.equal(second.ok, true);
-  if (!second.ok) return;
-  assert.equal(second.score, first.score);
+
+  const result = await submitScore(uid, 'legacy-bootstrap');
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.ok((result.score ?? 0) > 0);
+
+  const serverSnap = await adminFirestore.doc(`users/${uid}/serverState/current`).get();
+  assert.equal(serverSnap.exists, true);
+  assert.equal(Number(serverSnap.data()?.completedDeliveries), 12);
 });
 
 test('account deletion clears leaderboard entries', async () => {

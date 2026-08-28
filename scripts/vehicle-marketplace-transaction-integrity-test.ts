@@ -6,7 +6,10 @@ import './test-globals';
 
 import { STARTER_TRUCK } from '../src/data/trucks';
 import { resolveStaleCloudMarketplaceOverwrite } from '../src/domain/vehicleMarketplaceCloudMerge';
-import { reconcileFleetWithVehicleMarketplace } from '../src/domain/vehicleMarketplaceReconciliation';
+import {
+  buildLocalPurchaseApplyPatch,
+  reconcileFleetWithVehicleMarketplace,
+} from '../src/domain/vehicleMarketplaceReconciliation';
 import {
   planMarketplaceStartupReconcile,
 } from '../src/domain/vehicleMarketplaceStartupReconcile';
@@ -55,16 +58,26 @@ function applyAuthoritative(
     cash: number;
     soldTruckIds: string[];
     vehicles: ReturnType<typeof vehicleSnapshot>[];
+    incomplete?: boolean;
   },
 ) {
   const fleet = reconcileFleetWithVehicleMarketplace(localTrucks, authoritative);
+  if (!fleet.isComplete) {
+    return {
+      trucks: localTrucks,
+      money: localCash,
+      cache: fleet.cache,
+      applied: false as const,
+      rejectReason: fleet.rejectReason,
+    };
+  }
   const money = resolveCashAfterMarketplaceReconcile({
     localCash,
     authoritativeCash: fleet.authoritativeCash,
     acceptedTestRemoteMoney: null,
     testMoneySyncEnabled: false,
   });
-  return { trucks: fleet.trucks, money, cache: fleet.cache };
+  return { trucks: fleet.trucks, money, cache: fleet.cache, applied: true as const };
 }
 
 console.log('\n=== Vehicle Marketplace Transaction Integrity ===\n');
@@ -113,6 +126,101 @@ console.log('Two-user purchase (authoritative reconcile)');
   const sellerRestart = applyAuthoritative(sellerAfter.trucks, sellerAfter.money, sellerAuthoritative);
   assert(!sellerRestart.trucks.some((truck) => truck.id === TRUCK_A), 'seller restart keeps truck removed');
   assert(sellerRestart.money === sellerAfter.money, 'seller restart keeps sale proceeds');
+}
+
+console.log('\nP0 — refuse cash debit when purchased truck cannot materialize');
+{
+  const buyerTrucksBefore: Truck[] = [];
+  const incomplete = reconcileFleetWithVehicleMarketplace(buyerTrucksBefore, {
+    marketplaceStateVersion: 9,
+    cash: 100_000 - PRICE,
+    soldTruckIds: [],
+    vehicles: [
+      {
+        truckId: TRUCK_A,
+        templateId: 'truck-ford-cargo',
+        currentCityId: '',
+        condition: 90,
+        totalMileageKm: 1,
+        currentFuelL: 10,
+        fuelTankCapacityL: 300,
+        status: 'idle',
+      },
+    ],
+  });
+  assert(!incomplete.isComplete, 'incomplete materialization is detected');
+  assert(
+    incomplete.authoritativeCash == null,
+    'cash must not be exposed when materialization fails',
+  );
+  assert(
+    incomplete.trucks.length === 0,
+    'local fleet must remain unchanged on incomplete payload',
+  );
+
+  const flagged = reconcileFleetWithVehicleMarketplace(buyerTrucksBefore, {
+    marketplaceStateVersion: 9,
+    cash: 100_000 - PRICE,
+    soldTruckIds: [],
+    vehicles: [],
+    incomplete: true,
+    droppedOwnedCount: 1,
+  });
+  assert(!flagged.isComplete, 'backend incomplete flag refuses apply');
+}
+
+console.log('\nP0 — seller sold tombstone without cash must not strip truck');
+{
+  const sellerTrucks: Truck[] = [{
+    ...structuredClone(STARTER_TRUCK),
+    id: TRUCK_A,
+    catalogId: 'truck-ford-cargo',
+  }];
+  const noCash = reconcileFleetWithVehicleMarketplace(sellerTrucks, {
+    marketplaceStateVersion: 4,
+    soldTruckIds: [TRUCK_A],
+    vehicles: [],
+  });
+  assert(!noCash.isComplete, 'sold trucks without cash is incomplete');
+  assert(
+    noCash.trucks.some((truck) => truck.id === TRUCK_A),
+    'seller truck must remain until cash is present',
+  );
+}
+
+console.log('\nP0 — atomic local purchase apply (cash + truck)');
+{
+  const patch = buildLocalPurchaseApplyPatch({
+    localTrucks: [],
+    localCash: 100_000,
+    buyerCashAfter: 100_000 - PRICE,
+    vehicle: {
+      ...vehicleSnapshot(TRUCK_A),
+      status: 'idle',
+      marketplaceListingId: null,
+    },
+  });
+  assert(patch.ok, 'atomic purchase apply succeeds');
+  if (patch.ok) {
+    assert(patch.money === 100_000 - PRICE, 'buyer cash decreases exactly once');
+    assert(patch.trucks.some((truck) => truck.id === TRUCK_A), 'buyer receives truck');
+  }
+  const bad = buildLocalPurchaseApplyPatch({
+    localTrucks: [],
+    localCash: 100_000,
+    buyerCashAfter: 100_000 - PRICE,
+    vehicle: {
+      truckId: TRUCK_A,
+      templateId: 'truck-ford-cargo',
+      currentCityId: '',
+      condition: 90,
+      totalMileageKm: 0,
+      currentFuelL: 10,
+      fuelTankCapacityL: 300,
+      status: 'idle',
+    },
+  });
+  assert(!bad.ok, 'atomic apply refuses invalid truck snapshot');
 }
 
 console.log('\nOffline seller startup reconcile');

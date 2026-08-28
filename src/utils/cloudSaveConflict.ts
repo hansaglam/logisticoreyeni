@@ -2,6 +2,7 @@ export type CloudSaveConflictReason =
   | 'auth-user-mismatch'
   | 'owner-mismatch'
   | 'cloud-save-not-found'
+  /** Legacy alias — not emitted by validateCloudSaveRestorePayload or parseCloudSaveDocument; retained for mapCloudLoadFailure / message compatibility. */
   | 'cloud-save-corrupted'
   | 'cloud-save-fetch-failed'
   | 'cloud-save-invalid'

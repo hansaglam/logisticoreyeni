@@ -64,9 +64,11 @@ export function applyOfflineProgress(params: {
   lastOfflineProgressAppliedAt?: number | null;
   lastSeenRealTimeMs?: number | null;
   metaLastSimulatedRealTimeMs?: number | null;
+  hasActiveDeliveries?: boolean;
   gameState: { gameSpeed?: number; lastSimulationGameSpeed?: number };
 }): OfflineProgressPlan {
   const nowMs = Number.isFinite(params.nowMs) && params.nowMs > 0 ? params.nowMs : 0;
+  const hasActiveDeliveries = Boolean(params.hasActiveDeliveries);
   const baselineMs = nowMs > 0
     ? resolveOfflineBaselineMs({
         stateLastSimulated: params.lastSimulatedRealTimeMs,
@@ -82,6 +84,7 @@ export function applyOfflineProgress(params: {
       baselineMs,
       params.lastOfflineProgressAppliedAt,
       nowMs,
+      { hasActiveDeliveries },
     );
   const elapsed = duplicatePrevented
     ? {
@@ -91,7 +94,7 @@ export function applyOfflineProgress(params: {
         shouldApply: false,
         reason: 'non_positive' as const,
       }
-    : calculateOfflineElapsed(baselineMs, nowMs);
+    : calculateOfflineElapsed(baselineMs, nowMs, { hasActiveDeliveries });
   const gameSpeed = Math.max(
     0.25,
     Number.isFinite(params.gameState.lastSimulationGameSpeed)

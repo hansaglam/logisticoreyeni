@@ -17,7 +17,9 @@ import {
   ACTIVE_DELIVERY_OFFLINE_MIN_MS,
   buildDeliverySettlementId,
   computeDeliveryCatchUpGameHours,
+  countActiveRouteDeliveriesInList,
   estimateRemainingRealMsForDelivery,
+  isActiveRouteDelivery,
   reconcileDeliveriesWithRealTime,
   resolveOfflineProgressMinMs,
 } from '../src/simulation/deliveryOfflineProgress';
@@ -25,8 +27,10 @@ import {
   applyOfflineProgress,
   calculateOfflineElapsed,
   MAX_OFFLINE_PROGRESS_HOURS,
+  shouldSkipDuplicateOfflineApply,
 } from '../src/simulation/offlineProgression';
 import { isDeliveryProgressComplete } from '../src/simulation/delivery';
+import { MINUTE_MS } from '../src/simulation/economyClock';
 import { updateTransferProgressWithFuel } from '../src/simulation/truckTransfer';
 import { updateWarehouseStockTransferProgressWithFuel } from '../src/simulation/warehouseStockTransfer';
 import type { Delivery, Truck, TruckTransfer, WarehouseStockTransfer } from '../src/types/game';
@@ -198,6 +202,20 @@ function runRealTimeDeliveryTests(): void {
   assert(resolveOfflineProgressMinMs(true) === ACTIVE_DELIVERY_OFFLINE_MIN_MS, 'active delivery min 15s');
   assert(resolveOfflineProgressMinMs(false) === 5 * 60_000, 'default min 5m');
 
+  assert(isActiveRouteDelivery(makeDelivery({ status: 'on_route' })), 'on_route is active');
+  assert(isActiveRouteDelivery(makeDelivery({ status: 'preparing' })), 'preparing is active');
+  assert(!isActiveRouteDelivery(makeDelivery({ status: 'completed' })), 'completed is not active');
+  assert(!isActiveRouteDelivery(makeDelivery({ status: 'failed' })), 'failed is not active');
+  assert(!isActiveRouteDelivery(makeDelivery({ status: 'cancelled' })), 'cancelled is not active');
+  assert(
+    countActiveRouteDeliveriesInList([
+      makeDelivery({ status: 'on_route' }),
+      makeDelivery({ id: 'd2', status: 'completed' }),
+      makeDelivery({ id: 'd3', status: 'failed' }),
+    ]) === 1,
+    'only on_route/preparing count as active deliveries',
+  );
+
   const now = Date.now();
   const started = now - 30_000;
   const testDelivery = makeDelivery({
@@ -318,6 +336,7 @@ function runRealTimeDeliveryTests(): void {
 
   const storeSrc = readSrc('src/store/gameStore.ts');
   assert(storeSrc.includes('reconcileDeliveriesWithRealTime'), 'store reconciles real-time');
+  assert(storeSrc.includes('hasActiveDeliveries'), 'store passes active delivery threshold flag');
   assert(storeSrc.includes('computeRequiredDeliveryCatchUpGameHours'), 'store uses delivery catch-up hours');
   assert(storeSrc.includes('buildDeliverySettlementId'), 'store sets settlementId');
   assert(storeSrc.includes("'offline_skip'"), 'offline fixed costs still skipped');
@@ -347,6 +366,7 @@ function runOfflineProgressTests(): void {
     nowMs,
     lastSimulatedRealTimeMs: nowMs - 10 * 60_000,
     lastOfflineProgressAppliedAt: nowMs - 20 * 60_000,
+    hasActiveDeliveries: false,
     gameState: { gameSpeed: 1, lastSimulationGameSpeed: 1 },
   });
   assert(tenMinutes.elapsed.shouldApply, '10 dakika background süresi uygulanır');
@@ -355,6 +375,109 @@ function runOfflineProgressTests(): void {
     tenMinutes.simulation.appliedSimulationHours <= MAX_OFFLINE_PROGRESS_HOURS,
     'offline simulation 24 saat tavanını aşmaz',
   );
+
+  const activeTwentySeconds = applyOfflineProgress({
+    nowMs,
+    lastSimulatedRealTimeMs: nowMs - 20_000,
+    hasActiveDeliveries: true,
+    gameState: { gameSpeed: 1, lastSimulationGameSpeed: 1 },
+  });
+  assert(activeTwentySeconds.elapsed.shouldApply, '20s active delivery offline applies');
+  assert(activeTwentySeconds.elapsed.appliedMs === 20_000, '20s active delivery elapsed preserved');
+
+  const activeFourteenSeconds = applyOfflineProgress({
+    nowMs,
+    lastSimulatedRealTimeMs: nowMs - 14_000,
+    hasActiveDeliveries: true,
+    gameState: { gameSpeed: 1, lastSimulationGameSpeed: 1 },
+  });
+  assert(!activeFourteenSeconds.elapsed.shouldApply, '14s active delivery below threshold');
+
+  const immediateActiveDuplicate = applyOfflineProgress({
+    nowMs: nowMs + 1_000,
+    lastSimulatedRealTimeMs: nowMs,
+    lastOfflineProgressAppliedAt: nowMs,
+    hasActiveDeliveries: true,
+    gameState: { gameSpeed: 1, lastSimulationGameSpeed: 1 },
+  });
+  assert(
+    immediateActiveDuplicate.duplicatePrevented || !immediateActiveDuplicate.elapsed.shouldApply,
+    'immediate active-delivery resume does not double-apply',
+  );
+  assert(
+    immediateActiveDuplicate.simulation.appliedSimulationHours === 0,
+    'immediate active-delivery resume produces no extra simulation hours',
+  );
+
+  const terminalDeliveryIdleThreshold = calculateOfflineElapsed(nowMs - MINUTE_MS, nowMs, {
+    hasActiveDeliveries: false,
+  });
+  assert(!terminalDeliveryIdleThreshold.shouldApply, 'terminal delivery uses idle 5m threshold');
+
+  const sixteenSecondActive = applyOfflineProgress({
+    nowMs: nowMs + 16_000,
+    lastSimulatedRealTimeMs: nowMs,
+    hasActiveDeliveries: true,
+    gameState: { gameSpeed: 1, lastSimulationGameSpeed: 1 },
+  });
+  assert(sixteenSecondActive.elapsed.shouldApply, '16s active delivery background applies once');
+  assert(sixteenSecondActive.elapsed.appliedMs === 16_000, '16s active delivery preserves elapsed');
+
+  const immediateAfterSixteenSecond = applyOfflineProgress({
+    nowMs: nowMs + 16_000,
+    lastSimulatedRealTimeMs: nowMs,
+    lastOfflineProgressAppliedAt: nowMs + 16_000,
+    hasActiveDeliveries: true,
+    gameState: { gameSpeed: 1, lastSimulationGameSpeed: 1 },
+  });
+  assert(
+    immediateAfterSixteenSecond.duplicatePrevented,
+    'immediate resume after 16s active delivery duplicate prevented',
+  );
+  assert(
+    shouldSkipDuplicateOfflineApply(nowMs, nowMs + 16_000, nowMs + 16_000, {
+      hasActiveDeliveries: true,
+    }),
+    'duplicate guard uses 15s active threshold',
+  );
+
+  const completionNow = Date.now();
+  const finishRealMs = 10 * getMsPerGameHour(1) + 1_000;
+  const nearComplete = makeDelivery({
+    progress: 0,
+    travelHours: 10,
+    expectedDurationGameHours: 10,
+    startedRealAtMs: completionNow - finishRealMs,
+    lastProgressedRealAtMs: completionNow - finishRealMs,
+  });
+  const firstCompletion = reconcileDeliveriesWithRealTime({
+    deliveries: [nearComplete],
+    nowMs: completionNow,
+    gameSpeed: 1,
+  });
+  assert(firstCompletion.completedIds.length === 1, 'active delivery completes once during catch-up');
+  const settledDelivery = {
+    ...firstCompletion.deliveries[0]!,
+    status: 'completed' as const,
+    settlementId: buildDeliverySettlementId(nearComplete.id),
+    settledAt: completionNow,
+  };
+  const secondPass = reconcileDeliveriesWithRealTime({
+    deliveries: [settledDelivery],
+    nowMs: completionNow + 20_000,
+    gameSpeed: 1,
+  });
+  assert(secondPass.completedIds.length === 0, 'settled terminal delivery does not settle twice');
+  assert(
+    countActiveRouteDeliveriesInList([settledDelivery]) === 0,
+    'terminal delivery no longer triggers active threshold',
+  );
+  const postCompletionThreshold = calculateOfflineElapsed(
+    completionNow,
+    completionNow + MINUTE_MS,
+    { hasActiveDeliveries: false },
+  );
+  assert(!postCompletionThreshold.shouldApply, 'after completion idle 5m threshold applies');
 
   const partial = updateDeliveryProgressWithFuel(
     delivery(),

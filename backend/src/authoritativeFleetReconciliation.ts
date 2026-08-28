@@ -59,45 +59,25 @@ export function mergeCloudFleetIntoExistingMarketplaceState(
   existing: MarketplacePlayerState,
   fromCloud: MarketplacePlayerState,
   now: Timestamp,
+  options?: { requestedVehicleId?: string },
 ): MarketplacePlayerState {
   const tombstones = new Set(existing.soldTruckTombstones ?? []);
-  const lockedVehicles = new Map<string, MarketplaceVehicleRecord>();
-  for (const vehicle of existing.ownedTruckSnapshots) {
-    if (vehicle.marketplaceListingId || vehicle.status === 'marketplace_locked') {
-      lockedVehicles.set(vehicle.truckId, vehicle);
-    }
-  }
-
-  const mergedSnapshots: MarketplaceVehicleRecord[] = [];
-  for (const cloudTruck of fromCloud.ownedTruckSnapshots) {
-    if (tombstones.has(cloudTruck.truckId)) continue;
-    const locked = lockedVehicles.get(cloudTruck.truckId);
-    mergedSnapshots.push(
-      locked
-        ? {
-            ...cloudTruck,
-            status: locked.status,
-            marketplaceListingId: locked.marketplaceListingId ?? null,
-            assignedDriverId: locked.assignedDriverId ?? cloudTruck.assignedDriverId ?? null,
-            attachedTrailerId: locked.attachedTrailerId ?? cloudTruck.attachedTrailerId ?? null,
-            activeJobIds: locked.activeJobIds ?? cloudTruck.activeJobIds ?? [],
-          }
-        : cloudTruck,
-    );
-    lockedVehicles.delete(cloudTruck.truckId);
-  }
-
-  for (const locked of lockedVehicles.values()) {
-    mergedSnapshots.push(locked);
-  }
-
+  const mergedSnapshots: MarketplaceVehicleRecord[] = [...existing.ownedTruckSnapshots];
   const mergedIds = new Set(mergedSnapshots.map((truck) => truck.truckId));
-  for (const existingTruck of existing.ownedTruckSnapshots) {
-    if (tombstones.has(existingTruck.truckId) || mergedIds.has(existingTruck.truckId)) {
-      continue;
+
+  const requestedVehicleId = options?.requestedVehicleId;
+  if (
+    requestedVehicleId &&
+    !mergedIds.has(requestedVehicleId) &&
+    !tombstones.has(requestedVehicleId)
+  ) {
+    const cloudTruck = fromCloud.ownedTruckSnapshots.find(
+      (truck) => truck.truckId === requestedVehicleId,
+    );
+    if (cloudTruck) {
+      mergedSnapshots.push(cloudTruck);
+      mergedIds.add(cloudTruck.truckId);
     }
-    mergedSnapshots.push(existingTruck);
-    mergedIds.add(existingTruck.truckId);
   }
 
   const overwrite = resolveStaleCloudMarketplaceOverwrite({
@@ -122,7 +102,7 @@ export function mergeCloudFleetIntoExistingMarketplaceState(
   return {
     ...existing,
     ownerUid: fromCloud.ownerUid,
-    canonicalCash: overwrite.cash,
+    canonicalCash: existing.canonicalCash,
     ownedTruckSnapshots: mergedSnapshots,
     activeListingIds: existing.activeListingIds ?? [],
     soldTruckTombstones: existing.soldTruckTombstones ?? [],
@@ -138,17 +118,10 @@ export function mergeCloudFleetIntoExistingMarketplaceState(
 export function shouldReconcileFleetFromCloud(
   existing: MarketplacePlayerState | null,
   cloudBuilt: MarketplacePlayerState,
-  cloudDeviceUpdatedAt: number,
+  _cloudDeviceUpdatedAt: number,
   options?: { requestedVehicleId?: string; force?: boolean },
 ): boolean {
-  if (options?.force) return true;
-  if (!existing) return true;
-  if (
-    options?.requestedVehicleId &&
-    !fleetIdSet(existing).has(options.requestedVehicleId)
-  ) {
-    return true;
-  }
+  if (!existing) return false;
 
   const tombstones = new Set(existing.soldTruckTombstones ?? []);
   const cloudIds = fleetIdSet(cloudBuilt);
@@ -168,16 +141,26 @@ export function shouldReconcileFleetFromCloud(
     return false;
   }
 
-  if (existing.stateVersion > cloudBuilt.sourceSaveVersion) {
-    return false;
+  const requestedVehicleId = options?.requestedVehicleId;
+  if (requestedVehicleId) {
+    if (tombstones.has(requestedVehicleId)) return false;
+    if (!existingIds.has(requestedVehicleId)) {
+      return cloudBuilt.ownedTruckSnapshots.some(
+        (truck) => truck.truckId === requestedVehicleId,
+      );
+    }
   }
 
-  for (const id of cloudIds) {
-    if (!existingIds.has(id)) return true;
+  if (options?.force) {
+    return Boolean(
+      requestedVehicleId &&
+        !existingIds.has(requestedVehicleId) &&
+        cloudBuilt.ownedTruckSnapshots.some(
+          (truck) => truck.truckId === requestedVehicleId,
+        ),
+    );
   }
-  const marketplaceUpdatedAt = timestampToMillis(existing.updatedAt);
-  if (cloudDeviceUpdatedAt > marketplaceUpdatedAt + 1_000) return true;
-  if (cloudBuilt.sourceSaveVersion > existing.sourceSaveVersion) return true;
+
   return false;
 }
 
@@ -228,6 +211,10 @@ export async function reconcileAuthoritativeFleetInTransaction(
       ? (marketplaceSnap.data() as MarketplacePlayerState)
       : null);
 
+  if (!existing) {
+    return { ok: false, reason: 'marketplace-state-missing' };
+  }
+
   const cloudUpdatedAt = cloudSaveDeviceUpdatedAt(saveData);
   const needsReconcile = shouldReconcileFleetFromCloud(
     existing,
@@ -242,23 +229,22 @@ export async function reconcileAuthoritativeFleetInTransaction(
     ? (serverSnap.data() as ServerStateDocument)
     : null;
 
-  if (!needsReconcile && existing) {
+  if (!needsReconcile) {
     const serverState =
       existingServer ??
       buildServerStateFromMarketplaceState(uid, existing, now);
     return { ok: true, state: existing, reconciled: false, serverState };
   }
 
-  const merged = existing
-    ? mergeCloudFleetIntoExistingMarketplaceState(existing, built.state, now)
-    : built.state;
+  const merged = mergeCloudFleetIntoExistingMarketplaceState(
+    existing,
+    built.state,
+    now,
+    { requestedVehicleId: options?.requestedVehicleId },
+  );
 
   if (options?.write !== false) {
-    if (existing) {
-      transaction.set(playerRef, merged, { merge: true });
-    } else {
-      transaction.create(playerRef, merged);
-    }
+    transaction.set(playerRef, merged, { merge: true });
     const serverPatch = mirrorServerStateFromMarketplace(
       merged,
       existingServer,

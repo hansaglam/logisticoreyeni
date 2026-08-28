@@ -28,7 +28,6 @@ const deletion = read('src/utils/accountDeletion.ts');
 const cloud = read('src/services/cloudSaveService.ts');
 const backend = read('backend/src/index.ts');
 const connectionTab = read('src/components/accountCenter/AccountConnectionTab.tsx');
-const danger = read('src/components/accountCenter/DangerZoneCard.tsx');
 
 console.log('\n=== Account Sign-Out & Deletion P0 Regression ===\n');
 
@@ -59,19 +58,23 @@ assert(hook.includes('activeMarketplaceListingIds: []'), 'marketplace cache clea
 assert(hook.includes('resetCloudSaveSyncState'), 'cloud sync state reset');
 
 console.log('\nDeletion wiring');
-assert(danger.includes('Hesabı Sil'), 'delete CTA in danger zone');
+assert(connectionTab.includes('Hesap ve Gizlilik'), 'delete section on account tab');
+assert(connectionTab.includes('Hesabı Sil'), 'delete CTA on account tab');
 assert(hook.includes('handleDeleteAccount'), 'delete handler in hook');
 assert(hook.includes('Hesabı Kalıcı Olarak Sil'), 'second confirmation CTA');
 assert(hook.includes('runAccountDeletionFlow'), 'canonical deletion runner');
 assert(deletion.includes('deleteUserCloudData'), 'cloud deletion step');
 assert(deletion.includes('deleteCurrentFirebaseUser'), 'auth user deletion step');
 assert(deletion.includes('skipCloudDelete'), 'reauth retry can skip cloud');
+assert(deletion.includes('revokeAppleSignInIfNeeded'), 'Apple revocation step');
+assert(deletion.includes("provider === 'guest'"), 'guest skips linked-account cloud cleanup');
 assert(hook.includes('reauthenticateCurrentUser'), 'reauth on requires-recent-login');
 
 console.log('\nBackend orchestration');
 assert(cloud.includes('prepareVehicleMarketplaceAccountDeletion'), 'marketplace cleanup callable');
 assert(backend.includes('releaseUsernameForUid'), 'username release on server');
 assert(backend.includes('deleteLeaderboardEntriesForUid'), 'leaderboard cleanup on server');
+assert(backend.includes('revokeAppleSignInTokens'), 'Apple revoke callable on server');
 assert(backend.includes('recursiveDelete'), 'admin recursive user delete');
 
 console.log('\nDeletion messages');
@@ -82,9 +85,10 @@ assert(
 );
 assert(deletion.includes('completeAccountDeletionAfterReauth'), 'reauth helper exported');
 
-console.log('\nDanger zone isolation');
-assert(!danger.includes('onSignOut'), 'logout not in danger zone');
-assert(!danger.includes('Çıkış Yap'), 'logout not in danger zone');
+console.log('\nAccount deletion placement');
+assert(connectionTab.includes('Hesap ve Gizlilik'), 'dedicated privacy/delete section');
+assert(!connectionTab.includes('Tehlikeli İşlemler'), 'no collapsed danger accordion on account tab');
+assert(connectionTab.includes('onDeleteAccount'), 'delete handler prop on account tab');
 
 console.log(`\nPASS: ${pass}`);
 console.log(`FAIL: ${fail}`);

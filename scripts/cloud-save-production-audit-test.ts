@@ -144,7 +144,7 @@ assert.match(cloudSync, /if \(restoreCandidate\.hasCandidate\)[\s\S]*return;/);
 assert.match(cloudSync, /getInterruptedCloudRestore/);
 assert.match(cloudSync, /clearPendingCloudRestore/);
 assert.match(account, /Bu Cihazdaki Kayıt/);
-assert.match(account, /Bulut Kaydı/);
+assert.match(account, /Buluttan Yükle/);
 assert.match(account, /Detayları Karşılaştır/);
 assert.match(account, /Vazgeç/);
 assert.match(saveSource, /soldTruckIds: state\.vehicleMarketplace\.soldTruckIds\?\.slice\(-100\)/);

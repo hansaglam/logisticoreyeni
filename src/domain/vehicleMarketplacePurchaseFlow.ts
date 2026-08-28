@@ -75,16 +75,23 @@ export function resolveMarketplacePurchaseAttempt(params: {
 }
 
 export type MarketplacePurchaseClientOutcome =
-  | { kind: 'success'; reconcileAsync: true }
+  | { kind: 'success'; reconcileAsync: true; requiresLocalApply: true }
   | { kind: 'retryable-failure'; reuseEnvelope: true; reason: string }
   | { kind: 'terminal-failure'; reuseEnvelope: false; reason: string };
 
 export function resolveMarketplacePurchaseClientOutcome(
   result: Pick<VehicleMarketplaceActionResult, 'ok' | 'reason'>,
-  _refresh?: { refreshFailed?: boolean },
+  refresh?: { refreshFailed?: boolean; localApplyFailed?: boolean },
 ): MarketplacePurchaseClientOutcome {
   if (isMarketplacePurchaseSuccess(result)) {
-    return { kind: 'success', reconcileAsync: true };
+    if (refresh?.localApplyFailed) {
+      return {
+        kind: 'retryable-failure',
+        reuseEnvelope: true,
+        reason: 'save-conflict',
+      };
+    }
+    return { kind: 'success', reconcileAsync: true, requiresLocalApply: true };
   }
   const reason = result.reason ?? 'timeout';
   if (shouldReusePurchaseEnvelope(reason)) {

@@ -78,7 +78,6 @@ export default function AccountCenterScreen({
   const { alert: showAlert } = useAppDialog();
   const scrollRef = useRef<ScrollView>(null);
   const [activeTab, setActiveTab] = useState<AccountCenterTab>('profile');
-  const [dangerExpanded, setDangerExpanded] = useState(false);
   const [recoveryRequired, setRecoveryRequired] = useState(false);
   const [prefs, setPrefs] = useState(getAppPreferences());
   const [leaderboardRank, setLeaderboardRank] = useState<number | null>(null);
@@ -317,6 +316,7 @@ export default function AccountCenterScreen({
           isDeleting={vm.isDeleting}
           onAccountSwitch={vm.handleAccountSwitch}
           onSignOut={vm.handleGoogleSignOut}
+          onDeleteAccount={vm.handleDeleteAccount}
         />
         </AppTutorialTarget>
       ) : null}
@@ -330,13 +330,6 @@ export default function AccountCenterScreen({
           registrationDateLabel={formatRegistrationDate(
             useGameStore.getState().lastSeenRealTimeMs,
           )}
-          dangerExpanded={dangerExpanded}
-          onToggleDanger={() => setDangerExpanded((open) => !open)}
-          isDeleting={vm.isDeleting}
-          isSwitchingAccount={vm.isSwitchingAccount}
-          isGuest={vm.isGuest}
-          isReady={vm.safeAccountStatus.isReady}
-          onDeleteAccount={vm.handleDeleteAccount}
           onLanguagePress={() => showAlert('Dil', 'Şu an yalnızca Türkçe destekleniyor.')}
           onPrivacyPolicy={() => void handleOpenLegal('privacyPolicy', 'Gizlilik Politikası')}
           showPrivacyOptions={showPrivacyOptions}

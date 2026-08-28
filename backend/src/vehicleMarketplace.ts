@@ -99,17 +99,45 @@ type PurchaseActionData = {
   sellerNet: number;
   buyerCashBefore: number;
   buyerCashAfter: number;
+  transferredTruck?: MarketplaceTruckSnapshot & {
+    status: 'idle';
+    marketplaceListingId: null;
+  };
 };
 
 function buildPurchaseSuccessResult(
   input: PurchaseVehicleListingInput,
   listing: MarketplaceListingDocument,
   cash?: { buyerCashBefore: number; buyerCashAfter: number },
+  transferredTruck?: MarketplaceVehicleRecord,
 ): MarketplaceActionResult<PurchaseActionData> {
   const marketplaceFee = normalizeMoney(
     listing.askingPrice * listing.marketplaceFeeRate,
   );
   const sellerNet = normalizeMoney(listing.askingPrice - marketplaceFee);
+  const truck = transferredTruck
+    ? {
+        truckId: transferredTruck.truckId,
+        templateId: transferredTruck.templateId,
+        ...(transferredTruck.customName
+          ? { customName: transferredTruck.customName }
+          : {}),
+        currentCityId: transferredTruck.currentCityId,
+        condition: transferredTruck.condition,
+        totalMileageKm: transferredTruck.totalMileageKm,
+        currentFuelL: transferredTruck.currentFuelL,
+        fuelTankCapacityL: transferredTruck.fuelTankCapacityL,
+        ...(transferredTruck.upgrades ? { upgrades: transferredTruck.upgrades } : {}),
+        status: 'idle' as const,
+        marketplaceListingId: null,
+      }
+    : listing.truckSnapshot
+      ? {
+          ...listing.truckSnapshot,
+          status: 'idle' as const,
+          marketplaceListingId: null,
+        }
+      : undefined;
   return {
     ok: true,
     transactionId: input.transactionId,
@@ -121,6 +149,7 @@ function buildPurchaseSuccessResult(
       sellerNet,
       buyerCashBefore: cash?.buyerCashBefore ?? 0,
       buyerCashAfter: cash?.buyerCashAfter ?? 0,
+      ...(truck ? { transferredTruck: truck } : {}),
     },
   };
 }
@@ -427,7 +456,7 @@ function writePurchaseTransactionOutcome(
   const result = buildPurchaseSuccessResult(input, listing, {
     buyerCashBefore,
     buyerCashAfter,
-  });
+  }, buyerVehicle);
 
   console.info('[MARKETPLACE_TXN_AFTER]', {
     listingId: listing.id,
@@ -576,6 +605,35 @@ async function bootstrapMarketplaceStateInTransaction(
   }
 
   const now = Timestamp.fromMillis(nowMs);
+
+  if (!existing) {
+    const ensured = await ensureServerStateInTransaction(
+      transaction,
+      firestore,
+      uid,
+      nowMs,
+    );
+    if (!ensured.ok) return { ok: false, reason: 'marketplace-state-missing' };
+    const built = buildMarketplaceStateFromServerState(uid, ensured.state, now);
+    if (!built.ok) return { ok: false, reason: built.reason };
+    transaction.create(playerRef, built.state);
+    syncServerStateMirror(
+      transaction,
+      firestore,
+      uid,
+      built.state,
+      ensured.state,
+      now,
+    );
+    return {
+      ok: true,
+      state: built.state,
+      wasCreated: true,
+      statePersisted: true,
+      serverState: ensured.state,
+    };
+  }
+
   const reconciled = await reconcileAuthoritativeFleetInTransaction(
     transaction,
     firestore,
@@ -588,13 +646,9 @@ async function bootstrapMarketplaceStateInTransaction(
     },
   );
   if (reconciled.ok) {
-    const shouldPersist = reconciled.reconciled || !existing;
+    const shouldPersist = reconciled.reconciled;
     if (shouldPersist) {
-      if (existing) {
-        transaction.set(playerRef, reconciled.state, { merge: true });
-      } else {
-        transaction.create(playerRef, reconciled.state);
-      }
+      transaction.set(playerRef, reconciled.state, { merge: true });
       syncServerStateMirror(
         transaction,
         firestore,
@@ -607,7 +661,7 @@ async function bootstrapMarketplaceStateInTransaction(
     return {
       ok: true,
       state: reconciled.state,
-      wasCreated: !existing && shouldPersist,
+      wasCreated: false,
       statePersisted: shouldPersist,
       serverState: reconciled.serverState,
     };
@@ -616,32 +670,15 @@ async function bootstrapMarketplaceStateInTransaction(
   const serverRef = serverStateRef(firestore, uid);
   const serverSnapshot = await transaction.get(serverRef);
 
-  if (existing) {
-    if (serverSnapshot.exists) {
-      return {
-        ok: true,
-        state: existing,
-        wasCreated: false,
-        statePersisted: false,
-        serverState: serverSnapshot.data() as ServerStateDocument,
-      };
-    }
-    const ensured = await ensureServerStateInTransaction(
-      transaction,
-      firestore,
-      uid,
-      nowMs,
-    );
-    if (!ensured.ok) return { ok: false, reason: 'marketplace-state-missing' };
+  if (serverSnapshot.exists) {
     return {
       ok: true,
       state: existing,
       wasCreated: false,
       statePersisted: false,
-      serverState: ensured.state,
+      serverState: serverSnapshot.data() as ServerStateDocument,
     };
   }
-
   const ensured = await ensureServerStateInTransaction(
     transaction,
     firestore,
@@ -649,16 +686,10 @@ async function bootstrapMarketplaceStateInTransaction(
     nowMs,
   );
   if (!ensured.ok) return { ok: false, reason: 'marketplace-state-missing' };
-  const built = buildMarketplaceStateFromServerState(
-    uid,
-    ensured.state,
-    now,
-  );
-  if (!built.ok) return { ok: false, reason: built.reason };
   return {
     ok: true,
-    state: built.state,
-    wasCreated: true,
+    state: existing,
+    wasCreated: false,
     statePersisted: false,
     serverState: ensured.state,
   };

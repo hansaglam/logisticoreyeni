@@ -5,7 +5,6 @@
 
 import './test-globals';
 
-import { GAME_LOOP_TICK_MS } from '../src/config/balance';
 import { STARTER_DRIVER } from '../src/data/drivers';
 import { STARTER_TRUCK } from '../src/data/trucks';
 import {
@@ -16,12 +15,16 @@ import {
   ServerEconomyClock,
 } from '../src/simulation/economyClock';
 import {
+  ACTIVE_DELIVERY_OFFLINE_MIN_MS,
+  DEFAULT_OFFLINE_MIN_MS,
+  resolveOfflineProgressMinMs,
+} from '../src/simulation/deliveryOfflineProgress';
+import {
   buildTimeProgressionAudit,
   calculateOfflineElapsed,
   calculateOfflineSimulationHours,
   MAX_OFFLINE_PROGRESS_HOURS,
   MAX_OFFLINE_PROGRESS_MS,
-  MIN_OFFLINE_PROGRESS_MS,
   resolveOfflineBaselineMs,
   shouldSkipDuplicateOfflineApply,
 } from '../src/simulation/offlineProgression';
@@ -67,20 +70,43 @@ assert(HOUR_MS === 3_600_000, 'HOUR_MS canonical');
 assert(DAY_MS === 86_400_000, 'DAY_MS canonical');
 assert(MARKET_EPOCH_MS === 30 * MINUTE_MS, 'MARKET_EPOCH_MS canonical');
 assert(MAX_OFFLINE_PROGRESS_MS === 24 * HOUR_MS, 'MAX_OFFLINE_PROGRESS_MS = 24h');
-assert(MIN_OFFLINE_PROGRESS_MS === GAME_LOOP_TICK_MS, 'minimum offline threshold = one game tick');
+assert(resolveOfflineProgressMinMs(false) === DEFAULT_OFFLINE_MIN_MS, 'idle offline threshold = 5m');
+assert(resolveOfflineProgressMinMs(true) === ACTIVE_DELIVERY_OFFLINE_MIN_MS, 'active delivery threshold = 15s');
 
-const belowTick = calculateOfflineElapsed(
-  trustedNow - Math.max(1, MIN_OFFLINE_PROGRESS_MS - 1),
-  trustedNow,
-);
-assert(!belowTick.shouldApply, 'sub-tick pause discarded');
-assert(belowTick.reason === 'below_minimum', 'sub-tick below_minimum reason');
+const idleThresholdCases: Array<[string, number, boolean]> = [
+  ['14s', 14_000, false],
+  ['59s', 59_000, false],
+  ['1m', MINUTE_MS, false],
+  ['3m', 3 * MINUTE_MS, false],
+  ['4m59s', DEFAULT_OFFLINE_MIN_MS - 1, false],
+  ['5m', DEFAULT_OFFLINE_MIN_MS, true],
+];
+for (const [label, elapsedMs, shouldApply] of idleThresholdCases) {
+  const result = calculateOfflineElapsed(trustedNow - elapsedMs, trustedNow, {
+    hasActiveDeliveries: false,
+  });
+  assert(result.shouldApply === shouldApply, `idle ${label} threshold`);
+  if (!shouldApply) {
+    assert(result.reason === 'below_minimum', `idle ${label} below_minimum`);
+  }
+}
 
-const oneMinute = calculateOfflineElapsed(trustedNow - MINUTE_MS, trustedNow);
-const oneMinuteSimulation = calculateOfflineSimulationHours(oneMinute.appliedMs, 1);
-assert(oneMinute.shouldApply, '1 dakika offline progress uygulanır');
-assert(oneMinute.appliedMs === MINUTE_MS, '1 dakika elapsed tam uygulanır');
-assert(oneMinuteSimulation.appliedSimulationHours > 0, '1 dakika simulation hours > 0');
+const activeThresholdCases: Array<[string, number, boolean]> = [
+  ['14s', 14_000, false],
+  ['15s', ACTIVE_DELIVERY_OFFLINE_MIN_MS, true],
+  ['30s', 30_000, true],
+  ['1m', MINUTE_MS, true],
+  ['3m', 3 * MINUTE_MS, true],
+];
+for (const [label, elapsedMs, shouldApply] of activeThresholdCases) {
+  const result = calculateOfflineElapsed(trustedNow - elapsedMs, trustedNow, {
+    hasActiveDeliveries: true,
+  });
+  assert(result.shouldApply === shouldApply, `active delivery ${label} threshold`);
+  if (!shouldApply) {
+    assert(result.reason === 'below_minimum', `active delivery ${label} below_minimum`);
+  }
+}
 
 const oneHour = calculateOfflineElapsed(trustedNow - HOUR_MS, trustedNow);
 const oneHourSimulation = calculateOfflineSimulationHours(oneHour.appliedMs, 1);

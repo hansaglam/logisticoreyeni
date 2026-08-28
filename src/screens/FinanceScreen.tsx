@@ -46,6 +46,15 @@ import {
 import { calculateDeliverySettlement } from '../simulation/delivery';
 import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectActiveDeliveries,
+  selectCities,
+  selectContracts,
+  selectFinanceLedger,
+  selectProducts,
+} from '../store/selectors/stableCollections';
+import { selectPlayer } from '../store/selectors/playerFields';
+import { selectCurrentTimeHour } from '../store/selectors/timeBuckets';
 import { colors, formatMoney, formatRatioPercent, formatTons, spacing, typography } from '../theme';
 import type {
   Delivery,
@@ -318,15 +327,15 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
     scrollRef,
   });
 
-  const player = useGameStore((state) => state.player);
-  const contracts = useGameStore((state) => state.contracts) ?? [];
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const player = useGameStore(selectPlayer);
+  const contracts = useGameStore(selectContracts);
+  const activeDeliveries = useGameStore(selectActiveDeliveries);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
-  const financeLedger = useGameStore((state) => state.financeLedger) ?? [];
+  const financeLedger = useGameStore(selectFinanceLedger);
   const financeTotals = useGameStore((state) => state.financeTotals);
-  const cities = useGameStore((state) => state.cities) ?? [];
-  const products = useGameStore((state) => state.products) ?? [];
-  const currentTime = useGameStore((state) => state.currentTime);
+  const cities = useGameStore(selectCities);
+  const products = useGameStore(selectProducts);
+  const currentTimeHour = useGameStore(selectCurrentTimeHour);
 
   const trucks: Truck[] = player?.trucks ?? [];
   const drivers: Driver[] = player?.drivers ?? [];
@@ -370,18 +379,22 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
 
   const companyScoreBreakdown = useMemo(
     () =>
-      getCompanyScoreBreakdown({
-        player,
-        cities,
-        products,
-        financeLedger,
-        currentTime,
-      }),
-    [player, cities, products, financeLedger, currentTime],
+      player
+        ? getCompanyScoreBreakdown({
+            player,
+            cities,
+            products,
+            financeLedger,
+            currentTime: currentTimeHour,
+          })
+        : null,
+    [player, cities, products, financeLedger, currentTimeHour],
   );
 
   const companyScoreLines: BreakdownLine[] = useMemo(
-    () => [
+    () => {
+      if (!companyScoreBreakdown) return [];
+      return [
       { icon: 'contract', label: 'Teslimat performansı', amount: companyScoreBreakdown.deliveryScore, color: colors.success },
       {
         icon: 'upgrade',
@@ -413,12 +426,13 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
         amount: companyScoreBreakdown.weeklyActivityScore,
         color: colors.success,
       },
-    ],
+    ];
+    },
     [companyScoreBreakdown],
   );
 
   const companyScoreHint =
-    !companyScoreBreakdown.rankedEligible
+    !companyScoreBreakdown?.rankedEligible
       ? 'Haftalık sıralamaya girmek için en az 3 teslimat tamamlamalısın. Varsayılan itibar (50) nötrdür.'
       : 'Şirket puanı; teslimat performansı, şirket gelişimi, itibar, filo değeri ve haftalık operasyon sonuçlarından hesaplanır. Nakit bakiyesi sıralamayı domine etmez.';
 
@@ -657,7 +671,7 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
 
       <SectionTitle
         title="Şirket Puanı Dağılımı"
-        subtitle={`Toplam: ${formatCompanyScore(companyScoreBreakdown.totalScore)}`}
+        subtitle={`Toplam: ${formatCompanyScore(companyScoreBreakdown?.totalScore ?? 0)}`}
         compact
       />
       <BreakdownCard

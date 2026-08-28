@@ -41,6 +41,21 @@ import {
 } from '../simulation/trading';
 import { getEffectiveSellPrice } from '../simulation/warehouseStorage';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectCities,
+  selectProducts,
+} from '../store/selectors/stableCollections';
+import {
+  selectHasPlayer,
+  selectPlayer,
+  selectPlayerDrivers,
+  selectPlayerLevel,
+  selectPlayerMoney,
+  selectPlayerTrailers,
+  selectPlayerTrucks,
+  selectPlayerWarehouses,
+} from '../store/selectors/playerFields';
+import { selectCurrentTimeQuarterHour } from '../store/selectors/timeBuckets';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import { buildWarehouseScreenViewModel } from '../utils/warehouseScreenViewModel';
 import type { ProductId, Warehouse, WarehouseType } from '../types/game';
@@ -57,10 +72,17 @@ export default function WarehouseScreen() {
   const { contentBottomPadding } = useTabBarLayout();
   const { alert: showAlert, showDialog } = useAppDialog();
 
-  const player = useGameStore((state) => state.player);
-  const cities = useGameStore((state) => state.cities) ?? [];
-  const products = useGameStore((state) => state.products) ?? [];
-  const currentTime = useGameStore((state) => state.currentTime) ?? 0;
+  const hasPlayer = useGameStore(selectHasPlayer);
+  const player = useGameStore(selectPlayer);
+  const warehouses = useGameStore(selectPlayerWarehouses);
+  const trucks = useGameStore(selectPlayerTrucks);
+  const trailers = useGameStore(selectPlayerTrailers);
+  const drivers = useGameStore(selectPlayerDrivers);
+  const playerLevel = useGameStore(selectPlayerLevel);
+  const playerMoney = useGameStore(selectPlayerMoney);
+  const cities = useGameStore(selectCities);
+  const products = useGameStore(selectProducts);
+  const currentTimeQuarterHour = useGameStore(selectCurrentTimeQuarterHour);
   const financeLedger = useGameStore((state) => state.financeLedger);
   const activeWarehouseStockTransfers = useGameStore(
     (state) => state.activeWarehouseStockTransfers,
@@ -93,27 +115,34 @@ export default function WarehouseScreen() {
   }, [statusMessage]);
 
   const viewModel = useMemo(() => {
-    if (!player) return null;
+    if (!hasPlayer || !player) return null;
     return buildWarehouseScreenViewModel({
-      warehouses: player.warehouses ?? [],
+      warehouses,
       cities,
       products,
-      trucks: player.trucks ?? [],
-      trailers: player.trailers ?? [],
-      drivers: player.drivers ?? [],
+      trucks,
+      trailers,
+      drivers,
       activeWarehouseStockTransfers,
       financeLedger,
-      currentTime,
-      playerLevel: Math.max(1, player.level ?? player.companyLevel ?? 1),
-      playerMoney: player.money,
+      currentTime: currentTimeQuarterHour,
+      playerLevel,
+      playerMoney,
     });
   }, [
+    hasPlayer,
     player,
+    warehouses,
     cities,
     products,
+    trucks,
+    trailers,
+    drivers,
     activeWarehouseStockTransfers,
     financeLedger,
-    currentTime,
+    currentTimeQuarterHour,
+    playerLevel,
+    playerMoney,
   ]);
 
   const sellCity = useMemo(
@@ -128,10 +157,10 @@ export default function WarehouseScreen() {
 
   const sellInventoryItem = useMemo(() => {
     if (!sellWarehouse || !sellProductId) return null;
-    return normalizeWarehouse(sellWarehouse, currentTime).inventory?.find(
+    return normalizeWarehouse(sellWarehouse, currentTimeQuarterHour).inventory?.find(
       (item) => item.productId === sellProductId,
     );
-  }, [sellWarehouse, sellProductId, currentTime]);
+  }, [sellWarehouse, sellProductId, currentTimeQuarterHour]);
 
   const findWarehouse = (warehouseId: string): Warehouse | null => {
     return player?.warehouses?.find((item) => item.id === warehouseId) ?? null;

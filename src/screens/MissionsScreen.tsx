@@ -19,7 +19,6 @@ import { AppCard, GameIcon } from '../components/ui';
 import {
   CAREER_MISSIONS,
   STARTER_MISSIONS,
-  createDefaultMissionsState,
   getMissionById,
 } from '../config/missions';
 import { MILESTONE_DEFINITIONS } from '../data/milestones';
@@ -32,8 +31,13 @@ import {
   useOnboardingScreenVisit,
 } from '../hooks/useOnboardingScreenVisit';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { createDefaultRetentionState } from '../simulation/retentionProgress';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectMissions,
+  selectRetention,
+  selectRewardReceipts,
+} from '../store/selectors/stableCollections';
+import { selectCurrentTimeQuarterHour } from '../store/selectors/timeBuckets';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import type { RetentionReward } from '../types/game';
 import { getWeeklySeasonKey, getWeeklySeasonLabel } from '../utils/leaderboardSeason';
@@ -109,10 +113,10 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const [activeTab, setActiveTab] = useState<MissionsTabKey>('missions');
   const [claimingRewardKeys, setClaimingRewardKeys] = useState<Set<string>>(() => new Set());
 
-  const currentTime = useGameStore((state) => state.currentTime);
-  const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
-  const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
-  const rewardReceipts = useGameStore((state) => state.rewardReceipts) ?? {};
+  const currentTime = useGameStore(selectCurrentTimeQuarterHour);
+  const missions = useGameStore(selectMissions);
+  const retention = useGameStore(selectRetention);
+  const rewardReceipts = useGameStore(selectRewardReceipts);
   const getMissionProgressValue = useGameStore((state) => state.getMissionProgressValue);
   const claimMissionReward = useGameStore((state) => state.claimMissionReward);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);

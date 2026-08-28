@@ -1,12 +1,19 @@
+import { createDefaultMissionsState } from '../../config/missions';
 import type { ReputationHistoryEntry } from '../../domain/reputationModel';
+import { createDefaultRetentionState } from '../../simulation/retentionProgress';
 import type {
   City,
   Contract,
   Delivery,
   FinanceLedgerEntry,
+  MarketPriceAlert,
+  MissionsState,
   Product,
+  RetentionState,
+  RewardReceipt,
   Route,
   TruckTransfer,
+  WorldEvent,
 } from '../../types/game';
 
 export const EMPTY_ACTIVE_DELIVERIES: Delivery[] = [];
@@ -17,6 +24,20 @@ export const EMPTY_PRODUCTS: Product[] = [];
 export const EMPTY_ROUTES: Route[] = [];
 export const EMPTY_REPUTATION_HISTORY: ReputationHistoryEntry[] = [];
 export const EMPTY_FINANCE_LEDGER: FinanceLedgerEntry[] = [];
+export const EMPTY_WORLD_EVENTS: WorldEvent[] = [];
+export const EMPTY_MARKET_ALERTS: MarketPriceAlert[] = [];
+export const EMPTY_REWARD_RECEIPTS: Record<string, RewardReceipt> = {};
+
+export const DEFAULT_MISSIONS_STATE: MissionsState = createDefaultMissionsState();
+
+let defaultRetentionState: RetentionState | null = null;
+
+function getDefaultRetentionState(): RetentionState {
+  if (!defaultRetentionState) {
+    defaultRetentionState = createDefaultRetentionState();
+  }
+  return defaultRetentionState;
+}
 
 export function selectActiveDeliveries(state: {
   activeDeliveries?: Delivery[] | null;
@@ -58,4 +79,28 @@ export function selectFinanceLedger(state: {
   financeLedger?: FinanceLedgerEntry[] | null;
 }): FinanceLedgerEntry[] {
   return Array.isArray(state.financeLedger) ? state.financeLedger : EMPTY_FINANCE_LEDGER;
+}
+
+export function selectWorldEvents(state: { worldEvents?: WorldEvent[] | null }): WorldEvent[] {
+  return Array.isArray(state.worldEvents) ? state.worldEvents : EMPTY_WORLD_EVENTS;
+}
+
+export function selectMarketAlerts(state: {
+  marketAlerts?: MarketPriceAlert[] | null;
+}): MarketPriceAlert[] {
+  return Array.isArray(state.marketAlerts) ? state.marketAlerts : EMPTY_MARKET_ALERTS;
+}
+
+export function selectMissions(state: { missions?: MissionsState | null }): MissionsState {
+  return state.missions ?? DEFAULT_MISSIONS_STATE;
+}
+
+export function selectRetention(state: { retention?: RetentionState | null }): RetentionState {
+  return state.retention ?? getDefaultRetentionState();
+}
+
+export function selectRewardReceipts(state: {
+  rewardReceipts?: Record<string, RewardReceipt> | null;
+}): Record<string, RewardReceipt> {
+  return state.rewardReceipts ?? EMPTY_REWARD_RECEIPTS;
 }

@@ -4,6 +4,22 @@
  */
 import { readFileSync } from 'node:fs';
 
+import {
+  EMPTY_ACTIVE_DELIVERIES,
+  EMPTY_MARKET_ALERTS,
+  EMPTY_WORLD_EVENTS,
+  selectActiveDeliveries,
+  selectMarketAlerts,
+  selectMissions,
+  selectWorldEvents,
+} from '../src/store/selectors/stableCollections';
+import {
+  selectCurrentTimeGameDayAnchor,
+  selectCurrentTimeHour,
+  selectCurrentTimeQuarterHour,
+  selectCurrentTimeSixHour,
+} from '../src/store/selectors/timeBuckets';
+
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
   console.log(`  ✓ ${message}`);
@@ -46,7 +62,7 @@ assert(saveRevision.includes('getCachedIntegrityChecksum'), 'revision-based chec
 assert(saveIntegrity.includes('preparePayloadForChecksumShallow'), 'shallow checksum path');
 
 assert(!account.includes('useGameStore()'), 'AccountCenter avoids whole-store subscription');
-assert(contracts.includes('Math.floor(state.currentTime * 4) / 4'), 'Contracts quantizes preview time');
+assert(contracts.includes('selectCurrentTimeQuarterHour'), 'Contracts quantizes preview time');
 assert(tutorial.includes('if (!APP_TUTORIALS_ENABLED)'), 'tutorial hook no-op when globally disabled');
 assert(mapPreload.includes('preloadMapAssets'), 'shared map preload helper');
 
@@ -79,5 +95,45 @@ assert(more.includes('isActive'), 'More screen respects tab visibility');
 assert(read('src/screens/DashboardScreen.tsx').includes('useScreenRenderProfiler'), 'Dashboard render profiler');
 assert(read('src/screens/MapScreen.tsx').includes('useScreenRenderProfiler'), 'Map render profiler');
 assert(read('src/screens/MarketScreen.tsx').includes('marketGameDayAnchor'), 'Market uses game-day trend anchor');
+
+assert(
+  selectActiveDeliveries({ activeDeliveries: undefined }) === EMPTY_ACTIVE_DELIVERIES,
+  'selectActiveDeliveries returns stable empty fallback',
+);
+assert(
+  selectWorldEvents({ worldEvents: undefined }) === EMPTY_WORLD_EVENTS,
+  'selectWorldEvents returns stable empty fallback',
+);
+assert(
+  selectMarketAlerts({ marketAlerts: undefined }) === EMPTY_MARKET_ALERTS,
+  'selectMarketAlerts returns stable empty fallback',
+);
+assert(
+  selectMissions({ missions: undefined }).activeMissionIds.length > 0,
+  'selectMissions returns stable default missions state',
+);
+assert(selectCurrentTimeQuarterHour({ currentTime: 10.3 }) === 10.25, 'quarter-hour time bucket');
+assert(selectCurrentTimeHour({ currentTime: 10.9 }) === 10, 'hour time bucket');
+assert(selectCurrentTimeSixHour({ currentTime: 13 }) === 12, 'six-hour time bucket');
+assert(selectCurrentTimeGameDayAnchor({ currentTime: 30 }) === 24, 'game-day time anchor');
+
+const dashboard = read('src/screens/DashboardScreen.tsx');
+const contractsScreen = read('src/screens/ContractsScreen.tsx');
+const marketScreen = read('src/screens/MarketScreen.tsx');
+assert(dashboard.includes('selectCurrentTimeHour'), 'Dashboard buckets currentTime to hour');
+assert(!dashboard.includes('state.currentTime)'), 'Dashboard avoids raw currentTime subscription');
+assert(contractsScreen.includes('selectCurrentTimeQuarterHour'), 'Contracts uses shared quarter-hour bucket');
+assert(contractsScreen.includes('selectPlayerTrucks'), 'Contracts uses field-level truck selector');
+assert(marketScreen.includes('selectCities'), 'Market uses stable city selector');
+assert(marketScreen.includes('selectMarketAlerts'), 'Market uses stable market alert selector');
+assert(read('src/screens/VehicleMarketplaceScreen.tsx').includes('isActive'), 'Vehicle marketplace respects tab visibility');
+
+const contractIndex = read('src/simulation/contractGenerationIndex.ts');
+const contractsSim = read('src/simulation/contracts.ts');
+assert(contractIndex.includes('lookupRouteBetweenCities'), 'contract route index module exists');
+assert(contractIndex.includes('buildAvailableDuplicateIndex'), 'available duplicate index exists');
+assert(contractsSim.includes('buildCityProductEconomyIndex'), 'generation uses economy index');
+assert(contractsSim.includes('getAvailableDuplicateCount'), 'generation uses duplicate index lookup');
+assert(!contractsSim.includes('pendingContracts = [\n          ...existingContracts.filter'), 'generation avoids per-candidate pending list rebuild');
 
 console.log('\nperformance-regression-test: PASSED\n');

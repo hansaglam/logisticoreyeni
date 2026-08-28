@@ -71,6 +71,15 @@ import { getProductByIdSafe } from '../utils/entityLookup';
 import { canAffordVoluntaryPurchase } from '../utils/cashPolicy';
 import { measureContractScheduleStage } from '../utils/performanceDiagnostics';
 import {
+  buildAvailableDuplicateIndex,
+  buildCityProductEconomyIndex,
+  getAvailableDuplicateCount,
+  getCityProductEconomy,
+  isContractCityPairEligibleCached,
+  lookupRouteBetweenCities,
+  type CityPairEligibilityCache,
+} from './contractGenerationIndex';
+import {
   calculateDeliveryFuelLiters,
   getTruckFuelReadiness,
   normalizeTruckFuel,
@@ -233,9 +242,7 @@ export function getRouteBetweenCities(
   originCityId: string,
   destinationCityId: string,
 ): Route | undefined {
-  return routes.find(
-    (route) => route.fromCityId === originCityId && route.toCityId === destinationCityId,
-  );
+  return lookupRouteBetweenCities(routes, originCityId, destinationCityId);
 }
 
 // ---------------------------------------------------------------------------
@@ -566,24 +573,44 @@ export function findMarketOpportunities(
   playerLevel = 99,
 ): MarketOpportunity[] {
   const opportunities: MarketOpportunity[] = [];
+  const economyIndex = buildCityProductEconomyIndex(cities, products);
+  const pairEligibilityCache: CityPairEligibilityCache = new Map();
 
   for (const product of products) {
     for (const originCity of cities) {
-      const originMarket = toProductMarket(originCity.products[product.id]);
-      const surplus = calculateSurplus(originMarket);
+      const originEconomy = getCityProductEconomy(economyIndex, originCity.id, product.id);
+      if (!originEconomy) {
+        continue;
+      }
+      const { originMarket, surplus } = originEconomy;
 
       for (const destinationCity of cities) {
         if (destinationCity.id === originCity.id) {
           continue;
         }
 
-        if (!isContractCityPairEligible(originCity.id, destinationCity.id, playerLevel)) {
+        if (
+          !isContractCityPairEligibleCached(
+            pairEligibilityCache,
+            originCity.id,
+            destinationCity.id,
+            playerLevel,
+          )
+        ) {
           continue;
         }
 
-        const destinationMarket = toProductMarket(destinationCity.products[product.id]);
-        const shortage = calculateShortage(destinationMarket);
-        const route = getRouteBetweenCities(routes, originCity.id, destinationCity.id);
+        const destinationEconomy = getCityProductEconomy(
+          economyIndex,
+          destinationCity.id,
+          product.id,
+        );
+        if (!destinationEconomy) {
+          continue;
+        }
+        const destinationMarket = destinationEconomy.originMarket;
+        const shortage = destinationEconomy.shortage;
+        const route = lookupRouteBetweenCities(routes, originCity.id, destinationCity.id);
 
         if (
           !route ||
@@ -1106,6 +1133,19 @@ function generateContractsCore(
   const { currentTime } = options;
 
   const cityList = Object.values(cities);
+  const availableContracts = existingContracts.filter((contract) => contract.status === 'available');
+  const duplicateIndex = buildAvailableDuplicateIndex(availableContracts);
+  const economyIndex = buildCityProductEconomyIndex(cityList, products);
+  const pairEligibilityCache: CityPairEligibilityCache = new Map();
+  let pendingUnreachableCount = 0;
+  for (const contract of availableContracts) {
+    const weight = contract.cargoWeight ?? contract.amount ?? 0;
+    if (isContractUnreachableByFleet(weight, ownedMaxCapacity)) {
+      pendingUnreachableCount += 1;
+    }
+  }
+  const pendingAvailableCount = availableContracts.length;
+
   const marketOpportunities = findMarketOpportunities(cityList, routes, products, 12);
   const priorityOpportunityKeys = new Set(
     marketOpportunities.map(
@@ -1130,24 +1170,36 @@ function generateContractsCore(
         continue;
       }
 
-      if (!isContractCityPairEligible(originCity.id, destinationCity.id, playerLevel)) {
+      if (
+        !isContractCityPairEligibleCached(
+          pairEligibilityCache,
+          originCity.id,
+          destinationCity.id,
+          playerLevel,
+        )
+      ) {
         continue;
       }
 
-      const route = getRouteBetweenCities(routes, originCity.id, destinationCity.id);
+      const route = lookupRouteBetweenCities(routes, originCity.id, destinationCity.id);
       if (!route) {
         continue;
       }
 
       for (const product of products) {
-        const originMarket = toProductMarket(originCity.products[product.id]);
-        const destinationMarket = toProductMarket(destinationCity.products[product.id]);
+        const originEconomy = getCityProductEconomy(economyIndex, originCity.id, product.id);
+        const destinationEconomy = getCityProductEconomy(economyIndex, destinationCity.id, product.id);
+        if (!originEconomy || !destinationEconomy) {
+          continue;
+        }
 
-        const surplus = calculateSurplus(originMarket);
-        const shortage = calculateShortage(destinationMarket);
+        const originMarket = originEconomy.originMarket;
+        const destinationMarket = destinationEconomy.originMarket;
+        const surplus = originEconomy.surplus;
+        const shortage = destinationEconomy.shortage;
 
-        const existingAvailableCount = countAvailableDuplicates(
-          existingContracts,
+        const existingAvailableCount = getAvailableDuplicateCount(
+          duplicateIndex,
           originCity.id,
           destinationCity.id,
           product.id,
@@ -1240,17 +1292,9 @@ function generateContractsCore(
 
         const contractCargoWeight =
           finalContract.cargoWeight ?? finalContract.amount ?? 0;
-        const pendingContracts = [
-          ...existingContracts.filter((contract) => contract.status === 'available'),
-          ...candidates.map((candidate) => candidate.contract),
-        ];
-        const pendingTotal = pendingContracts.length;
-        const pendingUnreachable = pendingContracts.filter((contract) => {
-          const weight = contract.cargoWeight ?? contract.amount ?? 0;
-          return isContractUnreachableByFleet(weight, ownedMaxCapacity);
-        }).length;
+        const pendingTotal = pendingAvailableCount + candidates.length;
         const pendingUnreachableRatio =
-          pendingTotal > 0 ? pendingUnreachable / pendingTotal : 0;
+          pendingTotal > 0 ? pendingUnreachableCount / pendingTotal : 0;
 
         if (
           !shouldSpawnBeyondFleetContract(
@@ -1292,6 +1336,9 @@ function generateContractsCore(
         const score = baseScore * spawnWeight;
 
         candidates.push({ score, contract: finalContract });
+        if (isContractUnreachableByFleet(contractCargoWeight, ownedMaxCapacity)) {
+          pendingUnreachableCount += 1;
+        }
       }
     }
   }
@@ -1312,7 +1359,7 @@ function generateContractsCore(
     if (selected.length >= maxNewContracts) return false;
     const key = getContractDedupeKey(candidate.contract);
     if (batchDedupeKeys.has(key)) return false;
-    const candidateRoute = getRouteBetweenCities(
+    const candidateRoute = lookupRouteBetweenCities(
       routes,
       candidate.contract.originCityId,
       candidate.contract.destinationCityId,

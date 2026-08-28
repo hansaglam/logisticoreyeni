@@ -70,6 +70,13 @@ import { formatLeaderboardSeasonRange } from '../utils/leaderboardSeason';
 import { markStartup } from '../utils/startupPerformance';
 import { formatCompanyScore, getCompanyScoreBreakdown } from '../simulation/companyScore';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectCities,
+  selectFinanceLedger,
+  selectProducts,
+} from '../store/selectors/stableCollections';
+import { selectPlayer, selectPlayerCompletedContracts } from '../store/selectors/playerFields';
+import { selectCurrentTimeHour } from '../store/selectors/timeBuckets';
 import { colors, spacing, typography } from '../theme';
 
 interface LeaderboardScreenProps {
@@ -371,12 +378,12 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
 
   const eligible = isLeaderboardEligible();
   const uid = account.uid;
-  const player = useGameStore((state) => state.player);
-  const cities = useGameStore((state) => state.cities);
-  const products = useGameStore((state) => state.products);
-  const financeLedger = useGameStore((state) => state.financeLedger);
-  const currentTime = useGameStore((state) => state.currentTime);
-  const completedDeliveries = Math.max(0, player?.completedContracts ?? 0);
+  const player = useGameStore(selectPlayer);
+  const cities = useGameStore(selectCities);
+  const products = useGameStore(selectProducts);
+  const financeLedger = useGameStore(selectFinanceLedger);
+  const currentTimeHour = useGameStore(selectCurrentTimeHour);
+  const completedDeliveries = useGameStore(selectPlayerCompletedContracts);
   const rankedEligible = isLeaderboardRankedEligible(completedDeliveries);
   const scoreBreakdownReady = screenState.status !== 'loading';
   const localScoreBreakdown = useMemo(
@@ -384,15 +391,17 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
       if (!scoreBreakdownReady) {
         return null;
       }
-      return getCompanyScoreBreakdown({
-        player,
-        cities,
-        products,
-        financeLedger,
-        currentTime,
-      });
+      return player
+        ? getCompanyScoreBreakdown({
+            player,
+            cities,
+            products,
+            financeLedger,
+            currentTime: currentTimeHour,
+          })
+        : null;
     },
-    [scoreBreakdownReady, player, cities, products, financeLedger, currentTime],
+    [scoreBreakdownReady, player, cities, products, financeLedger, currentTimeHour],
   );
 
   const fetchData =

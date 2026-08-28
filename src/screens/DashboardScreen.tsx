@@ -31,8 +31,6 @@ import {
 import ReputationDetailSheet from '../components/dashboard/ReputationDetailSheet';
 import { selectReputationSummary } from '../domain/reputationModel';
 import DashboardDailyOpsBonusCard from '../components/monetization/DashboardDailyOpsBonusCard';
-import { createDefaultMissionsState } from '../config/missions';
-import { createDefaultRetentionState } from '../simulation/retentionProgress';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import {
   getWorldEventSummary,
@@ -47,9 +45,21 @@ import {
   selectActiveDeliveries,
   selectCities,
   selectFinanceLedger,
+  selectMissions,
   selectProducts,
   selectReputationHistory,
+  selectRetention,
+  selectWorldEvents,
 } from '../store/selectors/stableCollections';
+import {
+  selectHasPlayer,
+  selectPlayer,
+  selectPlayerCompanyName,
+  selectPlayerMoney,
+  selectPlayerTrucks,
+  selectPlayerWarehouses,
+} from '../store/selectors/playerFields';
+import { selectCurrentTimeGameDayAnchor, selectCurrentTimeHour } from '../store/selectors/timeBuckets';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import type { Player } from '../types/game';
@@ -77,23 +87,29 @@ function getWarehouseFillRatio(player: Player, currentTime: number): number {
 
 export default function DashboardScreen({ onNavigate, onOpenWarehouse }: DashboardScreenProps) {
   useScreenRenderProfiler('Dashboard');
-  const player = useGameStore((state) => state.player);
+  const hasPlayer = useGameStore(selectHasPlayer);
+  const player = useGameStore(selectPlayer);
+  const playerMoney = useGameStore(selectPlayerMoney);
+  const playerCompanyName = useGameStore(selectPlayerCompanyName);
+  const trucks = useGameStore(selectPlayerTrucks);
+  const warehouses = useGameStore(selectPlayerWarehouses);
   const products = useGameStore(selectProducts);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const globalSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
-  const currentTime = useGameStore((state) => state.currentTime);
+  const currentTimeHour = useGameStore(selectCurrentTimeHour);
+  const currentTimeDayAnchor = useGameStore(selectCurrentTimeGameDayAnchor);
   const cities = useGameStore(selectCities);
   const financeLedger = useGameStore(selectFinanceLedger);
   const financeTotals = useGameStore((state) => state.financeTotals);
-  const missions = useGameStore((state) => state.missions) ?? createDefaultMissionsState();
+  const missions = useGameStore(selectMissions);
   const onboarding = useGameStore((state) => state.onboarding);
   const advanceOnboardingProgress = useGameStore((state) => state.advanceOnboardingProgress);
   const notifyActiveDeliverySeen = useGameStore((state) => state.notifyActiveDeliverySeen);
   const syncMissionProgress = useGameStore((state) => state.syncMissionProgress);
   const syncRetentionProgress = useGameStore((state) => state.syncRetentionProgress);
   const getRetentionSummaryValue = useGameStore((state) => state.getRetentionSummaryValue);
-  const retention = useGameStore((state) => state.retention) ?? createDefaultRetentionState();
-  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
+  const retention = useGameStore(selectRetention);
+  const worldEvents = useGameStore(selectWorldEvents);
   const activeDeliveries = useGameStore(selectActiveDeliveries);
   const reputationHistory = useGameStore(selectReputationHistory);
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
@@ -119,14 +135,14 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     [activeDeliveries],
   );
 
-  const truckCount = player?.trucks?.length ?? 0;
+  const truckCount = trucks.length;
   const warehouseInventoryCount = useMemo(
     () =>
-      (player?.warehouses ?? []).reduce(
+      warehouses.reduce(
         (sum, warehouse) => sum + (warehouse.inventory?.length ?? 0),
         0,
       ),
-    [player?.warehouses],
+    [warehouses],
   );
 
   React.useEffect(() => {
@@ -158,27 +174,26 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   }, [runningDeliveries.length, notifyActiveDeliverySeen]);
 
   const fleetSnapshot = useMemo(() => {
-    const snapshotTrucks = player?.trucks ?? [];
     return {
-      idleTrucks: snapshotTrucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
+      idleTrucks: trucks.filter((t) => t.status === 'idle' && !t.leaseExpired).length,
     };
-  }, [player]);
+  }, [trucks]);
 
   const warehouseFillRatio = useMemo(
-    () => (player ? getWarehouseFillRatio(player, currentTime) : 0),
-    [player, currentTime],
+    () => (hasPlayer && player ? getWarehouseFillRatio(player, currentTimeHour) : 0),
+    [hasPlayer, player, currentTimeHour],
   );
 
   const companyScore = useMemo(
     () =>
       player
-        ? calculateCompanyScore({ player, cities, products, financeLedger, currentTime })
+        ? calculateCompanyScore({ player, cities, products, financeLedger, currentTime: currentTimeHour })
         : 0,
-    [player, cities, products, financeLedger, currentTime],
+    [player, cities, products, financeLedger, currentTimeHour],
   );
 
   const reputationSummary = useMemo(
-    () => selectReputationSummary({ player, reputationHistory }),
+    () => (player ? selectReputationSummary({ player, reputationHistory }) : null),
     [player, reputationHistory],
   );
 
@@ -189,7 +204,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   const activeWorldEvents = useMemo(
     () => getActiveWorldEventsValue(),
-    [getActiveWorldEventsValue, worldEvents, currentTime],
+    [getActiveWorldEventsValue, worldEvents, currentTimeDayAnchor],
   );
 
   const worldEventSummary = useMemo(
@@ -215,7 +230,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     onboarding?.visitedScreens?.length,
   ]);
 
-  if (!player) {
+  if (!hasPlayer || !player) {
     return (
       <View style={styles.screenRoot}>
         <DashboardBackground />
@@ -229,12 +244,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
   const levelProgress = getLevelProgress(player);
   const fuelPrice = getSnapshotFuelPrice(globalSnapshot, globalEconomy);
-  const showCashWarning = player.money < LOW_CASH_THRESHOLD;
+  const showCashWarning = playerMoney < LOW_CASH_THRESHOLD;
   const onboardingCompleted = onboarding?.completed === true;
 
   const handleDailyOpsBonusSuccess = (amount: number) => {
     addNotification({
-      time: currentTime,
+      time: useGameStore.getState().currentTime,
       type: 'success',
       title: 'Operasyon desteği',
       message: `${formatMoney(amount)} nakit eklendi.`,
@@ -312,7 +327,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       >
       <AppTutorialTarget tutorialId="dashboard" targetId="resource-bar" layoutMode="stretch">
       <DashboardResourceBar
-        money={player.money}
+        money={playerMoney}
         level={levelProgress.level}
         xpProgress={levelProgress.progressRatio}
         onHelpPress={dashboardTutorial.helpButtonProps.onPress}
@@ -323,17 +338,17 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
       <AppTutorialTarget tutorialId="dashboard" targetId="company-summary" layoutMode="stretch">
       <DashboardHeroCard
-        companyName={player.companyName}
+        companyName={playerCompanyName}
         level={levelProgress.level}
-        currentTime={currentTime}
+        currentTime={currentTimeDayAnchor}
         fuelPrice={fuelPrice}
         xp={levelProgress.xp ?? 0}
         xpToNext={levelProgress.xpToNextLevel}
         xpProgress={levelProgress.progressRatio}
         isMaxLevel={levelProgress.isMaxLevel}
-        money={player.money}
+        money={playerMoney}
         companyScore={companyScore}
-        reputationSummary={reputationSummary}
+        reputationSummary={reputationSummary!}
         idleTrucks={fleetSnapshot.idleTrucks}
         activeDeliveries={runningDeliveries.length}
         onReputationPress={() => setReputationSheetVisible(true)}
@@ -343,7 +358,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       {reputationSheetVisible ? (
         <ReputationDetailSheet
           visible={reputationSheetVisible}
-          summary={reputationSummary}
+          summary={reputationSummary!}
           history={reputationHistory}
           onClose={() => setReputationSheetVisible(false)}
         />
@@ -351,7 +366,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
 
       {showCashWarning ? (
         <DashboardAlertBanner
-          message={`Nakit düşük (${formatMoney(player.money)}) — giderlere dikkat et.`}
+          message={`Nakit düşük (${formatMoney(playerMoney)}) — giderlere dikkat et.`}
         />
       ) : null}
 
@@ -361,7 +376,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
             activeCount={worldEventSummary.activeCount}
             isCalm={worldEventSummary.isCalm}
             topEvents={worldEventSummary.topEvents}
-            currentTime={currentTime}
+            currentTime={currentTimeDayAnchor}
             onPress={handleOpenMarket}
           />
         </View>

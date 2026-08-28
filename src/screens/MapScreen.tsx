@@ -52,6 +52,18 @@ import {
   selectProducts,
   selectRoutes,
 } from '../store/selectors/stableCollections';
+import {
+  selectHasPlayer,
+  selectPlayer,
+  selectPlayerDrivers,
+  selectPlayerHomeCityId,
+  selectPlayerLevel,
+  selectPlayerMoney,
+  selectPlayerReputation,
+  selectPlayerTrailers,
+  selectPlayerTrucks,
+  selectPlayerWarehouses,
+} from '../store/selectors/playerFields';
 import { commitLayoutSize } from '../utils/layoutState';
 import { getWorldMapCityPosition } from '../data/worldMapPositions';
 import { getCityName } from '../utils/entityLookup';
@@ -215,7 +227,16 @@ function CompactRecommendedActionRow({ subtitle, onPress }: CompactRecommendedAc
 
 export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () => void }) {
   useScreenRenderProfiler('Map');
-  const player = useGameStore((state) => state.player);
+  const hasPlayer = useGameStore(selectHasPlayer);
+  const player = useGameStore(selectPlayer);
+  const playerTrucks = useGameStore(selectPlayerTrucks);
+  const drivers = useGameStore(selectPlayerDrivers);
+  const trailers = useGameStore(selectPlayerTrailers);
+  const warehouses = useGameStore(selectPlayerWarehouses);
+  const playerLevel = useGameStore(selectPlayerLevel);
+  const playerReputation = useGameStore(selectPlayerReputation);
+  const playerHomeCityId = useGameStore(selectPlayerHomeCityId);
+  const playerMoney = useGameStore(selectPlayerMoney);
   const cities = useGameStore(selectCities);
   const routes = useGameStore(selectRoutes);
   const products = useGameStore(selectProducts);
@@ -247,13 +268,13 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   });
 
   useEffect(() => {
-    if (!player || didReconcileOnOpenRef.current) return;
+    if (!hasPlayer || didReconcileOnOpenRef.current) return;
     didReconcileOnOpenRef.current = true;
     const result = useGameStore.getState().reconcileMapTracking('map-open');
     if (result.fixedCount > 0) {
       setStatusMessage(result.toast);
     }
-  }, [player]);
+  }, [hasPlayer]);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -313,8 +334,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   }, [routes]);
 
   const trucks = useMemo(
-    () => getVisibleFleetTrucks(player?.trucks, currentTime, activeDeliveries),
-    [player?.trucks, currentTime, activeDeliveries],
+    () => getVisibleFleetTrucks(playerTrucks, currentTime, activeDeliveries),
+    [playerTrucks, currentTime, activeDeliveries],
   );
 
   const validTruckIdsKey = useMemo(
@@ -332,38 +353,36 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   );
 
   const idleTruckCountByCity = useMemo(
-    () => buildIdleTruckCountByCity(trucks, player?.homeCityId),
-    [trucks, player?.homeCityId],
+    () => buildIdleTruckCountByCity(trucks, playerHomeCityId),
+    [trucks, playerHomeCityId],
   );
 
   const marketOpportunities = useMemo(
-    () => findMarketOpportunities(cities, routes, products, 5, player?.level ?? player?.companyLevel ?? 1),
-    [cities, routes, products, player?.level, player?.companyLevel],
+    () => findMarketOpportunities(cities, routes, products, 5, playerLevel),
+    [cities, routes, products, playerLevel],
   );
 
-  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
-  const playerMoney = player?.money ?? 0;
   const truckStatusKey = useMemo(
     () =>
-      (player?.trucks ?? [])
+      playerTrucks
         .map((truck) => `${truck.id}:${truck.status}:${truck.capacity ?? 0}`)
         .join('|'),
-    [player?.trucks],
+    [playerTrucks],
   );
   const driverStatusKey = useMemo(
-    () => (player?.drivers ?? []).map((driver) => `${driver.id}:${driver.status}`).join('|'),
-    [player?.drivers],
+    () => drivers.map((driver) => `${driver.id}:${driver.status}`).join('|'),
+    [drivers],
   );
   const warehouseInventoryKey = useMemo(
     () =>
-      (player?.warehouses ?? [])
+      warehouses
         .flatMap((warehouse) =>
           (warehouse.inventory ?? []).map(
             (item) => `${warehouse.id}:${item.productId}:${item.quantity}:${item.averageBuyPrice ?? 0}`,
           ),
         )
         .join('|'),
-    [player?.warehouses],
+    [warehouses],
   );
   const availableContractsKey = useMemo(
     () => availableContracts.map((contract) => `${contract.id}:${contract.status}`).join('|'),
@@ -372,9 +391,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   const recommendationClock = Math.floor(currentTime);
 
   const fuelPrice = globalEconomy?.fuelPrice ?? 0;
-
-  const drivers = player?.drivers ?? [];
-  const trailers = player?.trailers ?? [];
 
   const hasStartableContracts = useMemo(
     () =>
@@ -385,12 +401,12 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
           drivers,
           playerLevel,
           currentTime,
-          player?.reputation ?? 0,
-          player?.homeCityId,
+          playerReputation,
+          playerHomeCityId,
           trailers,
         ).canStart,
       ),
-    [availableContracts, trucks, drivers, trailers, playerLevel, currentTime, player?.reputation, player?.homeCityId],
+    [availableContracts, trucks, drivers, trailers, playerLevel, currentTime, playerReputation, playerHomeCityId],
   );
 
   const recommendationSubtitle = useMemo(
@@ -401,8 +417,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         drivers,
         trailers,
         playerLevel,
-        playerReputation: player?.reputation ?? 0,
-        homeCityId: player?.homeCityId,
+        playerReputation,
+        homeCityId: playerHomeCityId,
         runningDeliveries,
         idleTruckCountByCity,
       }),
@@ -412,8 +428,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
       drivers,
       trailers,
       playerLevel,
-      player?.reputation,
-      player?.homeCityId,
+      playerReputation,
+      playerHomeCityId,
       runningDeliveries,
       idleTruckCountByCity,
     ],
@@ -499,7 +515,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   const handleRootLayout = markLayoutReady;
 
-  if (!player) {
+  if (!hasPlayer || !player) {
     return (
       <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
         <View style={styles.loadingContainer}>
@@ -598,11 +614,11 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
         <AppTutorialTarget tutorialId="map" targetId="truck-tracking" layoutMode="stretch">
           <MapTruckTrackingSection
             trucks={trucks}
-            drivers={player.drivers ?? []}
+            drivers={drivers}
             deliveries={activeDeliveries}
             transfers={activeTransfers}
             idleTruckCountByCity={idleTruckCountByCity}
-            homeCityId={player.homeCityId}
+            homeCityId={playerHomeCityId}
             currentTime={currentTime}
             onOpenFleet={handleOpenFleet}
             onTruckPress={() => handleOpenFleet()}

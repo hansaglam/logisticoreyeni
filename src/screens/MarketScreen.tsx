@@ -130,6 +130,21 @@ import {
 import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import {
+  selectContracts,
+  selectMarketAlerts,
+  selectProducts,
+  selectRoutes,
+  selectCities,
+} from '../store/selectors/stableCollections';
+import {
+  selectPlayerMoney,
+  selectPlayerWarehouses,
+} from '../store/selectors/playerFields';
+import {
+  selectCurrentTimeGameDayAnchor,
+  selectCurrentTimeSixHour,
+} from '../store/selectors/timeBuckets';
+import {
   colors,
   formatMarketSyncCaption,
   formatMoney,
@@ -953,12 +968,12 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const productCardHeight = narrowScreen
     ? MARKET_PRODUCT_CARD_MIN_HEIGHT_NARROW
     : MARKET_PRODUCT_CARD_MIN_HEIGHT;
-  const playerMoney = useGameStore((state) => state.player?.money ?? 0);
-  const playerWarehouses = useGameStore((state) => state.player?.warehouses ?? []);
-  const cities = useGameStore((state) => state.cities) ?? [];
-  const products = useGameStore((state) => state.products) ?? [];
-  const routes = useGameStore((state) => state.routes) ?? [];
-  const contracts = useGameStore((state) => state.contracts) ?? [];
+  const playerMoney = useGameStore(selectPlayerMoney);
+  const playerWarehouses = useGameStore(selectPlayerWarehouses);
+  const cities = useGameStore(selectCities);
+  const products = useGameStore(selectProducts);
+  const routes = useGameStore(selectRoutes);
+  const contracts = useGameStore(selectContracts);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
   const globalSnapshot = useGameStore((state) => state.cachedGlobalEconomySnapshot);
   const globalSnapshotTrusted = useGameStore(
@@ -971,11 +986,9 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   );
   const marketMovementSummary = useGameStore((state) => state.marketMovementSummary);
   /** Ürün kart trendleri — oyun günü değişince güncellenir (her tick değil). */
-  const marketGameDayAnchor = useGameStore(
-    (state) => Math.floor(state.currentTime / 24) * 24,
-  );
+  const marketGameDayAnchor = useGameStore(selectCurrentTimeGameDayAnchor);
   /** Dünya olayı süre etiketleri — 6 oyun saatlik adımlar yeterli. */
-  const worldEventClock = useGameStore((state) => Math.floor(state.currentTime / 6) * 6);
+  const worldEventClock = useGameStore(selectCurrentTimeSixHour);
 
   const refreshMarketSnapshot = useGameStore((state) => state.refreshMarketSnapshot);
   const openContractsForMarketOpportunity = useGameStore(
@@ -984,7 +997,7 @@ export default function MarketScreen({ onOpenContracts }: MarketScreenProps) {
   const buyProductForWarehouse = useGameStore((state) => state.buyProductForWarehouse);
   const sellProductFromWarehouse = useGameStore((state) => state.sellProductFromWarehouse);
   const notifyMarketScreenOpened = useGameStore((state) => state.notifyMarketScreenOpened);
-  const marketAlerts = useGameStore((state) => state.marketAlerts) ?? [];
+  const marketAlerts = useGameStore(selectMarketAlerts);
   const createMarketPriceAlert = useGameStore((state) => state.createMarketPriceAlert);
   const deleteMarketPriceAlert = useGameStore((state) => state.deleteMarketPriceAlert);
   const pendingMarketFocus = useGameStore((state) => state.pendingMarketFocus);

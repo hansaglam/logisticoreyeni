@@ -92,6 +92,16 @@ import {
   endVehicleMarketplaceOperation,
 } from '../services/vehicleMarketplaceService';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectActiveDeliveries,
+  selectActiveTransfers,
+} from '../store/selectors/stableCollections';
+import {
+  selectPlayerDrivers,
+  selectPlayerMoney,
+  selectPlayerTrailers,
+  selectPlayerTrucks,
+} from '../store/selectors/playerFields';
 import { SAVE_GAME_VERSION } from '../storage/saveGame';
 import { getSaveContentRevision } from '../storage/saveRevision';
 import { colors, spacing } from '../theme';
@@ -130,14 +140,19 @@ function isLinkedMarketplaceUser(): boolean {
 
 export default function VehicleMarketplaceScreen({
   onBack,
+  isActive = true,
 }: {
   onBack: () => void;
+  isActive?: boolean;
 }) {
   const { alert: showAlert, showDialog } = useAppDialog();
   const { scrollBottomPadding } = useTabBarLayout();
-  const player = useGameStore((state) => state.player);
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries);
-  const activeTransfers = useGameStore((state) => state.activeTransfers);
+  const trucks = useGameStore(selectPlayerTrucks);
+  const drivers = useGameStore(selectPlayerDrivers);
+  const trailers = useGameStore(selectPlayerTrailers);
+  const playerMoney = useGameStore(selectPlayerMoney);
+  const activeDeliveries = useGameStore(selectActiveDeliveries);
+  const activeTransfers = useGameStore(selectActiveTransfers);
   const applyReconciliation = useGameStore(
     (state) => state.applyVehicleMarketplaceReconciliation,
   );
@@ -311,7 +326,10 @@ export default function VehicleMarketplaceScreen({
     setMyListings(result.listings);
     setMyListingsError(null);
     if (result.reconciliation) {
-      applyReconciliation(result.reconciliation);
+      const applied = applyReconciliation(result.reconciliation);
+      if (!applied) {
+        return { ok: false, reason: 'save-conflict' };
+      }
       setFleetLimit(
         Number.isFinite(result.reconciliation.fleetLimit)
           ? Number(result.reconciliation.fleetLimit)
@@ -447,7 +465,7 @@ export default function VehicleMarketplaceScreen({
   }, [loadFirstPage, syncMineAndReconcile]);
 
   useEffect(() => {
-    if (!VEHICLE_MARKETPLACE_ENABLED) return;
+    if (!VEHICLE_MARKETPLACE_ENABLED || !isActive) return;
     const cached = peekVehicleMarketplacePublicListingsCache();
     if (cached && cached.length > 0) {
       setScreenState({ status: 'ready', listings: cached });
@@ -459,10 +477,10 @@ export default function VehicleMarketplaceScreen({
       });
     });
     return () => handle.cancel();
-  }, [refreshAll]);
+  }, [refreshAll, isActive]);
 
   useEffect(() => {
-    if (!VEHICLE_MARKETPLACE_ENABLED) return;
+    if (!VEHICLE_MARKETPLACE_ENABLED || !isActive) return;
     const unsub = subscribeAuthState((user) => {
       const uid = user && !user.isAnonymous ? user.uid : null;
       void logMarketplaceAuthProbe('auth-state-changed', {
@@ -478,7 +496,7 @@ export default function VehicleMarketplaceScreen({
       void refreshAll();
     });
     return unsub;
-  }, [refreshAll, resetMarketplaceData]);
+  }, [refreshAll, resetMarketplaceData, isActive]);
 
   useEffect(() => {
     if (!VEHICLE_MARKETPLACE_ENABLED || !pendingSellTruckId) return;
@@ -539,22 +557,22 @@ export default function VehicleMarketplaceScreen({
 
   const eligibilityContext = useMemo(
     () => ({
-      trucks: player.trucks,
-      drivers: player.drivers,
-      trailers: player.trailers,
+      trucks,
+      drivers,
+      trailers,
       activeDeliveries,
       activeTransfers,
       activeListingTruckIds: activeMine.map((listing) => listing.truckSnapshot.truckId),
     }),
-    [activeDeliveries, activeMine, activeTransfers, player.drivers, player.trailers, player.trucks],
+    [activeDeliveries, activeMine, activeTransfers, drivers, trailers, trucks],
   );
 
   const canCreateListing = useMemo(
     () =>
-      player.trucks.some(
+      trucks.some(
         (truck) => getVehicleMarketplaceEligibility(truck.id, eligibilityContext).eligible,
       ),
-    [eligibilityContext, player.trucks],
+    [eligibilityContext, trucks],
   );
 
   const beginPurchase = (listing: VehicleMarketplaceListing) => {
@@ -628,7 +646,7 @@ export default function VehicleMarketplaceScreen({
         return;
       }
 
-      const cash = purchaseAuthoritativeCash ?? player.money;
+      const cash = purchaseAuthoritativeCash ?? playerMoney;
       logMarketplacePurchase('server balance confirmed', {
         cash,
         price: purchaseTarget.askingPrice,
@@ -684,15 +702,36 @@ export default function VehicleMarketplaceScreen({
         }
       }
 
+      const transferred = result.data?.transferredTruck ?? {
+        ...purchaseTarget.truckSnapshot,
+        status: 'idle' as const,
+        marketplaceListingId: null,
+      };
+      const buyerCashAfter = result.data?.buyerCashAfter;
+      const localApplied =
+        typeof buyerCashAfter === 'number' &&
+        Number.isFinite(buyerCashAfter) &&
+        useGameStore.getState().applyMarketplacePurchaseResult({
+          buyerCashAfter,
+          vehicle: transferred,
+          marketplaceStateVersion:
+            useGameStore.getState().vehicleMarketplace?.marketplaceStateVersion,
+        });
+
       const outcome = resolveMarketplacePurchaseClientOutcome(result, {
         refreshFailed: false,
+        localApplyFailed: !localApplied,
       });
       if (outcome.kind !== 'success') {
-        logMarketplacePurchase('done', { ok: false, reason: result.reason });
+        logMarketplacePurchase('done', {
+          ok: false,
+          reason: result.reason ?? 'save-conflict',
+          localApplied,
+        });
         if (!outcome.reuseEnvelope) {
           purchaseAttemptRef.current = null;
         }
-        if (result.reason === 'insufficient-funds' || result.reason === 'save-conflict') {
+        if (result.reason === 'insufficient-funds' || result.reason === 'save-conflict' || !localApplied) {
           void prepareMarketplacePurchaseFunds().then((refresh) => {
             setPurchaseAuthoritativeCash(refresh.cash);
             if (refresh.fleetLimit != null) {
@@ -705,7 +744,9 @@ export default function VehicleMarketplaceScreen({
           result.reason === 'listing-not-active' ||
           result.reason === 'listing-not-found' ||
           result.reason === 'stale-listing-version';
-        finishFailure(result.reason, { closeModal: listingGone });
+        finishFailure(localApplied ? result.reason : 'save-conflict', {
+          closeModal: listingGone,
+        });
         if (listingGone) {
           void refreshAll();
         }
@@ -716,6 +757,8 @@ export default function VehicleMarketplaceScreen({
         listingId: result.data?.listingId ?? purchaseTarget.id,
         serverMoneyBefore: result.data?.buyerCashBefore ?? null,
         serverMoneyAfter: result.data?.buyerCashAfter ?? null,
+        transferredTruckId: transferred.truckId,
+        localApplied: true,
       });
       const truckName = getMarketplaceTruckName(purchaseTarget.truckSnapshot.templateId);
       purchaseAttemptRef.current = null;
@@ -735,7 +778,8 @@ export default function VehicleMarketplaceScreen({
         logMarketplacePurchase('done', { ok: true });
       } catch (refreshError) {
         logMarketplacePurchase('buyer state refreshed', { error: refreshError });
-        logMarketplacePurchase('done', { ok: false, error: refreshError });
+        // Local atomic apply already succeeded — do not treat refresh failure as purchase failure.
+        logMarketplacePurchase('done', { ok: true, refreshFailed: true });
       }
     } catch (error) {
       logMarketplacePurchase('done', { ok: false, error });
@@ -776,7 +820,7 @@ export default function VehicleMarketplaceScreen({
     }
   };
 
-  const performCreate = async (truck: (typeof player.trucks)[number], askingPrice: number) => {
+  const performCreate = async (truck: (typeof trucks)[number], askingPrice: number) => {
     if (isCreatingListing) return;
 
     await logMarketplaceSellLocal(truck);
@@ -1045,7 +1089,7 @@ export default function VehicleMarketplaceScreen({
       />
       <VehicleListingCreateSheet
         visible={createVisible}
-        trucks={player.trucks}
+        trucks={trucks}
         creating={isCreatingListing}
         eligibilityContext={eligibilityContext}
         initialTruckId={pendingSellTruckId}
@@ -1060,8 +1104,8 @@ export default function VehicleMarketplaceScreen({
       />
       <VehiclePurchaseConfirmSheet
         listing={purchaseTarget}
-        cash={purchaseAuthoritativeCash ?? player.money}
-        fleetCount={player.trucks.length}
+        cash={purchaseAuthoritativeCash ?? playerMoney}
+        fleetCount={trucks.length}
         fleetLimit={fleetLimit}
         preparing={isPreparingPurchase}
         purchasing={isBuyingVehicle}

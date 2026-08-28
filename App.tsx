@@ -134,6 +134,7 @@ function renderActiveScreen(
     case 'vehicleMarketplace':
       return (
         <VehicleMarketplaceScreen
+          isActive={isActive}
           onBack={() => onNavigate('dashboard')}
         />
       );

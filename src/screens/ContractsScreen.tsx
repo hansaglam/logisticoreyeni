@@ -62,6 +62,22 @@ import {
 } from '../utils/contractSorting';
 import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectActiveDeliveries,
+  selectContracts,
+  selectWorldEvents,
+} from '../store/selectors/stableCollections';
+import {
+  selectPlayerCompletedContracts,
+  selectPlayerDrivers,
+  selectPlayerHomeCityId,
+  selectPlayerLevel,
+  selectPlayerMoney,
+  selectPlayerReputation,
+  selectPlayerTrailers,
+  selectPlayerTrucks,
+} from '../store/selectors/playerFields';
+import { selectCurrentTimeQuarterHour } from '../store/selectors/timeBuckets';
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
 import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
 import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
@@ -644,9 +660,9 @@ const ActiveDeliveryCard = React.memo(function ActiveDeliveryCard({
   drivers,
   onBoostSuccess,
 }: ActiveDeliveryCardProps) {
-  const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
+  const currentTime = useGameStore(selectCurrentTimeQuarterHour);
   const truck = useGameStore((state) =>
-    state.player.trucks.find((item) => item.id === delivery.truckId),
+    selectPlayerTrucks(state).find((item) => item.id === delivery.truckId),
   );
   const [roadsideJobId, setRoadsideJobId] = React.useState<string | null>(null);
   const [refuelTruck, setRefuelTruck] = React.useState<Truck | null>(null);
@@ -804,11 +820,11 @@ export default function ContractsScreen() {
   const { alert: showAlert } = useAppDialog();
   const player = useGameStore((state) => state.player);
   const monetization = useGameStore((state) => state.monetization);
-  const contracts = useGameStore((state) => state.contracts) ?? [];
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const contracts = useGameStore(selectContracts);
+  const activeDeliveries = useGameStore(selectActiveDeliveries);
   const globalEconomy = useGameStore((state) => state.globalEconomy);
-  const currentTime = useGameStore((state) => Math.floor(state.currentTime * 4) / 4);
-  const worldEvents = useGameStore((state) => state.worldEvents) ?? [];
+  const currentTime = useGameStore(selectCurrentTimeQuarterHour);
+  const worldEvents = useGameStore(selectWorldEvents);
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
 
   const startDelivery = useGameStore((state) => state.startDelivery);
@@ -847,12 +863,14 @@ export default function ContractsScreen() {
     return () => clearTimeout(timeout);
   }, [statusMessage]);
 
-  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
-  const playerReputation = player?.reputation ?? 0;
-  const trucks = player?.trucks ?? [];
-  const drivers = player?.drivers ?? [];
-  const trailers = player?.trailers ?? [];
-  const completedDeliveryCount = player?.completedContracts ?? 0;
+  const playerLevel = useGameStore(selectPlayerLevel);
+  const playerReputation = useGameStore(selectPlayerReputation);
+  const trucks = useGameStore(selectPlayerTrucks);
+  const drivers = useGameStore(selectPlayerDrivers);
+  const trailers = useGameStore(selectPlayerTrailers);
+  const completedDeliveryCount = useGameStore(selectPlayerCompletedContracts);
+  const playerHomeCityId = useGameStore(selectPlayerHomeCityId);
+  const playerMoney = useGameStore(selectPlayerMoney);
   const previewTruckKey = trucks
     .map((truck) =>
       truck.status === 'idle'
@@ -889,8 +907,8 @@ export default function ContractsScreen() {
   );
 
   const idleTruckCityIds = useMemo(
-    () => getIdleTruckOriginCityIds(trucks, player?.homeCityId),
-    [trucks, player?.homeCityId],
+    () => getIdleTruckOriginCityIds(trucks, playerHomeCityId),
+    [trucks, playerHomeCityId],
   );
   const idleTruckCityLabel = useMemo(() => {
     if (idleTruckCityIds.length === 0) {
@@ -911,7 +929,7 @@ export default function ContractsScreen() {
     if (typeof __DEV__ === 'undefined' || !__DEV__) {
       return;
     }
-    const originHint = getIdleTruckOriginCityIds(trucks, player?.homeCityId)[0] ?? player?.homeCityId ?? null;
+    const originHint = getIdleTruckOriginCityIds(trucks, playerHomeCityId)[0] ?? playerHomeCityId ?? null;
     logContractsUiSelector(
       inspectContractsUiSelector({
         contracts,
@@ -920,7 +938,7 @@ export default function ContractsScreen() {
         destinationCityId: 'adana',
       }),
     );
-  }, [contracts, trucks, player?.homeCityId]);
+  }, [contracts, trucks, playerHomeCityId]);
 
   const runningDeliveries = useMemo(
     () =>
@@ -966,12 +984,12 @@ export default function ContractsScreen() {
           currentTime,
           activeWorldEvents,
           playerReputation,
-          homeCityId: player?.homeCityId,
+          homeCityId: playerHomeCityId,
         }),
       );
     }
     return previews;
-  }, [activeSegment, availableContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
+  }, [activeSegment, availableContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, playerHomeCityId]);
 
   const playableContractCount = useMemo(
     () =>
@@ -982,10 +1000,10 @@ export default function ContractsScreen() {
         playerLevel,
         currentTime,
         {
-          playerMoney: player?.money,
+          playerMoney,
           globalEconomy,
           playerReputation,
-          homeCityId: player?.homeCityId,
+          homeCityId: playerHomeCityId,
           trailers,
         },
       ),
@@ -995,8 +1013,8 @@ export default function ContractsScreen() {
       previewDrivers,
       playerLevel,
       currentTime,
-      player?.money,
-      player?.homeCityId,
+      playerMoney,
+      playerHomeCityId,
       globalEconomy,
       playerReputation,
     ],
@@ -1013,7 +1031,7 @@ export default function ContractsScreen() {
       contractPreviewById,
       marketContractFilter,
       runningDeliveries,
-      player?.homeCityId,
+      playerHomeCityId,
     );
   }, [
     availableContracts,
@@ -1079,12 +1097,12 @@ export default function ContractsScreen() {
           currentTime,
           activeWorldEvents,
           playerReputation,
-          homeCityId: player?.homeCityId,
+          homeCityId: playerHomeCityId,
         }),
       );
     }
     return previews;
-  }, [activeSegment, completedContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, player?.homeCityId]);
+  }, [activeSegment, completedContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, playerHomeCityId]);
 
   const tabSegments = useMemo<TabSegment[]>(
     () => [
@@ -1385,7 +1403,7 @@ export default function ContractsScreen() {
     if (activeSegment === 'active') {
       return activeDeliveries
         .map((delivery) => {
-          const assigned = (player?.trucks ?? []).find((item) => item.id === delivery.truckId);
+          const assigned = trucks.find((item) => item.id === delivery.truckId);
           const fuel = assigned ? Math.round((assigned.currentFuelL ?? 0) * 10) : 'na';
           return `${delivery.id}:${Math.floor(delivery.progress * 100)}:${delivery.status}:${delivery.pausedReason ?? ''}:${fuel}`;
         })
@@ -1395,7 +1413,7 @@ export default function ContractsScreen() {
       return `${highlightedContractId ?? ''}:${monetization.totalRewardedAdsToday}`;
     }
     return activeSegment;
-  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday, player?.trucks]);
+  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday, trucks]);
 
   const listHeader = useMemo(() => {
     if (activeSegment !== 'available') {

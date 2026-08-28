@@ -65,6 +65,17 @@ import TruckTransferModal from '../components/TruckTransferModal';
 import TruckRefuelSheet from '../components/TruckRefuelSheet';
 import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
 import { useGameStore } from '../store/gameStore';
+import {
+  selectActiveDeliveries,
+  selectActiveTransfers,
+} from '../store/selectors/stableCollections';
+import {
+  selectPlayerDrivers,
+  selectPlayerHomeCityId,
+  selectPlayerMoney,
+  selectPlayerTrailers,
+  selectPlayerTrucks,
+} from '../store/selectors/playerFields';
 import { colors, formatDisplayPercent, formatMoney, spacing, typography } from '../theme';
 import type { Delivery, DeliveryStatus, Driver, Trailer, Truck, TruckTransfer } from '../types/game';
 
@@ -167,18 +178,18 @@ export default function FleetScreen() {
   const { width: screenWidth } = useWindowDimensions();
   const driverHireLayout = useMemo(() => getFleetDriverColumnWidths(screenWidth), [screenWidth]);
   const { contentBottomPadding } = useTabBarLayout();
-  const trucks = useGameStore((state) => state.player?.trucks ?? []);
+  const trucks = useGameStore(selectPlayerTrucks);
   const currentTime = useGameStore((state) => state.currentTime);
-  const trailers = useGameStore((state) => state.player?.trailers ?? []);
-  const drivers = useGameStore((state) => state.player?.drivers ?? []);
-  const playerMoney = useGameStore((state) => state.player?.money ?? 0);
-  const homeCityId = useGameStore((state) => state.player?.homeCityId);
-  const activeDeliveries = useGameStore((state) => state.activeDeliveries) ?? [];
+  const trailers = useGameStore(selectPlayerTrailers);
+  const drivers = useGameStore(selectPlayerDrivers);
+  const playerMoney = useGameStore(selectPlayerMoney);
+  const homeCityId = useGameStore(selectPlayerHomeCityId);
+  const activeDeliveries = useGameStore(selectActiveDeliveries);
   const visibleTrucks = useMemo(
     () => getVisibleFleetTrucks(trucks, currentTime, activeDeliveries),
     [trucks, currentTime, activeDeliveries],
   );
-  const activeTransfers = useGameStore((state) => state.activeTransfers) ?? [];
+  const activeTransfers = useGameStore(selectActiveTransfers);
   const monetization = useGameStore((state) => state.monetization);
   const attachTrailerToTruck = useGameStore((state) => state.attachTrailerToTruck);
   const detachTrailerFromTruck = useGameStore((state) => state.detachTrailerFromTruck);

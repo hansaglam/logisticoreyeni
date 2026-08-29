@@ -1,5 +1,6 @@
 /**
- * Ödüllü reklam sağlayıcı — AdMob Rewarded Ads + UMP consent + deferred iOS ATT.
+ * Ödüllü reklam sağlayıcı — AdMob Rewarded Ads + UMP consent.
+ * iOS: non-personalized / limited ads only (no ATT / IDFA).
  */
 
 import Constants from 'expo-constants';
@@ -21,12 +22,6 @@ import {
   type RewardedPlacement,
 } from '../config/rewardedPlacements';
 import { canRequestAdsAfterConsent, getAdsConsentSnapshot } from './adsConsentService';
-import {
-  getAttAdsPersonalizationMode,
-  getLastAttAuthorizationStatus,
-  requestAttIfNeededForRewardedAd,
-  shouldRequestNonPersonalizedAdsOnly,
-} from './attService';
 import type { AdRewardSlotId } from '../types/monetization';
 
 export type AdShowResult = 'completed' | 'skipped' | 'failed';
@@ -129,24 +124,12 @@ type RewardedAdRequestOptions = {
   requestNonPersonalizedAdsOnly?: boolean;
 };
 
+/** iOS always requests non-personalized ads; Android uses default AdMob request options. */
 export function buildRewardedAdRequestOptions(): RewardedAdRequestOptions {
-  if (shouldRequestNonPersonalizedAdsOnly()) {
+  if (Platform.OS === 'ios') {
     return { requestNonPersonalizedAdsOnly: true };
   }
   return {};
-}
-
-/** iOS ATT → ad personalization eligibility (before Mobile Ads init). */
-export async function applyAdTrackingConfiguration(): Promise<void> {
-  if (Platform.OS !== 'ios') {
-    return;
-  }
-  console.info('[ads-tracking-config]', {
-    platform: Platform.OS,
-    attStatus: getLastAttAuthorizationStatus(),
-    personalization: getAttAdsPersonalizationMode(),
-    requestNonPersonalizedAdsOnly: shouldRequestNonPersonalizedAdsOnly(),
-  });
 }
 
 function isDevEnvironment(): boolean {
@@ -926,8 +909,6 @@ export async function showRewardedAd(slotId: AdRewardSlotId): Promise<AdShowResu
     notifyDiagnostics();
     return 'failed';
   }
-
-  await requestAttIfNeededForRewardedAd();
 
   return showNativeRewardedAd(slotId);
 }

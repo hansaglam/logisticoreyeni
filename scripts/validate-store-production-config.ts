@@ -51,16 +51,18 @@ function main(): void {
   }
 
   const adsBootstrap = loadSource('src/services/adsPrivacyBootstrap.ts');
-  if (!adsBootstrap.includes('resolveAttBeforeAdsInitialization')) {
-    console.error('  ✗ ads bootstrap must resolve ATT before UMP');
+  if (adsBootstrap.includes('resolveAttBeforeAdsInitialization')) {
+    console.error('  ✗ ads bootstrap must not request ATT');
   } else {
-    console.log('  ✓ ads bootstrap ATT before UMP');
+    console.log('  ✓ ads bootstrap has no ATT');
   }
 
   if (!adProvider.includes('buildRewardedAdRequestOptions')) {
-    console.error('  ✗ adProvider must apply non-personalized ad requests when ATT denied');
+    console.error('  ✗ adProvider must apply non-personalized ad requests on iOS');
+  } else if (!adProvider.includes("Platform.OS === 'ios'")) {
+    console.error('  ✗ adProvider must gate NPA to iOS');
   } else {
-    console.log('  ✓ adProvider NPA request options');
+    console.log('  ✓ adProvider iOS NPA request options');
   }
 
   const appTsx = loadSource('App.tsx');

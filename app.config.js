@@ -135,15 +135,6 @@ module.exports = () => {
         {
           androidAppId: 'ca-app-pub-8214453687597896~5560651696',
           iosAppId: 'ca-app-pub-8214453687597896~4247570027',
-          userTrackingUsageDescription:
-            'Bu tanımlayıcı size daha uygun reklamlar sunmak için kullanılır.',
-        },
-      ],
-      [
-        'expo-tracking-transparency',
-        {
-          userTrackingPermission:
-            'LogistiCore, size daha alakalı reklamlar sunabilmek için cihaz tanımlayıcısını kullanmak isteyebilir. Reddederseniz kişiselleştirilmemiş reklamlar gösterilir; oyun normal devam eder.',
         },
       ],
     ],

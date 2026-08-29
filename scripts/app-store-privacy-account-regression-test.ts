@@ -1,20 +1,10 @@
 /**
- * App Store privacy (ATT/UMP) + account deletion regression.
+ * App Store privacy (no-tracking ads + UMP) + account deletion regression.
  * Run: npx tsx scripts/app-store-privacy-account-regression-test.ts
  */
 import './test-globals';
 
 import { readFileSync } from 'node:fs';
-
-import {
-  __resetAttStateForTests,
-  __setAttStatusForTests,
-  getAttAdsPersonalizationMode,
-  hasAttBootstrapCompleted,
-  requestAttIfNeededForRewardedAd,
-  shouldRequestNonPersonalizedAdsOnly,
-} from '../src/services/attService';
-import { mapAttStatusToPersonalization } from '../src/services/attPolicy';
 
 let pass = 0;
 let fail = 0;
@@ -34,61 +24,39 @@ const read = (path: string) => readFileSync(path, 'utf8');
 async function run(): Promise<void> {
   console.log('\n=== App Store Privacy + Account Deletion Regression ===\n');
 
-  console.log('ATT policy mapping');
+  console.log('No-tracking ads policy');
   {
-    check(
-      mapAttStatusToPersonalization('authorized', 'ios') === 'personalized',
-      'authorized → personalized',
-    );
-    check(
-      mapAttStatusToPersonalization('denied', 'ios') === 'non-personalized',
-      'denied → non-personalized',
-    );
-    check(
-      mapAttStatusToPersonalization('restricted', 'ios') === 'non-personalized',
-      'restricted → non-personalized',
-    );
-    __setAttStatusForTests('denied');
-    check(shouldRequestNonPersonalizedAdsOnly(), 'denied ATT → NPA flag');
     const adProvider = read('src/services/adProvider.ts');
+    const appConfig = read('app.config.js');
     check(
-      adProvider.includes('requestNonPersonalizedAdsOnly: true'),
-      'denied ATT → ad request NPA option wired',
+      adProvider.includes("Platform.OS === 'ios'") &&
+        adProvider.includes('requestNonPersonalizedAdsOnly: true'),
+      'iOS rewarded requests always use NPA',
     );
-    __setAttStatusForTests('authorized');
-    check(!shouldRequestNonPersonalizedAdsOnly(), 'authorized ATT → personalized path');
-    check(adProvider.includes('buildRewardedAdRequestOptions'), 'rewarded requests use ATT-aware options');
-    __resetAttStateForTests();
-  }
-
-  console.log('\nATT bootstrap idempotency');
-  {
-    __setAttStatusForTests('denied');
-    const first = await requestAttIfNeededForRewardedAd();
-    const second = await requestAttIfNeededForRewardedAd();
-    check(first === 'denied' && second === 'denied', 'rewarded ATT check does not re-prompt');
-    check(hasAttBootstrapCompleted(), 'bootstrap marked complete');
-    check(getAttAdsPersonalizationMode() === 'non-personalized', 'personalization mode latched');
-    __resetAttStateForTests();
+    check(adProvider.includes('buildRewardedAdRequestOptions'), 'rewarded requests use privacy-aware options');
+    check(!appConfig.includes('expo-tracking-transparency'), 'expo-tracking-transparency removed from app config');
+    check(
+      !appConfig.includes('userTrackingUsageDescription') &&
+        !appConfig.includes('userTrackingPermission'),
+      'no ATT usage strings in app config',
+    );
+    check(
+      !read('ios/LogistiCore/Info.plist').includes('NSUserTrackingUsageDescription'),
+      'NSUserTrackingUsageDescription removed from Info.plist',
+    );
+    check(!read('package.json').includes('expo-tracking-transparency'), 'expo-tracking-transparency dependency removed');
   }
 
   console.log('\nCanonical ads init order');
   {
     const bootstrap = read('src/services/adsPrivacyBootstrap.ts');
     const app = read('App.tsx');
-    const attIdx = bootstrap.indexOf('await resolveAttBeforeAdsInitialization()');
-    const trackingIdx = bootstrap.indexOf('await applyAdTrackingConfiguration()');
     const consentIdx = bootstrap.lastIndexOf('await gatherAdsConsentIfNeeded()');
     const initIdx = bootstrap.indexOf('await initializeAdProvider()');
-    check(attIdx >= 0 && attIdx < consentIdx, 'ATT before UMP in bootstrap');
-    check(trackingIdx >= 0 && trackingIdx < consentIdx, 'tracking config before UMP');
+    check(!bootstrap.includes('resolveAttBeforeAdsInitialization'), 'ATT bootstrap removed');
+    check(!bootstrap.includes('applyAdTrackingConfiguration'), 'ATT tracking config removed');
     check(consentIdx >= 0 && consentIdx < initIdx, 'UMP before Mobile Ads init');
     check(app.includes('initializeAdsPrivacyStack'), 'App uses ads privacy bootstrap');
-    check(
-      read('app.config.js').includes('NSUserTrackingUsageDescription') ||
-        read('app.config.js').includes('userTrackingPermission'),
-      'NSUserTrackingUsageDescription configured',
-    );
   }
 
   console.log('\nAccount deletion discoverability');

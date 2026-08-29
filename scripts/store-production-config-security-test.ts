@@ -15,7 +15,6 @@ import {
   validateStoreProductionEnv,
 } from '../src/config/storeProductionPolicy';
 import { canRequestAdsFromSnapshot } from '../src/services/adsConsentPolicy';
-import { mapAttStatusToPersonalization } from '../src/services/attPolicy';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -105,11 +104,12 @@ async function main() {
     'UMP error blocks ads',
   );
 
-  assert.equal(mapAttStatusToPersonalization('authorized', 'ios'), 'personalized');
-  assert.equal(mapAttStatusToPersonalization('denied', 'ios'), 'non-personalized');
-  assert.equal(mapAttStatusToPersonalization('not-determined', 'ios'), 'unknown');
-
+  const appConfigSrc = readFileSync(resolve(ROOT, 'app.config.js'), 'utf8');
   const adProviderSrc = readFileSync(resolve(ROOT, 'src/services/adProvider.ts'), 'utf8');
+  assert.doesNotMatch(appConfigSrc, /expo-tracking-transparency/);
+  assert.doesNotMatch(appConfigSrc, /userTrackingUsageDescription/);
+  assert.match(adProviderSrc, /Platform\.OS === 'ios'/);
+  assert.match(adProviderSrc, /requestNonPersonalizedAdsOnly: true/);
   assert.match(adProviderSrc, /RewardedAdEventType\.EARNED_REWARD/);
   assert.match(adProviderSrc, /rewardGrantedForImpression/);
   assert.match(adProviderSrc, /canRequestAdsAfterConsent/);
@@ -130,7 +130,7 @@ async function main() {
         umpRequiredBlocksAds: true,
         umpObtainedAllowsAds: true,
         umpErrorBlocksAds: true,
-        attPersonalizationMapping: true,
+        iosNoTrackingAds: true,
         rewardedEarnedRewardOnly: true,
       },
       null,

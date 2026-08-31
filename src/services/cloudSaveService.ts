@@ -120,6 +120,8 @@ export interface CloudSaveOperationResult {
   ok: boolean;
   error?: string;
   errorCode?: string;
+  stage?: string;
+  authDeletedByServer?: boolean;
   documentPath?: string;
   readBackVerified?: boolean;
   verifiedUpdatedAt?: number | null;
@@ -754,55 +756,42 @@ export async function getCloudSaveMeta(uid: string): Promise<CloudSaveMeta | nul
   };
 }
 
-async function deleteActiveLeaderboardEntry(uid: string): Promise<void> {
-  // Client writes/deletes are denied by rules. Account deletion callable
-  // (prepareVehicleMarketplaceAccountDeletion) removes all season entries via Admin SDK.
-  if (__DEV__) {
-    devCloudLog('[cloud-save] leaderboard entry cleanup deferred to trusted callable', {
-      uid,
-      seasonKey: getWeeklySeasonDocId(),
-    });
-  }
-}
-
-export async function deleteUserCloudData(uid: string): Promise<CloudSaveOperationResult> {
+export async function deleteUserCloudData(
+  uid: string,
+  options?: { authorizationCode?: string },
+): Promise<CloudSaveOperationResult> {
   if (!uid || !isFirebaseEnabled()) {
     return { ok: true };
   }
-
-  const db = getFirestoreSafe();
-  if (!db) {
-    return { ok: false, error: 'firestore-unavailable', errorCode: 'firestore-unavailable' };
-  }
-
-  const saveRef = doc(db, 'users', uid, 'saves', CURRENT_SAVE_DOC_ID);
-  const metaRef = doc(db, 'users', uid, 'meta', META_STATUS_DOC_ID);
-  const userRef = doc(db, 'users', uid);
-
-  // TODO: Gelecekte users/{uid} altına yeni subcollection eklenirse burada silinmeli.
 
   try {
     devCloudLog('[cloud-save] deleteUserCloudData started', uid);
     const { prepareVehicleMarketplaceAccountDeletion } = await import(
       './vehicleMarketplaceService'
     );
-    const marketplacePrepared =
-      await prepareVehicleMarketplaceAccountDeletion();
-    if (!marketplacePrepared) {
+    const deletionResult = await prepareVehicleMarketplaceAccountDeletion({
+      authorizationCode: options?.authorizationCode,
+    });
+    if (!deletionResult.ok) {
       return {
         ok: false,
-        error: 'marketplace-account-cleanup-failed',
-        errorCode: 'cloud-delete-failed',
+        error: deletionResult.reason ?? 'account-deletion-failed',
+        errorCode:
+          deletionResult.reason === 'service-unavailable' ||
+          deletionResult.reason === 'network-error' ||
+          deletionResult.reason === 'timeout'
+            ? 'network-error'
+            : 'cloud-delete-failed',
+        stage: deletionResult.stage,
       };
     }
-    await deleteActiveLeaderboardEntry(uid);
-    const batch = writeBatch(db);
-    batch.delete(saveRef);
-    batch.delete(metaRef);
-    batch.delete(userRef);
-    await batch.commit();
-    devCloudLog('[cloud-save] deleteUserCloudData success');
-    return { ok: true };
+    devCloudLog('[cloud-save] deleteUserCloudData success', {
+      authDeletedByServer: deletionResult.authDeletedByServer,
+    });
+    return {
+      ok: true,
+      authDeletedByServer: deletionResult.authDeletedByServer,
+    };
   } catch (error) {
     const info = getFirestoreErrorInfo(error);
     console.warn('[cloud-save] deleteUserCloudData failed:', info);
@@ -823,29 +812,10 @@ export async function deleteUserCloudData(uid: string): Promise<CloudSaveOperati
       };
     }
 
-    // Doküman yoksa batch genelde başarılı olur; kısmi hata için tek tek dene.
-    try {
-      await deleteDoc(saveRef);
-    } catch {
-      // missing doc — ignore
-    }
-    try {
-      await deleteDoc(metaRef);
-    } catch {
-      // missing doc — ignore
-    }
-    try {
-      await deleteDoc(userRef);
-      devCloudLog('[cloud-save] deleteUserCloudData partial success');
-      return { ok: true };
-    } catch (fallbackError) {
-      const fallbackInfo = getFirestoreErrorInfo(fallbackError);
-      console.warn('[cloud-save] deleteUserCloudData fallback failed:', fallbackInfo);
-      return {
-        ok: false,
-        error: fallbackInfo.message,
-        errorCode: fallbackInfo.code ?? 'cloud-delete-failed',
-      };
-    }
+    return {
+      ok: false,
+      error: info.message,
+      errorCode: 'cloud-delete-failed',
+    };
   }
 }

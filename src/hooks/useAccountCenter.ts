@@ -1355,7 +1355,7 @@ export function useAccountCenter({
       );
     } catch (error) {
       console.warn('[account] delete failed', error);
-      showAlert('Hesap silinemedi', 'Tekrar dene.');
+      showAlert('Hesap silinemedi', 'Hesap silinemedi. Lütfen tekrar deneyin.');
     } finally {
       setIsDeleting(false);
     }

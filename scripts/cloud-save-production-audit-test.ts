@@ -150,13 +150,21 @@ assert.match(account, /Vazgeç/);
 assert.match(saveSource, /soldTruckIds: state\.vehicleMarketplace\.soldTruckIds\?\.slice\(-100\)/);
 assert.doesNotMatch(saveSource, /globalMarketHistory:\s*structuredClone/);
 assert.doesNotMatch(saveSource, /mapRoadSegments:/);
-assert.match(backend, /recursiveDelete/);
-assert.match(backend, /releaseUsernameForUid|collectionGroup\('entries'\)/);
+const accountDeletionBackend = readFileSync(
+  resolve(__dirname, '../backend/src/accountDeletion.ts'),
+  'utf8',
+);
+assert.match(accountDeletionBackend, /recursiveDelete/);
+assert.match(accountDeletionBackend, /releaseUsernameForUid/);
 const leaderboardBackend = readFileSync(
   resolve(__dirname, '../backend/src/leaderboard.ts'),
   'utf8',
 );
-assert.match(leaderboardBackend, /collectionGroup\('entries'\)/);
+assert.match(leaderboardBackend, /listDocuments/);
+assert.doesNotMatch(
+  leaderboardBackend,
+  /collectionGroup\('entries'\)\s*\n\s*\.where\('uid'/,
+);
 
 for (const scenario of [
   'Google restore', 'Apple restore', 'anonymous -> Google', 'anonymous -> Apple',

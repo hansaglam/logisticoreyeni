@@ -536,13 +536,50 @@ export async function getMyVehicleListings(): Promise<{
   };
 }
 
-export async function prepareVehicleMarketplaceAccountDeletion(): Promise<boolean> {
+export type AccountDeletionCallableResult =
+  | {
+      ok: true;
+      authDeletedByServer: boolean;
+      authAlreadyAbsent?: boolean;
+    }
+  | {
+      ok: false;
+      reason?: VehicleMarketplaceFailureReason;
+      stage?: string;
+    };
+
+export async function prepareVehicleMarketplaceAccountDeletion(options?: {
+  authorizationCode?: string;
+}): Promise<AccountDeletionCallableResult> {
   const auth = await ensureMarketplaceAuthReady();
-  if (!auth.ok) return false;
-  const result = await invokeMarketplaceCallable<Record<string, never>, { ok: boolean }>(
-    VEHICLE_MARKETPLACE_CALLABLES.accountDeletion,
-    {},
-  );
-  if (!result.ok) return false;
-  return result.data.ok;
+  if (!auth.ok) return { ok: false, reason: auth.reason };
+  const payload =
+    options?.authorizationCode && options.authorizationCode.trim().length > 0
+      ? { authorizationCode: options.authorizationCode.trim() }
+      : {};
+  const result = await invokeMarketplaceCallable<
+    { authorizationCode?: string },
+    {
+      ok: boolean;
+      stage?: string;
+      reason?: string;
+      authDeleted?: boolean;
+      authAlreadyAbsent?: boolean;
+    }
+  >(VEHICLE_MARKETPLACE_CALLABLES.accountDeletion, payload);
+  if (!result.ok) {
+    return { ok: false, reason: result.reason };
+  }
+  if (!result.data.ok) {
+    return {
+      ok: false,
+      reason: 'service-unavailable',
+      stage: result.data.stage,
+    };
+  }
+  return {
+    ok: true,
+    authDeletedByServer: Boolean(result.data.authDeleted || result.data.authAlreadyAbsent),
+    authAlreadyAbsent: result.data.authAlreadyAbsent,
+  };
 }

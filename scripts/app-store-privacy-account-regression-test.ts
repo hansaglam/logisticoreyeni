@@ -69,7 +69,11 @@ async function run(): Promise<void> {
     check(connectionTab.includes('Hesabı Sil'), 'delete CTA on account tab');
     check(accountScreen.includes('onDeleteAccount={vm.handleDeleteAccount}'), 'screen wires delete handler');
     check(!read('src/components/accountCenter/AccountPreferencesTab.tsx').includes('DangerZoneCard'), 'delete not hidden in collapsed danger zone');
-    check(deletion.includes('revokeAppleSignInIfNeeded'), 'Apple revocation in deletion flow');
+    check(
+      deletion.includes('resolveAppleAuthorizationCodeForDeletion') &&
+        read('backend/src/accountDeletion.ts').includes('ACCOUNT_DELETE_STAGE_APPLE_REVOKE'),
+      'Apple revocation in deletion flow',
+    );
     check(deletion.includes("provider === 'guest'"), 'guest accounts skip cloud callable');
     check(backend.includes('revokeAppleSignInTokens'), 'backend Apple revoke callable');
     check(backend.includes('prepareVehicleMarketplaceAccountDeletion'), 'marketplace cleanup callable retained');

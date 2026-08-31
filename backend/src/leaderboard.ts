@@ -462,35 +462,36 @@ export async function deleteLeaderboardEntriesForUid(
   uid: string,
 ): Promise<number> {
   let deleted = 0;
+  const seasonKeys = new Set<string>();
+  seasonKeys.add(getLeaderboardSeasonKey(Date.now()));
+
+  const seasonRefs = await firestore.collection('leaderboards').listDocuments();
+  for (const seasonRef of seasonRefs) {
+    seasonKeys.add(seasonRef.id);
+  }
+
+  for (const seasonKey of seasonKeys) {
+    const snap = await entryRef(firestore, seasonKey, uid).get();
+    if (!snap.exists) continue;
+    await snap.ref.delete();
+    deleted += 1;
+  }
+
+  // Idempotency docs for this uid (paginated, idempotent)
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const snapshot = await firestore
-      .collectionGroup('entries')
+    const idemSnap = await firestore
+      .collection('leaderboardIdempotency')
       .where('uid', '==', uid)
       .limit(400)
       .get();
-    if (snapshot.empty) break;
-    const batch = firestore.batch();
-    for (const doc of snapshot.docs) {
-      batch.delete(doc.ref);
-    }
-    await batch.commit();
-    deleted += snapshot.size;
-    if (snapshot.size < 400) break;
-  }
-
-  // Idempotency docs for this uid
-  const idemSnap = await firestore
-    .collection('leaderboardIdempotency')
-    .where('uid', '==', uid)
-    .limit(400)
-    .get();
-  if (!idemSnap.empty) {
+    if (idemSnap.empty) break;
     const batch = firestore.batch();
     for (const doc of idemSnap.docs) {
       batch.delete(doc.ref);
     }
     await batch.commit();
+    if (idemSnap.size < 400) break;
   }
 
   return deleted;

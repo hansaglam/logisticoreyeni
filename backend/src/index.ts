@@ -6,9 +6,9 @@ import { logger } from 'firebase-functions';
 import { onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 
+import { deleteLinkedAccount } from './accountDeletion';
 import { runGlobalEconomyEpoch } from './globalEconomyWorker';
 import {
-  deleteLeaderboardEntriesForUid,
   getLeaderboardSnapshot,
   submitLeaderboardScoreTransaction,
 } from './leaderboard';
@@ -22,7 +22,6 @@ import { getLeaderboardSeasonKey, isValidLeaderboardSeasonKey } from './leaderbo
 import {
   checkUsernameAvailabilityTransaction,
   getUsernameProfileForUid,
-  releaseUsernameForUid,
   setUsernameTransaction,
 } from './username';
 import {
@@ -35,7 +34,6 @@ import {
   createVehicleListingTransaction,
   ensureVehicleMarketplaceStateTransaction,
   expireVehicleMarketplaceListings,
-  prepareMarketplaceAccountDeletion,
   purchaseVehicleListingTransaction,
 } from './vehicleMarketplace';
 import {
@@ -711,35 +709,42 @@ export const prepareVehicleMarketplaceAccountDeletion = onCall(
     const identity = callableIdentity(request);
     if (!identity) return unauthenticatedResult(request.data ?? {});
     const record = requestRecord(request.data);
-    if (!hasOnlyKeys(record, [])) return invalidRequestResult(record);
+    if (!hasOnlyKeys(record, ['authorizationCode'])) return invalidRequestResult(record);
+    const authorizationCode =
+      typeof record.authorizationCode === 'string' ? record.authorizationCode.trim() : undefined;
+    if (
+      record.authorizationCode !== undefined &&
+      (!authorizationCode || authorizationCode.length > 4096)
+    ) {
+      return invalidRequestResult(record);
+    }
     if (!(await consumeRateLimit(identity.uid, 'accountDeletion'))) {
       return rateLimitedResult(record);
     }
     const firestore = getFirestore();
-    const marketplace = await prepareMarketplaceAccountDeletion(
-      firestore,
-      identity.uid,
-    );
-    const usernameCleanup = await releaseUsernameForUid(firestore, identity.uid);
-    // Admin SDK recursive delete profile, saves/meta, alarms, notification
-    // tokens ve bounded restore receipt alt koleksiyonlarını kapsar.
-    await firestore.recursiveDelete(firestore.doc(`users/${identity.uid}`));
-    const leaderboardEntriesDeleted = await deleteLeaderboardEntriesForUid(
-      firestore,
-      identity.uid,
-    );
+    const deletionResult = await deleteLinkedAccount(firestore, {
+      uid: identity.uid,
+      authorizationCode,
+    });
+    if (!deletionResult.ok) {
+      logger.warn('[account-deletion-failed]', {
+        uidHash: uidHash(identity.uid),
+        stage: deletionResult.stage,
+        reason: deletionResult.reason,
+        code: deletionResult.code,
+      });
+      return {
+        ok: false,
+        stage: deletionResult.stage,
+        reason: deletionResult.reason,
+        code: deletionResult.code,
+      };
+    }
     logger.info('[account-deletion-cleanup]', {
       uidHash: uidHash(identity.uid),
-      leaderboardEntriesDeleted,
-      usernameReleased: usernameCleanup.usernameReleased,
-      ...marketplace,
+      ...deletionResult,
     });
-    return {
-      ok: true,
-      ...marketplace,
-      leaderboardEntriesDeleted,
-      usernameReleased: usernameCleanup.usernameReleased,
-    };
+    return deletionResult;
   },
 );
 

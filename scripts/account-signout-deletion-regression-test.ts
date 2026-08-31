@@ -27,6 +27,7 @@ const auth = read('src/services/authService.ts');
 const deletion = read('src/utils/accountDeletion.ts');
 const cloud = read('src/services/cloudSaveService.ts');
 const backend = read('backend/src/index.ts');
+const backendDeletion = read('backend/src/accountDeletion.ts');
 const connectionTab = read('src/components/accountCenter/AccountConnectionTab.tsx');
 
 console.log('\n=== Account Sign-Out & Deletion P0 Regression ===\n');
@@ -64,18 +65,21 @@ assert(hook.includes('handleDeleteAccount'), 'delete handler in hook');
 assert(hook.includes('Hesabı Kalıcı Olarak Sil'), 'second confirmation CTA');
 assert(hook.includes('runAccountDeletionFlow'), 'canonical deletion runner');
 assert(deletion.includes('deleteUserCloudData'), 'cloud deletion step');
-assert(deletion.includes('deleteCurrentFirebaseUser'), 'auth user deletion step');
+assert(deletion.includes('signOutAfterServerAccountDeletion'), 'server auth delete sign-out path');
+assert(deletion.includes('deleteCurrentFirebaseUser'), 'client auth fallback for guest');
 assert(deletion.includes('skipCloudDelete'), 'reauth retry can skip cloud');
-assert(deletion.includes('revokeAppleSignInIfNeeded'), 'Apple revocation step');
+assert(deletion.includes('resolveAppleAuthorizationCodeForDeletion'), 'Apple code passed to callable');
 assert(deletion.includes("provider === 'guest'"), 'guest skips linked-account cloud cleanup');
 assert(hook.includes('reauthenticateCurrentUser'), 'reauth on requires-recent-login');
 
 console.log('\nBackend orchestration');
-assert(cloud.includes('prepareVehicleMarketplaceAccountDeletion'), 'marketplace cleanup callable');
-assert(backend.includes('releaseUsernameForUid'), 'username release on server');
-assert(backend.includes('deleteLeaderboardEntriesForUid'), 'leaderboard cleanup on server');
+assert(cloud.includes('prepareVehicleMarketplaceAccountDeletion'), 'trusted deletion callable client');
+assert(backend.includes('deleteLinkedAccount'), 'server account deletion service');
+assert(backendDeletion.includes('releaseUsernameForUid'), 'username release on server');
+assert(backendDeletion.includes('deleteLeaderboardEntriesForUid'), 'leaderboard cleanup on server');
 assert(backend.includes('revokeAppleSignInTokens'), 'Apple revoke callable on server');
-assert(backend.includes('recursiveDelete'), 'admin recursive user delete');
+assert(backendDeletion.includes('recursiveDelete'), 'admin recursive user delete');
+assert(backendDeletion.includes('auth.deleteUser'), 'Admin SDK auth deletion');
 
 console.log('\nDeletion messages');
 assert(
@@ -84,6 +88,10 @@ assert(
   'recent-login user message',
 );
 assert(deletion.includes('completeAccountDeletionAfterReauth'), 'reauth helper exported');
+assert(
+  deletion.includes('Hesap silinemedi. Lütfen tekrar deneyin.'),
+  'generic failure message',
+);
 
 console.log('\nAccount deletion placement');
 assert(connectionTab.includes('Hesap ve Gizlilik'), 'dedicated privacy/delete section');

@@ -603,6 +603,21 @@ test('account deletion clears leaderboard entries', async () => {
   assert.equal(snap.exists, false);
 });
 
+test('account deletion leaderboard cleanup is idempotent', async () => {
+  await seedServerState('delete-twice', { completedDeliveries: 3 });
+  const submitted = await submitLeaderboardScoreTransaction(
+    adminFirestore,
+    { uid: 'delete-twice', displayName: null },
+    { transactionId: 'tx-del-2', idempotencyKey: 'idem-del-2' },
+  );
+  assert.equal(submitted.ok, true);
+  if (!submitted.ok) return;
+  const first = await deleteLeaderboardEntriesForUid(adminFirestore, 'delete-twice');
+  assert.ok(first >= 1);
+  const second = await deleteLeaderboardEntriesForUid(adminFirestore, 'delete-twice');
+  assert.equal(second, 0);
+});
+
 test('season key format is YYYY-Www', () => {
   const key = getLeaderboardSeasonKey(Date.UTC(2026, 6, 28));
   assert.match(key, /^\d{4}-W\d{2}$/);

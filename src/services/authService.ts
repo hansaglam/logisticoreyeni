@@ -2007,6 +2007,20 @@ export async function reauthenticateCurrentUser(): Promise<{
   }
 }
 
+export async function signOutAfterServerAccountDeletion(): Promise<void> {
+  const auth = getFirebaseAuthSafe();
+  if (auth) {
+    try {
+      setAuthLifecycleState('signing-out', 'server-account-deletion');
+      await signOut(auth);
+    } catch (error) {
+      console.warn('[auth] signOut after server account deletion failed', error);
+    }
+  }
+  await clearGoogleSignInSessionStrict().catch(() => undefined);
+  resetAuthService();
+}
+
 export async function deleteCurrentFirebaseUser(): Promise<void> {
   const auth = getFirebaseAuthSafe();
   const user = auth?.currentUser;

@@ -476,6 +476,9 @@ export async function completeExistingProviderAccountLogin(
 ): Promise<AccountLinkResult> {
   setAccountAuthPhase('authenticating');
   try {
+    const appleLog =
+      provider === 'apple' ? await import('../utils/appleAuthDiagnostics') : null;
+    appleLog?.logAppleAuth('firebase_signin_started');
     const authenticatedUid = await signInWithProviderCredential(credential, provider);
     const auth = getFirebaseAuthSafe();
     const user = auth?.currentUser;
@@ -484,11 +487,13 @@ export async function completeExistingProviderAccountLogin(
       commitAuthenticatedSession(user);
     }
     setAccountAuthPhase('authenticated');
+    appleLog?.logAppleAuth('firebase_signin_success');
+    appleLog?.logAppleAuth('cloud_migration_started');
 
     const outcome = await runPostSignInSaveFlow(provider, authenticatedUid);
+    appleLog?.logAppleAuth('cloud_migration_success', { outcomeType: outcome.type });
     return mapSaveOutcomeToLinkResult(outcome, provider);
   } catch (error) {
-    setAccountAuthPhase('error');
     const reason =
       error instanceof CloudSaveConflictError
         ? error.reason

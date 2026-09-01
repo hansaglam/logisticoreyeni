@@ -45,6 +45,8 @@ assert.match(appConfig, /usesAppleSignIn:\s*true/);
 assert.match(appConfig, /NSAllowsArbitraryLoads:\s*false/);
 assert.match(appConfig, /iosUrlScheme:/);
 assert.doesNotMatch(appConfig, /expo-tracking-transparency/);
+assert.doesNotMatch(appConfig, /userTrackingUsageDescription/);
+assert.doesNotMatch(appConfig, /NSUserTrackingUsageDescription/);
 assert.match(appConfig, /react-native-google-mobile-ads/);
 
 const colors = read('android/app/src/main/res/values/colors.xml');

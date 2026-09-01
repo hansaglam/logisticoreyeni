@@ -2,9 +2,8 @@
  * Apple Sign-In hata sınıflandırma + güvenli tanı logları.
  * Token / nonce / email / UID asla loglanmaz.
  * JSON.stringify(error) kullanılmaz — non-enumerable alanlar ayrı okunur.
+ * Logging asla authentication akışını kesmemeli.
  */
-
-import { INTERNAL_TEST_VERSION } from '../config/backendRoadmap';
 
 export type AppleAuthStage =
   | 'config-validation'
@@ -77,7 +76,7 @@ export type AppleAuthFlowLog = {
 };
 
 const SENSITIVE_KEY_PATTERN =
-  /(token|nonce|authorizationcode|identitytoken|email|fullname|uid|private.?key|secret|idtoken)/i;
+  /(token|nonce|authorizationcode|identitytoken|email|fullname|uid|private.?key|secret|idtoken|credential)/i;
 
 const ALLOWED_SENSITIVE_LOOKALIKE_KEYS = new Set([
   'bundleId',
@@ -90,6 +89,9 @@ const ALLOWED_SENSITIVE_LOOKALIKE_KEYS = new Set([
   'hasEmail',
   'hasFullName',
   'hasAppleUserId',
+  'hasFirebaseCredential',
+  'hasPreservedUid',
+  'cloudSyncOk',
 ]);
 
 function readUnknownProp(error: unknown, key: string): unknown {
@@ -177,19 +179,19 @@ export function extractSafeAppleErrorFields(error: unknown): SafeAppleErrorField
   };
 }
 
+function isEnvFlagEnabled(value: string | undefined): boolean {
+  const flag = value?.trim().toLowerCase();
+  return flag === '1' || flag === 'true';
+}
+
 export function shouldShowInternalAuthDiagnostics(): boolean {
-  const flag = process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS?.trim().toLowerCase();
-  if (flag === '0' || flag === 'false') {
-    return false;
-  }
-  if (flag === '1' || flag === 'true') {
+  if (isEnvFlagEnabled(process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS)) {
     return true;
   }
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+  if (isEnvFlagEnabled(process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS)) {
     return true;
   }
-  // Internal / TestFlight builds keep diagnosis visible until App Store production cutover.
-  return Boolean(INTERNAL_TEST_VERSION);
+  return typeof __DEV__ !== 'undefined' && __DEV__;
 }
 
 export function isAppleAuthCancelFailure(failure?: AppleAuthFailure | null): boolean {
@@ -507,7 +509,7 @@ export function getAppleAuthUserMessage(failure: AppleAuthFailure): string {
   }
 
   if (diagnosticCode === 'APPLE_NETWORK_ERROR') {
-    return 'İnternet bağlantısı kurulamadı. Tekrar deneyin.';
+    return 'Bağlantı kurulamadı. Tekrar dene.';
   }
   if (diagnosticCode === 'FIREBASE_RUNTIME_CONFIG_MISMATCH') {
     return 'Firebase yapılandırması eşleşmiyor.';
@@ -526,10 +528,10 @@ export function getAppleAuthUserMessage(failure: AppleAuthFailure): string {
     return 'Apple ile giriş şu anda yapılandırılamadı.';
   }
   if (diagnosticCode === 'APPLE_ACCOUNT_ALREADY_LINKED') {
-    return 'Bu Apple hesabı daha önce başka bir oyun hesabına bağlanmış.';
+    return 'Bu hesap başka bir giriş yöntemiyle zaten bağlı.';
   }
   if (diagnosticCode === 'APPLE_INVALID_NONCE' || diagnosticCode === 'APPLE_INVALID_CREDENTIAL') {
-    return 'Apple kimliği doğrulanamadı.';
+    return 'Apple oturumu doğrulanamadı.';
   }
   if (diagnosticCode === 'APPLE_IDENTITY_TOKEN_MISSING') {
     return "Apple'dan geçerli kimlik bilgisi alınamadı.";
@@ -543,13 +545,13 @@ export function getAppleAuthUserMessage(failure: AppleAuthFailure): string {
   if (diagnosticCode === 'APPLE_PROVIDER_ALREADY_LINKED') {
     return 'Bu hesaba zaten bir giriş yöntemi bağlı.';
   }
-  return 'Hesap bağlanamadı. Lütfen tekrar dene.';
+  return 'Apple ile giriş tamamlanamadı.';
 }
 
 /** Modal body — Internal/TestFlight keeps stage/code; production hides technical details. */
 export function formatAppleAuthDiagnosticDisplay(failure: AppleAuthFailure): string {
   const userMessage =
-    getAppleAuthUserMessage(failure) || 'Hesap bağlanamadı. Lütfen tekrar dene.';
+    getAppleAuthUserMessage(failure) || 'Apple ile giriş tamamlanamadı.';
   if (!shouldShowInternalAuthDiagnostics()) {
     return userMessage;
   }
@@ -583,15 +585,87 @@ export function getAppleAuthDiagnosticFooter(failure: AppleAuthFailure): string 
   return `Tanı:\nstage=${failure.stage}\ncode=${failure.firebaseCode || failure.code}`;
 }
 
-export function assertSafeAppleAuthLogPayload(payload: Record<string, unknown>): void {
-  for (const key of Object.keys(payload)) {
-    if (ALLOWED_SENSITIVE_LOOKALIKE_KEYS.has(key)) {
+function isSafeBooleanDiagnosticKey(key: string): boolean {
+  return /^has[A-Z]/.test(key) || key === 'cloudSyncOk';
+}
+
+function isBlockedSensitiveLogKey(key: string): boolean {
+  if (ALLOWED_SENSITIVE_LOOKALIKE_KEYS.has(key) || isSafeBooleanDiagnosticKey(key)) {
+    return false;
+  }
+  return SENSITIVE_KEY_PATTERN.test(key);
+}
+
+export function getUnsafeAppleAuthLogKeys(payload: Record<string, unknown>): string[] {
+  return Object.keys(payload).filter((key) => isBlockedSensitiveLogKey(key));
+}
+
+/** Omits secret-looking keys. Never throws. Boolean diagnostics keep only boolean values. */
+export function sanitizeAppleAuthLogPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (isBlockedSensitiveLogKey(key)) {
       continue;
     }
-    if (SENSITIVE_KEY_PATTERN.test(key) && !/^has[A-Z]/.test(key)) {
-      throw new Error(`Refusing to log sensitive apple-auth key: ${key}`);
+    if (isSafeBooleanDiagnosticKey(key) && typeof value !== 'boolean') {
+      continue;
     }
+    sanitized[key] = value;
   }
+  return sanitized;
+}
+
+/**
+ * @deprecated Logging never throws. Prefer sanitizeAppleAuthLogPayload.
+ * Kept so existing tests can import a stable name.
+ */
+export function assertSafeAppleAuthLogPayload(payload: Record<string, unknown>): void {
+  void sanitizeAppleAuthLogPayload(payload);
+}
+
+function emitAppleAuthLog(write: () => void): void {
+  try {
+    write();
+  } catch {
+    // Diagnostic logging must never abort Apple authentication.
+  }
+}
+
+export function logAppleAuth(
+  stage: string,
+  extra?: Record<string, unknown>,
+): void {
+  emitAppleAuthLog(() => {
+    const payload = sanitizeAppleAuthLogPayload({ stage, ...extra });
+    console.info(`[APPLE_AUTH] ${stage}`, payload);
+  });
+}
+
+export function logAppleAuthError(fields: {
+  stage: string;
+  code?: string | null;
+  message?: string | null;
+  nativeCode?: string | null;
+  firebaseCode?: string | null;
+}): void {
+  emitAppleAuthLog(() => {
+    const payload = sanitizeAppleAuthLogPayload({
+      stage: fields.stage,
+      code: fields.code ?? null,
+      message: fields.message ?? null,
+      nativeCode: fields.nativeCode ?? null,
+      firebaseCode: fields.firebaseCode ?? null,
+    });
+    console.warn('[APPLE_AUTH_ERROR]', payload);
+  });
+}
+
+export function shouldContinueExistingAppleAccountSignIn(
+  errorKind?: string | null,
+): boolean {
+  return errorKind === 'credential-already-in-use';
 }
 
 export function logAppleAuthFlow(fields: AppleAuthFlowLog): void {
@@ -619,8 +693,10 @@ export function logAppleAuthFlow(fields: AppleAuthFlowLog): void {
     firebaseAppId: fields.firebaseAppId ?? null,
   };
 
-  assertSafeAppleAuthLogPayload(payload);
-  console.warn('[apple-auth-flow]', payload);
+  emitAppleAuthLog(() => {
+    const safePayload = sanitizeAppleAuthLogPayload(payload);
+    console.warn('[apple-auth-flow]', safePayload);
+  });
 }
 
 export function sanitizeAppleFullName(fullName: string | null | undefined): string | null {

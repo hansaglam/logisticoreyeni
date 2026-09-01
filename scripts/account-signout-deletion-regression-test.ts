@@ -26,8 +26,11 @@ const hook = read('src/hooks/useAccountCenter.ts');
 const auth = read('src/services/authService.ts');
 const deletion = read('src/utils/accountDeletion.ts');
 const cloud = read('src/services/cloudSaveService.ts');
+const marketplace = read('src/services/vehicleMarketplaceService.ts');
 const backend = read('backend/src/index.ts');
 const backendDeletion = read('backend/src/accountDeletion.ts');
+const backendMarketplace = read('backend/src/vehicleMarketplace.ts');
+const backendLeaderboard = read('backend/src/leaderboard.ts');
 const connectionTab = read('src/components/accountCenter/AccountConnectionTab.tsx');
 
 console.log('\n=== Account Sign-Out & Deletion P0 Regression ===\n');
@@ -80,6 +83,18 @@ assert(backendDeletion.includes('deleteLeaderboardEntriesForUid'), 'leaderboard 
 assert(backend.includes('revokeAppleSignInTokens'), 'Apple revoke callable on server');
 assert(backendDeletion.includes('recursiveDelete'), 'admin recursive user delete');
 assert(backendDeletion.includes('auth.deleteUser'), 'Admin SDK auth deletion');
+assert(
+  backendMarketplace.includes('// Equality-only query — no composite index required'),
+  'seller listing cleanup avoids composite index query',
+);
+assert(
+  !backendLeaderboard.includes("collectionGroup('entries')"),
+  'leaderboard deletion avoids collection-group index',
+);
+assert(
+  !deletion.includes('marketplace-account-cleanup-failed'),
+  'raw marketplace cleanup code not shown in UI messages',
+);
 
 console.log('\nDeletion messages');
 assert(

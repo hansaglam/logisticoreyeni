@@ -64,6 +64,7 @@ function validSnapshot() {
 
 function run(): void {
   console.log('\nios-firebase-config-regression-test\n');
+  process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS = 'true';
 
   const ok = validSnapshot();
   assert(ok.projectMatches, 'correct project ID matches');

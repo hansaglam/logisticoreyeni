@@ -70,9 +70,12 @@ import {
   getAppleAuthDiagnosticCode,
   isAppleExistingAccountConflictCode,
   isAppleProviderAlreadyLinkedCode,
+  logAppleAuth,
+  logAppleAuthError,
   logAppleAuthFlow,
   normalizeAppleAuthFailure,
   resolveAppleLinkPlan,
+  shouldContinueExistingAppleAccountSignIn,
   type AppleAuthFailure,
 } from '../utils/appleAuthDiagnostics';
 import {
@@ -847,6 +850,9 @@ async function applyCredentialToCurrentUser(
   }
 
   if (provider === 'apple') {
+    logAppleAuth('firebase_link_started', {
+      isAnonymous: Boolean(currentUser.isAnonymous),
+    });
     logAppleAuthFlow({
       stage: 'anonymous-link-start',
       result: 'info',
@@ -859,6 +865,9 @@ async function applyCredentialToCurrentUser(
   try {
     const result = await linkWithCredential(currentUser, credential);
     if (provider === 'apple') {
+      logAppleAuth('firebase_link_success', {
+        providerIds: (result.user.providerData ?? []).map((entry) => entry.providerId),
+      });
       logAppleAuthFlow({
         stage: 'anonymous-link-success',
         result: 'success',
@@ -902,6 +911,13 @@ async function applyCredentialToCurrentUser(
         : undefined;
 
     if (provider === 'apple') {
+      logAppleAuthError({
+        stage: isConflict ? 'cloud-conflict' : 'anonymous-link-failure',
+        code: appleFailure?.code ?? mapped,
+        message: appleFailure?.message ?? null,
+        nativeCode: appleFailure?.nativeCode ?? null,
+        firebaseCode: appleFailure?.firebaseCode ?? firebaseCode,
+      });
       logAppleAuthFlow({
         stage: isConflict ? 'cloud-conflict' : 'anonymous-link-failure',
         result: 'failure',
@@ -1503,15 +1519,25 @@ export async function cancelPendingGoogleLinkConflict(): Promise<void> {
  * Anonymous hesabı Apple’a bağlar; mümkünse mevcut uid korunur.
  * iOS’ta Google veya başka 3. taraf login sunulursa Apple da sunulmalıdır.
  */
+function restoreAuthLifecycleAfterFailedAppleLink(reason: string): void {
+  const user = getFirebaseAuthSafe()?.currentUser ?? null;
+  setAuthLifecycleState(
+    user?.isAnonymous ? 'anonymous' : user ? 'authenticated' : 'idle',
+    reason,
+  );
+}
+
 export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult> {
   if (Platform.OS !== 'ios') {
     return { ok: false, error: 'apple-not-supported' };
   }
 
   try {
+    logAppleAuth('button_pressed');
     setAuthLifecycleState('linking-provider', 'apple-link');
     const ready = await ensureFirebaseAuthReady();
     if (!ready.ok) {
+      restoreAuthLifecycleAfterFailedAppleLink('apple-auth-not-ready');
       return {
         ok: false,
         error: ready.failure.code,
@@ -1525,6 +1551,9 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
     const { linkWithAppleAccount } = await import('./appleAuthService');
     const appleResult = await linkWithAppleAccount();
     if (!appleResult.ok) {
+      restoreAuthLifecycleAfterFailedAppleLink(
+        appleResult.error === 'cancelled' ? 'apple-picker-cancelled' : 'apple-native-failed',
+      );
       return {
         ok: false,
         error: appleResult.error,
@@ -1573,10 +1602,56 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
       const conflictDetected =
         linkResult.errorKind === 'credential-already-in-use' ||
         linkResult.errorKind === 'account-exists-with-different-credential';
+      // Apple tokens are one-time. Do not reuse the spent link credential.
+      // credential-already-in-use = this Apple ID already belongs to another Firebase user
+      // (reinstall / new guest). Mint a fresh nonce-backed credential, then sign in.
+      if (shouldContinueExistingAppleAccountSignIn(linkResult.errorKind)) {
+        logAppleAuth('existing_account_detected', {
+          errorKind: linkResult.errorKind ?? null,
+        });
+        const { signInWithAppleAccount } = await import('./appleAuthService');
+        const freshResult = await signInWithAppleAccount();
+        if (!freshResult.ok) {
+          restoreAuthLifecycleAfterFailedAppleLink(
+            freshResult.error === 'cancelled'
+              ? 'apple-existing-account-cancelled'
+              : 'apple-existing-account-fresh-failed',
+          );
+          return {
+            ok: false,
+            error: freshResult.error,
+            errorKind: freshResult.error === 'cancelled' ? 'cancelled' : 'general',
+            provider: 'apple',
+            appleFailure: freshResult.failure,
+            diagnosticCode: getAppleAuthDiagnosticCode(freshResult.failure),
+            diagnosticId,
+          };
+        }
+        logAppleAuth('existing_account_signin_started');
+        const { completeExistingProviderAccountLogin } = await import('./accountCloudLogin');
+        const existing = await completeExistingProviderAccountLogin(
+          freshResult.credential,
+          'apple',
+        );
+        if (existing.ok) {
+          logAppleAuth('existing_account_signin_success');
+          logAppleAuth('account_state_updated');
+        } else if (existing.error !== 'cancelled' && existing.error !== 'save-conflict') {
+          logAppleAuthError({
+            stage: 'existing-account-signin-failure',
+            code: existing.error,
+            message: existing.error,
+            firebaseCode: existing.error?.startsWith('auth/') ? existing.error : null,
+          });
+          restoreAuthLifecycleAfterFailedAppleLink('apple-existing-account-signin-failed');
+        }
+        return existing;
+      }
       if (conflictDetected && linkResult.pendingCredential) {
         const { completeExistingProviderAccountLogin } = await import('./accountCloudLogin');
         return completeExistingProviderAccountLogin(linkResult.pendingCredential, 'apple');
       }
+      restoreAuthLifecycleAfterFailedAppleLink('apple-link-failed');
       return {
         ok: false,
         error: linkResult.error,
@@ -1604,12 +1679,14 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
 
     let cloudSyncOk = false;
     try {
+      logAppleAuth('cloud_migration_started');
       const finalize = await finalizeAccountLink('apple', linkResult.user, appleResult.profile, {
         previousUid: uidBefore,
         previousAnonymous: previousAnonymous ?? true,
         diagnosticId,
       });
       cloudSyncOk = finalize.cloudSyncOk;
+      logAppleAuth('cloud_migration_success', { cloudSyncOk });
       logAppleAuthFlow({
         stage: 'profile-update',
         result: 'success',
@@ -1635,6 +1712,10 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
     }
 
     setAuthLifecycleState('authenticated', 'apple-linked');
+    logAppleAuth('account_state_updated', {
+      hasPreservedUid: uidPreserved,
+      cloudSyncOk,
+    });
     return {
       ok: true,
       provider: 'apple',
@@ -1648,6 +1729,7 @@ export async function linkAnonymousAccountWithApple(): Promise<AccountLinkResult
     const appleFailure = normalizeAppleAuthFailure(error, 'anonymous-link-failure', {
       firebaseCode: getAuthErrorCode(error),
     });
+    restoreAuthLifecycleAfterFailedAppleLink('apple-link-exception');
     console.warn('[auth] linkAnonymousAccountWithApple failed', {
       code: appleFailure.code,
       firebaseCode: appleFailure.firebaseCode ?? null,

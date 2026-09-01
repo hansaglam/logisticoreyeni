@@ -66,6 +66,8 @@ function run(): void {
     'does not use authorizationCode as idToken',
   );
   assert(appleSrc.includes('logAppleAuthFlow'), 'safe failure log present');
+  assert(appleSrc.includes("logAppleAuth('nonce_generated'"), 'APPLE_AUTH nonce step wired');
+  assert(appleSrc.includes("logAppleAuth('apple_request_started'"), 'APPLE_AUTH request start wired');
   assert(appleSrc.includes('[apple-auth-config]'), 'runtime config log present');
   assert(appleSrc.includes('fullName'), 'captures Apple fullName on first login');
   assert(appleSrc.includes('ERR_REQUEST_CANCELED') || appleSrc.includes("mappedError"), 'maps user cancel');
@@ -84,6 +86,8 @@ function run(): void {
   assert(authSrc.includes('already-linked-success'), 'treats existing Apple provider as linked');
   assert(authSrc.includes('getFirebaseAuthSafe'), 'uses Firebase Auth singleton helper');
   assert(authSrc.includes('ensureFirebaseAuthReady'), 'Apple link requires Auth readiness');
+  assert(authSrc.includes('shouldContinueExistingAppleAccountSignIn'), 'existing Apple account continue helper used');
+  assert(authSrc.includes('signInWithAppleAccount'), 'fresh Apple credential requested after spent token');
   assert(
     !authSrc.includes("throw new Error('auth-unavailable')") &&
       !authSrc.includes("error: 'auth-unavailable'"),

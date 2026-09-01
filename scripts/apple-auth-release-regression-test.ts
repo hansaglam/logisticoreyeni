@@ -19,13 +19,18 @@ import {
   formatAppleAuthDiagnosticDisplay,
   getAppleAuthDiagnosticCode,
   getAppleAuthUserMessage,
+  getUnsafeAppleAuthLogKeys,
   isAppleAuthCancelFailure,
   isAppleExistingAccountConflictCode,
   isAppleProviderAlreadyLinkedCode,
+  logAppleAuth,
   normalizeAppleAuthFailure,
   resolveAppleLinkPlan,
+  sanitizeAppleAuthLogPayload,
   sanitizeAppleFullName,
+  shouldContinueExistingAppleAccountSignIn,
   shouldRequestFreshAppleCredential,
+  shouldShowInternalAuthDiagnostics,
 } from '../src/utils/appleAuthDiagnostics';
 
 const ROOT = process.cwd();
@@ -212,6 +217,7 @@ async function runMockAppleFirebaseFlow(options: {
 
 async function run(): Promise<void> {
   console.log('\nApple Auth Release Regression\n');
+  process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS = 'true';
 
   const appConfig = readSrc('app.config.js');
   const entitlements = readSrc('ios/LogistiCore/LogistiCore.entitlements');
@@ -356,6 +362,26 @@ async function run(): Promise<void> {
     formatAppleAuthDiagnosticDisplay(notAllowed).includes('auth/operation-not-allowed'),
     'provider disabled real code shown',
   );
+
+  const previousDiagFlag = process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS;
+  const previousInternalFlag = process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS;
+  delete process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS;
+  delete process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS;
+  assert(!shouldShowInternalAuthDiagnostics(), 'production hides internal auth diagnostics');
+  assert(
+    !formatAppleAuthDiagnosticDisplay(notAllowed).includes('stage='),
+    'production modal does not expose stage=',
+  );
+  assert(
+    formatAppleAuthDiagnosticDisplay(notAllowed) === getAppleAuthUserMessage(notAllowed),
+    'production modal is the user message only',
+  );
+  process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS = previousDiagFlag;
+  if (previousInternalFlag === undefined) {
+    delete process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS;
+  } else {
+    process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS = previousInternalFlag;
+  }
   assert(
     getAppleAuthUserMessage(notAllowed).includes('yapılandırılamadı'),
     'operation not allowed user message',
@@ -454,14 +480,101 @@ async function run(): Promise<void> {
 
   assert(shouldRequestFreshAppleCredential('auth/credential-already-in-use'), 'conflict asks for fresh Apple credential');
   assert(shouldRequestFreshAppleCredential('auth/invalid-credential'), 'invalid credential asks for fresh Apple credential');
+  assert(
+    shouldContinueExistingAppleAccountSignIn('credential-already-in-use'),
+    'same Apple ID on another UID continues existing-account sign-in',
+  );
+  assert(
+    !shouldContinueExistingAppleAccountSignIn('account-exists-with-different-credential'),
+    'Google/email provider clash does not auto-sign-in as Apple',
+  );
 
-  let loggedSensitive = false;
+  const leftoverConflict = normalizeAppleAuthFailure(
+    { code: 'auth/account-exists-with-different-credential' },
+    'cloud-conflict',
+    { firebaseCode: 'auth/account-exists-with-different-credential' },
+  );
+  assert(
+    getAppleAuthUserMessage(leftoverConflict).includes('başka bir giriş yöntemiyle'),
+    'leftover provider clash has a user-visible message',
+  );
+  assert(
+    getAppleAuthUserMessage(invalidCredential) === 'Apple oturumu doğrulanamadı.',
+    'invalid credential user message',
+  );
+  const networkFailure = normalizeAppleAuthFailure(
+    { code: 'auth/network-request-failed' },
+    'anonymous-link-failure',
+    { firebaseCode: 'auth/network-request-failed' },
+  );
+  assert(
+    getAppleAuthUserMessage(networkFailure) === 'Bağlantı kurulamadı. Tekrar dene.',
+    'network failure user message',
+  );
+
+  const safeBooleanPayload = sanitizeAppleAuthLogPayload({
+    stage: 'apple_request_success',
+    hasIdentityToken: true,
+    hasAuthorizationCode: true,
+  });
+  assert(safeBooleanPayload.hasIdentityToken === true, 'hasIdentityToken boolean is accepted');
+  assert(safeBooleanPayload.hasAuthorizationCode === true, 'hasAuthorizationCode boolean is accepted');
+
+  const leakedTokens = {
+    identityToken: 'secret-identity-token',
+    authorizationCode: 'secret-auth-code',
+    rawNonce: 'secret-raw-nonce',
+    hashedNonce: 'secret-hashed-nonce',
+    idToken: 'secret-id-token',
+    identity_token_present: true,
+    hasIdentityToken: 'secret-identity-token',
+  };
+  assert(
+    getUnsafeAppleAuthLogKeys(leakedTokens).includes('identityToken'),
+    'identityToken is classified as unsafe',
+  );
+  let sanitizeThrew = false;
+  let sanitizedLeaks: Record<string, unknown> = {};
   try {
-    assertSafeAppleAuthLogPayload({ identityToken: 'secret' });
+    sanitizedLeaks = sanitizeAppleAuthLogPayload(leakedTokens);
   } catch {
-    loggedSensitive = true;
+    sanitizeThrew = true;
   }
-  assert(loggedSensitive, 'token/nonce keys are rejected from log payload helper');
+  assert(!sanitizeThrew, 'sanitizer does not throw on secret keys');
+  assert(!('identityToken' in sanitizedLeaks), 'identityToken is omitted');
+  assert(!('authorizationCode' in sanitizedLeaks), 'authorizationCode is omitted');
+  assert(!('rawNonce' in sanitizedLeaks), 'rawNonce is omitted');
+  assert(!('hashedNonce' in sanitizedLeaks), 'hashedNonce is omitted');
+  assert(!('idToken' in sanitizedLeaks), 'idToken is omitted');
+  assert(!('identity_token_present' in sanitizedLeaks), 'identity_token_present snake_case is omitted');
+  assert(!('hasIdentityToken' in sanitizedLeaks), 'non-boolean hasIdentityToken is omitted');
+  assertSafeAppleAuthLogPayload({ identityToken: 'secret' });
+
+  let logThrew = false;
+  try {
+    logAppleAuth('apple_request_success', {
+      identityToken: 'secret-identity-token',
+      authorizationCode: 'secret-auth-code',
+      hasIdentityToken: true,
+    });
+  } catch {
+    logThrew = true;
+  }
+  assert(!logThrew, 'logAppleAuth does not throw when secrets are passed');
+
+  const previousInfo = console.info;
+  console.info = () => {
+    throw new Error('console.info forced failure');
+  };
+  let consoleThrowEscaped = false;
+  try {
+    logAppleAuth('nonce_generated', { hasRawNonce: true });
+  } catch {
+    consoleThrowEscaped = true;
+  } finally {
+    console.info = previousInfo;
+  }
+  assert(!consoleThrowEscaped, 'console failure does not abort Apple auth logging callers');
   assert(
     !/console\.(warn|log)\([^\n]*identityToken\s*:/.test(diagnosticsSrc),
     'diagnostics source does not log identityToken values',
@@ -474,7 +587,36 @@ async function run(): Promise<void> {
   );
 
   const authService = readSrc('src/services/authService.ts');
+  const appleLinkFn = authService.slice(
+    authService.indexOf('export async function linkAnonymousAccountWithApple'),
+    authService.indexOf('function mapAccountSwitchFailure'),
+  );
   assert(authService.includes("pendingCredential: provider === 'apple' ? undefined : credential"), 'Apple pending credential is not cached after failed link');
+  assert(
+    appleLinkFn.includes('shouldContinueExistingAppleAccountSignIn') &&
+      appleLinkFn.includes('signInWithAppleAccount') &&
+      appleLinkFn.includes("completeExistingProviderAccountLogin"),
+    'credential-already-in-use requests a fresh Apple credential then existing-account login',
+  );
+  assert(appleSrc.includes("logAppleAuth('nonce_generated'"), 'APPLE_AUTH nonce step present');
+  assert(diagnosticsSrc.includes('[APPLE_AUTH]'), 'APPLE_AUTH prefix present');
+  assert(diagnosticsSrc.includes('[APPLE_AUTH_ERROR]'), 'APPLE_AUTH_ERROR logs present');
+  assert(
+    !diagnosticsSrc.includes('Refusing to log sensitive apple-auth key'),
+    'logger no longer throws Refusing to log',
+  );
+  assert(
+    !appleSrc.includes('identity_token_present') && !appleSrc.includes('authorization_code_present'),
+    'snake_case token-present keys are not used',
+  );
+  assert(
+    !accountSrc.includes('Conflict codes never become a generic modal'),
+    'leftover Apple conflicts are no longer swallowed',
+  );
+  assert(
+    accountSrc.includes("title: 'Apple ile giriş tamamlanamadı.'"),
+    'Apple failures show a visible title',
+  );
   assert(accountSrc.includes('getAppleAuthDiagnosticFooter'), 'internal diagnostic footer wired to UI');
   assert(
     readSrc('src/components/accountCenter/AccountConnectionTab.tsx').includes(

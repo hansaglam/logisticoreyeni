@@ -1326,36 +1326,34 @@ export async function prepareMarketplaceAccountDeletion(
     .slice(0, 20)}`;
   let cancelledListings = 0;
   let anonymizedListings = 0;
-  let listingCursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+  // Equality-only query — no composite index required. Updated listings leave the
+  // sellerUid filter after anonymization, so repeat until the page is empty.
   while (true) {
-    let query = firestore
+    const listings = await firestore
       .collection('vehicleMarketplaceListings')
       .where('sellerUid', '==', uid)
-      .orderBy(FieldPath.documentId())
-      .limit(200);
-    if (listingCursor) query = query.startAfter(listingCursor);
-    const listings = await query.get();
+      .limit(200)
+      .get();
     if (listings.empty) break;
     for (const snapshot of listings.docs) {
-    await firestore.runTransaction(async (transaction) => {
-      const fresh = await transaction.get(snapshot.ref);
-      if (!fresh.exists) return;
-      const listing = fresh.data() as MarketplaceListingDocument;
-      const update: Record<string, unknown> = {
-        sellerUid: anonymizedUid,
-        sellerDisplayName: 'Silinmiş Oyuncu',
-        updatedAt: now,
-        version: listing.version + 1,
-      };
-      if (listing.status === 'active' || listing.status === 'reserved') {
-        update.status = 'cancelled';
-        cancelledListings += 1;
-      }
-      transaction.update(fresh.ref, update);
-      anonymizedListings += 1;
-    });
+      await firestore.runTransaction(async (transaction) => {
+        const fresh = await transaction.get(snapshot.ref);
+        if (!fresh.exists) return;
+        const listing = fresh.data() as MarketplaceListingDocument;
+        const update: Record<string, unknown> = {
+          sellerUid: anonymizedUid,
+          sellerDisplayName: 'Silinmiş Oyuncu',
+          updatedAt: now,
+          version: listing.version + 1,
+        };
+        if (listing.status === 'active' || listing.status === 'reserved') {
+          update.status = 'cancelled';
+          cancelledListings += 1;
+        }
+        transaction.update(fresh.ref, update);
+        anonymizedListings += 1;
+      });
     }
-    listingCursor = listings.docs.at(-1);
     if (listings.size < 200) break;
   }
   while (true) {
@@ -1428,6 +1426,6 @@ export async function prepareMarketplaceAccountDeletion(
       if (documents.size < 400) break;
     }
   }
-  await stateRef(firestore, uid).delete();
+  await stateRef(firestore, uid).delete().catch(() => undefined);
   return { cancelledListings, anonymizedListings };
 }

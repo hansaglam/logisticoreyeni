@@ -67,6 +67,16 @@ export function getAccountDeletionErrorMessage(
       return 'Hesabı silmek için tekrar giriş yapman gerekiyor.';
     case 'cancelled':
       return 'Hesap silme iptal edildi.';
+    case 'permission-denied':
+      return 'Bulut verileri silinemedi. İzin hatası — daha sonra tekrar dene.';
+    case 'network-error':
+      return 'Ağ hatası nedeniyle bulut verileri silinemedi. İnternet bağlantını kontrol et.';
+    case 'cloud-delete-failed':
+      return GENERIC_DELETE_FAILURE_MESSAGE;
+    case 'auth-delete-failed':
+      return fallback ?? 'Hesap silinemedi.';
+    case 'local-clear-failed':
+      return fallback ?? 'Yerel kayıt temizlenemedi.';
     default:
       return fallback ?? GENERIC_DELETE_FAILURE_MESSAGE;
   }

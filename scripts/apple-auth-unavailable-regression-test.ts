@@ -63,6 +63,7 @@ function readyInput(overrides: Partial<Parameters<typeof resolveAuthReadiness>[0
 
 function run(): void {
   console.log('\napple-auth-unavailable-regression-test\n');
+  process.env.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS = 'true';
 
   const authSrc = readSrc('src/services/authService.ts');
   const appleSrc = readSrc('src/services/appleAuthService.ts');

@@ -456,14 +456,21 @@ export async function getLeaderboardSnapshot(
   }
 }
 
+const LEADERBOARD_ENTRY_CLEANUP_WEEKS = 156;
+const MS_PER_WEEK = 7 * 86_400_000;
+
 /** Account deletion — tüm sezon entry'lerini Admin SDK ile temizle. */
 export async function deleteLeaderboardEntriesForUid(
   firestore: Firestore,
   uid: string,
+  nowMs = Date.now(),
 ): Promise<number> {
   let deleted = 0;
   const seasonKeys = new Set<string>();
-  seasonKeys.add(getLeaderboardSeasonKey(Date.now()));
+  seasonKeys.add(getLeaderboardSeasonKey(nowMs));
+  for (let week = 0; week < LEADERBOARD_ENTRY_CLEANUP_WEEKS; week += 1) {
+    seasonKeys.add(getLeaderboardSeasonKey(nowMs - week * MS_PER_WEEK));
+  }
 
   const seasonRefs = await firestore.collection('leaderboards').listDocuments();
   for (const seasonRef of seasonRefs) {

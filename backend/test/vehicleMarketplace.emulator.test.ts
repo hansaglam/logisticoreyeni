@@ -862,6 +862,42 @@ test('account deletion cancels active listing and anonymizes history', async () 
   assert.equal(listing.sellerDisplayName, 'Silinmiş Oyuncu');
 });
 
+test('account deletion succeeds with no marketplace activity', async () => {
+  const result = await prepareMarketplaceAccountDeletion(
+    adminFirestore,
+    'no-marketplace-user',
+    NOW_MS + 2,
+  );
+  assert.equal(result.cancelledListings, 0);
+  assert.equal(result.anonymizedListings, 0);
+});
+
+test('account deletion succeeds with marketplace state but no listings', async () => {
+  await seedState('state-only-user');
+  const result = await prepareMarketplaceAccountDeletion(
+    adminFirestore,
+    'state-only-user',
+    NOW_MS + 3,
+  );
+  assert.equal(result.cancelledListings, 0);
+  assert.equal(result.anonymizedListings, 0);
+  const stateSnap = await adminFirestore
+    .doc('users/state-only-user/marketplaceState/current')
+    .get();
+  assert.equal(stateSnap.exists, false);
+});
+
+test('account deletion is idempotent when marketplace state already cleaned', async () => {
+  await prepareMarketplaceAccountDeletion(adminFirestore, 'already-clean', NOW_MS + 4);
+  const second = await prepareMarketplaceAccountDeletion(
+    adminFirestore,
+    'already-clean',
+    NOW_MS + 5,
+  );
+  assert.equal(second.cancelledListings, 0);
+  assert.equal(second.anonymizedListings, 0);
+});
+
 test('Firestore allows public active reads but denies all direct marketplace writes', async () => {
   const { assertFails, assertSucceeds } = rulesTesting;
   const { listingId } = await createValidListing();

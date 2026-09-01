@@ -657,17 +657,11 @@ export function useAccountCenter({
     if (isAppleAuthCancelFailure(failure) || fallbackError === 'cancelled') {
       return;
     }
-    // Conflict codes never become a generic modal — conflict dialog owns that path.
-    if (
-      isAppleExistingAccountConflictCode(failure.code) ||
-      isAppleExistingAccountConflictCode(failure.firebaseCode) ||
-      isAppleExistingAccountConflictCode(fallbackError)
-    ) {
-      return;
-    }
-    // Internal/TestFlight: stage + code always in the message body. Never drop real codes.
+    // Leftover credential conflicts must not stay silent. Save-conflict dialogs
+    // already returned earlier via saveOutcome. Google-vs-Apple email clashes
+    // and unhandled credential-already-in-use need a visible error.
     showDialog({
-      title: 'Hesap Bağlanamadı',
+      title: 'Apple ile giriş tamamlanamadı.',
       message: formatAppleAuthDiagnosticDisplay(failure),
       variant: 'warning',
       footerNote: getAppleAuthDiagnosticFooter(failure),
@@ -724,7 +718,6 @@ export function useAccountCenter({
 
       if (isAccountLinkConflictError(result.error, result.errorKind)) {
         if (provider === 'apple') {
-          // Conflict path is owned by saveOutcome / conflict dialogs.
           showAppleLinkFailure(resolveAppleFailure(result), result.error);
         }
         return;

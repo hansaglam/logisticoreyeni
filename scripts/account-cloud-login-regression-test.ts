@@ -68,6 +68,8 @@ assert(classifyLocalSave(starter).meaningful === false, 'classifyLocalSave start
 console.log('\n2. Existing account login branch');
 assert(auth.includes('completeExistingProviderAccountLogin'), 'credential-already-in-use uses existing login');
 assert(auth.includes("completeExistingProviderAccountLogin(linkResult.pendingCredential, 'google')"), 'google existing-account branch');
+assert(auth.includes('shouldContinueExistingAppleAccountSignIn'), 'apple existing-account continue after spent token');
+assert(auth.includes('signInWithAppleAccount'), 'apple existing-account mints a fresh credential');
 
 console.log('\n3. Post sign-in save flow');
 assert(login.includes('runPostSignInSaveFlow'), 'central post sign-in flow');

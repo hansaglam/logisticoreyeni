@@ -18,6 +18,8 @@ import {
   createAppleOAuthCredentialParams,
   extractSafeAppleErrorFields,
   getAppleAuthDiagnosticCode,
+  logAppleAuth,
+  logAppleAuthError,
   logAppleAuthFlow,
   normalizeAppleAuthFailure,
   sanitizeAppleFullName,
@@ -211,6 +213,15 @@ function fail(
     hasHashedNonce?: boolean;
   },
 ): AppleCredentialResult {
+  if (failure.code !== 'ERR_REQUEST_CANCELED') {
+    logAppleAuthError({
+      stage: failure.stage,
+      code: failure.code,
+      message: failure.message ?? null,
+      nativeCode: failure.nativeCode ?? null,
+      firebaseCode: failure.firebaseCode ?? null,
+    });
+  }
   logAppleAuthFlow(
     baseFlowFields({
       stage: failure.stage,
@@ -328,6 +339,7 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
 
     const rawNonce = nonceResult.nonce;
     hasRawNonce = true;
+    logAppleAuth('nonce_generated', { hasRawNonce: true });
 
     const hashedResult = await sha256(rawNonce);
     if (!hashedResult.ok) {
@@ -339,6 +351,7 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
 
     const hashedNonce = hashedResult.hash;
     hasHashedNonce = hashedNonce.length > 0;
+    logAppleAuth('apple_request_started', { hasRawNonce, hasHashedNonce });
 
     logAppleAuthFlow(
       baseFlowFields({
@@ -357,6 +370,10 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       nonce: hashedNonce,
     });
 
+    logAppleAuth('apple_request_success', {
+      hasIdentityToken: Boolean(appleCredential.identityToken),
+      hasAuthorizationCode: Boolean(appleCredential.authorizationCode),
+    });
     logAppleAuthFlow(
       baseFlowFields({
         stage: 'native-request-success',
@@ -420,6 +437,10 @@ async function requestAppleFirebaseCredential(): Promise<AppleCredentialResult> 
       createAppleOAuthCredentialParams(identityToken, rawNonce),
     );
 
+    logAppleAuth('firebase_credential_created', {
+      hasIdentityToken,
+      hasAuthorizationCode,
+    });
     logAppleAuthFlow(
       baseFlowFields({
         stage: 'firebase-credential-created',

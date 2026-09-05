@@ -95,6 +95,7 @@ export function resolveAdPrivacyAvailability(
 
 export function shouldShowAccountPrivacyOptions(
   snapshot: AdsConsentSnapshot,
+  platform: string = 'android',
 ): boolean {
-  return isPrivacyOptionsRequired(snapshot);
+  return platform !== 'ios' && isPrivacyOptionsRequired(snapshot);
 }

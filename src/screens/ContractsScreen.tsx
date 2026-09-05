@@ -56,7 +56,6 @@ import {
 } from '../utils/contractBadges';
 import {
   compareContractsBySmartScore,
-  getActiveDeliveryDestinationCityIds,
   isMarketOpportunityFilter,
   isRouteContractFilter,
 } from '../utils/contractSorting';
@@ -85,13 +84,20 @@ import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
 import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
+import {
+  ContractsSummaryStrip,
+  ContractsTabBar,
+  MarketFilterInfoCard,
+  NextRouteHintCard,
+  type ContractsSegmentKey,
+  type ContractsTabSegment,
+} from '../features/contracts/components/ContractsOverview';
 import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
 import { resolveDeliveryHealth } from '../domain/deliveryHealthStatus';
 import { normalizeTruckFuel } from '../utils/truckFuel';
 import {
-  formatIdleTruckSummaryLine,
   shouldShowPostDeliveryLocationHint,
 } from '../utils/truckLocationUx';
 
@@ -113,7 +119,7 @@ const COLORS = {
 };
 
 type FilterKey = 'all' | 'bestPayment' | 'shortDistance' | 'urgent' | 'lowRisk';
-type SegmentKey = 'available' | 'active' | 'completed';
+type SegmentKey = ContractsSegmentKey;
 
 const EMPTY_CONTRACT_PREVIEW_MAP = new Map<string, ContractPreview>();
 
@@ -332,155 +338,6 @@ function getDeliveryStatusLabel(status: Delivery['status']): string {
 
 function findDeliveryForContract(contractId: string, deliveries: Delivery[]): Delivery | undefined {
   return deliveries.find((delivery) => delivery.contractId === contractId);
-}
-
-interface TabSegment {
-  key: SegmentKey;
-  label: string;
-  count: number;
-}
-
-interface ContractsTabBarProps {
-  segments: TabSegment[];
-  activeKey: SegmentKey;
-  onChange: (key: SegmentKey) => void;
-}
-
-function ContractsTabBar({ segments, activeKey, onChange }: ContractsTabBarProps) {
-  return (
-    <View style={styles.tabBar}>
-      {segments.map((segment, index) => {
-        const isActive = segment.key === activeKey;
-        return (
-          <React.Fragment key={segment.key}>
-            {index > 0 ? <View style={styles.tabDivider} /> : null}
-            <TouchableOpacity
-              style={styles.tabItem}
-              onPress={() => onChange(segment.key)}
-              activeOpacity={0.85}
-            >
-              <View style={styles.tabLabelRow}>
-                <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
-                  {segment.label}
-                </Text>
-                {segment.count > 0 ? (
-                  <View style={styles.tabBadge}>
-                    <Text style={styles.tabBadgeText}>
-                      {segment.count > 99 ? '99+' : segment.count}
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-              {isActive ? <View style={styles.tabUnderline} /> : null}
-            </TouchableOpacity>
-          </React.Fragment>
-        );
-      })}
-    </View>
-  );
-}
-
-interface MarketFilterInfoCardProps {
-  routeLine: string;
-  exactCount: number;
-  relatedCount: number;
-  onClear: () => void;
-}
-
-function MarketFilterInfoCard({
-  routeLine,
-  exactCount,
-  relatedCount,
-  onClear,
-}: MarketFilterInfoCardProps) {
-  const detailMessage =
-    exactCount > 0
-      ? 'Bu fırsatla tam eşleşen işler bulundu.'
-      : relatedCount > 0
-        ? 'Tam eşleşme yok, aynı rota/şehir/ürünle ilişkili işler gösteriliyor.'
-        : 'Bu fırsata uygun iş şu anda yok. Yakın işler ve diğer sözleşmeler aşağıda gösteriliyor.';
-
-  return (
-    <View style={styles.marketFilterInfoCard}>
-      <View style={styles.marketFilterInfoHeader}>
-        <Text style={styles.marketFilterInfoTitle}>Piyasa fırsatına göre sıralanıyor</Text>
-        <TouchableOpacity onPress={onClear} activeOpacity={0.85}>
-          <Text style={styles.marketFilterClear}>Filtreyi temizle</Text>
-        </TouchableOpacity>
-      </View>
-      <Text style={styles.marketFilterInfoRoute} numberOfLines={1}>
-        {routeLine}
-      </Text>
-      <Text style={styles.marketFilterInfoMessage}>{detailMessage}</Text>
-      <Text style={styles.marketFilterInfoHint}>
-        Eşleşen ve yakın sözleşmeler üstte gösteriliyor.
-      </Text>
-    </View>
-  );
-}
-
-interface ContractsSummaryStripProps {
-  availableCount: number;
-  activeCount: number;
-  bestPayment: number;
-  playableCount: number;
-  trucks: Truck[];
-}
-
-function ContractsSummaryStrip({
-  availableCount,
-  activeCount,
-  bestPayment,
-  playableCount,
-  trucks,
-}: ContractsSummaryStripProps) {
-  const idleCount = (trucks ?? []).filter((truck) => truck.status === 'idle').length;
-  const originCityIds = getIdleTruckOriginCityIds(trucks);
-  const cityLabels = originCityIds.map((cityId) => getCityName(cityId)).join(', ');
-
-  const originLine = formatIdleTruckSummaryLine(cityLabels, idleCount, playableCount);
-
-  return (
-    <View style={styles.summaryStrip}>
-      <Text style={styles.compactStatText}>
-        <Text style={styles.statValueSuccess}>{playableCount}</Text>
-        {' uygun iş · '}
-        <Text style={styles.statValueInfo}>{availableCount}</Text>
-        {' iş ilanı · '}
-        <Text style={styles.statValueAmber}>{activeCount}</Text>
-        {' aktif · En yüksek '}
-        <Text style={styles.statValueSuccess}>{formatMoney(bestPayment)}</Text>
-      </Text>
-      <Text style={styles.summarySubline} numberOfLines={2}>
-        {originLine}
-      </Text>
-    </View>
-  );
-}
-
-interface NextRouteHintCardProps {
-  deliveries: Delivery[];
-}
-
-function NextRouteHintCard({ deliveries }: NextRouteHintCardProps) {
-  const destinationIds = [...getActiveDeliveryDestinationCityIds(deliveries)];
-  if (destinationIds.length === 0) {
-    return null;
-  }
-
-  const message =
-    destinationIds.length === 1
-      ? `Sıradaki rota önerileri: ${getCityName(destinationIds[0])}'a varacak kamyon için ${getCityName(destinationIds[0])} çıkışlı işler ayrıca öne çıkarılır.`
-      : 'Sıradaki rota önerileri: Kamyonlarının varış şehirlerinden çıkan işler ayrıca öne çıkarılır.';
-
-  return (
-    <View style={styles.nextRouteHint}>
-      <Text style={styles.nextRouteHintTitle}>Sıradaki rota önerileri</Text>
-      <Text style={styles.nextRouteHintText} numberOfLines={2}>
-        {message}
-      </Text>
-    </View>
-  );
 }
 
 type ContractsListItem =
@@ -1104,7 +961,7 @@ export default function ContractsScreen() {
     return previews;
   }, [activeSegment, completedContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, playerHomeCityId]);
 
-  const tabSegments = useMemo<TabSegment[]>(
+  const tabSegments = useMemo<ContractsTabSegment[]>(
     () => [
       { key: 'available', label: 'Müsait', count: availableContracts.length },
       { key: 'active', label: 'Aktif', count: runningDeliveries.length },
@@ -1744,49 +1601,12 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     justifyContent: 'center',
   },
-  summaryStrip: {
-    marginBottom: spacing.sm,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.sm,
-    borderRadius: 10,
-    backgroundColor: colors.cardSoft,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 3,
-  },
-  summarySubline: {
-    fontSize: 10,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
   truckLocationHint: {
     marginBottom: spacing.sm,
   },
   adRewardStrip: {
     marginBottom: spacing.sm,
     paddingHorizontal: spacing.sm,
-  },
-  nextRouteHint: {
-    marginBottom: spacing.sm,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.sm,
-    borderRadius: 10,
-    backgroundColor: 'rgba(56, 189, 248, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.25)',
-  },
-  nextRouteHintTitle: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.cyan,
-    marginBottom: 2,
-  },
-  nextRouteHintText: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-    lineHeight: 15,
   },
   originBanner: {
     marginBottom: spacing.sm,
@@ -1837,79 +1657,6 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     backgroundColor: COLORS.card,
   },
-  compactStatText: {
-    fontSize: 11,
-    color: COLORS.muted,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  statValueInfo: {
-    color: COLORS.cyan,
-    fontWeight: '800',
-  },
-  statValueAmber: {
-    color: colors.accentAmber,
-    fontWeight: '800',
-  },
-  statValueSuccess: {
-    color: COLORS.green,
-    fontWeight: '800',
-  },
-  tabBar: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    marginBottom: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
-  },
-  tabDivider: {
-    width: 1,
-    backgroundColor: COLORS.border,
-    marginVertical: spacing.sm,
-  },
-  tabLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  tabLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.muted,
-  },
-  tabLabelActive: {
-    color: COLORS.cyan,
-    fontWeight: '800',
-  },
-  tabBadge: {
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: COLORS.red,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  tabBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  tabUnderline: {
-    position: 'absolute',
-    bottom: 0,
-    left: spacing.sm,
-    right: spacing.sm,
-    height: 2,
-    backgroundColor: COLORS.cyan,
-    borderRadius: 1,
-  },
   marketFilterCompact: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1921,44 +1668,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
     marginBottom: spacing.sm,
-  },
-  marketFilterInfoCard: {
-    backgroundColor: colors.accentAmberSoft,
-    borderWidth: 1,
-    borderColor: colors.accentAmber,
-    borderRadius: 10,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    marginBottom: spacing.sm,
-    gap: 4,
-  },
-  marketFilterInfoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  marketFilterInfoTitle: {
-    flex: 1,
-    fontSize: 12,
-    color: COLORS.text,
-    fontWeight: '800',
-  },
-  marketFilterInfoRoute: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-  },
-  marketFilterInfoMessage: {
-    fontSize: 11,
-    color: colors.accentAmber,
-    fontWeight: '700',
-    lineHeight: 15,
-  },
-  marketFilterInfoHint: {
-    fontSize: 10,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
   },
   marketFilterLine: {
     flex: 1,

@@ -19,6 +19,29 @@ export type AdsConsentSnapshot = {
   errorCategory: AdsConsentErrorCategory;
 };
 
+export type AdsConsentPlatform = 'android' | 'ios' | string;
+
+/**
+ * Product policy: Google UMP UI is Android-only. iOS never asks for ad
+ * personalization consent and always uses non-personalized ad requests.
+ */
+export function shouldUseGoogleUmpOnPlatform(platform: AdsConsentPlatform): boolean {
+  return platform === 'android';
+}
+
+export function createIosNonPersonalizedAdsSnapshot(
+  adsEnabled: boolean,
+): AdsConsentSnapshot {
+  return {
+    gathered: true,
+    canRequestAds: adsEnabled,
+    status: 'IOS_NPA_ONLY',
+    privacyOptionsRequirementStatus: 'NOT_REQUIRED',
+    error: null,
+    errorCategory: 'none',
+  };
+}
+
 export function createEmptyAdsConsentSnapshot(): AdsConsentSnapshot {
   return {
     gathered: false,

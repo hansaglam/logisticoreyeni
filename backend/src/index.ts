@@ -50,6 +50,11 @@ import type {
 } from './vehicleMarketplaceTypes';
 import { revokeAppleAuthorizationCode } from './appleTokenRevocation';
 import {
+  claimChallengeRewardTransaction,
+  getCurrentChallengeState,
+} from './challenges';
+import { getSeasonDefinition } from './seasonPeriods';
+import {
   APPLE_SIGNIN_SECRETS,
   readAppleSignInSecretValuesFromBinding,
 } from './appleSignInSecrets';
@@ -77,6 +82,8 @@ const RATE_LIMITS = {
   setUsername: { windowMs: 60 * 60 * 1000, maxRequests: 10 },
   checkUsername: { windowMs: 60 * 1000, maxRequests: 60 },
   migrateServerState: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
+  challengeGet: { windowMs: 60 * 1000, maxRequests: 60 },
+  challengeClaim: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -955,6 +962,93 @@ export const getLeaderboard = onCall(
       ok: result.ok,
       entryCount: result.ok ? result.entries.length : 0,
       durationMs: Date.now() - startedAt,
+    });
+    return result;
+  },
+);
+
+/** Current weekly season metadata; server clock is authoritative. */
+export const getCurrentSeason = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    const record = requestRecord(request.data);
+    if (!hasOnlyKeys(record, [])) return { ok: false, reason: 'invalid-request' };
+    if (!(await consumeRateLimit(auth.identity.uid, 'challengeGet'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return { ok: true, season: getSeasonDefinition(Date.now()) };
+  },
+);
+
+/** Read-only challenge projection derived from trusted marketplace history. */
+export const getChallengeProgress = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    const record = requestRecord(request.data);
+    if (!hasOnlyKeys(record, [])) return { ok: false, reason: 'invalid-request' };
+    if (!(await consumeRateLimit(auth.identity.uid, 'challengeGet'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    try {
+      const state = await getCurrentChallengeState(
+        getFirestore(),
+        auth.identity.uid,
+        Date.now(),
+      );
+      return { ok: true, ...state };
+    } catch (error) {
+      logger.error('[challenge-progress-failed]', {
+        uidHash: uidHash(auth.identity.uid),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false, reason: 'service-unavailable' };
+    }
+  },
+);
+
+/** Atomic, idempotent reward claim. No client progress amount is accepted. */
+export const claimChallengeReward = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (
+      !hasActionEnvelope(request.data) ||
+      !hasOnlyKeys(record, ['challengeId', 'periodKey', 'transactionId', 'idempotencyKey']) ||
+      !isBoundedId(record.challengeId) ||
+      !isBoundedId(record.periodKey)
+    ) {
+      return invalidRequestResult(record);
+    }
+    if (!(await consumeRateLimit(
+      auth.identity.uid,
+      'challengeClaim',
+      record.idempotencyKey as string,
+    ))) {
+      return rateLimitedResult(record);
+    }
+    const result = await claimChallengeRewardTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      {
+        challengeId: record.challengeId as string,
+        periodKey: record.periodKey as string,
+        transactionId: record.transactionId as string,
+        idempotencyKey: record.idempotencyKey as string,
+      },
+      Date.now(),
+    );
+    logger.info('[challenge-claim]', {
+      uidHash: uidHash(auth.identity.uid),
+      challengeId: record.challengeId,
+      periodKey: record.periodKey,
+      ok: result.ok,
+      reason: result.ok ? 'success' : result.reason,
     });
     return result;
   },

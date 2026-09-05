@@ -44,7 +44,7 @@ function assert(condition: boolean, label: string): void {
 
 const notificationsSrc = readFileSync('src/services/notifications.ts', 'utf8');
 const gameStoreSrc = readFileSync('src/store/gameStore.ts', 'utf8');
-const appSrc = readFileSync('App.tsx', 'utf8');
+const appSrc = `${readFileSync('App.tsx', 'utf8')}\n${readFileSync('src/hooks/useNativeAppLifecycle.ts', 'utf8')}`;
 const rentalSrc = readFileSync('src/simulation/rentalTruckLifecycle.ts', 'utf8');
 const saveSrc = readFileSync('src/storage/saveGame.ts', 'utf8');
 

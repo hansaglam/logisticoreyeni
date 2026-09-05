@@ -60,6 +60,36 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
   if (env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC === 'true') {
     errors.push('EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC must be false/unset for store production');
   }
+  if (env.EXPO_PUBLIC_ENABLE_SEASONS === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_SEASONS must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_CHALLENGES === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_CHALLENGES must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_COMPANY_STATS === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_COMPANY_STATS must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_ACHIEVEMENTS === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_ACHIEVEMENTS must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_SEASON_HISTORY must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_INBOX === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_INBOX must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_MARKET_ALERTS must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_V11_ANALYTICS === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_V11_ANALYTICS must remain false for store production');
+  }
 
   for (const [key, value] of Object.entries(env)) {
     if (!value) continue;
@@ -109,6 +139,36 @@ export function validateInternalProfileEnv(env: Record<string, string>): string[
   }
   if (env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED !== 'true') {
     errors.push('internal profile expects EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_SEASONS !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_SEASONS=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_CHALLENGES !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_CHALLENGES=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_COMPANY_STATS !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_COMPANY_STATS=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_ACHIEVEMENTS !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_ACHIEVEMENTS=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_SEASON_HISTORY=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_INBOX !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_INBOX=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_MARKET_ALERTS=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER=true');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_V11_ANALYTICS !== 'true') {
+    errors.push('internal profile expects EXPO_PUBLIC_ENABLE_V11_ANALYTICS=true');
   }
   return errors;
 }

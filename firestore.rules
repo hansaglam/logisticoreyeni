@@ -79,6 +79,17 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow write: if false;
       }
+
+      // Seasons/challenges are projected and rewarded by trusted callables only.
+      match /challengeClaims/{documentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /seasonProgress/{seasonKey} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
     }
 
     // Active offers are publicly browseable. Historical records are visible

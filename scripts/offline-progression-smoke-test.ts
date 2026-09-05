@@ -544,7 +544,7 @@ console.log('\n8. Online/offline time parity');
 }
 
 {
-  const appSource = readFileSync('App.tsx', 'utf8');
+  const appSource = readFileSync('src/hooks/useAppStateLifecycle.ts', 'utf8');
   const activeLineIdx = appSource.indexOf('!wasActive && isActive');
   assert(activeLineIdx >= 0, 'AppState active handler bulundu');
   const activeBlock = appSource.slice(activeLineIdx, activeLineIdx + 420);
@@ -611,7 +611,7 @@ console.log('\n8. Online/offline time parity');
 }
 
 {
-  const appSource = readFileSync('App.tsx', 'utf8');
+  const appSource = readFileSync('src/hooks/useAppStateLifecycle.ts', 'utf8');
   assert(
     appSource.includes("nextState === 'background' || nextState === 'inactive'") &&
       appSource.includes('recordLastSeenRealTimeMs'),

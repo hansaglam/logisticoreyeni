@@ -346,7 +346,7 @@ function runRealTimeDeliveryTests(): void {
   );
   assert(!storeSrc.includes("title: 'İşletme giderleri işlendi'"), 'no operating cost toast');
 
-  const appSrc = readSrc('App.tsx');
+  const appSrc = readSrc('src/hooks/useAppStateLifecycle.ts');
   assert(
     appSrc.includes("nextState === 'background' || nextState === 'inactive'"),
     'App records inactive+background',

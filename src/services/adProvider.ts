@@ -1,6 +1,7 @@
 /**
- * Ödüllü reklam sağlayıcı — AdMob Rewarded Ads + UMP consent.
- * iOS: non-personalized / limited ads only (no ATT / IDFA).
+ * Ödüllü reklam sağlayıcı — AdMob Rewarded Ads.
+ * iOS: no UMP UI; non-personalized / limited ads only (no ATT / IDFA).
+ * Android: existing UMP consent gate remains active.
  */
 
 import Constants from 'expo-constants';
@@ -625,7 +626,7 @@ async function ensureMobileAdsInitialized(): Promise<boolean> {
   return mobileAdsInitPromise;
 }
 
-/** Uygulama açılışında çağrılır — consent sonrası SDK init (stub/Expo Go'da no-op). */
+/** Uygulama açılışında çağrılır — Android consent sonrası, iOS NPA modunda SDK init. */
 export async function initializeAdProvider(): Promise<void> {
   if (!isAdsEnabled()) {
     console.info('[ads-sdk-init]', {

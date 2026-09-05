@@ -16,7 +16,9 @@ import {
   classifyCloudSaveError,
   createLinkFlowDiagnosticId,
 } from '../src/utils/accountLinkFlowLog';
+import { resolveCloudSaveDisplayInfo } from '../src/utils/accountCenterCloudStatus';
 import { reconcileLocalSaveOwnershipAfterAccountLink } from '../src/utils/cloudSaveOwnership';
+import type { CloudSaveStatusState } from '../src/storage/cloudSaveSync';
 
 const ROOT = process.cwd();
 
@@ -146,7 +148,9 @@ function run(): void {
 
   const syncSrc = readSrc('src/storage/cloudSaveSync.ts');
   assert(syncSrc.includes('scheduleCloudSaveRetry'), 'retry scheduler exists');
-  assert(syncSrc.includes("AppState.addEventListener('change'"), 'foreground retry hook');
+  const appStateLifecycle = readSrc('src/hooks/useAppStateLifecycle.ts');
+  assert(syncSrc.includes('retryCloudSaveSyncOnForeground'), 'foreground retry entry point');
+  assert(appStateLifecycle.includes('retryCloudSaveSyncOnForeground()'), 'foreground retry hook');
   assert(syncSrc.includes('readBackVerified'), 'read-back gates success');
   assert(syncSrc.includes('syncInFlight'), 'duplicate sync mutex');
   assert(syncSrc.includes('cloudProtected'), 'status exposes cloudProtected');
@@ -157,21 +161,82 @@ function run(): void {
   assert(cloudSrc.includes('verifyCloudSaveReadBack'), 'read-back verify helper');
   assert(cloudSrc.includes("users/${uid}/saves/"), 'canonical document path helper');
 
-  const accountSrc = readSrc('src/components/AccountSection.tsx');
-  assert(accountSrc.includes('resolveAccountConnectionState'), 'AccountSection uses connection state');
-  assert(accountSrc.includes('Şimdi Kaydet'), 'manual save CTA');
-  assert(accountSrc.includes('secureFootnoteAmber'), 'amber footnote for unverified cloud');
+  const accountCenterSrc = readSrc('src/screens/AccountCenterScreen.tsx');
+  const connectionTabSrc = readSrc('src/components/accountCenter/AccountConnectionTab.tsx');
+  const baseCloudStatus: CloudSaveStatusState = {
+    status: 'failed',
+    statusLabel: 'Bağlantı yok',
+    uid: 'test-user',
+    uidShort: 'test-use',
+    lastSyncAt: null,
+    lastError: 'Ağ bağlantısı kurulamadı.',
+    lastErrorCode: 'unavailable',
+    nextRetryAt: null,
+    firebaseEnabled: true,
+    restoreCandidate: null,
+    cloudProtected: false,
+  };
+  const retryDisplay = resolveCloudSaveDisplayInfo({
+    cloudStatus: baseCloudStatus,
+    isGuest: false,
+    recoveryRequired: false,
+    hasAccountConflict: false,
+  });
+  const guestDisplay = resolveCloudSaveDisplayInfo({
+    cloudStatus: { ...baseCloudStatus, status: 'disabled', firebaseEnabled: false },
+    isGuest: true,
+    recoveryRequired: false,
+    hasAccountConflict: false,
+  });
+  const syncedDisplay = resolveCloudSaveDisplayInfo({
+    cloudStatus: {
+      ...baseCloudStatus,
+      status: 'success',
+      statusLabel: 'Bağlı',
+      lastSyncAt: Date.now(),
+      lastError: null,
+      lastErrorCode: null,
+      cloudProtected: true,
+    },
+    isGuest: false,
+    recoveryRequired: false,
+    hasAccountConflict: false,
+  });
+
+  assert(
+    accountCenterSrc.includes('resolveCloudSaveDisplayInfo') &&
+      accountCenterSrc.includes('AccountConnectionTab'),
+    'Account Center uses canonical connection display state',
+  );
+  assert(
+    retryDisplay.ctaLabel === 'Şimdi Senkronize Et' &&
+      accountCenterSrc.includes('vm.handleManualSync()') &&
+      connectionTabSrc.includes("? 'Senkronize Et'"),
+    'manual cloud sync CTA is wired',
+  );
+  assert(
+    retryDisplay.badgeVariant === 'amber' && guestDisplay.badgeVariant === 'amber',
+    'unverified cloud states use amber treatment',
+  );
   assert(
     !/Hesabın güvende · Bulut kaydı aktif/.test(
-      accountSrc.split('getAccountConnectionHeroCopy')[0] ?? '',
+      connectionTabSrc,
     ),
     'hardcoded green protected footnote removed from static path',
   );
-  assert(accountSrc.includes('cloud-protected'), 'cloud-protected drives green copy');
+  assert(
+    syncedDisplay.key === 'synced' &&
+      syncedDisplay.badgeVariant === 'success' &&
+      connectionTabSrc.includes("cloudDisplay.key === 'synced'"),
+    'verified cloud state drives success treatment',
+  );
 
-  const rulesSrc = readSrc('FIRESTORE_RULES.md');
-  assert(rulesSrc.includes('ownerUid'), 'rules document mentions ownerUid');
-  assert(rulesSrc.includes('request.resource.data.ownerUid'), 'create/update uses request.resource');
+  const rulesSrc = readSrc('firestore.rules');
+  assert(rulesSrc.includes('ownerUid'), 'rules source mentions ownerUid');
+  assert(
+    rulesSrc.includes('request.resource.data.ownerUid == userId'),
+    'cloud save create/update enforces ownerUid',
+  );
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) {

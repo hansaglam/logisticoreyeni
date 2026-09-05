@@ -1,5 +1,5 @@
 /**
- * App Store privacy (no-tracking ads + UMP) + account deletion regression.
+ * App Store privacy (iOS no UMP/no tracking + NPA ads) + account deletion regression.
  * Run: npx tsx scripts/app-store-privacy-account-regression-test.ts
  */
 import './test-globals';
@@ -50,12 +50,28 @@ async function run(): Promise<void> {
   console.log('\nCanonical ads init order');
   {
     const bootstrap = read('src/services/adsPrivacyBootstrap.ts');
-    const app = read('App.tsx');
+    const consentService = read('src/services/adsConsentService.ts');
+    const app = `${read('App.tsx')}\n${read('src/hooks/usePostStartupLifecycle.ts')}`;
     const consentIdx = bootstrap.lastIndexOf('await gatherAdsConsentIfNeeded()');
-    const initIdx = bootstrap.indexOf('await initializeAdProvider()');
+    const initIdx = bootstrap.lastIndexOf('await initializeAdProvider()');
     check(!bootstrap.includes('resolveAttBeforeAdsInitialization'), 'ATT bootstrap removed');
     check(!bootstrap.includes('applyAdTrackingConfiguration'), 'ATT tracking config removed');
-    check(consentIdx >= 0 && consentIdx < initIdx, 'UMP before Mobile Ads init');
+    check(
+      bootstrap.includes("Platform.OS === 'ios'") &&
+        bootstrap.indexOf('prepareIosNonPersonalizedAdsState()') <
+          bootstrap.indexOf('await initializeAdProvider()'),
+      'iOS skips UMP and prepares NPA state before Mobile Ads init',
+    );
+    check(consentIdx >= 0 && consentIdx < initIdx, 'Android keeps UMP before Mobile Ads init');
+    check(
+      consentService.includes("!shouldUseGoogleUmpOnPlatform(Platform.OS)"),
+      'iOS cannot obtain the native UMP module through the consent service',
+    );
+    check(
+      consentService.includes("if (Platform.OS === 'ios')") &&
+        consentService.includes("reason: 'not-required'"),
+      'iOS privacy-options action fails closed without showing UMP UI',
+    );
     check(app.includes('initializeAdsPrivacyStack'), 'App uses ads privacy bootstrap');
   }
 

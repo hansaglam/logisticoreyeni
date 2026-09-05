@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { InteractionManager, StyleSheet, View, type ScrollView } from 'react-native';
+import { InteractionManager, Platform, StyleSheet, View, type ScrollView } from 'react-native';
 import Constants from 'expo-constants';
 
 import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
@@ -86,7 +86,10 @@ export default function AccountCenterScreen({
   const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const { openPrivacyOptions } = useAccountPrivacyOptions();
   useAdPrivacyAvailability();
-  const showPrivacyOptions = shouldShowAccountPrivacyOptions(getAdsConsentSnapshot());
+  const showPrivacyOptions = shouldShowAccountPrivacyOptions(
+    getAdsConsentSnapshot(),
+    Platform.OS,
+  );
 
   const accountTutorial = useScreenAppTutorial({
     tutorialId: 'account',
@@ -332,6 +335,7 @@ export default function AccountCenterScreen({
           )}
           onLanguagePress={() => showAlert('Dil', 'Şu an yalnızca Türkçe destekleniyor.')}
           onPrivacyPolicy={() => void handleOpenLegal('privacyPolicy', 'Gizlilik Politikası')}
+          adsPrivacyOptionsSupported={Platform.OS === 'android'}
           showPrivacyOptions={showPrivacyOptions}
           onPrivacyChoices={() => void handlePrivacyChoices()}
           onAccountDeletionInfo={() => void handleOpenLegal('accountDeletion', 'Hesap Silme')}

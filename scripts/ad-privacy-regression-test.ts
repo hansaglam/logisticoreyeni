@@ -235,8 +235,21 @@ async function run(): Promise<void> {
           status: 'OBTAINED',
           privacyOptionsRequirementStatus: 'REQUIRED',
         }),
+        'android',
       ),
-      'shows privacy options when REQUIRED',
+      'Android shows privacy options when REQUIRED',
+    );
+    check(
+      !shouldShowAccountPrivacyOptions(
+        createTestAdsConsentSnapshot({
+          gathered: true,
+          canRequestAds: true,
+          status: 'OBTAINED',
+          privacyOptionsRequirementStatus: 'REQUIRED',
+        }),
+        'ios',
+      ),
+      'iOS never shows UMP privacy options',
     );
     check(
       !shouldShowAccountPrivacyOptions(
@@ -246,6 +259,7 @@ async function run(): Promise<void> {
           status: 'NOT_REQUIRED',
           privacyOptionsRequirementStatus: 'NOT_REQUIRED',
         }),
+        'android',
       ),
       'hides privacy options when NOT_REQUIRED',
     );
@@ -319,10 +333,15 @@ async function run(): Promise<void> {
       'DeliveryBoost uses rewarded privacy gate',
     );
     check(
-      accountCenter.includes('useAccountPrivacyOptions'),
-      'AccountCenter uses account privacy options',
+      accountCenter.includes('useAccountPrivacyOptions') &&
+        accountCenter.includes('Platform.OS'),
+      'AccountCenter platform-gates account privacy options',
     );
-    check(accountPrefs.includes('showPrivacyOptions'), 'Account prefs conditional privacy row');
+    check(
+      accountPrefs.includes('adsPrivacyOptionsSupported') &&
+        accountPrefs.includes('showPrivacyOptions'),
+      'Account prefs hides the UMP row on iOS and preserves Android conditional UI',
+    );
     check(
       getRewardedPlacementStatusMessage({
         status: 'consent-required',

@@ -251,6 +251,8 @@ void (async () => {
 
   console.log('\nTEST 7 — startup performance wiring');
   const app = read('App.tsx');
+  const postStartupLifecycle = read('src/hooks/usePostStartupLifecycle.ts');
+  const appStateLifecycle = read('src/hooks/useAppStateLifecycle.ts');
   const gameStore = read('src/store/gameStore.ts');
   const startup = read('src/utils/startupPerformance.ts');
   const service = read('src/services/vehicleMarketplaceStartupReconcile.ts');
@@ -275,25 +277,26 @@ void (async () => {
     'cloud upload is held before GAME_READY so stale local cannot upload first',
   );
   assert(
-    app.includes('runPostStartupMarketplaceReconcile'),
+    app.includes('usePostStartupLifecycle') &&
+      postStartupLifecycle.includes('runPostStartupMarketplaceReconcile'),
     'post-startup reconcile is triggered from App after game ready',
   );
   assert(
     /if \(!isGameReady \|\| bootPhase !== 'ready'\)[\s\S]*runPostStartupMarketplaceReconcile\(\)[\s\S]*initCloudSaveSync/.test(
-      app,
+      postStartupLifecycle,
     ),
     'reconcile runs after first render gate, before the next cloud save',
   );
   assert(
-    !/await startGame\(\);[\s\S]{0,80}runPostStartupMarketplaceReconcile/.test(app),
+    !app.includes('runPostStartupMarketplaceReconcile'),
     'startGame / first paint is not blocked on marketplace reconcile',
   );
   assert(
-    app.includes('retryPostStartupMarketplaceReconcileIfNeeded'),
+    appStateLifecycle.includes('retryPostStartupMarketplaceReconcileIfNeeded'),
     'offline failure retries on later foreground',
   );
   assert(
-    app.includes('reconcileVehicleMarketplaceOnForeground'),
+    appStateLifecycle.includes('reconcileVehicleMarketplaceOnForeground'),
     'foreground reconcile runs for offline seller/buyer marketplace mutations',
   );
   assert(

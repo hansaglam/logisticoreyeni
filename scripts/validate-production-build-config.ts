@@ -220,7 +220,10 @@ function scanForEmulatorCalls(dir: string): string[] {
 const emulatorHits = scanForEmulatorCalls(srcRoot);
 assert(emulatorHits.length === 0, 'no emulator connect calls in src', emulatorHits.join(','));
 
-const appTsx = readFileSync(resolve(ROOT, 'App.tsx'), 'utf8');
+const appTsx = [
+  'App.tsx',
+  'src/hooks/useAppBootstrap.ts',
+].map((file) => readFileSync(resolve(ROOT, file), 'utf8')).join('\n');
 assert(
   appTsx.includes('probeSaveRecoveryOnColdStart') &&
     appTsx.includes('await useGameStore.getState().initializeGame()') &&

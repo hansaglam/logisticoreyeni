@@ -6,7 +6,9 @@
 const MS_PER_DAY = 86_400_000;
 
 export function getIsoWeekParts(date: Date): { isoYear: number; isoWeek: number } {
-  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const utc = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
   const day = utc.getUTCDay() || 7;
   utc.setUTCDate(utc.getUTCDate() + 4 - day);
   const isoYear = utc.getUTCFullYear();

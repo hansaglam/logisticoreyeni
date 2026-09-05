@@ -56,6 +56,15 @@ import { normalizeWarehouse } from '../simulation/trading';
 import { calculateCompanyScore } from '../simulation/companyScore';
 import { ensureFinanceTotals, FINANCE_LEDGER_MAX_COUNT } from '../utils/financeLedger';
 import { normalizeCashBalance } from '../utils/cashPolicy';
+import {
+  captureCompanyStatsPeaks,
+  normalizeCompanyStats,
+  type CompanyStats,
+} from '../domain/companyStats';
+import {
+  normalizeProgressionFoundationState,
+  type ProgressionFoundationState,
+} from '../domain/progressionFoundation';
 import { normalizeMissionsState, normalizeTutorialState } from '../utils/missionProgress';
 import { normalizeRetentionState } from '../simulation/retentionProgress';
 import {
@@ -168,6 +177,10 @@ export interface SaveGamePayload {
   meta: SaveGameMeta;
   currentTime: number;
   player: Player;
+  /** Additive V1.1 informational stats; missing in legacy saves. */
+  companyStats?: CompanyStats;
+  /** Additive V1.1 unlock/history/inbox foundation; missing in legacy saves. */
+  progressionFoundation?: ProgressionFoundationState;
   cities: City[];
   products: Product[];
   routes: Route[];
@@ -637,6 +650,13 @@ export function createDefaultSaveFallbacks(
     gameSpeed: normalizeGameSpeed(payload.gameSpeed),
     isPaused: typeof payload.isPaused === 'boolean' ? payload.isPaused : false,
     player,
+    companyStats: normalizeCompanyStats(payload.companyStats, {
+      player,
+      currentTime,
+    }),
+    progressionFoundation: normalizeProgressionFoundationState(
+      payload.progressionFoundation,
+    ),
     cities: isArray(payload.cities) && payload.cities.length > 0
       ? mergeCanonicalCities(payload.cities as City[])
       : cloneDefaultCities(),
@@ -826,6 +846,13 @@ export function normalizeSavePayload(
     },
     currentTime,
     player,
+    companyStats: normalizeCompanyStats(withFallbacks.companyStats, {
+      player,
+      currentTime,
+    }),
+    progressionFoundation: normalizeProgressionFoundationState(
+      withFallbacks.progressionFoundation,
+    ),
     cities: normalizedCities,
     products: withFallbacks.products as Product[],
     routes: withFallbacks.routes as Route[],
@@ -1650,6 +1677,13 @@ export function serializeGameState(
     ...structuredClone(state.player),
     homeCityId,
   });
+  const companyStats = captureCompanyStatsPeaks(
+    normalizeCompanyStats(state.companyStats, {
+      player,
+      currentTime: state.currentTime,
+    }),
+    player,
+  );
 
   const companyScore = calculateCompanyScore({
     player,
@@ -1677,6 +1711,11 @@ export function serializeGameState(
     },
     currentTime: state.currentTime,
     player,
+    companyStats,
+    progressionFoundation: normalizeProgressionFoundationState(
+      state.progressionFoundation,
+      savedAtMs,
+    ),
     cities: state.cities.map(slimCityForSave),
     products: [],
     routes: [],
@@ -1789,6 +1828,13 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     }),
     payload.activeDeliveries ?? [],
   );
+  const companyStats = normalizeCompanyStats(payload.companyStats, {
+    player,
+    currentTime: safeCurrentTime,
+  });
+  const progressionFoundation = normalizeProgressionFoundationState(
+    payload.progressionFoundation,
+  );
   const cachedSnapshotCandidate =
     payload.cachedGlobalEconomySnapshot &&
     Number.isFinite(payload.cachedGlobalEconomySnapshot.epoch) &&
@@ -1839,6 +1885,8 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     lastPlayableContractGeneratedTime: payload.lastPlayableContractGeneratedTime ?? 0,
     lastManualContractRefreshTime: payload.lastManualContractRefreshTime ?? 0,
     player,
+    companyStats,
+    progressionFoundation,
     cities: hydratedCities,
     products:
       isArray(payload.products) && payload.products.length > 0

@@ -19,7 +19,13 @@ function assert(condition: boolean, label: string): void {
   console.log(`  ✗ ${label}`);
 }
 
-const app = readFileSync('App.tsx', 'utf8');
+const app = [
+  'App.tsx',
+  'src/hooks/useAppBootstrap.ts',
+  'src/hooks/useAppStateLifecycle.ts',
+  'src/hooks/useNativeAppLifecycle.ts',
+  'src/hooks/usePostStartupLifecycle.ts',
+].map((file) => readFileSync(file, 'utf8')).join('\n');
 const gameStore = readFileSync('src/store/gameStore.ts', 'utf8');
 const startup = readFileSync('src/utils/startupPerformance.ts', 'utf8');
 const notifications = readFileSync('src/services/notifications.ts', 'utf8');

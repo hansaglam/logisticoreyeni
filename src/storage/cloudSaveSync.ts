@@ -5,8 +5,6 @@
  * Bu fazda cloud'dan otomatik restore yapılmaz.
  */
 
-import { AppState, type AppStateStatus } from 'react-native';
-
 import { getAccountStatus, getCurrentUserId, initAnonymousAuth } from '../services/authService';
 import {
   assertLocalSaveOwnerMatchesAuth,
@@ -149,7 +147,6 @@ let restoreCandidate: CloudRestoreCandidate | null = null;
 let backendInitPromise: Promise<void> | null = null;
 let cloudSyncInitialized = false;
 let isAccountDeletionInProgress = false;
-let appStateSubscriptionAttached = false;
 let pendingRetryStateGetter: (() => StoreGameState) | null = null;
 
 export function beginAccountDeletion(): void {
@@ -247,21 +244,16 @@ function scheduleCloudSaveRetry(getState: () => StoreGameState, diagnosticId?: s
   });
 }
 
-function ensureAppStateRetryHook(): void {
-  if (appStateSubscriptionAttached) return;
-  appStateSubscriptionAttached = true;
-  AppState.addEventListener('change', (next: AppStateStatus) => {
-    if (next !== 'active') return;
-    if (cloudSaveStatus !== 'failed') return;
-    if (!pendingRetryStateGetter) return;
-    if (lastCloudSyncErrorCode) {
-      const classified = classifyCloudSaveError(lastCloudSyncErrorCode);
-      if (classified.permanent) return;
-    }
-    void syncLocalSaveToCloud('foreground', {
-      force: true,
-      state: pendingRetryStateGetter(),
-    });
+export function retryCloudSaveSyncOnForeground(): void {
+  if (cloudSaveStatus !== 'failed') return;
+  if (!pendingRetryStateGetter) return;
+  if (lastCloudSyncErrorCode) {
+    const classified = classifyCloudSaveError(lastCloudSyncErrorCode);
+    if (classified.permanent) return;
+  }
+  void syncLocalSaveToCloud('foreground', {
+    force: true,
+    state: pendingRetryStateGetter(),
   });
 }
 
@@ -479,8 +471,6 @@ export async function syncLocalSaveToCloud(
       setCloudSaveStatus('disabled');
       return false;
     }
-
-    ensureAppStateRetryHook();
 
     const account = getAccountStatus();
     const uid = getCurrentUserId();

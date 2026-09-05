@@ -114,8 +114,18 @@ check(invalidFuel.source === 'unavailable' && invalidFuel.errorCode === 'invalid
 
 const storeSource = readFileSync(resolve(process.cwd(), 'src/store/gameStore.ts'), 'utf8');
 const currentCommitIndex = storeSource.indexOf('// Current snapshot is canonical.');
-const historyReadIndex = storeSource.indexOf('const history = await repository.getHistory', currentCommitIndex);
-check(currentCommitIndex >= 0 && historyReadIndex > currentCommitIndex, 'current snapshot commits before optional history');
+const historyReadIndex = storeSource.indexOf(
+  'const history = await fetchGlobalMarketHistoryEntries(repository, snapshot)',
+  currentCommitIndex,
+);
+const historyCommitIndex = storeSource.indexOf(
+  'applyGlobalMarketHistory(set, snapshot, history)',
+  historyReadIndex,
+);
+check(
+  currentCommitIndex >= 0 && historyReadIndex > currentCommitIndex && historyCommitIndex > historyReadIndex,
+  'current snapshot commits before bounded optional history',
+);
 check(storeSource.includes('limit: INITIAL_GLOBAL_HISTORY_LIMIT'), 'initial history query is bounded');
 check(storeSource.includes("globalMarketErrorCode: null"), 'successful retry clears store error');
 

@@ -15,6 +15,11 @@ import {
 } from '../utils/marketAlerts';
 import { getCityName, getProductName } from '../utils/entityLookup';
 import type { MarketPriceAlert } from '../types/game';
+import { MARKET_ALERTS_ENABLED, NOTIFICATION_CENTER_ENABLED } from '../config/backendRoadmap';
+import type {
+  CanonicalMarketAlert,
+  NotificationPermissionState,
+} from '../domain/v11Notifications';
 
 export const MARKET_ALERT_NOTIFICATION_TYPE = 'market_alert';
 export const FLEET_RENTAL_NOTIFICATION_TYPE = 'fleet_rental';
@@ -104,6 +109,52 @@ export async function requestNotificationPermissions(): Promise<{
     granted: requested.granted,
     canAskAgain: requested.canAskAgain ?? true,
   };
+}
+
+/** Read-only permission probe. It never displays the OS permission prompt. */
+export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
+  try {
+    const permission = await Notifications.getPermissionsAsync();
+    if (permission.granted) return 'granted';
+    return permission.canAskAgain === false ? 'denied' : 'undetermined';
+  } catch {
+    return 'undetermined';
+  }
+}
+
+/**
+ * Emits only after a canonical marketplace event has been persisted by the store.
+ * Permission requests remain contextual and are owned by the settings action.
+ */
+export async function emitCanonicalMarketActivityNotification(
+  alert: CanonicalMarketAlert,
+): Promise<boolean> {
+  if (!MARKET_ALERTS_ENABLED || !NOTIFICATION_CENTER_ENABLED || isAppForegrounded()) return false;
+  try {
+    const permission = await getNotificationPermissionState();
+    if (permission !== 'granted') return false;
+    setupNotificationHandler();
+    await ensureAndroidNotificationChannel();
+    await Notifications.scheduleNotificationAsync({
+      identifier: osNotificationIdentifier(alert.dedupeKey),
+      content: {
+        title: alert.title,
+        body: alert.body,
+        data: {
+          type: 'marketplace_activity',
+          alertType: alert.type,
+          dedupeKey: alert.dedupeKey,
+          tab: 'vehicleMarketplace',
+        },
+        sound: true,
+        ...(Platform.OS === 'android' ? { channelId: 'market-alerts' } : {}),
+      },
+      trigger: null,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Tick/event paths must not prompt. First delivery start is the contextual ask. */

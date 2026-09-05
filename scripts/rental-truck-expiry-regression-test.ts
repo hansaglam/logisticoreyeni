@@ -262,7 +262,7 @@ console.log('\nIntegration wiring');
 {
   const gameStore = readFileSync('src/store/gameStore.ts', 'utf8');
   const notifications = readFileSync('src/services/notifications.ts', 'utf8');
-  const app = readFileSync('App.tsx', 'utf8');
+  const app = `${readFileSync('App.tsx', 'utf8')}\n${readFileSync('src/hooks/useNativeAppLifecycle.ts', 'utf8')}`;
   assert(gameStore.includes('processExpiredRentalTrucks'), 'gameStore uses rental processor');
   assert(gameStore.includes("processExpiredLeases('hydrate-rental-expiry')"), 'hydrate path wired');
   assert(notifications.includes('fleet-updates'), 'Android fleet channel exists');

@@ -11,15 +11,54 @@ import type {
 import { clamp } from '../utils/math';
 import { normalizeContractType } from './contractTypes';
 
-export const MAX_DRIVER_LEVEL = 5;
+export const MAX_DRIVER_LEVEL = 50;
+export const DRIVER_SPECIALTY_UNLOCK_LEVEL = 5;
 
-export const DRIVER_LEVEL_XP_THRESHOLDS: Record<number, number> = {
+const LEGACY_DRIVER_LEVEL_XP_THRESHOLDS: Record<number, number> = {
   1: 0,
   2: 100,
   3: 250,
   4: 500,
   5: 1150,
 };
+
+/**
+ * Deterministic cumulative XP curve.
+ *
+ * Levels 1–5 preserve the shipped thresholds. After level 5, each next level
+ * asks for 100 XP more than the previous step (750, 850, 950…). This grows
+ * quadratically rather than exponentially and remains integer-only/stable.
+ */
+export function getDriverLifetimeXpForLevel(level: number): number {
+  const safeLevel = clamp(Math.floor(Number.isFinite(level) ? level : 1), 1, MAX_DRIVER_LEVEL);
+  if (safeLevel <= DRIVER_SPECIALTY_UNLOCK_LEVEL) {
+    return LEGACY_DRIVER_LEVEL_XP_THRESHOLDS[safeLevel] ?? 0;
+  }
+  let threshold = LEGACY_DRIVER_LEVEL_XP_THRESHOLDS[DRIVER_SPECIALTY_UNLOCK_LEVEL] ?? 1150;
+  for (let nextLevel = DRIVER_SPECIALTY_UNLOCK_LEVEL + 1; nextLevel <= safeLevel; nextLevel += 1) {
+    threshold += 650 + (nextLevel - DRIVER_SPECIALTY_UNLOCK_LEVEL) * 100;
+  }
+  return threshold;
+}
+
+export const DRIVER_LEVEL_XP_THRESHOLDS: Readonly<Record<number, number>> =
+  Object.freeze(
+    Object.fromEntries(
+      Array.from({ length: MAX_DRIVER_LEVEL }, (_, index) => {
+        const level = index + 1;
+        return [level, getDriverLifetimeXpForLevel(level)];
+      }),
+    ),
+  );
+
+export interface DriverProgress {
+  level: number;
+  /** Lifetime XP; retained as `xp` for save compatibility. */
+  xp: number;
+  xpIntoLevel: number;
+  xpForNextLevel: number;
+  lifetimeXp: number;
+}
 
 const SPECIALTY_BY_TYPE: Partial<Record<ContractType, DriverSpecialty>> = {
   urgent: 'urgent',
@@ -78,6 +117,24 @@ export function getDriverXpProgress(driver: Driver): {
   };
 }
 
+export function getDriverProgress(driver: Driver): DriverProgress {
+  const normalized = normalizeDriverProgress(driver);
+  const level = normalized.level ?? 1;
+  const lifetimeXp = normalized.xp ?? 0;
+  const currentThreshold = getDriverLifetimeXpForLevel(level);
+  const nextThreshold =
+    level >= MAX_DRIVER_LEVEL
+      ? currentThreshold
+      : getDriverLifetimeXpForLevel(level + 1);
+  return {
+    level,
+    xp: lifetimeXp,
+    xpIntoLevel: Math.max(0, lifetimeXp - currentThreshold),
+    xpForNextLevel: Math.max(0, nextThreshold - currentThreshold),
+    lifetimeXp,
+  };
+}
+
 export function getDriverOnTimeRate(driver: Driver): number {
   const completed = driver.completedDeliveries ?? 0;
   if (completed <= 0) {
@@ -94,7 +151,7 @@ export function calculateDriverDeliveryXp(params: {
   success: boolean;
 }): number {
   if (!params.success) {
-    return 5;
+    return 0;
   }
 
   const contractType = normalizeContractType(params.contract);
@@ -158,7 +215,7 @@ export function applyDriverXp(
   let newLevel = computeDriverLevelFromXp(newXp);
 
   let specialty = normalized.specialty;
-  if (newLevel >= MAX_DRIVER_LEVEL && !specialty && contract) {
+  if (newLevel >= DRIVER_SPECIALTY_UNLOCK_LEVEL && !specialty && contract) {
     specialty = SPECIALTY_BY_TYPE[normalizeContractType(contract)] ?? inferSpecialty(normalized);
   }
 

@@ -1129,7 +1129,8 @@ export type GameNotificationActionTarget =
   | 'fleet'
   | 'finance'
   | 'map'
-  | 'market';
+  | 'market'
+  | 'vehicleMarketplace';
 
 export interface GameNotification {
   id: string;
@@ -1557,6 +1558,10 @@ export interface StoreGameState {
   /** Son manuel sözleşme yenilemesi (oyun saati) */
   lastManualContractRefreshTime: number;
   player: Player;
+  /** V1.1 informational progression; never a reward/leaderboard authority. */
+  companyStats?: import('../domain/companyStats').CompanyStats;
+  /** Additive V1.1 achievements/history/inbox cache; informational only. */
+  progressionFoundation?: import('../domain/progressionFoundation').ProgressionFoundationState;
   cities: City[];
   products: Product[];
   routes: Route[];

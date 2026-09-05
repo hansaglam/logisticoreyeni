@@ -40,17 +40,11 @@ import {
   MARKET_REFRESH_BORDER,
   MARKET_SECTION_GAP,
   MARKET_SECTION_GAP_TIGHT,
-  MARKET_SEGMENT_BG,
-  MARKET_SEGMENT_BORDER,
-  MARKET_SUMMARY_STRIP_HEIGHT,
-  marketCityChipActive,
-  marketCityChipInactive,
 } from '../components/market/marketTheme';
 import TradeProductModal, { type TradeWarehouseOption } from '../components/TradeProductModal';
 import { TutorialTarget } from '../tutorial/TutorialTarget';
 import { MARKET_ALARMS_ENABLED } from '../config/backendRoadmap';
 import {
-  ActionButton,
   AppCard,
   AppScreen,
   EmptyState,
@@ -58,8 +52,6 @@ import {
   ProductIcon,
   StatusBadge,
 } from '../components/ui';
-import type { StatusBadgeVariant } from '../components/ui';
-import type { GameIconName } from '../theme/icons';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import {
   resolveMarketTutorialMarketState,
@@ -96,8 +88,6 @@ import {
   getMarketStatusColorVariant,
   getMarketStatusHint,
   getMarketStatusLabel,
-  getMarketStatusShortLabel,
-  formatMarketStockRiskCounter,
 } from '../utils/marketStatusLabels';
 import {
   formatTrendChangeDisplay,
@@ -114,8 +104,6 @@ import {
 } from '../simulation/trading';
 import {
   detectMarketTradeOpportunities,
-  formatMarketTradeOpportunityTitle,
-  type MarketTradeOpportunity,
 } from '../utils/marketTradeOpportunities';
 import { formatTradeProfitDisplay, resolveMarketBuyState, resolveMarketSellState } from '../utils/tradeDisplay';
 import {
@@ -162,6 +150,18 @@ import type {
   Warehouse,
 } from '../types/game';
 import type { TradeProductModalMode } from '../components/TradeProductModal';
+import {
+  CompactCitySummary,
+  MarketCityChip,
+  MarketStatusSummary,
+  MarketTabSegment,
+  type MarketMood,
+  type MarketTab,
+} from '../features/market/components/MarketOverview';
+import {
+  OpportunityCard,
+  TradeOpportunityCard,
+} from '../features/market/components/MarketOpportunityCards';
 
 const CRITICAL_SHORTAGE_RATIO = 0.35;
 const HIGH_SURPLUS_RATIO = 1.5;
@@ -170,66 +170,14 @@ const SURPLUS_THRESHOLD = 1.2;
 const STATUS_MESSAGE_TIMEOUT_MS = 2000;
 const MARKET_SUCCESS_BANNER_MS = 2500;
 const MAX_OPPORTUNITIES = 3;
-const OPPORTUNITY_SCORE_CAP = 2500;
 
-type MarketTab = 'products' | 'opportunities';
-type MarketMood = 'Sakin' | 'Hareketli' | 'Fırsatlı' | 'Kriz';
 /** Piyasa fetch UI — success ve error aynı anda render edilmez. */
 type MarketFetchUiStatus = 'idle' | 'loading' | 'success' | 'error' | 'stale';
-
-const MARKET_TABS = [
-  { key: 'products' as const, label: 'Ürünler', icon: 'inventory' as const },
-  { key: 'opportunities' as const, label: 'Fırsatlar', icon: 'reputation' as const },
-];
 
 interface MarketHighlight {
   cityId: string;
   productId: ProductId;
   stockRatio: number;
-}
-
-/** Ham piyasa skorunu 0-100 aralığına normalize eder — yalnızca UI gösterimi */
-function normalizeOpportunityScore(rawScore: number | undefined | null): number {
-  const safe = Number(rawScore ?? 0);
-  if (!Number.isFinite(safe) || safe <= 0) return 0;
-
-  if (safe <= 1) {
-    return Math.min(100, Math.round(safe * 100));
-  }
-
-  if (safe <= 100) {
-    return Math.round(safe);
-  }
-
-  const capped = Math.min(safe, OPPORTUNITY_SCORE_CAP);
-  if (capped >= 2000) return 100;
-  if (capped >= 1200) {
-    return 75 + Math.round(((capped - 1200) / 800) * 25);
-  }
-  if (capped >= 700) {
-    return 50 + Math.round(((capped - 700) / 500) * 25);
-  }
-  return Math.min(49, Math.round((capped / 700) * 49));
-}
-
-function formatOpportunityScoreDisplay(rawScore: number | undefined | null): string {
-  return `${normalizeOpportunityScore(rawScore)}/100`;
-}
-
-function getOpportunityPotential(normalizedScore: number): {
-  label: string;
-  variant: StatusBadgeVariant;
-} {
-  if (normalizedScore >= 80) {
-    return { label: 'Çok güçlü', variant: 'success' };
-  }
-  if (normalizedScore >= 60) {
-    return { label: 'Güçlü', variant: 'success' };
-  }
-  if (normalizedScore >= 40) {
-    return { label: 'Orta', variant: 'warning' };
-  }
-  return { label: 'Zayıf', variant: 'muted' };
 }
 
 function getPriceChangePercent(market: NormalizedProductMarket): number {
@@ -240,30 +188,6 @@ function getPriceChangePercent(market: NormalizedProductMarket): number {
 function getOpportunityHint(market: NormalizedProductMarket): string {
   const stockRatio = calculateStockRatio(market);
   return getMarketStatusHint(getMarketStatus(stockRatio));
-}
-
-function getDemandLevelLabel(level: MarketOpportunity['demandLevel']): string {
-  switch (level) {
-    case 'high':
-      return 'Yüksek';
-    case 'medium':
-      return 'Orta';
-    default:
-      return 'Düşük';
-  }
-}
-
-function getOpportunityStrength(normalizedScore: number): {
-  label: string;
-  variant: StatusBadgeVariant;
-} {
-  if (normalizedScore >= 75) {
-    return { label: 'Güçlü fırsat', variant: 'success' };
-  }
-  if (normalizedScore >= 50) {
-    return { label: 'İyi fırsat', variant: 'info' };
-  }
-  return { label: 'Orta fırsat', variant: 'muted' };
 }
 
 function findMarketHighlights(cities: City[], products: Product[]): {
@@ -299,148 +223,6 @@ function findMarketHighlights(cities: City[], products: Product[]): {
   }
 
   return { criticalShortage, highestSurplus, criticalCount };
-}
-
-function MarketStatusSummary({
-  mood,
-  criticalCount,
-  opportunityCount,
-  syncCaption,
-}: {
-  mood: MarketMood;
-  criticalCount: number;
-  opportunityCount: number;
-  syncCaption?: string | null;
-}) {
-  return (
-    <View style={styles.worldStatusRow}>
-      <GameIcon name="map" size={13} color={colors.textMuted} />
-      <Text style={styles.worldStatusText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}>
-        <Text style={styles.worldStatusLabel}>Dünya Durumu</Text>
-        {'  '}
-        {mood} · {formatMarketStockRiskCounter(criticalCount)} · {opportunityCount} fırsat
-      </Text>
-      {syncCaption ? (
-        <Text style={styles.worldStatusSync} numberOfLines={2}>
-          {syncCaption}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-function CompactCitySummary({
-  cityName,
-  shortages,
-  surpluses,
-  avgPrice,
-}: {
-  cityName: string;
-  shortages: number;
-  surpluses: number;
-  avgPrice: number;
-}) {
-  return (
-    <View style={styles.citySummaryStrip}>
-      <View style={styles.citySummaryMetric}>
-        <Text style={[styles.citySummaryValue, { color: colors.danger }]}>{shortages}</Text>
-        <Text
-          style={styles.citySummaryLabel}
-          numberOfLines={2}
-          adjustsFontSizeToFit
-          minimumFontScale={0.75}
-        >
-          {getMarketStatusShortLabel('Kıtlık')}
-        </Text>
-      </View>
-      <View style={styles.citySummaryDivider} />
-      <View style={styles.citySummaryMetric}>
-        <Text style={[styles.citySummaryValue, { color: colors.success }]}>{surpluses}</Text>
-        <Text style={styles.citySummaryLabel}>Stok Fazla</Text>
-      </View>
-      <View style={styles.citySummaryDivider} />
-      <View style={styles.citySummaryMetric}>
-        <Text style={[styles.citySummaryValue, { color: colors.accentAmber }]}>
-          {formatMoney(avgPrice)}
-        </Text>
-        <Text style={styles.citySummaryLabel}>Ort. fiyat</Text>
-      </View>
-      <View style={styles.citySummaryTrendSlot}>
-        <GameIcon name="market" size={16} color={colors.info} />
-        <Text style={styles.citySummaryName} numberOfLines={1}>
-          {cityName}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-function MarketTabSegment({
-  activeTab,
-  onChange,
-}: {
-  activeTab: MarketTab;
-  onChange: (tab: MarketTab) => void;
-}) {
-  return (
-    <View style={styles.segmentContainer}>
-      {MARKET_TABS.map((tab) => {
-        const isActive = tab.key === activeTab;
-        return (
-          <Pressable
-            key={tab.key}
-            style={[styles.segmentTab, isActive && styles.segmentTabActive]}
-            onPress={() => onChange(tab.key)}
-          >
-            {tab.icon ? (
-              <GameIcon
-                name={tab.icon}
-                size={15}
-                color={isActive ? colors.accentBlue : colors.textMuted}
-              />
-            ) : null}
-            <Text style={[styles.segmentLabel, isActive && styles.segmentLabelActive]} numberOfLines={1}>
-              {tab.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-function MarketCityChip({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const palette = selected ? marketCityChipActive : marketCityChipInactive;
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[
-        styles.cityChip,
-        {
-          backgroundColor: palette.backgroundColor,
-          borderColor: palette.borderColor,
-        },
-      ]}
-    >
-      <Text
-        style={[
-          styles.cityChipLabel,
-          { color: palette.textColor, fontWeight: selected ? '700' : '600' },
-        ]}
-        numberOfLines={1}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
 }
 
 interface MarketVolatilitySnapshot {
@@ -816,142 +598,6 @@ const ProductMarketCard = React.memo(function ProductMarketCard({
     </View>
   );
 });
-
-function TradeOpportunityCard({
-  opportunity,
-  onPress,
-}: {
-  opportunity: MarketTradeOpportunity;
-  onPress: () => void;
-}) {
-  const badgeVariant: StatusBadgeVariant =
-    opportunity.type === 'sell' ? 'amber' : opportunity.type === 'buy' ? 'success' : 'info';
-
-  return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
-      <AppCard style={styles.tradeOpportunityCard} padded>
-        <View style={styles.cardTopRow}>
-          <View style={styles.productIconBox}>
-            <GameIcon
-              name={opportunity.type === 'sell' ? 'warehouse' : 'market'}
-              size={16}
-              color={colors.accentBlue}
-            />
-          </View>
-          <View style={styles.cardMain}>
-            <Text style={styles.opportunityRoute} numberOfLines={1}>
-              {formatMarketTradeOpportunityTitle(opportunity)}
-            </Text>
-            <Text style={styles.opportunityProduct} numberOfLines={2}>
-              {opportunity.description}
-            </Text>
-          </View>
-          <StatusBadge label={opportunity.label} variant={badgeVariant} size="sm" />
-        </View>
-        {opportunity.netProfit != null ? (
-          <Text
-            style={[
-              styles.tradeOpportunityProfit,
-              { color: opportunity.netProfit >= 0 ? colors.success : colors.danger },
-            ]}
-          >
-            Net kâr: {opportunity.netProfit >= 0 ? '+' : ''}
-            {formatMoney(opportunity.netProfit)}
-          </Text>
-        ) : null}
-      </AppCard>
-    </TouchableOpacity>
-  );
-}
-
-function OpportunityCard({
-  opportunity,
-  exactMatchesCount,
-  relatedMatchesCount,
-  onViewContracts,
-}: {
-  opportunity: MarketOpportunity;
-  exactMatchesCount: number;
-  relatedMatchesCount: number;
-  onViewContracts: (opportunity: MarketOpportunity) => void;
-}) {
-  const normalizedScore = normalizeOpportunityScore(opportunity.score);
-  const strength = getOpportunityStrength(normalizedScore);
-  const potential = getOpportunityPotential(normalizedScore);
-  const hasExactMatches = exactMatchesCount > 0;
-  const hasRelatedMatches = relatedMatchesCount > 0;
-  const hasAnyMatches = hasExactMatches || hasRelatedMatches;
-
-  return (
-    <AppCard style={styles.opportunityCard} padded>
-      <View style={styles.cardTopRow}>
-        <View style={styles.productIconBox}>
-          <GameIcon name="route" size={16} color={colors.accentBlue} />
-        </View>
-        <View style={styles.cardMain}>
-          <Text style={styles.opportunityRoute} numberOfLines={1}>
-            {opportunity.fromCityName || getCityName(opportunity.fromCityId)} →{' '}
-            {opportunity.toCityName || getCityName(opportunity.toCityId)}
-          </Text>
-          <Text style={styles.opportunityProduct} numberOfLines={1}>
-            Ürün: {opportunity.productName}
-          </Text>
-        </View>
-        <StatusBadge label={strength.label} variant={strength.variant} size="sm" />
-      </View>
-
-      <View style={styles.opportunityMetrics}>
-        <Text style={styles.opportunityLine} numberOfLines={1}>
-          Fiyat farkı: <Text style={styles.opportunityValue}>{formatMoney(opportunity.priceGap)}</Text>
-          {' · '}
-          Mesafe: <Text style={styles.opportunityValue}>{Math.round(opportunity.distanceKm ?? 0)} km</Text>
-        </Text>
-        <Text style={styles.opportunityLine} numberOfLines={1}>
-          Talep: <Text style={styles.opportunityValue}>{getDemandLevelLabel(opportunity.demandLevel)}</Text>
-          {' · '}
-          Potansiyel: <Text style={styles.opportunityValue}>{potential.label}</Text>
-          {' · '}
-          Skor: <Text style={styles.opportunityValue}>{formatOpportunityScoreDisplay(opportunity.score)}</Text>
-        </Text>
-        <Text style={styles.opportunityLine} numberOfLines={1}>
-          {hasAnyMatches ? (
-            hasExactMatches && hasRelatedMatches ? (
-              <Text style={styles.opportunityValue}>
-                {exactMatchesCount} tam · {relatedMatchesCount} yakın iş
-              </Text>
-            ) : hasExactMatches ? (
-              <>
-                Tam eşleşme:{' '}
-                <Text style={[styles.opportunityValue, { color: colors.success }]}>
-                  {exactMatchesCount}
-                </Text>
-              </>
-            ) : (
-              <>
-                Yakın iş:{' '}
-                <Text style={[styles.opportunityValue, { color: colors.accentAmber }]}>
-                  {relatedMatchesCount}
-                </Text>
-              </>
-            )
-          ) : (
-            <Text style={styles.opportunityPending}>Uygun sözleşme bekleniyor</Text>
-          )}
-        </Text>
-      </View>
-
-      <ActionButton
-        label="Sözleşmeleri Gör"
-        onPress={() => onViewContracts(opportunity)}
-        variant="primary"
-        icon="contract"
-        iconSize={12}
-        compact
-        style={styles.opportunityAction}
-      />
-    </AppCard>
-  );
-}
 
 interface MarketScreenProps {
   onOpenContracts?: () => void;
@@ -2303,114 +1949,6 @@ const styles = StyleSheet.create({
     lineHeight: 13,
     color: colors.textSecondary,
   },
-  worldStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    minHeight: 26,
-    paddingHorizontal: 2,
-  },
-  worldStatusText: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 10,
-    lineHeight: 13,
-    color: colors.textSecondary,
-    fontWeight: '500',
-  },
-  worldStatusSync: {
-    maxWidth: 118,
-    fontSize: 8.5,
-    lineHeight: 11,
-    color: colors.textMuted,
-    fontWeight: '500',
-    textAlign: 'right',
-    flexShrink: 0,
-  },
-  worldStatusLabel: {
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  segmentContainer: {
-    height: 42,
-    borderRadius: 14,
-    padding: 3,
-    backgroundColor: MARKET_SEGMENT_BG,
-    borderWidth: 1,
-    borderColor: MARKET_SEGMENT_BORDER,
-    flexDirection: 'row',
-    gap: 3,
-  },
-  segmentTab: {
-    flex: 1,
-    height: 36,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    paddingHorizontal: 6,
-  },
-  segmentTabActive: {
-    backgroundColor: 'rgba(35,136,255,0.13)',
-    borderColor: colors.accentBlue,
-  },
-  segmentLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.textMuted,
-  },
-  segmentLabelActive: {
-    color: colors.accentBlue,
-    fontWeight: '700',
-  },
-  citySummaryStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: MARKET_SUMMARY_STRIP_HEIGHT,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.cardSoft,
-    paddingHorizontal: 11,
-  },
-  citySummaryMetric: {
-    flex: 1,
-    alignItems: 'center',
-    minWidth: 0,
-  },
-  citySummaryDivider: {
-    width: 1,
-    height: 28,
-    backgroundColor: 'rgba(70,120,190,0.22)',
-  },
-  citySummaryValue: {
-    fontSize: 15,
-    fontWeight: '800',
-    lineHeight: 17,
-  },
-  citySummaryLabel: {
-    fontSize: 8.5,
-    color: colors.textMuted,
-    marginTop: 2,
-    lineHeight: 10,
-  },
-  citySummaryTrendSlot: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingLeft: 6,
-    minWidth: 44,
-    maxWidth: 56,
-  },
-  citySummaryName: {
-    fontSize: 8.5,
-    fontWeight: '700',
-    color: colors.textMuted,
-    marginTop: 2,
-    textAlign: 'center',
-  },
   tabContent: {
     gap: MARKET_SECTION_GAP_TIGHT,
   },
@@ -2436,18 +1974,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderLeftWidth: 1,
     borderLeftColor: colors.divider,
-  },
-  cityChip: {
-    height: 34,
-    paddingHorizontal: 13,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  cityChipLabel: {
-    fontSize: 10.5,
   },
   productsSectionHeader: {
     gap: 2,
@@ -2586,22 +2112,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.textSecondary,
   },
-  opportunityCard: {
-    marginBottom: 9,
-  },
-  tradeOpportunityCard: {
-    marginBottom: 8,
-  },
-  tradeOpportunityProfit: {
-    ...typography.caption,
-    fontWeight: '800',
-    marginTop: 6,
-  },
-  cardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
   productIconBox: {
     width: 32,
     height: 32,
@@ -2616,10 +2126,6 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 9,
-  },
-  cardMain: {
-    flex: 1,
-    minWidth: 0,
   },
   productName: {
     flex: 1,
@@ -2660,37 +2166,5 @@ const styles = StyleSheet.create({
     lineHeight: 12,
     color: colors.textMuted,
     marginTop: 3,
-  },
-  opportunityRoute: {
-    ...typography.bodySmall,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  opportunityProduct: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  opportunityMetrics: {
-    marginTop: 4,
-    gap: 1,
-  },
-  opportunityLine: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  opportunityValue: {
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  opportunityPending: {
-    color: colors.textMuted,
-    fontStyle: 'italic',
-  },
-  opportunityAction: {
-    marginTop: 6,
-    minHeight: 34,
-    paddingVertical: 6,
-    alignSelf: 'flex-start',
   },
 });

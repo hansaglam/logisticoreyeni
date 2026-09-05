@@ -12,7 +12,12 @@ import {
   formatOperatingCostEventLogMessage,
   formatOperatingCostNotificationMessage,
 } from '../src/simulation/dailyOperatingCosts';
-import { buildPeriodicCostDeductions, PERIOD_24H_MS } from '../src/simulation/periodicCosts';
+import {
+  buildPeriodicCostDeductions,
+  OFFLINE_CATCHUP_MAX_COST_PERIODS,
+  ONLINE_TICK_MAX_COST_PERIODS,
+  PERIOD_24H_MS,
+} from '../src/simulation/periodicCosts';
 import { STARTER_DRIVER } from '../src/data/drivers';
 import { STARTER_TRUCK } from '../src/data/trucks';
 import type { Player } from '../src/types/game';
@@ -81,10 +86,13 @@ function run(): void {
   );
 
   const storeSrc = readSrc('src/store/gameStore.ts');
-  assert(storeSrc.includes("reason: 'offline_skip'"), 'offline path uses offline_skip');
   assert(
-    storeSrc.includes('maxOfflineCostPeriods: 0'),
-    'offline progression forces maxOfflineCostPeriods 0',
+    OFFLINE_CATCHUP_MAX_COST_PERIODS === 0 && periodicDefault.periodsCharged === 0,
+    'offline path uses zero-period canonical cap',
+  );
+  assert(
+    periodicDefault.newlyProcessedUntil === now,
+    'offline cursor advances without creating deferred debt',
   );
   assert(
     storeSrc.includes("dailyCostsApplied: false"),
@@ -110,10 +118,17 @@ function run(): void {
   const balanceSrc = readSrc('src/config/balance.ts');
   assert(balanceSrc.includes('maxOfflineChargeDays: 0'), 'balance source maxOfflineChargeDays 0');
 
-  // Online path still charges via processDailyOperatingCosts when not offline
+  // Online path still charges the bounded current period when not offline.
+  const periodicOnline = buildPeriodicCostDeductions({
+    player,
+    economyNowMs: now,
+    lastProcessedEconomyAt: now - PERIOD_24H_MS,
+    alreadyAppliedPeriodKeys: [],
+    maxOfflineCostPeriods: ONLINE_TICK_MAX_COST_PERIODS,
+  });
   assert(
-    storeSrc.includes("reason: 'daily_tick'") && storeSrc.includes('days: elapsedDays'),
-    'online advanceTime still charges elapsed days',
+    periodicOnline.periodsCharged === 1 && periodicOnline.totalAmount > 0,
+    'online periodic path still charges one eligible period',
   );
   assert(
     storeSrc.includes('get().updateDeliveries(hours)'),

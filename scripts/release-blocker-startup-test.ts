@@ -23,7 +23,11 @@ function assert(condition: boolean, label: string): void {
 const root = resolve(process.cwd());
 const read = (rel: string) => readFileSync(resolve(root, rel), 'utf8');
 
-const app = read('App.tsx');
+const app = [
+  'App.tsx',
+  'src/hooks/useAppBootstrap.ts',
+  'src/hooks/usePostStartupLifecycle.ts',
+].map(read).join('\n');
 const index = read('index.js');
 const marker = read('src/components/map/AnimatedDeliveryTruckMarker.tsx');
 const canvas = read('src/components/map/WorldMapCanvas.tsx');

@@ -14,7 +14,7 @@ function occurrences(source: string, token: string): number {
 
 console.log('\n=== tab-navigation-performance-regression-test ===\n');
 
-const app = readFileSync('App.tsx', 'utf8');
+const app = `${readFileSync('App.tsx', 'utf8')}\n${readFileSync('src/hooks/useAppStateLifecycle.ts', 'utf8')}`;
 const gameLoop = readFileSync('src/hooks/useGameLoop.ts', 'utf8');
 const tabBar = readFileSync('src/components/navigation/GameTabBar.tsx', 'utf8');
 const market = readFileSync('src/screens/MarketScreen.tsx', 'utf8');
@@ -29,7 +29,7 @@ assert(app.includes('[perf-navigation]') || app.includes('beginPerfNavigation'),
 assert(app.includes('startTransition'), 'tab switch concurrent transition kullanır');
 assert(app.includes('ScreenErrorBoundary'), 'ağır ekranlar screen-level error boundary ile korunur');
 assert(app.includes("applyOfflineProgressionIfNeeded('foreground')"), 'foreground catch-up route’u bağlı');
-assert(app.includes('wasActive && !isActive'), 'active → inactive tek lifecycle geçişi işlenir');
+assert(app.includes("nextState === 'background' || nextState === 'inactive'"), 'active → inactive lifecycle checkpoint işlenir');
 
 assert(occurrences(app, "AppState.addEventListener('change'") === 1, 'App lifecycle listener tek instance');
 assert(occurrences(gameLoop, 'setInterval(') === 1, 'game loop timer tek instance');

@@ -37,7 +37,12 @@ import {
   logAchievementHydrate,
 } from '../domain/rewardClaimIntegrity';
 import { getAcceptedTestRemoteMoney } from '../config/testMoneySyncAccepted';
-import { VEHICLE_MARKETPLACE_ENABLED } from '../config/backendRoadmap';
+import {
+  MARKET_ALERTS_ENABLED,
+  NOTIFICATION_CENTER_ENABLED,
+  V11_ANALYTICS_ENABLED,
+  VEHICLE_MARKETPLACE_ENABLED,
+} from '../config/backendRoadmap';
 import { isTestMoneySyncEnabled } from '../config/testMoneySync';
 import { resolveCashAfterMarketplaceReconcile } from '../config/testMoneySyncPure';
 import { beginPostStartupMarketplaceCloudHold } from '../services/marketplaceStartupCloudHold';
@@ -63,6 +68,7 @@ import type {
   MarketPriceAlert,
   MarketPriceAlertCondition,
   ProductId,
+  Player,
   SimulationGameState,
   SpotlightTutorialId,
   StartDeliveryResult,
@@ -86,6 +92,16 @@ import {
   reconcileFleetWithVehicleMarketplace,
 } from '../domain/vehicleMarketplaceReconciliation';
 import { resolveNotificationDismissMs } from '../types/game';
+import {
+  applyCanonicalMarketAlert,
+  buildCanonicalPurchaseAlert,
+  buildCanonicalSaleAlert,
+  normalizeNotificationPreferences,
+  rememberAnalyticsReceipt,
+  type NotificationPreferences,
+} from '../domain/v11Notifications';
+import { emitCanonicalMarketActivityNotification } from '../services/notifications';
+import { trackV11Analytics } from '../services/analytics';
 import { CITIES } from '../data/cities';
 import { PRODUCTS } from '../data/products';
 import { ROUTES } from '../data/routes';
@@ -244,6 +260,22 @@ import {
   deliveryFailureReasonToReputationDelta,
 } from '../simulation/reputationSettlement';
 import { mergeReputationIntoStore } from '../simulation/reputationService';
+import {
+  applyAuthoritativeMarketplaceSales,
+  applyCompanyStatsEvent,
+  captureCompanyStatsPeaks,
+  createCompanyStatsBaseline,
+  normalizeCompanyStats,
+} from '../domain/companyStats';
+import {
+  createDefaultProgressionFoundationState,
+  evaluateAchievementUnlocks,
+  markAllInboxRead,
+  markInboxRead,
+  mergeCanonicalSeasonHistory,
+  normalizeProgressionFoundationState,
+  type SeasonHistoryEntry,
+} from '../domain/progressionFoundation';
 import { evaluateDeliveryReadiness } from '../domain/deliveryReadiness';
 import {
   buildRecoveryOptions,
@@ -408,6 +440,7 @@ import { canRequestAdsAfterConsent } from '../services/adsConsentService';
 import {
   cancelMarketAlertNotification,
   getDefaultAlertExpiryTime,
+  getNotificationPermissionState,
   maybeRequestGameplayNotificationPermission,
   requestNotificationPermissions,
   scheduleMarketAlertNotification,
@@ -1730,6 +1763,38 @@ export function createInitialGameState(): StoreGameState {
     maxNewContracts: contractGenerationBalance.maxPlayableContractsGeneratedAtOnce,
   }).contracts;
 
+  const initialPlayer: Player = {
+    companyName: 'LogistiCore Lojistik',
+    money: STARTING_MONEY,
+    companyLevel: 1,
+    level: 1,
+    xp: 0,
+    xpToNextLevel: calculateXpToNextLevel(1),
+    totalXp: 0,
+    homeCityId: 'izmir',
+    reputation: reputationBalance.initial,
+    completedContracts: 0,
+    failedDeliveries: 0,
+    lateDeliveries: 0,
+    trucks: [normalizeTruckFuel(structuredClone(STARTER_TRUCK))],
+    drivers: [structuredClone(STARTER_DRIVER)],
+    trailers: [],
+    warehouses: [
+      {
+        id: 'warehouse-starter-1',
+        cityId: 'izmir',
+        capacityTons: 100,
+        capacityTon: 100,
+        dailyOperatingCost: operatingCostBalance.fallbackWarehouseDailyCost,
+        upgradeTier: 1,
+        warehouseType: 'standard',
+        qualityProtection: 0.5,
+        inventory: [],
+        usedCapacityTon: 0,
+      },
+    ],
+  };
+
   return {
     currentTime: 0,
     isPaused: false,
@@ -1742,37 +1807,14 @@ export function createInitialGameState(): StoreGameState {
     lastDailyCleanupTime: 0,
     lastPlayableContractGeneratedTime: 0,
     lastManualContractRefreshTime: 0,
-    player: {
-      companyName: 'LogistiCore Lojistik',
-      money: STARTING_MONEY,
-      companyLevel: 1,
-      level: 1,
-      xp: 0,
-      xpToNextLevel: calculateXpToNextLevel(1),
-      totalXp: 0,
-      homeCityId: 'izmir',
-      reputation: reputationBalance.initial,
-      completedContracts: 0,
-      failedDeliveries: 0,
-      lateDeliveries: 0,
-      trucks: [normalizeTruckFuel(structuredClone(STARTER_TRUCK))],
-      drivers: [structuredClone(STARTER_DRIVER)],
-      trailers: [],
-      warehouses: [
-        {
-          id: 'warehouse-starter-1',
-          cityId: 'izmir',
-          capacityTons: 100,
-          capacityTon: 100,
-          dailyOperatingCost: operatingCostBalance.fallbackWarehouseDailyCost,
-          upgradeTier: 1,
-          warehouseType: 'standard',
-          qualityProtection: 0.5,
-          inventory: [],
-          usedCapacityTon: 0,
-        },
-      ],
+    player: initialPlayer,
+    companyStats: {
+      ...createCompanyStatsBaseline(initialPlayer, 0),
+      // Fresh games have no pre-V1.1 marketplace history to baseline.
+      // Legacy saves omit companyStats and are normalized conservatively instead.
+      marketplaceSalesBaselineInitialized: true,
     },
+    progressionFoundation: createDefaultProgressionFoundationState(),
     cities,
     products: structuredClone(PRODUCTS),
     routes: structuredClone(ROUTES),
@@ -1868,6 +1910,19 @@ export interface GameStore extends StoreGameState {
   addNotification: (notification: Omit<GameNotification, 'id'> & { id?: string }) => void;
   dismissNotification: (notificationId: string) => void;
   clearNotifications: () => void;
+  syncProgressionFoundation: (input: {
+    activeSeasonKey?: string;
+    seasonPoints?: number;
+    challengesCompleted?: number;
+    seasonHistory?: SeasonHistoryEntry[];
+    nowMs?: number;
+  }) => string[];
+  markProgressInboxRead: (itemId: string) => void;
+  markAllProgressInboxRead: () => void;
+  updateNotificationPreference: (
+    key: keyof Omit<NotificationPreferences, 'permissionAsked'>,
+    enabled: boolean,
+  ) => Promise<'granted' | 'denied' | 'not-requested'>;
   applyVehicleMarketplaceReconciliation: (
     authoritative: AuthoritativeMarketplaceReconciliation,
   ) => boolean;
@@ -1879,6 +1934,7 @@ export interface GameStore extends StoreGameState {
     buyerCashAfter: number;
     vehicle: AuthoritativeMarketplaceReconciliation['vehicles'][number];
     marketplaceStateVersion?: number;
+    transactionId: string;
   }) => boolean;
   requestNavigationFromNotification: (target: GameNotificationActionTarget) => void;
   clearNavigationRequest: () => void;
@@ -2199,6 +2255,114 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ notifications: [] });
   },
 
+  syncProgressionFoundation: (input) => {
+    const live = get();
+    const now = input.nowMs ?? Date.now();
+    let foundation = normalizeProgressionFoundationState(live.progressionFoundation, now);
+    if (input.activeSeasonKey) {
+      foundation = mergeCanonicalSeasonHistory(
+        foundation,
+        input.seasonHistory ?? foundation.seasonHistory,
+        input.activeSeasonKey,
+        now,
+      );
+      if (input.seasonPoints !== undefined || input.challengesCompleted !== undefined) {
+        foundation = {
+          ...foundation,
+          currentSeasonSnapshot: {
+            seasonKey: input.activeSeasonKey,
+            seasonPoints: Math.max(0, Math.floor(input.seasonPoints ?? 0)),
+            challengesCompleted: Math.max(0, Math.floor(input.challengesCompleted ?? 0)),
+            loadedAt: now,
+          },
+        };
+      }
+    }
+    const stats = captureCompanyStatsPeaks(
+      normalizeCompanyStats(live.companyStats, {
+        player: live.player,
+        currentTime: live.currentTime,
+      }),
+      live.player,
+    );
+    const result = evaluateAchievementUnlocks(
+      foundation,
+      {
+        player: live.player,
+        companyStats: stats,
+        seasonPoints: foundation.currentSeasonSnapshot?.seasonPoints,
+        challengesCompleted: foundation.currentSeasonSnapshot?.challengesCompleted,
+      },
+      now,
+    );
+    let nextFoundation = result.state;
+    const analyticsEvents: string[] = [];
+    for (const achievementId of V11_ANALYTICS_ENABLED ? result.unlockedIds : []) {
+      const receipt = rememberAnalyticsReceipt(
+        nextFoundation,
+        `analytics:achievement:${achievementId}`,
+      );
+      nextFoundation = receipt.state;
+      if (receipt.applied) analyticsEvents.push(achievementId);
+    }
+    set({ progressionFoundation: nextFoundation });
+    for (const achievementId of analyticsEvents) {
+      void trackV11Analytics('achievement_unlocked', { achievement_id: achievementId });
+    }
+    get().autoSave('manual');
+    return result.unlockedIds;
+  },
+
+  markProgressInboxRead: (itemId) => {
+    set({ progressionFoundation: markInboxRead(get().progressionFoundation, itemId, Date.now()) });
+    get().autoSave('manual');
+  },
+
+  markAllProgressInboxRead: () => {
+    set({ progressionFoundation: markAllInboxRead(get().progressionFoundation, Date.now()) });
+    get().autoSave('manual');
+  },
+
+  updateNotificationPreference: async (key, enabled) => {
+    const current = normalizeProgressionFoundationState(get().progressionFoundation);
+    const currentPreferences = normalizeNotificationPreferences(current.notificationPreferences);
+    let permissionAsked = currentPreferences.permissionAsked;
+    let result: 'granted' | 'denied' | 'not-requested' = 'not-requested';
+    if (
+      enabled &&
+      (key === 'marketSaleAlerts' || key === 'marketplaceActivityAlerts') &&
+      MARKET_ALERTS_ENABLED &&
+      NOTIFICATION_CENTER_ENABLED
+    ) {
+      try {
+        if (!permissionAsked) {
+          const permission = await requestNotificationPermissions();
+          permissionAsked = true;
+          result = permission.granted ? 'granted' : 'denied';
+        } else {
+          result = (await getNotificationPermissionState()) === 'granted'
+            ? 'granted'
+            : 'denied';
+        }
+      } catch {
+        permissionAsked = true;
+        result = 'denied';
+      }
+    }
+    set({
+      progressionFoundation: {
+        ...current,
+        notificationPreferences: {
+          ...currentPreferences,
+          [key]: enabled,
+          permissionAsked,
+        },
+      },
+    });
+    get().autoSave('manual');
+    return result;
+  },
+
   applyVehicleMarketplaceReconciliation: (authoritative) => {
     const live = get();
     const trucks = live.player?.trucks ?? [];
@@ -2218,24 +2382,68 @@ export const useGameStore = create<GameStore>((set, get) => ({
         templateIds: result.diagnostics.usedFallbackTemplateIds,
       });
     }
+    const observedAlerts: Array<ReturnType<typeof buildCanonicalSaleAlert>> = [];
+    const analyticsSaleIds: string[] = [];
     set((state) => {
       if (!state.player) {
         return { vehicleMarketplace: result.cache };
       }
+      const nextPlayer = {
+        ...state.player,
+        trucks: result.trucks,
+        money: resolveCashAfterMarketplaceReconcile({
+          localCash: state.player.money,
+          authoritativeCash: result.authoritativeCash,
+          acceptedTestRemoteMoney: getAcceptedTestRemoteMoney(),
+          testMoneySyncEnabled: isTestMoneySyncEnabled(),
+        }),
+      };
+      const normalizedStats = normalizeCompanyStats(state.companyStats, {
+          player: state.player,
+          currentTime: state.currentTime,
+        });
+      const newlyObservedSaleIds = normalizedStats.marketplaceSalesBaselineInitialized
+        ? (result.cache.soldTruckIds ?? []).filter(
+            (truckId) => !normalizedStats.appliedEventIds.includes(`marketplace-sale:${truckId}`),
+          )
+        : [];
+      const saleStats = applyAuthoritativeMarketplaceSales(
+        normalizedStats,
+        result.cache.soldTruckIds ?? [],
+      );
+      let progressionFoundation = normalizeProgressionFoundationState(state.progressionFoundation);
+      for (const truckId of newlyObservedSaleIds) {
+        const alert = buildCanonicalSaleAlert(truckId, Date.now());
+        if (MARKET_ALERTS_ENABLED) {
+          const alertResult = applyCanonicalMarketAlert(progressionFoundation, alert);
+          progressionFoundation = alertResult.state;
+          if (alertResult.applied) observedAlerts.push(alert);
+        }
+        if (V11_ANALYTICS_ENABLED) {
+          const analyticsReceipt = rememberAnalyticsReceipt(
+            progressionFoundation,
+            `analytics:marketplace-sale:${truckId}`,
+          );
+          progressionFoundation = analyticsReceipt.state;
+          if (analyticsReceipt.applied) analyticsSaleIds.push(truckId);
+        }
+      }
       return {
-        player: {
-          ...state.player,
-          trucks: result.trucks,
-          money: resolveCashAfterMarketplaceReconcile({
-            localCash: state.player.money,
-            authoritativeCash: result.authoritativeCash,
-            acceptedTestRemoteMoney: getAcceptedTestRemoteMoney(),
-            testMoneySyncEnabled: isTestMoneySyncEnabled(),
-          }),
-        },
+        player: nextPlayer,
+        companyStats: captureCompanyStatsPeaks(saleStats, nextPlayer),
         vehicleMarketplace: result.cache,
+        progressionFoundation,
       };
     });
+    const preferences = normalizeNotificationPreferences(
+      get().progressionFoundation?.notificationPreferences,
+    );
+    if (preferences.marketSaleAlerts) {
+      for (const alert of observedAlerts) if (alert) void emitCanonicalMarketActivityNotification(alert);
+    }
+    for (const _saleId of analyticsSaleIds) {
+      void trackV11Analytics('marketplace_sale_observed', { source: 'reconciliation' });
+    }
     bumpCanonicalStateRevision('marketplace-reconciliation');
     get().autoSave('marketplace-reconciliation');
     return true;
@@ -2259,17 +2467,46 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
       return false;
     }
-    set({
-      player: {
+    const nextPlayer = {
         ...live.player,
         trucks: patch.trucks,
         money: patch.money,
-      },
+      };
+    const purchaseStats = applyCompanyStatsEvent(normalizeCompanyStats(live.companyStats, {
+      player: live.player,
+      currentTime: live.currentTime,
+    }), {
+      type: 'marketplace-purchase',
+      eventId: `marketplace-purchase:${input.transactionId}`,
+    });
+    const alert = buildCanonicalPurchaseAlert(input.transactionId, Date.now());
+    const alertResult = MARKET_ALERTS_ENABLED
+      ? applyCanonicalMarketAlert(live.progressionFoundation, alert)
+      : { state: normalizeProgressionFoundationState(live.progressionFoundation), applied: false };
+    const analyticsReceipt = V11_ANALYTICS_ENABLED
+      ? rememberAnalyticsReceipt(
+          alertResult.state,
+          `analytics:marketplace-purchase:${input.transactionId}`,
+        )
+      : { state: alertResult.state, applied: false };
+    set({
+      player: nextPlayer,
+      companyStats: captureCompanyStatsPeaks(purchaseStats.stats, nextPlayer),
+      progressionFoundation: analyticsReceipt.state,
       vehicleMarketplace: {
         ...live.vehicleMarketplace,
         ...patch.cache,
       },
     });
+    const preferences = normalizeNotificationPreferences(
+      analyticsReceipt.state.notificationPreferences,
+    );
+    if (alertResult.applied && alert && preferences.marketplaceActivityAlerts) {
+      void emitCanonicalMarketActivityNotification(alert);
+    }
+    if (analyticsReceipt.applied) {
+      void trackV11Analytics('marketplace_purchase_success', { source: 'canonical_response' });
+    }
     bumpCanonicalStateRevision('marketplace-purchase');
     get().autoSave('marketplace-purchase');
     return true;
@@ -2294,6 +2531,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         break;
       case 'market':
         set({ navigationRequest: { tab: 'market' } });
+        break;
+      case 'vehicleMarketplace':
+        set({ navigationRequest: { tab: 'vehicleMarketplace' } });
         break;
       default:
         break;
@@ -7749,6 +7989,32 @@ const elapsed = plan.elapsed;
       deliveryId,
     );
     const ledgerPatch = patchFinanceLedger(state, completionLedgerEntries);
+    const completedPlayer: Player = {
+      ...reputationPatch.player,
+      trucks: merged.player!.trucks,
+      drivers: updatedDrivers,
+      warehouses: merged.player!.warehouses,
+      trailers: syncedTrailers,
+      money: moneyAfterComplete,
+      completedContracts: state.player.completedContracts + 1,
+      lateDeliveries: isLateDelivery
+        ? (state.player.lateDeliveries ?? 0) + 1
+        : (state.player.lateDeliveries ?? 0),
+    };
+    const deliveryStats = applyCompanyStatsEvent(normalizeCompanyStats(state.companyStats, {
+      player: state.player,
+      currentTime: state.currentTime,
+    }), {
+      type: 'delivery-success',
+      eventId: settlementId,
+      punctuality: settlementRecord.punctualityResult === 'cancelled'
+        ? 'failed'
+        : settlementRecord.punctualityResult,
+      distanceKm: settlementRecord.distanceKm,
+      revenue: settlement.grossRevenue,
+      driverXp: driverXpGain,
+    });
+    const nextCompanyStats = captureCompanyStatsPeaks(deliveryStats.stats, completedPlayer);
 
     set({
       ...merged,
@@ -7765,18 +8031,8 @@ const elapsed = plan.elapsed;
         reportedNetProfit: netProfit,
         cashDeltaOnCompletion: moneyAfterComplete - beforeMoney,
       },
-      player: {
-        ...reputationPatch.player,
-        trucks: merged.player!.trucks,
-        drivers: updatedDrivers,
-        warehouses: merged.player!.warehouses,
-        trailers: syncedTrailers,
-        money: moneyAfterComplete,
-        completedContracts: state.player.completedContracts + 1,
-        lateDeliveries: isLateDelivery
-          ? (state.player.lateDeliveries ?? 0) + 1
-          : (state.player.lateDeliveries ?? 0),
-      },
+      player: completedPlayer,
+      companyStats: nextCompanyStats,
       reputationHistory: reputationPatch.reputationHistory,
       deliverySettlementHistory: prependSettlementRecord(
         state.deliverySettlementHistory,
@@ -8021,6 +8277,25 @@ const elapsed = plan.elapsed;
       item.id === deliveryId ? { ...item, settledAt } : item,
     );
     const routeLabel = `${getCityName(delivery.originCityId)} → ${getCityName(delivery.destinationCityId)}`;
+    const failedPlayer: Player = {
+      ...reputationPatch.player,
+      trucks: merged.player!.trucks,
+      drivers: merged.player!.drivers,
+      warehouses: merged.player!.warehouses,
+      money: moneyAfterFail,
+      failedDeliveries: (state.player.failedDeliveries ?? 0) + 1,
+      lateDeliveries:
+        reason === 'too_late'
+          ? (state.player.lateDeliveries ?? 0) + 1
+          : (state.player.lateDeliveries ?? 0),
+    };
+    const failureStats = applyCompanyStatsEvent(normalizeCompanyStats(state.companyStats, {
+      player: state.player,
+      currentTime: state.currentTime,
+    }), {
+      type: 'delivery-failure',
+      eventId: `delivery-failure:${deliveryId}`,
+    });
 
     set({
       ...merged,
@@ -8045,18 +8320,8 @@ const elapsed = plan.elapsed;
         reportedNetProfit: -(delivery.fuelCost ?? 0) - paidPenaltyAmount,
         cashDeltaOnCompletion: -paidPenaltyAmount,
       },
-      player: {
-        ...reputationPatch.player,
-        trucks: merged.player!.trucks,
-        drivers: merged.player!.drivers,
-        warehouses: merged.player!.warehouses,
-        money: moneyAfterFail,
-        failedDeliveries: (state.player.failedDeliveries ?? 0) + 1,
-        lateDeliveries:
-          reason === 'too_late'
-            ? (state.player.lateDeliveries ?? 0) + 1
-            : (state.player.lateDeliveries ?? 0),
-      },
+      player: failedPlayer,
+      companyStats: captureCompanyStatsPeaks(failureStats.stats, failedPlayer),
       reputationHistory: reputationPatch.reputationHistory,
       deliverySettlementHistory: prependSettlementRecord(
         state.deliverySettlementHistory,
@@ -9247,7 +9512,6 @@ const elapsed = plan.elapsed;
         return { ok: false, reason: result.reason ?? 'Operasyon kararı uygulanamadı.' };
       }
 
-      const contract = state.contracts.find((item) => item.id === delivery.contractId);
       const incidentTitle = result.delivery.incident?.title ?? 'Teslimat';
       const cashDelta = getOperationChoiceNetCashDelta(choice.effects);
       let nextPlayer = state.player;
@@ -9340,18 +9604,6 @@ const elapsed = plan.elapsed;
               ...normalized,
               currentFuelL: (normalized.currentFuelL ?? 0) + (result.effects!.fuelLitersDelta ?? 0),
             });
-          }),
-        };
-      }
-
-      if (result.effects.driverXpDelta > 0) {
-        nextPlayer = {
-          ...nextPlayer,
-          drivers: nextPlayer.drivers.map((driver) => {
-            if (driver.id !== delivery.driverId) {
-              return driver;
-            }
-            return applyDriverXp(driver, result.effects!.driverXpDelta, contract).driver;
           }),
         };
       }

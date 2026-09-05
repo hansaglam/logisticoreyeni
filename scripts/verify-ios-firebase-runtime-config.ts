@@ -320,7 +320,7 @@ function run(): void {
   assert(appleSrc.includes('config-validation'), 'Apple auth has config-validation stage');
   assert(appleSrc.includes('FIREBASE_RUNTIME_CONFIG_MISMATCH'), 'Apple auth hard-guard code present');
 
-  const appSrc = read('App.tsx');
+  const appSrc = `${read('App.tsx')}\n${read('src/hooks/useAppBootstrap.ts')}`;
   assert(appSrc.includes('logFirebaseRuntimeConfigOnce'), 'startup runtime config log present');
 
   console.log(`\nResult: ${passed} passed, ${failed} failed\n`);

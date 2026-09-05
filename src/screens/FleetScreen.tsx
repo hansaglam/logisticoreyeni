@@ -52,6 +52,7 @@ import {
 import {
   getDriverOnTimeRate,
   getDriverXpProgress,
+  MAX_DRIVER_LEVEL,
 } from '../simulation/driverProgress';
 import { findActiveTransferForTruck, selectDriverForTransfer } from '../simulation/truckTransfer';
 import {
@@ -620,7 +621,7 @@ export default function FleetScreen() {
         {
           label: 'XP',
           value:
-            xpProgress.level >= 5
+            xpProgress.level >= MAX_DRIVER_LEVEL
               ? String(xpProgress.xp)
               : `${xpProgress.xp} / ${xpProgress.xpForNextLevel}`,
         },

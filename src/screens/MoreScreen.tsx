@@ -34,6 +34,12 @@ import {
 import type { GameIconName } from '../theme/icons';
 import { CITIES_BY_ID } from '../data/cities';
 import { getLevelProgress } from '../simulation/leveling';
+import { getDriverProgress, MAX_DRIVER_LEVEL } from '../simulation/driverProgress';
+import {
+  captureCompanyStatsPeaks,
+  normalizeCompanyStats,
+} from '../domain/companyStats';
+import CompanyProgressFoundationCard from '../features/companyStats/CompanyProgressFoundationCard';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import { restartSpotlightTutorial } from '../hooks/useSpotlightTutorialTriggers';
@@ -44,7 +50,16 @@ import {
   resolveMoreScreenRoute,
   shouldFocusAccountSection,
 } from '../navigation/managementNavigation';
-import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
+import {
+  CHALLENGES_ENABLED,
+  COMPANY_STATS_ENABLED,
+  DRIVER_PROGRESSION_ENABLED,
+  ACHIEVEMENTS_ENABLED,
+  INBOX_ENABLED,
+  LEADERBOARD_ENABLED,
+  SEASONS_ENABLED,
+  SEASON_HISTORY_ENABLED,
+} from '../config/backendRoadmap';
 
 const WarehouseScreen = lazy(() => import('./WarehouseScreen'));
 const FinanceScreen = lazy(() => import('./FinanceScreen'));
@@ -52,6 +67,12 @@ const MissionsScreen = lazy(() => import('./MissionsScreen'));
 const LeaderboardScreen = lazy(() => import('./LeaderboardScreen'));
 const UpgradesScreen = lazy(() => import('./UpgradesScreen'));
 const AccountCenterScreen = lazy(() => import('./AccountCenterScreen'));
+const SeasonsChallengesScreen = lazy(
+  () => import('../features/seasons/SeasonsChallengesScreen'),
+);
+const ProgressHistoryScreen = lazy(
+  () => import('../features/progression/ProgressHistoryScreen'),
+);
 const DebugSimulationScreen = lazy(() => import('./DebugSimulationScreen'));
 
 function EmbeddedScreenFallback() {
@@ -70,7 +91,9 @@ type MoreRoute =
   | 'missions'
   | 'leaderboard'
   | 'upgrades'
-  | 'account';
+  | 'account'
+  | 'seasons-challenges'
+  | 'progress-history';
 
 interface ModuleItem {
   key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
@@ -226,6 +249,8 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
   const [route, setRoute] = useState<MoreRoute>('menu');
   const [focusAccountSection, setFocusAccountSection] = useState(false);
   const player = useGameStore((state) => state.player);
+  const companyStats = useGameStore((state) => state.companyStats);
+  const progressionFoundationState = useGameStore((state) => state.progressionFoundation);
   const pendingMoreSubRoute = useGameStore((state) => state.pendingMoreSubRoute);
   const clearPendingMoreSubRoute = useGameStore((state) => state.clearPendingMoreSubRoute);
   const menuScrollRef = useRef<ScrollView | null>(null);
@@ -272,6 +297,27 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
     () => (player ? getLevelProgress(player) : null),
     [player],
   );
+  const progressionFoundation = useMemo(() => {
+    if (!player || !DRIVER_PROGRESSION_ENABLED || !COMPANY_STATS_ENABLED) return null;
+    const driver = player.drivers[0];
+    if (!driver) return null;
+    const progress = getDriverProgress(driver);
+    const stats = captureCompanyStatsPeaks(
+      normalizeCompanyStats(companyStats, { player, currentTime: 0 }),
+      player,
+    );
+    return {
+      driverName: driver.name,
+      driverLevel: progress.level,
+      driverXpIntoLevel: progress.xpIntoLevel,
+      driverXpForNextLevel: progress.xpForNextLevel,
+      driverProgress:
+        progress.level >= MAX_DRIVER_LEVEL || progress.xpForNextLevel <= 0
+          ? 1
+          : Math.max(0, Math.min(1, progress.xpIntoLevel / progress.xpForNextLevel)),
+      stats,
+    };
+  }, [companyStats, player]);
 
   const handleModulePress = (item: ModuleItem) => {
     if (item.placeholder) {
@@ -332,6 +378,44 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
           <AccountCenterScreen
             onBack={() => setRoute('menu')}
             onOpenLeaderboard={LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined}
+          />
+        </Suspense>
+      </View>
+    );
+  }
+
+  if (route === 'seasons-challenges' && SEASONS_ENABLED && CHALLENGES_ENABLED) {
+    return (
+      <View style={styles.embeddedRoot}>
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <SeasonsChallengesScreen
+            onBack={() => setRoute('menu')}
+            onOpenAccountCenter={() => setRoute('account')}
+            onOpenLeaderboard={
+              LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined
+            }
+          />
+        </Suspense>
+      </View>
+    );
+  }
+
+  if (
+    route === 'progress-history' &&
+    ACHIEVEMENTS_ENABLED &&
+    SEASON_HISTORY_ENABLED &&
+    INBOX_ENABLED
+  ) {
+    return (
+      <View style={styles.embeddedRoot}>
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <ProgressHistoryScreen
+            onBack={() => setRoute('menu')}
+            onOpenSeasons={
+              SEASONS_ENABLED && CHALLENGES_ENABLED
+                ? () => setRoute('seasons-challenges')
+                : undefined
+            }
           />
         </Suspense>
       </View>
@@ -420,6 +504,60 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
           onOpenAccountCenter={() => setRoute('account')}
         />
       </View>
+
+      {SEASONS_ENABLED && CHALLENGES_ENABLED ? (
+        <View style={styles.moduleList}>
+          <ListRowCard
+            title="Sezonlar ve Görevler"
+            subtitle="Günlük ve haftalık hedeflerini takip et"
+            icon="trophy"
+            onPress={() => setRoute('seasons-challenges')}
+            right={
+              <View style={styles.moduleRight}>
+                <StatusBadge label="V1.1" variant="amber" size="sm" />
+                <ModuleChevron />
+              </View>
+            }
+          />
+
+          {progressionFoundation ? (
+            <CompanyProgressFoundationCard
+              driverName={progressionFoundation.driverName}
+              driverLevel={progressionFoundation.driverLevel}
+              driverXpIntoLevel={progressionFoundation.driverXpIntoLevel}
+              driverXpForNextLevel={progressionFoundation.driverXpForNextLevel}
+              driverProgress={progressionFoundation.driverProgress}
+              deliveriesCompleted={progressionFoundation.stats.deliveriesCompleted}
+              totalDistanceCompleted={progressionFoundation.stats.totalDistanceCompleted}
+              deliveryRevenueEarned={progressionFoundation.stats.deliveryRevenueEarned}
+              historicalDataComplete={progressionFoundation.stats.historicalDataComplete}
+            />
+          ) : null}
+        </View>
+      ) : null}
+
+      {ACHIEVEMENTS_ENABLED && SEASON_HISTORY_ENABLED && INBOX_ENABLED ? (
+        <View style={styles.moduleList}>
+          <ListRowCard
+            title="İlerleme ve Geçmiş"
+            subtitle="Başarımlar, sezon geçmişi ve bildirimler"
+            icon="trophy"
+            onPress={() => setRoute('progress-history')}
+            right={
+              <View style={styles.moduleRight}>
+                {(progressionFoundationState?.inbox ?? []).some((item) => !item.readAt) ? (
+                  <StatusBadge
+                    label={String((progressionFoundationState?.inbox ?? []).filter((item) => !item.readAt).length)}
+                    variant="info"
+                    size="sm"
+                  />
+                ) : null}
+                <ModuleChevron />
+              </View>
+            }
+          />
+        </View>
+      ) : null}
 
       {/* Finans / Depolar / Görevler / Geliştirmeler bu ekranda tekrarlanmaz —
           mevcut tab ve deep-link (pendingMoreSubRoute) girişleri korunur. */}

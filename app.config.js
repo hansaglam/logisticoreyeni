@@ -180,6 +180,24 @@ module.exports = () => {
           process.env.EXPO_PUBLIC_VEHICLE_MARKETPLACE_ENABLED ?? '',
         leaderboardEnabled: process.env.EXPO_PUBLIC_LEADERBOARD_ENABLED ?? '',
         marketAlarmsEnabled: process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED ?? '',
+        seasonsEnabled: process.env.EXPO_PUBLIC_ENABLE_SEASONS ?? '',
+        challengesEnabled: process.env.EXPO_PUBLIC_ENABLE_CHALLENGES ?? '',
+        driverProgressionEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION ?? '',
+        companyStatsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_COMPANY_STATS ?? '',
+        achievementsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_ACHIEVEMENTS ?? '',
+        seasonHistoryEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY ?? '',
+        inboxEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_INBOX ?? '',
+        marketAlertsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS ?? '',
+        notificationCenterEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER ?? '',
+        v11AnalyticsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_V11_ANALYTICS ?? '',
         backendDiagnosticsEnabled:
           process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED ?? '',
         enableTestMoneySync: process.env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC ?? '',

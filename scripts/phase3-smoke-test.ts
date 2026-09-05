@@ -732,15 +732,22 @@ assert(storeSrc.includes('upgradeTruck'), 'upgradeTruck action var');
 console.log('\n7. Fleet UI (static)');
 
 const fleetSrc = readFileSync('src/screens/FleetScreen.tsx', 'utf8');
+const fleetUpgradesSrc = readFileSync('src/components/fleet/FleetUpgradesPanel.tsx', 'utf8');
 assert(fleetSrc.includes('Kondisyon'), 'truck kondisyon gösterimi');
 assert(fleetSrc.includes('Bakım Yap'), 'Bakım Yap butonu');
 assert(fleetSrc.includes('Geliştirmeleri Yönet'), 'Geliştirmeleri Yönet butonu');
-assert(fleetSrc.includes('UpgradesScreen'), 'Filo UpgradesScreen yönlendirmesi');
-assert(readFileSync('src/screens/UpgradesScreen.tsx', 'utf8').includes('upgradeTruck'), 'UpgradesScreen mevcut upgrade action');
-assert(readFileSync('src/screens/UpgradesScreen.tsx', 'utf8').includes('Kamyon Değiştir'), 'UpgradesScreen kamyon değiştir strip');
+assert(
+  fleetSrc.includes("pendingFleetSubTab === 'upgrades'") && fleetSrc.includes("setActiveTab('upgrades')"),
+  'Filo canonical geliştirmeler sekmesine yönlendirir',
+);
+assert(fleetUpgradesSrc.includes('upgradeTruck(selectedTruck.id, upgradeType)'), 'FleetUpgradesPanel mevcut upgrade action');
+assert(
+  fleetUpgradesSrc.includes('title="Kamyon Seç"') && fleetUpgradesSrc.includes('TruckPickerChip'),
+  'FleetUpgradesPanel kamyon seçim strip’i',
+);
 const moreSrc = readFileSync('src/screens/MoreScreen.tsx', 'utf8');
 assert(fleetSrc.includes('Geliştirmeleri Yönet'), 'Filo canonical Geliştirmeler erişimi');
-assert(fleetSrc.includes('UpgradesScreen'), 'Filo UpgradesScreen embed route');
+assert(fleetSrc.includes('<FleetUpgradesPanel'), 'Filo FleetUpgradesPanel embed route');
 assert(moreSrc.includes("route === 'upgrades'"), 'More deep-link upgrades route korunur');
 assert(moreSrc.includes('UpgradesScreen'), 'More embedded UpgradesScreen route');
 assert(fleetSrc.includes('getDriverXpProgress'), 'driver XP progress');

@@ -182,7 +182,7 @@ console.log('\nPlatform parity + wiring');
 {
   const gameStore = readFileSync('src/store/gameStore.ts', 'utf8');
   const marketScreen = readFileSync('src/screens/MarketScreen.tsx', 'utf8');
-  const appTsx = readFileSync('App.tsx', 'utf8');
+  const appTsx = `${readFileSync('App.tsx', 'utf8')}\n${readFileSync('src/hooks/useAppStateLifecycle.ts', 'utf8')}`;
 
   assert(gameStore.includes('maybeRefreshMarketSnapshot'), 'maybeRefreshMarketSnapshot exists');
   assert(gameStore.includes('maybeRefreshMarketHistory'), 'deferred market history refresh exists');

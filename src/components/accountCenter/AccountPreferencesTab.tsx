@@ -52,6 +52,7 @@ export interface AccountPreferencesTabProps {
   registrationDateLabel: string;
   onLanguagePress: () => void;
   onPrivacyPolicy: () => void;
+  adsPrivacyOptionsSupported: boolean;
   showPrivacyOptions: boolean;
   onPrivacyChoices: () => void;
   onAccountDeletionInfo: () => void;
@@ -66,6 +67,7 @@ export default function AccountPreferencesTab({
   registrationDateLabel,
   onLanguagePress,
   onPrivacyPolicy,
+  adsPrivacyOptionsSupported,
   showPrivacyOptions,
   onPrivacyChoices,
   onAccountDeletionInfo,
@@ -114,23 +116,27 @@ export default function AccountPreferencesTab({
           compact
         />
         <View style={styles.divider} />
-        {showPrivacyOptions ? (
-          <AccountActionRow
-            title={AD_PRIVACY_OPTIONS_TITLE}
-            subtitle="Reklam ve çerez tercihleri"
-            icon="settings"
-            onPress={onPrivacyChoices}
-            compact
-          />
-        ) : (
-          <View style={styles.staticRow}>
-            <Text style={styles.staticTitle}>Gizlilik ve Çerez Ayarları</Text>
-            <Text style={styles.staticValue} numberOfLines={2}>
-              {AD_PRIVACY_NOT_REQUIRED_MESSAGE}
-            </Text>
-          </View>
-        )}
-        <View style={styles.divider} />
+        {adsPrivacyOptionsSupported ? (
+          <>
+            {showPrivacyOptions ? (
+              <AccountActionRow
+                title={AD_PRIVACY_OPTIONS_TITLE}
+                subtitle="Reklam ve çerez tercihleri"
+                icon="settings"
+                onPress={onPrivacyChoices}
+                compact
+              />
+            ) : (
+              <View style={styles.staticRow}>
+                <Text style={styles.staticTitle}>Gizlilik ve Çerez Ayarları</Text>
+                <Text style={styles.staticValue} numberOfLines={2}>
+                  {AD_PRIVACY_NOT_REQUIRED_MESSAGE}
+                </Text>
+              </View>
+            )}
+            <View style={styles.divider} />
+          </>
+        ) : null}
         <AccountActionRow
           title="Hesap Silme Bilgileri"
           subtitle="Silme süreci ve kapsam"

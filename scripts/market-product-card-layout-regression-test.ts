@@ -118,7 +118,11 @@ function run(): void {
   assert(marketSrc.includes('flexBasis: leftColWidth'), 'info column uses flexBasis');
   assert(marketSrc.includes('[market-card-layout]'), 'dev layout measurement log present');
   assert(marketSrc.includes('minHeight: 44'), 'buy button meets 44px min height');
-  assert(marketSrc.includes('scrollBottomPadding={contentBottomPadding}'), 'tab bar bottom padding via layout hook');
+  assert(
+    marketSrc.includes('marketScrollBottomPadding = contentBottomPadding') &&
+      marketSrc.includes('scrollBottomPadding={marketScrollBottomPadding}'),
+    'tab bar bottom padding via layout hook',
+  );
   assert(!/Platform\.OS === ['"]ios['"].*actionCol|actionCol.*Platform\.OS/.test(marketSrc), 'no iOS hardcoded action width');
 
   // Product name coverage — titles should not force early ellipsis via tiny fixed title width

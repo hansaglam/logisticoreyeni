@@ -114,13 +114,19 @@ export async function enableImmersiveGameMode(): Promise<void> {
 export function subscribeImmersiveModeRefresh(): () => void {
   if (Platform.OS !== 'android') return () => {};
 
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   const subscription = AppState.addEventListener('change', (state) => {
     if (state === 'active') {
-      setTimeout(() => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
         void enableImmersiveGameMode();
       }, 250);
     }
   });
 
-  return () => subscription.remove();
+  return () => {
+    subscription.remove();
+    if (refreshTimer) clearTimeout(refreshTimer);
+  };
 }

@@ -73,6 +73,7 @@ import {
   withMarketplacePurchaseTimeout,
 } from '../domain/vehicleMarketplacePurchaseFlow';
 import { subscribeAuthState } from '../services/authService';
+import { trackV11Analytics } from '../services/analytics';
 import { getFirebaseAuthSafe } from '../services/firebase';
 import { logMarketplaceAuthProbe } from '../utils/marketplaceAuthDiagnostics';
 import {
@@ -285,6 +286,7 @@ export default function VehicleMarketplaceScreen({
 
   useEffect(() => {
     logMarketplaceDev('OPEN');
+    void trackV11Analytics('marketplace_view', { source: 'navigation' });
     void logMarketplaceAuthProbe('screen-open', {
       screenStatus: screenState.status,
     });
@@ -714,6 +716,7 @@ export default function VehicleMarketplaceScreen({
         useGameStore.getState().applyMarketplacePurchaseResult({
           buyerCashAfter,
           vehicle: transferred,
+          transactionId: result.transactionId,
           marketplaceStateVersion:
             useGameStore.getState().vehicleMarketplace?.marketplaceStateVersion,
         });

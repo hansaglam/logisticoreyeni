@@ -25,6 +25,11 @@ const reactNativeMock = {
 };
 
 const expoConstantsMock = {
+  ExecutionEnvironment: {
+    Bare: 'bare',
+    Standalone: 'standalone',
+    StoreClient: 'storeClient',
+  },
   expoConfig: {
     extra: {
       features: {},

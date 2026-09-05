@@ -9,6 +9,7 @@ import path from 'node:path';
 const root = path.resolve(__dirname, '..');
 const screenPath = path.join(root, 'src/screens/ContractsScreen.tsx');
 const headerPath = path.join(root, 'src/components/ui/ScreenHeader.tsx');
+const layoutPath = path.join(root, 'src/constants/layout.ts');
 
 let passed = 0;
 let failed = 0;
@@ -25,6 +26,7 @@ function assert(condition: boolean, label: string): void {
 
 const screenSource = fs.readFileSync(screenPath, 'utf8');
 const headerSource = fs.readFileSync(headerPath, 'utf8');
+const layoutSource = fs.readFileSync(layoutPath, 'utf8');
 
 console.log('\n=== Contracts Screen Layout Regression ===\n');
 
@@ -40,7 +42,8 @@ assert(screenSource.includes('emergency'), 'emergency refresh path');
 console.log('\nScreenHeader symmetry');
 assert(headerSource.includes('leftAction'), 'ScreenHeader supports leftAction');
 assert(headerSource.includes('SIDE_SLOT_WIDTH'), 'fixed side slot width');
-assert(headerSource.includes('minHeight: 48'), '48px touch target min height');
+assert(headerSource.includes('minHeight: MIN_TOUCH_TARGET'), 'shared touch target token used');
+assert(/MIN_TOUCH_TARGET\s*=\s*44/.test(layoutSource), 'touch target token is at least platform minimum');
 assert(headerSource.includes('textAlign: \'center\''), 'centered title');
 
 console.log(`\nPASS: ${passed}`);

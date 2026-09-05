@@ -14,7 +14,11 @@ import {
   validateInternalProfileEnv,
   validateStoreProductionEnv,
 } from '../src/config/storeProductionPolicy';
-import { canRequestAdsFromSnapshot } from '../src/services/adsConsentPolicy';
+import {
+  canRequestAdsFromSnapshot,
+  createIosNonPersonalizedAdsSnapshot,
+  shouldUseGoogleUmpOnPlatform,
+} from '../src/services/adsConsentPolicy';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -104,6 +108,14 @@ async function main() {
     'UMP error blocks ads',
   );
 
+  assert.equal(shouldUseGoogleUmpOnPlatform('ios'), false, 'iOS skips Google UMP');
+  assert.equal(shouldUseGoogleUmpOnPlatform('android'), true, 'Android retains Google UMP');
+  assert.equal(
+    createIosNonPersonalizedAdsSnapshot(true).canRequestAds,
+    true,
+    'iOS NPA policy permits ads without a consent form',
+  );
+
   const appConfigSrc = readFileSync(resolve(ROOT, 'app.config.js'), 'utf8');
   const adProviderSrc = readFileSync(resolve(ROOT, 'src/services/adProvider.ts'), 'utf8');
   assert.doesNotMatch(appConfigSrc, /expo-tracking-transparency/);
@@ -130,6 +142,8 @@ async function main() {
         umpRequiredBlocksAds: true,
         umpObtainedAllowsAds: true,
         umpErrorBlocksAds: true,
+        iosUmpUiDisabled: true,
+        androidUmpPreserved: true,
         iosNoTrackingAds: true,
         rewardedEarnedRewardOnly: true,
       },

@@ -32,6 +32,41 @@ export const MARKET_ALARMS_ENABLED =
   (typeof __DEV__ !== 'undefined' && __DEV__) ||
   process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED === 'true' ||
   readExtraFeatureFlag('marketAlarmsEnabled') === 'true';
+
+/** V1.1 foundation: production remains fail-closed until backend deploy/canary. */
+export const SEASONS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_SEASONS === 'true' ||
+  readExtraFeatureFlag('seasonsEnabled') === 'true';
+export const CHALLENGES_ENABLED =
+  SEASONS_ENABLED &&
+  (process.env.EXPO_PUBLIC_ENABLE_CHALLENGES === 'true' ||
+    readExtraFeatureFlag('challengesEnabled') === 'true');
+/** V1.1 Phase 2 read-only foundation; store production remains fail-closed. */
+export const DRIVER_PROGRESSION_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION === 'true' ||
+  readExtraFeatureFlag('driverProgressionEnabled') === 'true';
+export const COMPANY_STATS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_COMPANY_STATS === 'true' ||
+  readExtraFeatureFlag('companyStatsEnabled') === 'true';
+export const ACHIEVEMENTS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_ACHIEVEMENTS === 'true' ||
+  readExtraFeatureFlag('achievementsEnabled') === 'true';
+export const SEASON_HISTORY_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY === 'true' ||
+  readExtraFeatureFlag('seasonHistoryEnabled') === 'true';
+export const INBOX_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_INBOX === 'true' ||
+  readExtraFeatureFlag('inboxEnabled') === 'true';
+/** V1.1 Phase 4 retention/observability foundation; store production remains fail-closed. */
+export const MARKET_ALERTS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS === 'true' ||
+  readExtraFeatureFlag('marketAlertsEnabled') === 'true';
+export const NOTIFICATION_CENTER_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER === 'true' ||
+  readExtraFeatureFlag('notificationCenterEnabled') === 'true';
+export const V11_ANALYTICS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_V11_ANALYTICS === 'true' ||
+  readExtraFeatureFlag('v11AnalyticsEnabled') === 'true';
 /** Migration + production canary doğrulanana kadar hiçbir UI giriş noktası açılmamalı. */
 export type VehicleMarketplaceFeatureSource = 'dev' | 'env' | 'disabled';
 

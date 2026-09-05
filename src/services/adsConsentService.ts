@@ -10,9 +10,11 @@ import {
   canRequestAdsFromSnapshot,
   classifyConsentError,
   createEmptyAdsConsentSnapshot,
+  createIosNonPersonalizedAdsSnapshot,
   isPrivacyOptionsRequired,
   isPublisherMisconfigurationError,
   maskAdMobAppId,
+  shouldUseGoogleUmpOnPlatform,
   type AdsConsentSnapshot,
 } from './adsConsentPolicy';
 
@@ -66,7 +68,7 @@ function isSupportedPlatform(): boolean {
 function getConsentModule():
   | typeof import('react-native-google-mobile-ads')
   | null {
-  if (!isSupportedPlatform()) {
+  if (!isSupportedPlatform() || !shouldUseGoogleUmpOnPlatform(Platform.OS)) {
     return null;
   }
   try {
@@ -134,6 +136,9 @@ function applyConsentFailure(message: string): AdsConsentSnapshot {
 }
 
 async function refreshConsentSnapshotFromNative(): Promise<AdsConsentSnapshot> {
+  if (Platform.OS === 'ios') {
+    return prepareIosNonPersonalizedAdsState();
+  }
   const mod = getConsentModule();
   if (!mod) {
     return updateSnapshot({
@@ -154,11 +159,23 @@ export function getAdsConsentSnapshot(): AdsConsentSnapshot {
 }
 
 export function canRequestAdsAfterConsent(): boolean {
+  if (Platform.OS === 'ios') {
+    return isAdsEnabled();
+  }
   return canRequestAdsFromSnapshot(snapshot, isAdsEnabled());
+}
+
+/** iOS fail-closed policy: no UMP UI, no personalization, NPA requests only. */
+export function prepareIosNonPersonalizedAdsState(): AdsConsentSnapshot {
+  return updateSnapshot(createIosNonPersonalizedAdsSnapshot(isAdsEnabled()));
 }
 
 export function resetAdsConsentForDebug(): void {
   if (!isInternalBuildProfile()) {
+    return;
+  }
+  if (Platform.OS === 'ios') {
+    prepareIosNonPersonalizedAdsState();
     return;
   }
   const mod = getConsentModule();
@@ -182,6 +199,10 @@ export async function gatherAdsConsentIfNeeded(): Promise<AdsConsentSnapshot> {
       error: null,
       errorCategory: 'none',
     });
+  }
+
+  if (Platform.OS === 'ios') {
+    return prepareIosNonPersonalizedAdsState();
   }
 
   if (configErrorLatched) {
@@ -233,6 +254,16 @@ export async function openAccountPrivacyOptions(): Promise<AccountPrivacyOptions
       ok: false,
       reason: 'not-required',
       userMessage: 'Reklamlar bu yapılandırmada kapalı.',
+    };
+  }
+
+
+  if (Platform.OS === 'ios') {
+    prepareIosNonPersonalizedAdsState();
+    return {
+      ok: false,
+      reason: 'not-required',
+      userMessage: 'iOS reklamları kişiselleştirilmeden gösterilir.',
     };
   }
 
@@ -324,6 +355,10 @@ export async function handleRewardedAdRequest(): Promise<RewardedAdPrivacyReques
 
   privacyActionInFlight = true;
   try {
+    if (Platform.OS === 'ios') {
+      prepareIosNonPersonalizedAdsState();
+      return { allowed: true };
+    }
     if (!snapshot.gathered) {
       await gatherAdsConsentIfNeeded();
     }

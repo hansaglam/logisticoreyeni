@@ -44,10 +44,21 @@ function main(): void {
   }
 
   const adProvider = loadSource('src/services/adProvider.ts');
+  const consentService = loadSource('src/services/adsConsentService.ts');
+  const consentPolicy = loadSource('src/services/adsConsentPolicy.ts');
   if (!adProvider.includes('canRequestAdsAfterConsent')) {
-    console.error('  ✗ adProvider must gate on UMP consent');
+    console.error('  ✗ adProvider must use the canonical platform ad gate');
   } else {
-    console.log('  ✓ adProvider consent gate');
+    console.log('  ✓ adProvider canonical platform ad gate');
+  }
+
+  if (
+    !consentPolicy.includes("return platform === 'android'") ||
+    !consentService.includes("!shouldUseGoogleUmpOnPlatform(Platform.OS)")
+  ) {
+    console.error('  ✗ iOS must not access Google UMP consent UI');
+  } else {
+    console.log('  ✓ iOS UMP UI disabled; Android UMP preserved');
   }
 
   const adsBootstrap = loadSource('src/services/adsPrivacyBootstrap.ts');
@@ -66,10 +77,14 @@ function main(): void {
   }
 
   const appTsx = loadSource('App.tsx');
-  if (!appTsx.includes('initializeAdsPrivacyStack')) {
-    console.error('  ✗ App must use initializeAdsPrivacyStack');
+  const postStartupLifecycle = loadSource('src/hooks/usePostStartupLifecycle.ts');
+  if (
+    !appTsx.includes('usePostStartupLifecycle') ||
+    !postStartupLifecycle.includes('initializeAdsPrivacyStack')
+  ) {
+    console.error('  ✗ App lifecycle must use initializeAdsPrivacyStack');
   } else {
-    console.log('  ✓ App ads privacy bootstrap');
+    console.log('  ✓ App lifecycle ads privacy bootstrap');
   }
 
   const failed = productionErrors.length + internalErrors.length;

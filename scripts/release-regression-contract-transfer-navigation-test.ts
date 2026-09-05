@@ -51,12 +51,21 @@ assert(
 );
 
 const accountSection = readFileSync('src/components/AccountSection.tsx', 'utf8');
-const accountCenter = readFileSync('src/screens/AccountCenterScreen.tsx', 'utf8');
+const accountConnectionState = readFileSync('src/utils/accountConnectionState.ts', 'utf8');
 const moreScreen = readFileSync('src/screens/MoreScreen.tsx', 'utf8');
 const leaderboardScreen = readFileSync('src/screens/LeaderboardScreen.tsx', 'utf8');
 assert(accountSection.includes('onOpenLeaderboard'), 'Hesap kartında Liderlik Tablosu erişimi korunur');
 assert(moreScreen.includes("setRoute('leaderboard')"), 'Liderlik Tablosu route’u erişilebilir');
 assert(leaderboardScreen.includes('Kullanıcı Adı Oluştur'), 'Kullanıcı adı olmayan bağlı hesap için CTA gösterilir');
-assert(accountCenter.includes('İlerlemeni korumak için Google veya Apple hesabını bağla'), 'Misafir kullanıcı için hesap bağlama açıklaması gösterilir');
+assert(
+  accountConnectionState.includes("case 'guest'") &&
+    accountConnectionState.includes('liderlik tablosuna katılmak için hesabını bağla'),
+  'Misafir hesap bağlantısı canonical durumda açıklanır',
+);
+assert(
+  leaderboardScreen.includes('GuestPromptCard') &&
+    leaderboardScreen.includes('Sıralamaya katılmak için hesabını bağla'),
+  'Misafir Liderlik Tablosu erişimi hesap bağlama CTA’sı gösterir',
+);
 
 console.log('\nrelease-regression-contract-transfer-navigation-test: PASSED');

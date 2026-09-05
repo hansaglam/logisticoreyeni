@@ -29,7 +29,12 @@ const read = (path: string) => readFileSync(path, 'utf8');
 
 console.log('\n=== performance-regression-test ===\n');
 
-const app = read('App.tsx');
+const app = [
+  'App.tsx',
+  'src/hooks/useAppBootstrap.ts',
+  'src/hooks/useAppStateLifecycle.ts',
+  'src/hooks/usePostStartupLifecycle.ts',
+].map(read).join('\n');
 const perf = read('src/utils/performanceDiagnostics.ts');
 const save = read('src/storage/saveGame.ts');
 const saveRevision = read('src/storage/saveRevision.ts');

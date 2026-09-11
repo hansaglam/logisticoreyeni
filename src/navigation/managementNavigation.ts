@@ -11,7 +11,8 @@ export type PendingMoreSubRoute =
   | 'debug'
   | 'missions'
   | 'leaderboard'
-  | 'upgrades';
+  | 'upgrades'
+  | 'help';
 
 export type ManagementNavigationTarget = {
   tab: TabKey;

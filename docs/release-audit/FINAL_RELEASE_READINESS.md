@@ -1,8 +1,59 @@
 # LogistiCore — Final Release Readiness
 
-**Audit date:** 2026-08-14  
-**Scope:** Release hardening only (no new features, no binaries)  
+**Audit date:** 2026-08-14
+**Scope:** Release hardening only (no new features, no binaries)
 **Audited tree:** Local working copy (includes offline-cost fix + fleet upgrades integration)
+
+### V1.1 Phase 7 addendum (2026-09-11)
+
+Season-close / immutable results / Season History / reward backend architecture: see
+[`V1_1_PHASE_7_FINAL_AUDIT.md`](./V1_1_PHASE_7_FINAL_AUDIT.md) — **`PHASE_7_FINAL_AUDIT_VERIFIED`**.
+Reward payout remains **`WAITING_FOR_NATURAL_QUALIFYING_SEASON`** (flags OFF; allowlist empty).
+External gate (not Phase 7): `MANDATORY_TUTORIAL_ANDROID_QA_PENDING`.
+
+**Stale regression hygiene (same day):** `leaderboard-season-seed` + `seasons-challenges-ui` updated to current lifecycle extraction and internal-ON / production-fail-closed flag truth. Local gitignored `.env.internal` / `.env.production` overlays restored to match `storeProductionPolicy`.
+
+**Leaderboard seed composite Firestore index deployed (2026-09-11):**
+- Project: `logisticore-53ab4`
+- Scope: `firestore:indexes` only (`npx firebase-tools deploy --only firestore:indexes --project logisticore-53ab4`)
+- Attempted `users` composite (`usernameSetupCompleted` + `__name__`) was **rejected by Firebase** (`400: this index is not necessary, configure using single field index controls`)
+- Seed query remains covered by automatic **single-field** indexes; local `firestore.indexes.json` does not declare the rejected composite
+- Deploy of current `firestore.indexes.json` **succeeded**; 4 pre-existing project indexes absent from the local file were **retained** (no `--force`)
+- No Functions, rules, Hosting, Storage, or client builds deployed
+
+### V1.1 Leaderboard Zero-Start production rollout (2026-09-11)
+
+Canonical audit: [`V1_1_LEADERBOARD_ZERO_START_AUDIT.md`](./V1_1_LEADERBOARD_ZERO_START_AUDIT.md) — **`LEADERBOARD_ZERO_START_PRODUCTION_VERIFIED`**.
+
+- Product: eligible linked players start at `companyScore = 0` (`scoreVersion = 3`)
+- Narrow Functions deploy only (submit/get/seed + season-close shared dependency trio); flags remain OFF
+- Active season **2026-W37** Admin refresh: 5→7 entries, all v3, includes 1 zero-score zero-progress user
+- W34 fingerprint unchanged: **`ea2310b854f11eb4`**
+- Phase 7 rewards / season-close snapshot flags still OFF
+
+### V1.1 Remaining Work Audit (2026-09-11)
+
+Canonical inventory: [`V1_1_REMAINING_WORK_AUDIT.md`](./V1_1_REMAINING_WORK_AUDIT.md)
+
+**Status:** `READY_WITH_PENDING_DEVICE_QA` (~86%) — not full `RELEASE_READY` for dual-store ship until Android mandatory tutorial QA (+ store console/smoke).
+
+P0 remaining: Android mandatory tutorial physical QA; store privacy/ads console forms for submission.
+Phase 7 payout is **not** a V1.1 enablement blocker. Tutorial QA Reset runtime UI has been **removed** (Yönetim + DebugSimulation + helper). Android mandatory tutorial physical QA remains **PENDING**.
+
+### V1.1 Store Submission Final Audit (2026-09-11)
+
+Canonical store answer sheets: [`V1_1_STORE_SUBMISSION_FINAL_AUDIT.md`](./V1_1_STORE_SUBMISSION_FINAL_AUDIT.md)
+
+**Highlights (current code truth):**
+- Tracking / ATT: **NO** (`NSPrivacyTracking=false`; iOS NPA-only ads; no ATT)
+- Contains ads: **YES** (rewarded AdMob only)
+- Account deletion: in-app + `…/account-deletion/` URL
+- IAP / financial features: **NO**
+- Guest core play; Google (+ Apple iOS) for marketplace/leaderboard
+- Privacy policy URL **READY**; dedicated Terms URL **NOT_FOUND** (Yasal Belgeler opens privacy)
+- Supersedes stale §18 inventory wording that still mentioned ATT / “Advertising ID if consent”
+
+**Operator next:** Fill App Connect Privacy + Play Data Safety from that audit; keep Android tutorial QA on the dual-store path.
 
 ---
 
@@ -273,16 +324,19 @@ Source: `src/utils/legalLinks.ts` (HTTPS).
 
 ## 18. Store privacy data inventory (code-collected)
 
+> **Superseded for submission:** use [`V1_1_STORE_SUBMISSION_FINAL_AUDIT.md`](./V1_1_STORE_SUBMISSION_FINAL_AUDIT.md).
+> Historical table below retained for audit trail; **ATT is removed**; iOS ads are NPA-only; Android retains UMP.
+
 | Data type | Collected? | Purpose / location |
 |-----------|------------|-------------------|
 | Firebase Auth UID | Yes | Account, cloud save, marketplace, leaderboard |
 | Email | Optional (Google/Apple) | Auth provider profile |
 | Username | Yes (user-set) | Leaderboard display, reservations |
 | Gameplay / save state | Yes | Local + Firestore cloud save |
-| Advertising ID | Yes (if ads + consent) | AdMob, UMP, ATT |
+| Advertising ID | AdMob SDK (esp. Android); iOS NPA / no ATT | Ads — see store submission audit |
 | Diagnostics | Internal profile only | Backend diagnostics panel |
-| Crash data | Not in-app custom SDK audited | Expo/RN default if enabled in build |
-| IAP / purchase receipts | No native IAP audited | N/A |
+| Crash data | Not in-app Crashlytics | Do not overclaim |
+| IAP / purchase receipts | No | N/A |
 | Precise location | **No** | Map is fictional network positions |
 
 ---

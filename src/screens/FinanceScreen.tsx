@@ -7,11 +7,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import HelpGuideButton from '../components/help/HelpGuideButton';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 import { CARD_GAP, getMetricChipWidth } from '../constants/layout';
 
 import {
@@ -318,14 +315,7 @@ function FinanceMetricStrip({
 
 export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) {
   useScreenRenderProfiler('Finance');
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
-
-  const financeTutorial = useScreenAppTutorial({
-    tutorialId: 'finance',
-    layoutReady,
-    scrollRef,
-  });
 
   const player = useGameStore(selectPlayer);
   const contracts = useGameStore(selectContracts);
@@ -432,9 +422,7 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
   );
 
   const companyScoreHint =
-    !companyScoreBreakdown?.rankedEligible
-      ? 'Haftalık sıralamaya girmek için en az 3 teslimat tamamlamalısın. Varsayılan itibar (50) nötrdür.'
-      : 'Şirket puanı; teslimat performansı, şirket gelişimi, itibar, filo değeri ve haftalık operasyon sonuçlarından hesaplanır. Nakit bakiyesi sıralamayı domine etmez.';
+    'Şirket puanı; teslimat performansı, şirket gelişimi, itibar, filo değeri ve haftalık operasyon sonuçlarından hesaplanır. Yeni şirketler 0 puanla başlar; başlangıç nakit/filo ücretsiz puan vermez. Nakit bakiyesi sıralamayı domine etmez.';
 
   const availableContractCount = useMemo(
     () => contracts.filter((c) => c.status === 'available').length,
@@ -637,29 +625,28 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
         scroll
         embedded={!onBack}
         scrollRef={scrollRef}
-        onScroll={financeTutorial.handleScroll}
-        onScrollEndDrag={financeTutorial.handleScrollEnd}
-        onMomentumScrollEnd={financeTutorial.handleScrollEnd}
-        scrollEventThrottle={16}
       >
-        <View onLayout={markLayoutReady}>
+        <View>
       <ScreenHeader
         title="Finans"
         subtitle="Gelirleri, giderleri ve şirket sağlığını takip et"
         compact
         onBack={onBack}
-        rightAction={<AppTutorialHelpButton {...financeTutorial.helpButtonProps} />}
+        rightAction={
+          <HelpGuideButton
+            onPress={() => openHelpGuide('getting_started')}
+            accessibilityLabel="Yardım ve Rehber"
+          />
+        }
       />
 
-      <AppTutorialTarget tutorialId="finance" targetId="cash-flow" layoutMode="stretch">
-        <FinanceMetricStrip
-          cash={cash}
-          totalRevenue={totalRevenue}
-          totalExpenses={totalExpenses}
-          netProfit={netProfit}
-          dailyFixedCosts={dailyFixedCosts}
-        />
-      </AppTutorialTarget>
+      <FinanceMetricStrip
+        cash={cash}
+        totalRevenue={totalRevenue}
+        totalExpenses={totalExpenses}
+        netProfit={netProfit}
+        dailyFixedCosts={dailyFixedCosts}
+      />
 
       {showFallbackHint ? (
         <Text style={styles.summaryHint}>Finans özeti tahmini verilerle hesaplanıyor.</Text>
@@ -681,17 +668,13 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
       />
 
       <SectionTitle title="Gelirler" compact />
-      <AppTutorialTarget tutorialId="finance" targetId="income" layoutMode="stretch">
-        <BreakdownCard
-          lines={incomeLines}
-          hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
-        />
-      </AppTutorialTarget>
+      <BreakdownCard
+        lines={incomeLines}
+        hint={showRevenueHint ? 'Gelirler teslimat tamamlandığında işlenir.' : undefined}
+      />
 
       <SectionTitle title="Teslimat Giderleri" compact />
-      <AppTutorialTarget tutorialId="finance" targetId="expenses" layoutMode="stretch">
-        <BreakdownCard lines={deliveryExpenseLines} />
-      </AppTutorialTarget>
+      <BreakdownCard lines={deliveryExpenseLines} />
 
       <SectionTitle
         title="Sabit Giderler"
@@ -865,28 +848,26 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
       )}
 
       <SectionTitle title="Finansal Sağlık" compact />
-      <AppTutorialTarget tutorialId="finance" targetId="net-profit" layoutMode="stretch">
-        <AppCard
-          variant="soft"
-          style={[styles.healthCard, { borderColor: healthColor }]}
-          padded={false}
-        >
-          <View style={styles.healthHeader}>
-            <View>
-              <Text style={[styles.healthScore, { color: healthColor }]}>
-                {Math.round(financialHealth)}
-                <Text style={styles.healthScoreSuffix}> / 100</Text>
-              </Text>
-              <Text style={[styles.healthLabel, { color: healthColor }]}>{healthLabel}</Text>
-            </View>
-            <GameIcon name="success" size={22} color={healthColor} />
+      <AppCard
+        variant="soft"
+        style={[styles.healthCard, { borderColor: healthColor }]}
+        padded={false}
+      >
+        <View style={styles.healthHeader}>
+          <View>
+            <Text style={[styles.healthScore, { color: healthColor }]}>
+              {Math.round(financialHealth)}
+              <Text style={styles.healthScoreSuffix}> / 100</Text>
+            </Text>
+            <Text style={[styles.healthLabel, { color: healthColor }]}>{healthLabel}</Text>
           </View>
-          <ProgressBar progress={financialHealth / 100} color={healthColor} height={8} />
-          <Text style={styles.healthHint} numberOfLines={2}>
-            Nakit rezervi, sabit giderler, filo kondisyonu ve sözleşme geçmişine göre hesaplanır.
-          </Text>
-        </AppCard>
-      </AppTutorialTarget>
+          <GameIcon name="success" size={22} color={healthColor} />
+        </View>
+        <ProgressBar progress={financialHealth / 100} color={healthColor} height={8} />
+        <Text style={styles.healthHint} numberOfLines={2}>
+          Nakit rezervi, sabit giderler, filo kondisyonu ve sözleşme geçmişine göre hesaplanır.
+        </Text>
+      </AppCard>
 
       <SectionTitle title="Son Finans Hareketleri" compact />
       {recentLedgerEntries.length === 0 ? (
@@ -951,7 +932,6 @@ export default function FinanceScreen({ onBack }: { onBack?: () => void } = {}) 
       ) : null}
         </View>
       </AppScreen>
-      <AppTutorialOverlay {...financeTutorial.overlayProps} />
     </View>
   );
 }

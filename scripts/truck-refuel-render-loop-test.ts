@@ -36,7 +36,7 @@ check(source.includes('lastTruckRef'), 'iOS dismiss keeps last truck so Modal is
 check(!source.includes('useGameStore((state) => selectFuelPriceQuote(state))'), 'fresh-object Zustand selector removed');
 check(source.includes('const cachedSnapshot = useGameStore') && source.includes('const marketSyncStatus = useGameStore'), 'store inputs use stable selectors');
 check(source.includes('[cachedSnapshot, cachedSnapshotTrusted, marketLastSyncedAtMs, marketSyncStatus]'), 'quote dependencies are stable');
-check(source.includes('initializedTruckIdRef.current === truck?.id'), 'truck reset is idempotent');
+check(source.includes('initializedTruckIdRef.current === truckId'), 'truck reset is idempotent');
 check(source.includes("console.warn('[truck-refuel-render-loop]'") && source.includes('renderCountRef.current > 20'), 'render warning is thresholded once');
 
 const snapshot = buildGlobalEconomySnapshot({ cities: CITIES, nowMs: 1_800_000_000_000 });
@@ -51,11 +51,14 @@ const price = live.pricePerLiter ?? 0;
 const truckA = makeTruck('a', 70);
 const truckB = makeTruck('b', 130);
 const preset = calculateTruckRefuelQuote(truckA, 25, price);
-const full = calculateTruckRefuelQuote(truckA, 110, price);
+const hundred = calculateTruckRefuelQuote(truckA, 100, price);
+const hundredCapped = calculateTruckRefuelQuote(truckB, 100, price);
 const max40 = calculateTruckRefuelQuote(truckA, maximumLiters(40, price, 110), price);
 const max80 = calculateTruckRefuelQuote(truckA, maximumLiters(80, price, 110), price);
 check(preset.litersToAdd === 25, '25 L preset');
-check(full.newFuelL === 180, 'full fill');
+check(hundred.litersToAdd === 100, '100 L preset');
+check(hundredCapped.litersToAdd === 50 && hundredCapped.newFuelL === 180, '100 L capped by remaining tank');
+check(source.includes("label: '100 L'") && !source.includes('Tam Doldur'), 'Tam Doldur replaced by 100 L');
 check(max40.totalCost <= 40, 'maximum buy');
 check(max80.litersToAdd >= max40.litersToAdd, 'cash/store update recomputes derived quote');
 check(calculateTruckRefuelQuote(truckB, 25, price).newFuelL === 155, 'truck change recomputes quote');

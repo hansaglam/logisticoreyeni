@@ -222,8 +222,8 @@ console.log('\nDelivery boost eligibility states');
   });
   assert(consentBlocked.reason === 'consent-not-ready', 'consent-not-ready reason');
   assert(
-    eligibilityReasonToUserMessage(consentBlocked).includes('Gizlilik Tercihini Tamamla'),
-    'consent-not-ready UI message',
+    eligibilityReasonToUserMessage(consentBlocked).includes('Reklam İzle'),
+    'consent-not-ready UI message uses Reklam İzle (privacy CTA deprecated)',
   );
 
   const adLoading = getDeliveryAdBoostEligibility({

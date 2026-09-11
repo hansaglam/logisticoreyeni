@@ -5,12 +5,18 @@
 import {
   ADMOB_APP_IDS,
   ADMOB_REWARDED_UNIT_IDS,
+  GOOGLE_SAMPLE_ADMOB_APP_ID_PREFIX,
+  GOOGLE_SAMPLE_ADMOB_UNIT_PREFIX,
+  isGoogleSampleAdMobAppId,
+  isGoogleSampleAdMobUnitId,
   isValidAdMobAppId,
   isValidAdMobUnitId,
 } from './adMobConstants';
 
-export const GOOGLE_SAMPLE_ADMOB_APP_ID_PREFIX = 'ca-app-pub-3940256099942544~';
-export const GOOGLE_SAMPLE_ADMOB_UNIT_PREFIX = 'ca-app-pub-3940256099942544/';
+export {
+  GOOGLE_SAMPLE_ADMOB_APP_ID_PREFIX,
+  GOOGLE_SAMPLE_ADMOB_UNIT_PREFIX,
+};
 
 const LOCALHOST_PATTERNS = [
   /^localhost\b/i,
@@ -35,6 +41,16 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
 
   if (env.EXPO_PUBLIC_ADS_USE_TEST_IDS === 'true') {
     errors.push('EXPO_PUBLIC_ADS_USE_TEST_IDS must be false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_REWARDED_AD_DIAGNOSTIC === 'true') {
+    errors.push(
+      'EXPO_PUBLIC_ENABLE_REWARDED_AD_DIAGNOSTIC must be false/unset for store production',
+    );
+  }
+  if (env.LOGISTICORE_ALLOW_PRODUCTION_DIAGNOSTICS === 'true') {
+    errors.push(
+      'LOGISTICORE_ALLOW_PRODUCTION_DIAGNOSTICS must be false/unset for store production',
+    );
   }
   if (env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED === 'true') {
     errors.push('EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED must be false for store production');
@@ -78,6 +94,12 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
   if (env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY === 'true') {
     errors.push('EXPO_PUBLIC_ENABLE_SEASON_HISTORY must remain false for store production');
   }
+  if (env.EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT must remain false for store production');
+  }
+  if (env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS === 'true') {
+    errors.push('EXPO_PUBLIC_ENABLE_SEASON_REWARDS must remain false for store production');
+  }
   if (env.EXPO_PUBLIC_ENABLE_INBOX === 'true') {
     errors.push('EXPO_PUBLIC_ENABLE_INBOX must remain false for store production');
   }
@@ -106,7 +128,7 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
     if (!isValidAdMobAppId(appId)) {
       errors.push(`Missing/invalid production AdMob App ID (${label})`);
     }
-    if (appId.startsWith(GOOGLE_SAMPLE_ADMOB_APP_ID_PREFIX)) {
+    if (isGoogleSampleAdMobAppId(appId)) {
       errors.push(`AdMob App ID (${label}) uses Google sample/test App ID`);
     }
   }
@@ -115,7 +137,7 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
     if (!isValidAdMobUnitId(unitId)) {
       errors.push(`Missing/invalid production rewarded unit ID (${label})`);
     }
-    if (unitId.startsWith(GOOGLE_SAMPLE_ADMOB_UNIT_PREFIX)) {
+    if (isGoogleSampleAdMobUnitId(unitId)) {
       errors.push(`Rewarded unit ID (${label}) uses Google sample/test unit ID`);
     }
   }

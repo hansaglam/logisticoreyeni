@@ -1,7 +1,7 @@
 import React from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 
-import AppTutorialHelpButton from '../tutorial/AppTutorialHelpButton';
+import HelpGuideButton from '../help/HelpGuideButton';
 import { GameIcon } from '../ui';
 import { colors, formatMoney, radius } from '../../theme';
 import {
@@ -57,7 +57,7 @@ export default function DashboardResourceBar({
       </View>
 
       <View style={styles.helpSlot}>
-        <AppTutorialHelpButton
+        <HelpGuideButton
           onPress={onHelpPress}
           disabled={helpDisabled}
           accessibilityLabel={helpAccessibilityLabel}

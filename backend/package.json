@@ -7,12 +7,12 @@
     "node": "20"
   },
   "scripts": {
-    "sync:canonical": "tsx scripts/syncCanonicalInputs.ts",
+    "sync:canonical": "node --import tsx scripts/syncCanonicalInputs.ts",
     "build": "npm run sync:canonical && tsc",
     "typecheck": "npm run sync:canonical && tsc --noEmit",
-    "marketplace:migrate": "npm run sync:canonical && tsx scripts/migrateMarketplaceStates.ts",
-    "marketplace:smoke:production": "npm run sync:canonical && tsx scripts/productionMarketplaceSmoke.ts",
-    "test": "tsx --test test/*.test.ts"
+    "marketplace:migrate": "npm run sync:canonical && node --import tsx scripts/migrateMarketplaceStates.ts",
+    "marketplace:smoke:production": "npm run sync:canonical && node --import tsx scripts/productionMarketplaceSmoke.ts",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",

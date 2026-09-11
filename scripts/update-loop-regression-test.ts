@@ -12,8 +12,6 @@ import {
   selectActiveDeliveries,
   selectReputationHistory,
 } from '../src/store/selectors/stableCollections';
-import { APP_TUTORIALS_ENABLED } from '../src/tutorial/app/featureFlags';
-import { normalizeTutorialProgress } from '../src/tutorial/app/persistence';
 import { commitLayoutReady, commitLayoutSize } from '../src/utils/layoutState';
 
 let pass = 0;
@@ -29,7 +27,8 @@ function assert(condition: boolean, label: string): void {
   console.log(`  ✗ ${label}`);
 }
 
-const TUTORIAL_SCREENS = [
+/** Legacy AppTutorial overlays are gone — these screens must not resurrect them. */
+const GAMEPLAY_SCREENS = [
   'DashboardScreen.tsx',
   'MapScreen.tsx',
   'ContractsScreen.tsx',
@@ -54,13 +53,6 @@ console.log('Stable collection selectors');
   const missingHistoryAgain = selectReputationHistory({});
   assert(missingHistory === missingHistoryAgain, 'missing reputationHistory uses stable empty array');
   assert(missingHistory === EMPTY_REPUTATION_HISTORY, 'empty reputation history constant reused');
-}
-
-console.log('\nTutorial progress normalization');
-{
-  const first = normalizeTutorialProgress(undefined);
-  const second = normalizeTutorialProgress(undefined);
-  assert(JSON.stringify(first) === JSON.stringify(second), 'normalize output is stable for undefined');
 }
 
 console.log('\nLayout guards');
@@ -92,81 +84,29 @@ console.log('\nLayout guards');
   assert(size.width === 104 && size.height === 204, 'layout size updates on meaningful change');
 }
 
-console.log('\nKill switch');
+console.log('\nRender instrumentation');
 {
-  assert(typeof APP_TUTORIALS_ENABLED === 'boolean', 'APP_TUTORIALS_ENABLED is boolean');
-}
-
-console.log('\nTutorial hook stabilization');
-{
-  const useAppTutorialSource = readFileSync('src/hooks/useAppTutorial.ts', 'utf8');
-  assert(useAppTutorialSource.includes('return useMemo('), 'useAppTutorial return value is memoized');
-  assert(useAppTutorialSource.includes('const onSkip = useCallback'), 'onSkip callback is stable');
-  assert(useAppTutorialSource.includes('const onComplete = useCallback'), 'onComplete callback is stable');
-  assert(
-    useAppTutorialSource.includes('setTransitionState((previous)'),
-    'transition state updates are no-op guarded',
-  );
-  assert(
-    !useAppTutorialSource.includes('autoAttemptedRef.current = false'),
-    'auto-start does not reset session ref on remount/blocker (persisted hasBeenPresented is source of truth)',
-  );
-  assert(
-    useAppTutorialSource.includes('shouldAutoPresentTutorial'),
-    'auto-start uses canonical shouldAutoPresentTutorial',
-  );
-
-  const hook = readFileSync('src/hooks/useScreenAppTutorial.ts', 'utf8');
-  assert(
-    !hook.includes('normalizeTutorialProgress(state.tutorialProgress)'),
-    'tutorial progress not normalized inside zustand selector',
-  );
-  assert(hook.includes('useMemo'), 'tutorial progress normalized via useMemo');
-  assert(hook.includes('onPresentPersistence = useCallback'), 'present persistence callback is stable');
-  assert(hook.includes('onTutorialOutcome = useCallback'), 'outcome persistence callback is stable');
-  assert(hook.includes('warnRenderLoopSuspected'), 'render-loop dev instrumentation exists');
   assert(
     readFileSync('src/utils/renderRateInstrumentation.ts', 'utf8').includes('RENDER_THRESHOLD'),
     'render instrumentation uses rolling window threshold',
   );
-
-  const layoutHook = readFileSync('src/hooks/useTutorialLayoutReady.ts', 'utf8');
-  assert(layoutHook.includes('readyRef'), 'layout hook uses ref guard');
-  assert(layoutHook.includes('markLayoutReady'), 'layout hook exports markLayoutReady');
 }
 
-console.log('\nTarget registry');
+console.log('\nLegacy tutorial removal');
 {
-  const targetSource = readFileSync('src/components/tutorial/AppTutorialTarget.tsx', 'utf8');
-  assert(targetSource.includes('scrollIntoViewRef'), 'target scroll callback stored in ref');
-  assert(targetSource.includes('layoutMode'), 'target supports layoutMode contract');
-  assert(
-    !targetSource.includes("alignSelf: 'flex-start'"),
-    'target has no global alignSelf flex-start',
-  );
-
-  const registrySource = readFileSync('src/tutorial/app/targetRegistry.ts', 'utf8');
-  assert(registrySource.includes('existing === entry'), 'registry skips identical entry re-register');
-}
-
-console.log('\nScreen layout wiring');
-{
-  for (const screenFile of TUTORIAL_SCREENS) {
+  for (const screenFile of GAMEPLAY_SCREENS) {
     const source = readFileSync(`src/screens/${screenFile}`, 'utf8');
     assert(
-      source.includes('useTutorialLayoutReady'),
-      `${screenFile} uses useTutorialLayoutReady`,
-    );
-    assert(
-      !source.includes('setLayoutReady(true)'),
-      `${screenFile} does not call setLayoutReady(true) inline`,
+      !/AppTutorial|MarketTutorial|SpotlightTutorial|useTutorialLayoutReady/.test(source),
+      `${screenFile} has no legacy tutorial wiring`,
     );
   }
 
   const reputationSheet = readFileSync('src/components/dashboard/ReputationDetailSheet.tsx', 'utf8');
-  assert(reputationSheet.includes('autoStart: true'), 'reputation tutorial auto-starts when sheet open');
-  assert(reputationSheet.includes('blockingModals: !visible'), 'closed reputation sheet blocks tutorial');
-  assert(reputationSheet.includes('useTutorialLayoutReady'), 'reputation sheet uses layout hook');
+  assert(
+    !/AppTutorial|useTutorialLayoutReady/.test(reputationSheet),
+    'reputation sheet has no legacy tutorial wiring',
+  );
 
   const dashboard = readFileSync('src/screens/DashboardScreen.tsx', 'utf8');
   assert(

@@ -7,12 +7,14 @@
  * - production → gerçek ad unit ID'leri
  *
  * EXPO_PUBLIC_ADS_USE_TEST_IDS=true
- * → Play Internal Testing release build'de bile TestIds.REWARDED kullanır.
+ * → Play Internal Testing / DEV builds use SDK TestIds.REWARDED
+ *   (iOS: …/1712485313, Android: …/5224354917). Do NOT switch DEV to live ads.
  * Mağaza yayını öncesi false yapılmalı.
  *
  * EXPO_PUBLIC_ADS_ENABLED=false → reklam UI/SDK kapalı
  *
  * Env yoksa: __DEV__ → test, release → production
+ * LOGISTICORE_BUILD_PROFILE=production always blocks test unit IDs.
  */
 
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -41,6 +43,7 @@ export type AdsMode = 'stub' | 'test' | 'production';
  * Expo Go, native AdMob modülünü (RNGoogleMobileAdsModule) içermez;
  * SDK require edilirse TurboModuleRegistry.getEnforcing hatası fırlatır.
  * Bu yüzden Expo Go'da her zaman stub moda düşülür.
+ * Native availability itself is Bridge OR TurboModule (see googleMobileAdsNativeAvailability).
  */
 export function isRunningInExpoGo(): boolean {
   return Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -133,8 +136,14 @@ export function getProductionDeliveryBoostRewardedAdUnitId(): string {
     : ADMOB_DELIVERY_BOOST_REWARDED_UNIT_IDS.android;
 }
 
-export function shouldShowTestAdLabel(mode: AdsMode = resolveAdsMode()): boolean {
-  return mode === 'stub' || mode === 'test';
+/**
+ * Game UI must never advertise "Test reklam" — Google's own creative may show
+ * "Test mode" inside DEV/INTERNAL test units; that is expected and left alone.
+ *
+ * @deprecated Always false. Kept for import compatibility.
+ */
+export function shouldShowTestAdLabel(_mode: AdsMode = resolveAdsMode()): boolean {
+  return false;
 }
 
 export function getAdsConfigAudit() {

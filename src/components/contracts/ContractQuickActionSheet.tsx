@@ -50,9 +50,6 @@ import { getCityName, getProductName } from '../../utils/entityLookup';
 import { colors, formatMoney, formatRatioPercent, spacing, typography } from '../../theme';
 import type { Contract, Driver, Truck } from '../../types/game';
 import { useAppSafeAreaInsets } from '../AppSafeAreaProvider';
-import TutorialOverlay from '../tutorial/TutorialOverlay';
-import { TutorialTarget } from '../../tutorial/TutorialTarget';
-import type { TutorialTargetId } from '../../tutorial/types';
 import { ActionButton, GameIcon, IconButton, StatusBadge } from '../ui';
 import AssignmentPickerSheet from './AssignmentPickerSheet';
 import FuelRequirementModal from '../FuelRequirementModal';
@@ -128,7 +125,6 @@ interface TeamPickerCardProps {
   showChange: boolean;
   selected: boolean;
   onPress: () => void;
-  tutorialId?: TutorialTargetId;
 }
 
 function TeamPickerCard({
@@ -141,9 +137,8 @@ function TeamPickerCard({
   showChange,
   selected,
   onPress,
-  tutorialId,
 }: TeamPickerCardProps) {
-  const content = (
+  return (
     <Pressable
       onPress={onPress}
       style={[styles.teamCard, selected && styles.teamCardSelected]}
@@ -176,12 +171,6 @@ function TeamPickerCard({
       )}
     </Pressable>
   );
-
-  if (tutorialId) {
-    return <TutorialTarget id={tutorialId}>{content}</TutorialTarget>;
-  }
-
-  return content;
 }
 
 export default function ContractQuickActionSheet({
@@ -608,7 +597,6 @@ export default function ContractQuickActionSheet({
                   if (eligibleTrucks.length === 1 && selectedTruckOption?.selectable) return;
                   setPickerMode('truck');
                 }}
-                tutorialId="assignment-truck-card"
               />
 
               <TeamPickerCard
@@ -625,7 +613,6 @@ export default function ContractQuickActionSheet({
                   if (eligibleDrivers.length === 1 && selectedDriverOption?.selectable) return;
                   setPickerMode('driver');
                 }}
-                tutorialId="assignment-driver-card"
               />
 
               {onOpenAdvancedAssignment ? (
@@ -672,36 +659,30 @@ export default function ContractQuickActionSheet({
               <Text style={styles.footerSummary} numberOfLines={2}>
                 {selectionSummary}
               </Text>
-              <TutorialTarget
-                id="assignment-start-button"
-                onTutorialPress={handleStart}
-              >
-                <ActionButton
-                  label={
-                    fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')
-                      ? 'Yakıt gerekli'
-                      : fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')
+              <ActionButton
+                label={
+                  fuelReadiness?.reasons.includes('INSUFFICIENT_FUEL')
+                    ? 'Yakıt gerekli'
+                    : fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE')
+                      ? 'Başka Araç Seç'
+                      : selectedTruckOption?.issue === 'rental_duration'
                         ? 'Başka Araç Seç'
-                        : selectedTruckOption?.issue === 'rental_duration'
-                          ? 'Başka Araç Seç'
-                          : 'Teslimatı Başlat'
-                  }
-                  icon="truck"
-                  onPress={handleStart}
-                  disabled={
-                    !canStart &&
-                    !fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE') &&
-                    selectedTruckOption?.issue !== 'rental_duration'
-                  }
-                  fullWidth
-                  variant="primary"
-                  style={styles.startButton}
-                />
-              </TutorialTarget>
+                        : 'Teslimatı Başlat'
+                }
+                icon="truck"
+                onPress={handleStart}
+                disabled={
+                  !canStart &&
+                  !fuelReadiness?.reasons.includes('DEADLINE_IMPOSSIBLE') &&
+                  selectedTruckOption?.issue !== 'rental_duration'
+                }
+                fullWidth
+                variant="primary"
+                style={styles.startButton}
+              />
             </View>
           </View>
         </View>
-        <TutorialOverlay layer="modal" />
         {nestFuelUi ? fuelFlow : null}
       </Modal>
 

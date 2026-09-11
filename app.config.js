@@ -4,8 +4,15 @@
  * Profile selection (explicit, no fragile overwrite chain):
  *   LOGISTICORE_BUILD_PROFILE=internal|production
  *   Reads `.env` (shared secrets) then `.env.internal` or `.env.production` overrides.
- * EXPO_PUBLIC_* varsa onu kullanır; yoksa src/config/firebase.public.json
- * (client-side public Firebase web/iOS config) Xcode archive için fallback'tir.
+ *
+ * iOS Xcode authority (upstream):
+ *   LogistiCore Debug  → LOGISTICORE_BUILD_PROFILE=internal
+ *   LogistiCore Release → LOGISTICORE_BUILD_PROFILE=production
+ *   Pods (EXConstants) mirror the same via Podfile post_install so
+ *   EXConstants.bundle/app.config matches Metro.
+ *
+ * Defense in depth: ios/scripts/apply-release-bundle-env.sh + assert-ios-release-ad-env.ts
+ * still force/verify production before Metro embed.
  *
  * Store release: LOGISTICORE_BUILD_PROFILE=production npm run validate:store-production
  */
@@ -39,18 +46,53 @@ function parseEnvFile(filePath) {
   return out;
 }
 
-function applyEnvVars(vars, { override = false } = {}) {
+function applyEnvVars(vars, { override = false, preserveKeys = [] } = {}) {
+  const preserve = new Set(preserveKeys);
   for (const [key, value] of Object.entries(vars)) {
+    if (preserve.has(key) && process.env[key] !== undefined) {
+      continue;
+    }
     if (override || process.env[key] === undefined) {
       process.env[key] = value;
     }
   }
 }
 
+/**
+ * True when app.config is evaluated inside an Xcode iOS Release/Archive script
+ * (EXConstants get-app-config, Expo Configure, Metro embed, etc.).
+ * Ordinary `npx expo config` without Xcode env must remain usable with default internal.
+ */
+function isXcodeIosReleaseBuildContext() {
+  const configuration = String(process.env.CONFIGURATION ?? '');
+  if (!/Release/i.test(configuration)) {
+    return false;
+  }
+  return Boolean(
+    process.env.XCODE_VERSION_ACTUAL ||
+      process.env.PODS_ROOT ||
+      process.env.TARGET_BUILD_DIR ||
+      process.env.PROJECT_DIR ||
+      process.env.BUILT_PRODUCTS_DIR,
+  );
+}
+
 const root = __dirname;
 applyEnvVars(parseEnvFile(path.join(root, '.env')));
-const buildProfile = process.env.LOGISTICORE_BUILD_PROFILE?.trim().toLowerCase() || 'internal';
-applyEnvVars(parseEnvFile(path.join(root, `.env.${buildProfile}`)), { override: true });
+
+const rawProfile = process.env.LOGISTICORE_BUILD_PROFILE?.trim().toLowerCase() ?? '';
+if (isXcodeIosReleaseBuildContext() && rawProfile !== 'production') {
+  throw new Error(
+    `[app.config] iOS Xcode Release/Archive requires LOGISTICORE_BUILD_PROFILE=production ` +
+      `(got "${rawProfile || '(unset)'}"). Set it on the LogistiCore Release build configuration ` +
+      `(and Pods via Podfile post_install). Refusing to default to internal/test ads.`,
+  );
+}
+
+const buildProfile = rawProfile || 'internal';
+applyEnvVars(parseEnvFile(path.join(root, `.env.${buildProfile}`)), {
+  override: true,
+});
 process.env.LOGISTICORE_BUILD_PROFILE = buildProfile;
 
 function readGitCommit() {
@@ -190,6 +232,10 @@ module.exports = () => {
           process.env.EXPO_PUBLIC_ENABLE_ACHIEVEMENTS ?? '',
         seasonHistoryEnabled:
           process.env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY ?? '',
+        seasonCloseSnapshotEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT ?? '',
+        seasonRewardsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS ?? '',
         inboxEnabled:
           process.env.EXPO_PUBLIC_ENABLE_INBOX ?? '',
         marketAlertsEnabled:

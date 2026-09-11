@@ -142,8 +142,8 @@ export function useManagementItems(): ManagementItem[] {
   );
 
   return useMemo(
-    () =>
-      configItems.map((item) => {
+    () => {
+      const mapped = configItems.map((item) => {
         let subtitle = item.defaultSubtitle ?? '';
         let badge: number | undefined;
         let badgeAttention = false;
@@ -199,7 +199,10 @@ export function useManagementItems(): ManagementItem[] {
           accessibilityLabel,
           accessibilityHint: item.accessibilityHint,
         };
-      }),
+      });
+
+      return mapped;
+    },
     [
       configItems,
       fleetSubtitle,

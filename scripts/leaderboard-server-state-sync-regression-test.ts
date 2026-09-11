@@ -136,7 +136,7 @@ console.log('First-time bootstrap may use bounded legacy migration when serverSt
   if (extracted.ok) {
     const breakdown = calculateLeaderboardScore(extracted.player, extracted.gameState);
     assert.equal(breakdown.completedContracts, 25);
-    assert.equal(breakdown.rankedEligible, true, '≥3 deliveries → ranked eligible');
+    assert.equal(breakdown.rankedEligible, true, 'v3: ranked eligible without delivery gate');
   }
   console.log('  ✓ bounded legacy migration remains valid for missing serverState');
 }

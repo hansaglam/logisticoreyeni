@@ -132,7 +132,14 @@ State lazy oluşur. Mevcut kullanıcı money/fleet/reputation resetlenmez. Histo
 - `EXPO_PUBLIC_ENABLE_SEASONS=false`
 - `EXPO_PUBLIC_ENABLE_CHALLENGES=false`
 
-Challenges yalnız seasons flag’i de açıkken etkinleşir. `.env.production` ve `.env.internal` explicit false’dur. Store production validator bu flag’lerin yanlışlıkla true olmasını reddeder.
+Challenges yalnız seasons flag’i de açıkken etkinleşir.
+
+**Profile truth (current):**
+- `.env.internal`: `EXPO_PUBLIC_ENABLE_SEASONS=true` + `EXPO_PUBLIC_ENABLE_CHALLENGES=true` (internal QA UI).
+- `.env.production` / store: both **false** (fail-closed). Store production validator rejects accidental `true`.
+- Phase 7 `EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT` / `EXPO_PUBLIC_ENABLE_SEASON_REWARDS` remain independent and fail-closed unless separately enabled.
+
+`.env.example` documents fail-closed defaults for shared templates.
 
 ## Security test results
 

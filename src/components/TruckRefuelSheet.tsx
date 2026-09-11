@@ -34,7 +34,7 @@ import type { Truck } from '../types/game';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
 import { ActionButton, GameIcon, IconButton, ProgressBar } from './ui';
 
-type RefuelChoice = '25' | '50' | 'full' | 'max';
+type RefuelChoice = '25' | '50' | '100' | 'max';
 
 export interface TruckRefuelSheetProps {
   visible: boolean;
@@ -51,7 +51,7 @@ export interface TruckRefuelSheetProps {
 const CHOICES: Array<{ id: RefuelChoice; label: string; icon: GameIconName }> = [
   { id: '25', label: '25 L', icon: 'fuel' },
   { id: '50', label: '50 L', icon: 'fuel' },
-  { id: 'full', label: 'Tam Doldur', icon: 'refresh' },
+  { id: '100', label: '100 L', icon: 'fuel' },
   { id: 'max', label: 'Maksimum Al', icon: 'level' },
 ];
 
@@ -217,8 +217,10 @@ function TruckRefuelSheetContent({
       setChoice('25');
     } else if (preferredMinimumLiters <= 50) {
       setChoice('50');
+    } else if (preferredMinimumLiters <= 100) {
+      setChoice('100');
     } else {
-      setChoice('full');
+      setChoice('max');
     }
   }, [preferredMinimumLiters, visible, truckId]);
 
@@ -241,9 +243,12 @@ function TruckRefuelSheetContent({
   const availableTankSpace = Math.max(0, tankCapacity - currentFuel);
   const requestedLiters = useMemo(() => {
     if (!priceReady || pricePerLiter == null) return 0;
+    // Fixed presets: request nominal liters; calculateTruckRefuelQuote caps by tank space.
+    // Affordability / submit disable stay on existing canAffordQuote / canSubmit gates.
     if (choice === '25') return 25;
     if (choice === '50') return 50;
-    if (choice === 'full') return availableTankSpace;
+    if (choice === '100') return 100;
+    // Maksimum Al: min(remaining tank capacity, affordable liters from cash).
     if (pricePerLiter <= 0 || cash <= 0) return 0;
     return Math.min(availableTankSpace, Math.floor((cash / pricePerLiter) * 1000) / 1000);
   }, [availableTankSpace, cash, choice, pricePerLiter, priceReady]);

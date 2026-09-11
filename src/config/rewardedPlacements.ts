@@ -7,6 +7,7 @@ import { Platform } from 'react-native';
 import {
   ADMOB_DELIVERY_BOOST_REWARDED_UNIT_IDS,
   ADMOB_REWARDED_UNIT_IDS,
+  isGoogleSampleAdMobUnitId,
   isValidAdMobUnitId,
 } from './adMobConstants';
 import { isAdsEnabled, resolveAdsMode, shouldUseTestAdUnitIds } from './adMob';
@@ -119,9 +120,13 @@ export function validateProductionRewardedPlacementIds(): string[] {
     const config = getRewardedPlacementConfig({ placement, environment: 'production' });
     if (!isValidAdMobUnitId(config.androidAdUnitId)) {
       errors.push(`${placement}: android ad unit ID missing or invalid`);
+    } else if (isGoogleSampleAdMobUnitId(config.androidAdUnitId)) {
+      errors.push(`${placement}: android ad unit ID must not be Google sample/test ID`);
     }
     if (!isValidAdMobUnitId(config.iosAdUnitId)) {
       errors.push(`${placement}: ios ad unit ID missing or invalid`);
+    } else if (isGoogleSampleAdMobUnitId(config.iosAdUnitId)) {
+      errors.push(`${placement}: ios ad unit ID must not be Google sample/test ID`);
     }
   }
 

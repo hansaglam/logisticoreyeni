@@ -1727,24 +1727,6 @@ export default function DebugSimulationScreen() {
           <View style={styles.saveStatusCard}>
             <View style={styles.statGrid}>
               <StatItem
-                label="Spotlight Done"
-                value={
-                  debugSaveInfo.spotlightCompletedIds.length > 0
-                    ? debugSaveInfo.spotlightCompletedIds.join(', ')
-                    : '—'
-                }
-                color={COLORS.secondary}
-              />
-              <StatItem
-                label="Spotlight Skipped"
-                value={
-                  debugSaveInfo.spotlightSkippedIds.length > 0
-                    ? debugSaveInfo.spotlightSkippedIds.join(', ')
-                    : '—'
-                }
-                color={COLORS.secondary}
-              />
-              <StatItem
                 label="Save Exists"
                 value={saveStatus.hasSave ? 'Yes' : 'No'}
                 color={saveStatus.hasSave ? COLORS.success : COLORS.textMuted}

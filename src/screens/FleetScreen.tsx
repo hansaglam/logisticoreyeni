@@ -7,12 +7,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
+import HelpGuideButton from '../components/help/HelpGuideButton';
 import { useAppDialog } from '../components/AppDialogProvider';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import ContextualGuideHost from '../contextualGuide/components/ContextualGuideHost';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 
 import {
   buildDriverAssignmentContext,
@@ -211,24 +209,7 @@ export default function FleetScreen() {
   const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
   const [transferTargetCityId, setTransferTargetCityId] = useState<string | undefined>();
   const [upgradeFocusTruckId, setUpgradeFocusTruckId] = useState<string | null>(null);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
-
-  const fleetTutorial = useScreenAppTutorial({
-    tutorialId: 'fleet',
-    layoutReady,
-    blockingModals:
-      transferModalTruck != null ||
-      refuelSheetTruck != null ||
-      roadsideFuelJobId != null,
-    stepOptions: { hasTrucks: trucks.length > 0 },
-    scrollRef,
-  });
-
-  const firstLeasedTruckId = useMemo(
-    () => visibleTrucks.find((truck) => truck.ownershipType === 'leased')?.id,
-    [visibleTrucks],
-  );
 
   useEffect(() => {
     if (!pendingFleetSubTab) return;
@@ -776,18 +757,17 @@ export default function FleetScreen() {
         scroll
         scrollRef={scrollRef}
         scrollBottomPadding={contentBottomPadding}
-        onScroll={fleetTutorial.handleScroll}
-        onScrollEndDrag={fleetTutorial.handleScrollEnd}
-        onMomentumScrollEnd={fleetTutorial.handleScrollEnd}
-        scrollEventThrottle={16}
       >
-        <View style={styles.screenStack} onLayout={markLayoutReady}>
+        <View style={styles.screenStack}>
           <View style={styles.fleetHeader}>
-            <AppTutorialTarget tutorialId="fleet" targetId="fleet-header" layoutMode="stretch" style={styles.fleetHeaderText}>
+            <View style={styles.fleetHeaderText}>
               <Text style={styles.fleetTitle}>Filo</Text>
               <Text style={styles.fleetSubtitle}>Araçlarını ve şoförlerini yönet</Text>
-            </AppTutorialTarget>
-            <AppTutorialHelpButton {...fleetTutorial.helpButtonProps} />
+            </View>
+            <HelpGuideButton
+              onPress={() => openHelpGuide('vehicles_fleet')}
+              accessibilityLabel="Yardım ve Rehber"
+            />
           </View>
 
         {statusMessage ? (
@@ -835,8 +815,7 @@ export default function FleetScreen() {
             />
           ) : (
             <>
-              {visibleTrucks.map((truck, index) => {
-                const truckCard = (
+              {visibleTrucks.map((truck) => (
                   <OwnedTruckCard
                     key={truck.id}
                     truck={truck}
@@ -859,28 +838,7 @@ export default function FleetScreen() {
                     }
                     onShowSellBlocked={handleShowSellBlocked}
                   />
-                );
-
-                if (index === 0) {
-                  return (
-                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="truck-status" layoutMode="stretch">
-                      <AppTutorialTarget tutorialId="fleet" targetId="fuel-maintenance" layoutMode="stretch">
-                        {truckCard}
-                      </AppTutorialTarget>
-                    </AppTutorialTarget>
-                  );
-                }
-
-                if (truck.id === firstLeasedTruckId) {
-                  return (
-                    <AppTutorialTarget key={truck.id} tutorialId="fleet" targetId="rental-return" layoutMode="stretch">
-                      {truckCard}
-                    </AppTutorialTarget>
-                  );
-                }
-
-                return truckCard;
-              })}
+              ))}
               {showFleetTip ? (
                 <AppCard variant="highlighted" style={styles.tipCard} padded>
                   <View style={styles.tipTitleRow}>
@@ -958,45 +916,31 @@ export default function FleetScreen() {
               compact
             />
           ) : (
-            drivers.map((driver, index) => {
-              const driverCard = (
-                <DriverCard
-                  key={driver.id}
-                  driver={driver}
-                  trucks={trucks}
-                  driverContext={driverAssignmentContext}
-                  homeCityId={homeCityId}
-                  activeDelivery={deliveryByDriverId.get(driver.id)}
-                  onAssign={handleAssignDriver}
-                  onTraining={handleDriverTraining}
-                  onDetail={handleDriverDetail}
-                  onMore={handleDriverMore}
-                />
-              );
-
-              if (index === 0) {
-                return (
-                  <AppTutorialTarget key={driver.id} tutorialId="fleet" targetId="driver-assignment" layoutMode="stretch">
-                    {driverCard}
-                  </AppTutorialTarget>
-                );
-              }
-
-              return driverCard;
-            })
+            drivers.map((driver) => (
+              <DriverCard
+                key={driver.id}
+                driver={driver}
+                trucks={trucks}
+                driverContext={driverAssignmentContext}
+                homeCityId={homeCityId}
+                activeDelivery={deliveryByDriverId.get(driver.id)}
+                onAssign={handleAssignDriver}
+                onTraining={handleDriverTraining}
+                onDetail={handleDriverDetail}
+                onMore={handleDriverMore}
+              />
+            ))
           )}
         </View>
       ) : null}
 
       {activeTab === 'upgrades' ? (
-        <AppTutorialTarget tutorialId="fleet" targetId="fleet-upgrades-tab" layoutMode="stretch">
-          <View style={styles.tabContent}>
-            <FleetUpgradesPanel
-              initialTruckId={upgradeFocusTruckId}
-              onUpgradeFeedback={setStatusMessage}
-            />
-          </View>
-        </AppTutorialTarget>
+        <View style={styles.tabContent}>
+          <FleetUpgradesPanel
+            initialTruckId={upgradeFocusTruckId}
+            onUpgradeFeedback={setStatusMessage}
+          />
+        </View>
       ) : null}
 
       <TruckTransferModal
@@ -1027,7 +971,14 @@ export default function FleetScreen() {
       />
       </View>
       </AppScreen>
-      <AppTutorialOverlay {...fleetTutorial.overlayProps} />
+      <ContextualGuideHost
+        cardId="manage_fleet"
+        blockingUi={
+          transferModalTruck != null ||
+          refuelSheetTruck != null ||
+          roadsideFuelJobId != null
+        }
+      />
     </View>
   );
 }

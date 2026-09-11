@@ -70,7 +70,6 @@ import type {
   ProductId,
   Player,
   SimulationGameState,
-  SpotlightTutorialId,
   StartDeliveryResult,
   StartTruckTransferResult,
   StoreGameState,
@@ -79,6 +78,7 @@ import type {
   Truck,
   TruckTransfer,
   TutorialStepId,
+  ContextualGuideCardId,
   OnboardingScreenId,
   OnboardingStepId,
   Warehouse,
@@ -589,20 +589,14 @@ import {
   syncOnboardingProgress,
 } from '../onboarding/onboardingProgress';
 import {
-  clearSpotlightTutorialProgressState,
-  createDefaultSpotlightTutorialState,
-  markSpotlightTutorialCompletedState,
-  markSpotlightTutorialSkippedState,
-} from '../tutorial/spotlightTutorialState';
-import { createCompletedMarketTutorialState } from '../tutorial/marketTutorialState';
-import {
-  applyTutorialCompletion,
-  applyTutorialOutcome,
-  applyTutorialPresented,
-  applyManualTutorialReplay,
-  normalizeTutorialProgress,
-} from '../tutorial/app/persistence';
-import type { AppTutorialId, TutorialOutcome } from '../tutorial/app/types';
+  completeContextualGuideState,
+  createEligibleContextualGuideState,
+  dismissContextualGuideCardState,
+  dismissContextualGuideState,
+  isContextualGuideCardId,
+  markContextualGuideCardCompletedState,
+  resetContextualGuideForReplayState,
+} from '../contextualGuide/contextualGuideState';
 import {
   buildSummarizedDailyOperatingCostLedgerEntry,
   calculateDailyOperatingCostBreakdown,
@@ -949,7 +943,8 @@ export type AutoSaveReason =
   | 'time_tick'
   | 'delivery_incident'
   | 'offline_progress'
-  | 'vehicle_recovery';
+  | 'vehicle_recovery'
+  | 'contextual_guide';
 
 const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'critical',
@@ -972,6 +967,7 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'vehicle_recovery',
   'marketplace-purchase',
   'marketplace-reconciliation',
+  'contextual_guide',
 ]);
 
 function resetAutoSaveTracking(gameTime = 0): void {
@@ -1241,6 +1237,11 @@ function commitXpResult(
     notifyLevelUps(get, set, state.currentTime, xpResult.newLevels);
     get().autoSave('level_up');
   }
+}
+
+function persistContextualGuideSave(getStore: () => GameStore): void {
+  getStore().markSaveDirty();
+  getStore().autoSave('contextual_guide');
 }
 
 function persistRewardClaimSave(
@@ -1857,10 +1858,7 @@ export function createInitialGameState(): StoreGameState {
     retention: createDefaultRetentionState(),
     rewardReceipts: {},
     onboarding: createDefaultOnboardingState(),
-    spotlightTutorial: createDefaultSpotlightTutorialState(),
-    marketTutorialCompleted: false,
-    marketTutorialVersion: 0,
-    tutorialProgress: {},
+    contextualGuide: createEligibleContextualGuideState(),
     marketAlerts: [],
     worldEvents: initialSnapshot?.activeEvents ?? [],
     worldEventsVersion: 1,
@@ -1971,8 +1969,6 @@ export interface GameStore extends StoreGameState {
     currentTime: number;
     tutorialStepId: TutorialStepId;
     tutorialCompletedStepIds: string[];
-    spotlightCompletedIds: string[];
-    spotlightSkippedIds: string[];
     missionsCompletedIds: string[];
     missionsClaimedRewardIds: string[];
   };
@@ -2119,10 +2115,6 @@ export interface GameStore extends StoreGameState {
   setCurrentTutorialStep: (stepId: TutorialStepId) => void;
   dismissTutorialStep: (stepId: TutorialStepId) => void;
   resetTutorial: () => void;
-  markSpotlightTutorialCompleted: (tutorialId: SpotlightTutorialId) => void;
-  markSpotlightTutorialSkipped: (tutorialId: SpotlightTutorialId) => void;
-  clearSpotlightTutorialProgress: (tutorialId: SpotlightTutorialId) => void;
-  resetSpotlightTutorials: () => void;
   ensureStarterContractsForTutorial: () => void;
   notifyContractsScreenOpened: () => void;
   notifyContractAssignmentOpened: () => void;
@@ -2130,11 +2122,6 @@ export interface GameStore extends StoreGameState {
   notifyActiveDeliverySeen: () => void;
   notifyFirstDeliveryCompleted: () => void;
   notifyMarketScreenOpened: () => void;
-  completeMarketTutorial: () => void;
-  completeTutorial: (tutorialId: AppTutorialId) => void;
-  markTutorialPresented: (tutorialId: AppTutorialId) => void;
-  recordTutorialOutcome: (tutorialId: AppTutorialId, outcome: TutorialOutcome) => void;
-  recordTutorialManualReplay: (tutorialId: AppTutorialId) => void;
   createMarketPriceAlert: (input: {
     cityId: string;
     productId: ProductId;
@@ -2172,6 +2159,13 @@ export interface GameStore extends StoreGameState {
   completeOnboardingStepPress: (stepId: OnboardingStepId) => void;
   advanceOnboardingProgress: () => void;
   resetOnboardingForDev: () => void;
+  markContextualGuideCardCompleted: (cardId: ContextualGuideCardId) => void;
+  dismissContextualGuideCard: (cardId: ContextualGuideCardId) => void;
+  completeContextualGuide: () => void;
+  dismissContextualGuide: () => void;
+  resetContextualGuideForReplay: () => void;
+  /** Restores pre-replay durable guide; no-op if not in manual replay. */
+  exitContextualGuideReplay: () => void;
   addCompanyXp: (amount: number, reason?: string) => void;
   checkLevelUp: () => void;
   getLevelBenefits: (level?: number) => LevelBenefits;
@@ -2695,46 +2689,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().markSaveDirty();
   },
 
-  markSpotlightTutorialCompleted: (tutorialId) => {
-    const state = get();
-    set({
-      spotlightTutorial: markSpotlightTutorialCompletedState(
-        state.spotlightTutorial ?? createDefaultSpotlightTutorialState(),
-        tutorialId,
-      ),
-    });
-    get().markSaveDirty();
-    get().autoSave('manual');
-  },
-
-  markSpotlightTutorialSkipped: (tutorialId) => {
-    const state = get();
-    set({
-      spotlightTutorial: markSpotlightTutorialSkippedState(
-        state.spotlightTutorial ?? createDefaultSpotlightTutorialState(),
-        tutorialId,
-      ),
-    });
-    get().markSaveDirty();
-    get().autoSave('manual');
-  },
-
-  clearSpotlightTutorialProgress: (tutorialId) => {
-    const state = get();
-    set({
-      spotlightTutorial: clearSpotlightTutorialProgressState(
-        state.spotlightTutorial ?? createDefaultSpotlightTutorialState(),
-        tutorialId,
-      ),
-    });
-    get().markSaveDirty();
-  },
-
-  resetSpotlightTutorials: () => {
-    set({ spotlightTutorial: createDefaultSpotlightTutorialState() });
-    get().markSaveDirty();
-  },
-
   ensureStarterContractsForTutorial: () => {
     const state = get();
     if (!state.player) {
@@ -2864,54 +2818,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
-  completeMarketTutorial: () => {
-    set({
-      ...createCompletedMarketTutorialState(),
-      tutorialProgress: applyTutorialCompletion(get().tutorialProgress, 'market'),
-    });
-    get().markSaveDirty();
-  },
-
-  completeTutorial: (tutorialId: AppTutorialId) => {
-    get().recordTutorialOutcome(tutorialId, 'completed');
-  },
-
-  markTutorialPresented: (tutorialId) => {
-    const nextProgress = applyTutorialPresented(
-      normalizeTutorialProgress(get().tutorialProgress),
-      tutorialId,
-    );
-    set({ tutorialProgress: nextProgress });
-    get().markSaveDirty();
-  },
-
-  recordTutorialOutcome: (tutorialId, outcome) => {
-    const state = get();
-    const nextProgress = applyTutorialOutcome(
-      normalizeTutorialProgress(state.tutorialProgress),
-      tutorialId,
-      outcome,
-    );
-    if (tutorialId === 'market') {
-      set({
-        ...(outcome === 'completed' ? createCompletedMarketTutorialState() : {}),
-        tutorialProgress: nextProgress,
-      });
-    } else {
-      set({ tutorialProgress: nextProgress });
-    }
-    get().markSaveDirty();
-  },
-
-  recordTutorialManualReplay: (tutorialId) => {
-    const nextProgress = applyManualTutorialReplay(
-      normalizeTutorialProgress(get().tutorialProgress),
-      tutorialId,
-    );
-    set({ tutorialProgress: nextProgress });
-    get().markSaveDirty();
-  },
-
   markOnboardingScreenVisited: (screenId) => {
     const state = get();
     const onboarding = state.onboarding ?? createDefaultOnboardingState();
@@ -2977,6 +2883,95 @@ export const useGameStore = create<GameStore>((set, get) => ({
   resetOnboardingForDev: () => {
     set({ onboarding: resetOnboardingStateForDev() });
     get().markSaveDirty();
+  },
+
+  markContextualGuideCardCompleted: (cardId) => {
+    if (!isContextualGuideCardId(cardId)) {
+      return;
+    }
+    const state = get();
+    const current = state.contextualGuide ?? createEligibleContextualGuideState();
+    const next = markContextualGuideCardCompletedState(current, cardId);
+    if (next === current) {
+      return;
+    }
+    set({ contextualGuide: next });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { isContextualGuideManualReplayActive } = require('../contextualGuide/contextualGuideSession') as typeof import('../contextualGuide/contextualGuideSession');
+    if (!isContextualGuideManualReplayActive()) {
+      // Immediate durable flush — force-quit must not lose mandatory progress.
+      persistContextualGuideSave(get);
+    }
+  },
+
+  dismissContextualGuideCard: (cardId) => {
+    if (!isContextualGuideCardId(cardId)) {
+      return;
+    }
+    const state = get();
+    const current = state.contextualGuide ?? createEligibleContextualGuideState();
+    const next = dismissContextualGuideCardState(current, cardId);
+    if (next === current) {
+      return;
+    }
+    set({ contextualGuide: next });
+    get().markSaveDirty();
+  },
+
+  completeContextualGuide: () => {
+    const state = get();
+    const current = state.contextualGuide ?? createEligibleContextualGuideState();
+    const next = completeContextualGuideState(current);
+    if (next === current) {
+      return;
+    }
+    set({ contextualGuide: next });
+    persistContextualGuideSave(get);
+  },
+
+  dismissContextualGuide: () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { isContextualGuideManualReplayActive, endContextualGuideManualReplay } =
+      require('../contextualGuide/contextualGuideSession') as typeof import('../contextualGuide/contextualGuideSession');
+    if (isContextualGuideManualReplayActive()) {
+      const prior = endContextualGuideManualReplay();
+      if (prior) {
+        set({ contextualGuide: prior });
+      }
+      return;
+    }
+    // Mandatory first-run: ignore dismiss (product: must complete).
+    const modeGuide = get().contextualGuide;
+    if (modeGuide?.status === 'eligible' || modeGuide?.status === 'active') {
+      return;
+    }
+    const state = get();
+    const current = state.contextualGuide ?? createEligibleContextualGuideState();
+    const next = dismissContextualGuideState(current);
+    if (next === current) {
+      return;
+    }
+    set({ contextualGuide: next });
+    get().markSaveDirty();
+  },
+
+  resetContextualGuideForReplay: () => {
+    const state = get();
+    const current = state.contextualGuide ?? createEligibleContextualGuideState();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { startContextualGuideManualReplay } = require('../contextualGuide/contextualGuideSession') as typeof import('../contextualGuide/contextualGuideSession');
+    startContextualGuideManualReplay(current);
+    set({ contextualGuide: resetContextualGuideForReplayState() });
+    // Do not markSaveDirty — durable completion stays via serialize snapshot.
+  },
+
+  exitContextualGuideReplay: () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { endContextualGuideManualReplay } = require('../contextualGuide/contextualGuideSession') as typeof import('../contextualGuide/contextualGuideSession');
+    const prior = endContextualGuideManualReplay();
+    if (prior) {
+      set({ contextualGuide: prior });
+    }
   },
 
   createMarketPriceAlert: async (input) => {
@@ -4345,8 +4340,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         title: 'Test kaydı sıfırlandı',
         message: 'Test kaydı sıfırlandı. Yeni oyun başlatıldı.',
       });
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('./spotlightTutorialStore').useSpotlightTutorialStore.getState().resetActive();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Test kaydı sıfırlanamadı.';
       console.warn('[gameStore] resetGameForTesting failed:', error);
@@ -4369,7 +4362,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const tutorial = state.tutorial ?? createDefaultTutorialState();
     const missions = state.missions ?? createDefaultMissionsState();
-    const spotlight = state.spotlightTutorial ?? createDefaultSpotlightTutorialState();
     return {
       hasHydrated: hasHydratedGame,
       hasSavedGame: state.saveStatus.hasSave,
@@ -4377,8 +4369,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       currentTime: state.currentTime,
       tutorialStepId: tutorial.currentStepId,
       tutorialCompletedStepIds: tutorial.completedStepIds,
-      spotlightCompletedIds: spotlight.completedIds,
-      spotlightSkippedIds: spotlight.skippedIds,
       missionsCompletedIds: missions.completedMissionIds,
       missionsClaimedRewardIds: missions.claimedMissionRewardIds,
     };

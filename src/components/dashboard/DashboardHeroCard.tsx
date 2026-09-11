@@ -11,7 +11,6 @@ import {
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
 import type { ReputationSummary } from '../../domain/reputationModel';
 import { METRIC_CELL_HORIZONTAL_PADDING, METRIC_ROW_GAP } from '../../domain/dashboardMetricGridLayout';
-import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { GameIcon, ProgressBar } from '../ui';
 import { formatCompanyScore } from '../../simulation/companyScore';
 import type { GameIconName } from '../../theme/icons';
@@ -223,7 +222,7 @@ export default function DashboardHeroCard({
             />
           </View>
           <View style={styles.metricCell}>
-            <AppTutorialTarget tutorialId="dashboard" targetId="reputation-card" layoutMode="preserve" style={styles.metricTarget}>
+            <View style={styles.metricTarget}>
               <Pressable
                 style={({ pressed }) => [
                   styles.reputationPressable,
@@ -297,7 +296,7 @@ export default function DashboardHeroCard({
                   />
                 </View>
               </Pressable>
-            </AppTutorialTarget>
+            </View>
           </View>
           <View style={styles.metricCell}>
             <MetricTile

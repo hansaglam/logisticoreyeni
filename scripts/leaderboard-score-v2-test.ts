@@ -290,27 +290,29 @@ const profiles: Profile[] = [
   },
 ];
 
-console.log('\n=== Leaderboard Score V2 ===\n');
+console.log('\n=== Leaderboard Score V2→V3 continuity ===\n');
 
-console.log('Audit: why 0-delivery ranked #1 under v1');
+console.log('Audit: why 0-delivery ranked #1 under v1; v3 starter is exactly 0');
 {
   const fresh = profiles[0]!;
   const v1 = calculateV1Score(fresh);
   check(v1 === 119_535, `v1 starter score is 119,535 (got ${v1})`);
-  const v2 = scoreV2(fresh);
-  check(v2.rankedEligible === false, 'v2 starter is not ranked eligible');
-  check(v2.reputationScore === 0, 'v2 reputation 50 contributes 0');
-  check(v2.progressionScore === 0, 'v2 level 1 contributes 0 progression');
-  check(v2.deliveryScore === 0, 'v2 0 deliveries contribute 0');
-  check(v2.totalScore < 15_000, `v2 starter total is modest (got ${v2.totalScore})`);
+  const v3 = scoreV2(fresh);
+  check(v3.rankedEligible === true, 'v3 starter is ranked eligible');
+  check(v3.totalScore === 0, `v3 starter total is 0 (got ${v3.totalScore})`);
+  check(v3.reputationScore === 0, 'v3 reputation 50 contributes 0');
+  check(v3.progressionScore === 0, 'v3 level 1 contributes 0 progression');
+  check(v3.deliveryScore === 0, 'v3 0 deliveries contribute 0');
+  check(v3.assetScore === 0, 'v3 starter assets contribute 0 after baseline');
+  check(v3.financeScore === 0, 'v3 starter cash contributes 0 after baseline');
 }
 
 console.log('\nEligibility');
 {
-  check(LEADERBOARD_MIN_COMPLETED_DELIVERIES === 3, 'min completed deliveries is 3');
-  check(LEADERBOARD_SCORE_VERSION === 2, 'score version is 2');
-  check(isLeaderboardRankedEligible(0) === false, '0 deliveries ineligible');
-  check(isLeaderboardRankedEligible(2) === false, '2 deliveries ineligible');
+  check(LEADERBOARD_MIN_COMPLETED_DELIVERIES === 0, 'delivery ranked gate removed (min=0)');
+  check(LEADERBOARD_SCORE_VERSION === 3, 'score version is 3');
+  check(isLeaderboardRankedEligible(0) === true, '0 deliveries eligible');
+  check(isLeaderboardRankedEligible(2) === true, '2 deliveries eligible');
   check(isLeaderboardRankedEligible(3) === true, '3 deliveries eligible');
 }
 
@@ -337,19 +339,21 @@ console.log('\nWeekly season activity');
   check(midWeek.weeklyCompletedDeliveries === 6, 'same week weekly = completed - baseline');
 }
 
-console.log('\nRequired ranking order (v2)');
+console.log('\nRequired ranking order (v3)');
 {
   const a = scoreV2(profiles[0]!);
   const b = scoreV2(profiles[1]!);
   const c = scoreV2(profiles[2]!);
   const d = scoreV2(profiles[3]!);
   const e = scoreV2(profiles[4]!);
-  check(a.rankedEligible === false, 'Player A unranked');
-  check(b.rankedEligible === false, 'Player B still unranked at 2 deliveries');
+  check(a.rankedEligible === true, 'Player A ranked at 0');
+  check(a.totalScore === 0, 'Player A score is 0');
+  check(b.rankedEligible === true, 'Player B ranked at 2 deliveries');
   check(c.rankedEligible === true, 'Player C ranked');
   check(c.totalScore > a.totalScore, `C (${c.totalScore}) above A (${a.totalScore})`);
   check(d.totalScore > c.totalScore, `D (${d.totalScore}) above C (${c.totalScore})`);
   check(e.totalScore > d.totalScore, `E (${e.totalScore}) above D (${d.totalScore})`);
+  check(b.totalScore > a.totalScore, `B (${b.totalScore}) above zero-score A`);
 }
 
 console.log('\nExploit guards');
@@ -361,10 +365,11 @@ console.log('\nExploit guards');
   const i = scoreV2(profiles[8]!);
   const j = scoreV2(profiles[9]!);
   const c = scoreV2(profiles[2]!);
-  check(f.rankedEligible === false, 'max default reputation still unranked without deliveries');
+  check(f.rankedEligible === true, 'max reputation new account is ranked');
+  check(f.totalScore > a.totalScore, 'max reputation new account above pure starter zero');
   check(f.totalScore < c.totalScore, 'max reputation new account below established Player C');
   check(g.financeScore <= 8_000, `admin 5M cash finance capped (got ${g.financeScore})`);
-  check(g.rankedEligible === false, 'cash whale with 0 deliveries is unranked');
+  check(g.rankedEligible === true, 'cash whale with 0 deliveries is ranked');
   check(g.totalScore < c.totalScore, 'admin cash does not beat 14-delivery company');
   check(h.assetScore < 4_000, `leased fleet is not full asset value (got ${h.assetScore})`);
   check(i.assetScore < 4_000, `listed truck is not counted as owned asset (got ${i.assetScore})`);
@@ -457,9 +462,10 @@ for (const row of comparison) {
 }
 
 check(oldRanked[0]?.player === 'A' || oldRanked[0]?.player === 'F' || oldRanked[0]?.player === 'G', 'v1 lets a no-delivery or cash profile sit at or near #1');
-check(newRanked[0]?.player === 'E', `v2 #1 is large active company E (got ${newRanked[0]?.player})`);
-check(newRanked.some((row) => row.player === 'C'), 'Player C is ranked in v2');
-check(!newRanked.some((row) => row.player === 'A'), 'Player A is not in v2 ranked list');
+check(newRanked[0]?.player === 'E', `v3 #1 is large active company E (got ${newRanked[0]?.player})`);
+check(newRanked.some((row) => row.player === 'C'), 'Player C is ranked in v3');
+check(newRanked.some((row) => row.player === 'A'), 'Player A is ranked in v3 at score 0');
+check(comparison.find((row) => row.player === 'A')?.newScore === 0, 'Player A new score is 0');
 
 if (fail > 0) {
   console.log(`\nResult: ${pass} passed, ${fail} failed\n`);

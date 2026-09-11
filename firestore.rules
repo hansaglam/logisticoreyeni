@@ -152,6 +152,20 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Phase 7 immutable season-close — Admin/callable only (no client reads/writes).
+    match /seasons/{seasonKey} {
+      allow read, write: if false;
+      match /results/{uid} {
+        allow read, write: if false;
+      }
+      match /rewardEntitlements/{uid} {
+        allow read, write: if false;
+      }
+      match /rewardClaims/{uid} {
+        allow read, write: if false;
+      }
+    }
+
     // Username reservations — Admin SDK only (setUsername callable).
     match /usernames/{usernameNormalized} {
       allow read, write: if false;

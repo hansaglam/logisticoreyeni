@@ -77,12 +77,13 @@ import {
   inferLegacyOnboardingFromSave,
   normalizeOnboardingState,
 } from '../onboarding/onboardingProgress';
-import { normalizeSpotlightTutorialState } from '../tutorial/spotlightTutorialState';
-import { normalizeMarketTutorialState } from '../tutorial/marketTutorialState';
 import {
-  mergeLegacyMarketTutorialProgress,
-  normalizeTutorialProgress,
-} from '../tutorial/app/persistence';
+  buildContextualGuideProgressSignals,
+  createEligibleContextualGuideState,
+  resolveContextualGuideFromSave,
+} from '../contextualGuide/contextualGuideState';
+import { hasLegacyTutorialActivityFromRawSave } from '../contextualGuide/legacyTutorialSaveSignals';
+import { getDurableContextualGuideForSave } from '../contextualGuide/contextualGuideSession';
 import { normalizeCitiesPriceHistory, seedProductPriceHistory } from '../utils/productPriceHistory';
 import { normalizeMarketAlerts } from '../utils/marketAlerts';
 import type { MonetizationState } from '../types/monetization';
@@ -128,11 +129,11 @@ import type {
   RewardReceipt,
   WorldEvent,
   OnboardingState,
+  ContextualGuideState,
   MarketPriceAlert,
   Player,
   Product,
   Route,
-  SpotlightTutorialPersistence,
   TutorialState,
   TruckTransfer,
   Warehouse,
@@ -209,10 +210,7 @@ export interface SaveGamePayload {
   retention?: RetentionState;
   rewardReceipts?: Record<string, RewardReceipt>;
   onboarding?: OnboardingState;
-  spotlightTutorial?: SpotlightTutorialPersistence;
-  marketTutorialCompleted?: boolean;
-  marketTutorialVersion?: number;
-  tutorialProgress?: import('../tutorial/app/types').TutorialProgressState;
+  contextualGuide?: ContextualGuideState;
   marketAlerts?: MarketPriceAlert[];
   worldEvents?: WorldEvent[];
   worldEventsVersion?: number;
@@ -733,32 +731,6 @@ export function createDefaultSaveFallbacks(
             ? (payload.tutorial as Partial<TutorialState>).isCompleted === true
             : false,
         }),
-    spotlightTutorial: normalizeSpotlightTutorialState(
-      isRecord(payload.spotlightTutorial)
-        ? (payload.spotlightTutorial as Partial<SpotlightTutorialPersistence>)
-        : undefined,
-    ),
-    ...normalizeMarketTutorialState({
-      marketTutorialCompleted: payload.marketTutorialCompleted === true,
-      marketTutorialVersion:
-        typeof payload.marketTutorialVersion === 'number'
-          ? payload.marketTutorialVersion
-          : undefined,
-    }),
-    tutorialProgress: mergeLegacyMarketTutorialProgress(
-      normalizeTutorialProgress(
-        isRecord(payload.tutorialProgress)
-          ? (payload.tutorialProgress as import('../tutorial/app/types').TutorialProgressState)
-          : undefined,
-      ),
-      {
-        marketTutorialCompleted: payload.marketTutorialCompleted === true,
-        marketTutorialVersion:
-          typeof payload.marketTutorialVersion === 'number'
-            ? payload.marketTutorialVersion
-            : undefined,
-      },
-    ),
     marketAlerts: normalizeMarketAlerts(
       isArray(payload.marketAlerts) ? (payload.marketAlerts as MarketPriceAlert[]) : undefined,
     ),
@@ -832,6 +804,20 @@ export function normalizeSavePayload(
     currentTime,
   });
 
+  const tutorial = withFallbacks.tutorial as TutorialState;
+  const onboarding = withFallbacks.onboarding as OnboardingState;
+  const contextualGuide = resolveContextualGuideFromSave(
+    withFallbacks.contextualGuide,
+    buildContextualGuideProgressSignals({
+      player,
+      activeDeliveries: withFallbacks.activeDeliveries as Delivery[],
+      missions: rewardClaims.missions,
+      tutorial,
+      onboarding,
+      legacyTutorialActivity: hasLegacyTutorialActivityFromRawSave(payload),
+    }),
+  );
+
   return {
     version: withFallbacks.version as number,
     meta: {
@@ -901,33 +887,12 @@ export function normalizeSavePayload(
     lastDailyCleanupTime: withFallbacks.lastDailyCleanupTime as number,
     lastPlayableContractGeneratedTime: withFallbacks.lastPlayableContractGeneratedTime as number,
     lastManualContractRefreshTime: withFallbacks.lastManualContractRefreshTime as number,
-    tutorial: withFallbacks.tutorial as TutorialState,
+    tutorial,
     missions: rewardClaims.missions,
     retention: rewardClaims.retention,
     rewardReceipts: rewardClaims.rewardReceipts,
-    onboarding: withFallbacks.onboarding as OnboardingState,
-    spotlightTutorial: withFallbacks.spotlightTutorial as SpotlightTutorialPersistence,
-    ...normalizeMarketTutorialState({
-      marketTutorialCompleted: withFallbacks.marketTutorialCompleted === true,
-      marketTutorialVersion:
-        typeof withFallbacks.marketTutorialVersion === 'number'
-          ? withFallbacks.marketTutorialVersion
-          : undefined,
-    }),
-    tutorialProgress: mergeLegacyMarketTutorialProgress(
-      normalizeTutorialProgress(
-        isRecord(withFallbacks.tutorialProgress)
-          ? (withFallbacks.tutorialProgress as import('../tutorial/app/types').TutorialProgressState)
-          : undefined,
-      ),
-      {
-        marketTutorialCompleted: withFallbacks.marketTutorialCompleted === true,
-        marketTutorialVersion:
-          typeof withFallbacks.marketTutorialVersion === 'number'
-            ? withFallbacks.marketTutorialVersion
-            : undefined,
-      },
-    ),
+    onboarding,
+    contextualGuide,
     marketAlerts: normalizeMarketAlerts(withFallbacks.marketAlerts as MarketPriceAlert[] | undefined),
     ...normalizeWorldEventsState(
       withFallbacks.worldEvents,
@@ -1752,21 +1717,9 @@ export function serializeGameState(
     retention: structuredClone(state.retention),
     rewardReceipts: structuredClone(state.rewardReceipts ?? {}),
     onboarding: structuredClone(state.onboarding),
-    spotlightTutorial: structuredClone(state.spotlightTutorial),
-    marketTutorialCompleted: state.marketTutorialCompleted === true,
-    marketTutorialVersion:
-      typeof state.marketTutorialVersion === 'number' &&
-      Number.isFinite(state.marketTutorialVersion)
-        ? Math.max(0, Math.floor(state.marketTutorialVersion))
-        : 0,
-    tutorialProgress: structuredClone(
-      mergeLegacyMarketTutorialProgress(
-        normalizeTutorialProgress(state.tutorialProgress),
-        {
-          marketTutorialCompleted: state.marketTutorialCompleted === true,
-          marketTutorialVersion: state.marketTutorialVersion,
-        },
-      ),
+    contextualGuide: structuredClone(
+      getDurableContextualGuideForSave(state.contextualGuide) ??
+        createEligibleContextualGuideState(),
     ),
     marketAlerts: structuredClone(state.marketAlerts ?? []),
     worldEvents: structuredClone(state.worldEvents ?? []),
@@ -1873,6 +1826,29 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       }),
   );
 
+  const tutorial = normalizeTutorialState(payload.tutorial);
+  const onboarding = payload.onboarding
+    ? normalizeOnboardingState(payload.onboarding)
+    : inferLegacyOnboardingFromSave({
+        completedContracts: player.completedContracts ?? 0,
+        activeDeliveryCount: payload.activeDeliveries?.length ?? 0,
+        deliveryStarted: payload.missions?.flags?.deliveryStarted === true,
+        tradePurchased: payload.missions?.flags?.tradePurchased === true,
+        playerLevel: player.level ?? 1,
+        tutorialCompleted: payload.tutorial?.isCompleted === true,
+      });
+  const contextualGuide = resolveContextualGuideFromSave(
+    payload.contextualGuide,
+    buildContextualGuideProgressSignals({
+      player,
+      activeDeliveries: payload.activeDeliveries,
+      missions: rewardClaims.missions,
+      tutorial,
+      onboarding,
+      legacyTutorialActivity: hasLegacyTutorialActivityFromRawSave(payload),
+    }),
+  );
+
   return {
     currentTime: safeCurrentTime,
     isPaused: payload.isPaused,
@@ -1924,32 +1900,12 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
     eventLog: Array.isArray(payload.eventLog) ? payload.eventLog.slice(0, 50) : [],
     financeLedger: (payload.financeLedger ?? []).slice(0, FINANCE_LEDGER_MAX_COUNT),
     financeTotals: ensureFinanceTotals(payload.financeLedger, payload.financeTotals),
-    tutorial: normalizeTutorialState(payload.tutorial),
+    tutorial,
     missions: rewardClaims.missions,
     retention: rewardClaims.retention,
     rewardReceipts: rewardClaims.rewardReceipts,
-    onboarding: payload.onboarding
-      ? normalizeOnboardingState(payload.onboarding)
-      : inferLegacyOnboardingFromSave({
-          completedContracts: player.completedContracts ?? 0,
-          activeDeliveryCount: payload.activeDeliveries?.length ?? 0,
-          deliveryStarted: payload.missions?.flags?.deliveryStarted === true,
-          tradePurchased: payload.missions?.flags?.tradePurchased === true,
-          playerLevel: player.level ?? 1,
-          tutorialCompleted: payload.tutorial?.isCompleted === true,
-        }),
-    spotlightTutorial: normalizeSpotlightTutorialState(payload.spotlightTutorial),
-    ...normalizeMarketTutorialState({
-      marketTutorialCompleted: payload.marketTutorialCompleted === true,
-      marketTutorialVersion: payload.marketTutorialVersion,
-    }),
-    tutorialProgress: mergeLegacyMarketTutorialProgress(
-      normalizeTutorialProgress(payload.tutorialProgress),
-      {
-        marketTutorialCompleted: payload.marketTutorialCompleted === true,
-        marketTutorialVersion: payload.marketTutorialVersion,
-      },
-    ),
+    onboarding,
+    contextualGuide,
     marketAlerts: normalizeMarketAlerts(payload.marketAlerts),
     ...normalizeWorldEventsState(
       payload.worldEvents,

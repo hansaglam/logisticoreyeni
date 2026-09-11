@@ -34,7 +34,7 @@ console.log('ScreenHeader contract');
 assert(screenSource.includes('ScreenHeader'), 'ContractsScreen uses ScreenHeader');
 assert(screenSource.includes('leftAction'), 'help button in leftAction slot');
 assert(screenSource.includes('rightAction'), 'refresh button in rightAction slot');
-assert(screenSource.includes('AppTutorialHelpButton'), 'tutorial help wired');
+assert(screenSource.includes('HelpGuideButton'), 'help guide button wired');
 assert(screenSource.includes('icon="refresh"'), 'refresh icon present');
 assert(screenSource.includes('Piyasayı Yenile'), 'empty-state refresh CTA');
 assert(screenSource.includes('emergency'), 'emergency refresh path');

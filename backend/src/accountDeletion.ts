@@ -7,6 +7,8 @@ import { logger } from 'firebase-functions';
 import { revokeAppleAuthorizationCode } from './appleTokenRevocation';
 import { readAppleSignInSecretValuesFromBinding } from './appleSignInSecrets';
 import { deleteLeaderboardEntriesForUid } from './leaderboard';
+import { deleteSeasonCloseResultsForUid } from './seasonClose';
+import { deleteSeasonRewardDataForUid } from './seasonRewards';
 import { releaseUsernameForUid } from './username';
 import { prepareMarketplaceAccountDeletion } from './vehicleMarketplace';
 
@@ -33,6 +35,9 @@ export type DeleteLinkedAccountSuccess = {
   anonymizedListings: number;
   usernameReleased: boolean;
   leaderboardEntriesDeleted: number;
+  seasonCloseResultsDeleted: number;
+  seasonRewardEntitlementsDeleted: number;
+  seasonRewardClaimsDeleted: number;
   authDeleted: boolean;
   authAlreadyAbsent: boolean;
   appleRevoked: boolean;
@@ -148,12 +153,22 @@ export async function deleteLinkedAccount(
   }
 
   let leaderboardEntriesDeleted = 0;
+  let seasonCloseResultsDeleted = 0;
+  let seasonRewardEntitlementsDeleted = 0;
+  let seasonRewardClaimsDeleted = 0;
   try {
     logStage(ACCOUNT_DELETE_STAGE.LEADERBOARD, uid);
     leaderboardEntriesDeleted = await deleteLeaderboardEntriesForUid(firestore, uid);
+    seasonCloseResultsDeleted = await deleteSeasonCloseResultsForUid(firestore, uid);
+    const rewardCleanup = await deleteSeasonRewardDataForUid(firestore, uid);
+    seasonRewardEntitlementsDeleted = rewardCleanup.entitlementsDeleted;
+    seasonRewardClaimsDeleted = rewardCleanup.claimsDeleted;
     logStage(ACCOUNT_DELETE_STAGE.LEADERBOARD, uid, {
       success: true,
       leaderboardEntriesDeleted,
+      seasonCloseResultsDeleted,
+      seasonRewardEntitlementsDeleted,
+      seasonRewardClaimsDeleted,
     });
   } catch (error) {
     logStageError(ACCOUNT_DELETE_STAGE.LEADERBOARD, uid, error);
@@ -214,6 +229,9 @@ export async function deleteLinkedAccount(
       ...marketplace,
       usernameReleased,
       leaderboardEntriesDeleted,
+      seasonCloseResultsDeleted,
+      seasonRewardEntitlementsDeleted,
+      seasonRewardClaimsDeleted,
       ...authResult,
       appleRevoked,
     };

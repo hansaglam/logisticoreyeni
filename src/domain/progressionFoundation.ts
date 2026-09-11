@@ -69,6 +69,14 @@ export const ACHIEVEMENT_CATALOG: readonly AchievementDefinition[] = Object.free
   { id: 'challenge_three', category: 'season', title: 'Hedef Odaklı', description: '3 sezon görevi tamamla.', metric: 'challenges_completed', target: 3, tier: 'silver', enabled: true, version: 1, authority: 'trusted-backend' },
 ]);
 
+export interface SeasonHistoryFinalLeaderboard {
+  state: 'available' | 'not_ranked' | 'pending' | 'unavailable';
+  finalScore?: number;
+  finalRank?: number;
+  participantCount?: number;
+  snapshotVersion?: number;
+}
+
 export interface SeasonHistoryEntry {
   seasonKey: string;
   displayName: string;
@@ -76,8 +84,15 @@ export interface SeasonHistoryEntry {
   challengeCompletionCount: number;
   endedAt: number;
   readOnly: true;
-  /** Rank/score are omitted until a trusted final snapshot exists. */
+  /**
+   * Trusted closed-season leaderboard finals (Phase 7).
+   * Authority is backend seasons/{seasonKey}/results/{uid} via getSeasonResult.
+   * Never fabricate from live leaderboard entries.
+   */
+  finalLeaderboard?: SeasonHistoryFinalLeaderboard;
+  /** @deprecated Prefer finalLeaderboard when present — kept for additive compatibility. */
   finalLeaderboardRank?: number;
+  /** @deprecated Prefer finalLeaderboard when present — kept for additive compatibility. */
   finalLeaderboardScore?: number;
 }
 
@@ -131,6 +146,94 @@ export interface AchievementEvaluationContext {
 
 function finiteNonNegative(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function normalizeFinalLeaderboard(value: unknown): SeasonHistoryFinalLeaderboard | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Partial<SeasonHistoryFinalLeaderboard>;
+  const state = source.state;
+  if (
+    state !== 'available' &&
+    state !== 'not_ranked' &&
+    state !== 'pending' &&
+    state !== 'unavailable'
+  ) {
+    return undefined;
+  }
+  const normalized: SeasonHistoryFinalLeaderboard = { state };
+  if (state === 'available') {
+    if (typeof source.finalRank === 'number' && Number.isFinite(source.finalRank) && source.finalRank >= 1) {
+      normalized.finalRank = Math.floor(source.finalRank);
+    } else {
+      return undefined;
+    }
+    if (typeof source.finalScore === 'number' && Number.isFinite(source.finalScore) && source.finalScore >= 0) {
+      normalized.finalScore = Math.floor(source.finalScore);
+    } else {
+      return undefined;
+    }
+    if (
+      typeof source.participantCount === 'number' &&
+      Number.isFinite(source.participantCount) &&
+      source.participantCount >= 0
+    ) {
+      normalized.participantCount = Math.floor(source.participantCount);
+    }
+    if (
+      typeof source.snapshotVersion === 'number' &&
+      Number.isFinite(source.snapshotVersion) &&
+      source.snapshotVersion >= 1
+    ) {
+      normalized.snapshotVersion = Math.floor(source.snapshotVersion);
+    }
+  }
+  return normalized;
+}
+
+function normalizeSeasonHistoryEntry(entry: SeasonHistoryEntry): SeasonHistoryEntry {
+  const finalLeaderboard = normalizeFinalLeaderboard(entry.finalLeaderboard);
+  const legacyRank =
+    typeof entry.finalLeaderboardRank === 'number' &&
+    Number.isFinite(entry.finalLeaderboardRank) &&
+    entry.finalLeaderboardRank >= 1
+      ? Math.floor(entry.finalLeaderboardRank)
+      : undefined;
+  const legacyScore =
+    typeof entry.finalLeaderboardScore === 'number' &&
+    Number.isFinite(entry.finalLeaderboardScore) &&
+    entry.finalLeaderboardScore >= 0
+      ? Math.floor(entry.finalLeaderboardScore)
+      : undefined;
+  const resolved =
+    finalLeaderboard ??
+    (legacyRank != null && legacyScore != null
+      ? ({
+          state: 'available' as const,
+          finalRank: legacyRank,
+          finalScore: legacyScore,
+        } satisfies SeasonHistoryFinalLeaderboard)
+      : undefined);
+  return {
+    seasonKey: entry.seasonKey,
+    displayName: typeof entry.displayName === 'string' ? entry.displayName : entry.seasonKey,
+    seasonPoints: finiteNonNegative(entry.seasonPoints),
+    challengeCompletionCount: Math.floor(finiteNonNegative(entry.challengeCompletionCount)),
+    endedAt: finiteNonNegative(entry.endedAt),
+    readOnly: true as const,
+    ...(resolved
+      ? {
+          finalLeaderboard: resolved,
+          ...(resolved.state === 'available'
+            ? {
+                finalLeaderboardRank: resolved.finalRank,
+                finalLeaderboardScore: resolved.finalScore,
+              }
+            : {}),
+        }
+      : {}),
+  };
 }
 
 function normalizeStoredNotificationPreferences(
@@ -189,7 +292,7 @@ export function normalizeProgressionFoundationState(value: unknown, now = Date.n
   ) as Record<string, number>;
   const seasonHistory = (Array.isArray(source.seasonHistory) ? source.seasonHistory : [])
     .filter((entry): entry is SeasonHistoryEntry => Boolean(entry && typeof entry.seasonKey === 'string'))
-    .map((entry) => ({ ...entry, displayName: typeof entry.displayName === 'string' ? entry.displayName : entry.seasonKey, seasonPoints: finiteNonNegative(entry.seasonPoints), challengeCompletionCount: Math.floor(finiteNonNegative(entry.challengeCompletionCount)), endedAt: finiteNonNegative(entry.endedAt), readOnly: true as const }))
+    .map((entry) => normalizeSeasonHistoryEntry(entry))
     .sort((a, b) => b.endedAt - a.endedAt)
     .slice(0, SEASON_HISTORY_RETENTION_LIMIT);
   const dedupe = new Set<string>();

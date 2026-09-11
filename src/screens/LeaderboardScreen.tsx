@@ -13,11 +13,8 @@ import {
   View,
 } from 'react-native';
 
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import HelpGuideButton from '../components/help/HelpGuideButton';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 import {
   AppCard,
   AppScreen,
@@ -60,12 +57,7 @@ import {
 import { fetchUsernameProfile } from '../services/usernameService';
 import { subscribeUsernameProfileChanged } from '../services/usernameProfileEvents';
 import { leaderboardConfig } from '../config/leaderboard';
-import {
-  LEADERBOARD_SCORE_EXPLAINER,
-  LEADERBOARD_UNRANKED_MESSAGE,
-  LEADERBOARD_UNRANKED_TITLE,
-  isLeaderboardRankedEligible,
-} from '../domain/leaderboardRankEligibility';
+import { LEADERBOARD_SCORE_EXPLAINER } from '../domain/leaderboardRankEligibility';
 import { formatLeaderboardSeasonRange } from '../utils/leaderboardSeason';
 import { markStartup } from '../utils/startupPerformance';
 import { formatCompanyScore, getCompanyScoreBreakdown } from '../simulation/companyScore';
@@ -75,7 +67,7 @@ import {
   selectFinanceLedger,
   selectProducts,
 } from '../store/selectors/stableCollections';
-import { selectPlayer, selectPlayerCompletedContracts } from '../store/selectors/playerFields';
+import { selectPlayer } from '../store/selectors/playerFields';
 import { selectCurrentTimeHour } from '../store/selectors/timeBuckets';
 import { colors, spacing, typography } from '../theme';
 
@@ -267,27 +259,6 @@ function PlayerSummaryCard({
   );
 }
 
-function UnrankedEligibilityCard({
-  completedDeliveries,
-  remaining,
-}: {
-  completedDeliveries: number;
-  remaining: number;
-}) {
-  return (
-    <AppCard variant="soft" style={styles.unrankedCard} padded>
-      <View style={styles.guestHeader}>
-        <GameIcon name="warning" size={18} color={colors.accentAmber} />
-        <Text style={styles.guestTitle}>{LEADERBOARD_UNRANKED_TITLE}</Text>
-      </View>
-      <Text style={styles.guestText}>{LEADERBOARD_UNRANKED_MESSAGE}</Text>
-      <Text style={styles.unrankedProgress}>
-        {completedDeliveries}/{leaderboardConfig.minCompletedDeliveriesToRank} teslimat · {remaining} teslimat kaldı
-      </Text>
-    </AppCard>
-  );
-}
-
 function ScoreExplainerCard({
   breakdown,
 }: {
@@ -371,7 +342,6 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const [account, setAccount] = useState<AccountStatus>(DEFAULT_ACCOUNT_STATUS);
   const [screenState, setScreenState] = useState<LeaderboardScreenState>({ status: 'loading' });
   const [usernameReady, setUsernameReady] = useState<boolean | null>(null);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const requestSeqRef = React.useRef(0);
   const listRef = useRef<FlatList<LeaderboardRankedEntry>>(null);
   const lastAuthUidRef = React.useRef<string | null>(null);
@@ -383,8 +353,6 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const products = useGameStore(selectProducts);
   const financeLedger = useGameStore(selectFinanceLedger);
   const currentTimeHour = useGameStore(selectCurrentTimeHour);
-  const completedDeliveries = useGameStore(selectPlayerCompletedContracts);
-  const rankedEligible = isLeaderboardRankedEligible(completedDeliveries);
   const scoreBreakdownReady = screenState.status !== 'loading';
   const localScoreBreakdown = useMemo(
     () => {
@@ -420,12 +388,6 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const entries = fetchData?.entries ?? [];
   const playerEntry = fetchData?.playerEntry ?? null;
   const playerRank = fetchData?.playerRank ?? null;
-
-  const leaderboardTutorial = useScreenAppTutorial({
-    tutorialId: 'leaderboard',
-    layoutReady,
-    stepOptions: { hasLeaderboardEntries: entries.length > 0 },
-  });
 
   const isLoading = screenState.status === 'loading';
   const isRefreshing = screenState.status === 'refreshing';
@@ -583,61 +545,48 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
   const listHeader = useMemo(
     () => (
       <View style={styles.headerBlock}>
-        <AppTutorialTarget tutorialId="leaderboard" targetId="weekly-season" layoutMode="stretch">
-          <AppCard variant="soft" style={styles.seasonCard} padded>
-            <View style={styles.seasonRow}>
-              <GameIcon name="company" size={18} color={colors.accentBlue} />
-              <View style={styles.seasonText}>
-                <Text style={styles.seasonTitle}>Haftalık sezon</Text>
-                <Text style={styles.seasonDates}>{seasonLabel}</Text>
-              </View>
-              <StatusBadge label="Canlı" variant="success" size="sm" />
+        <AppCard variant="soft" style={styles.seasonCard} padded>
+          <View style={styles.seasonRow}>
+            <GameIcon name="company" size={18} color={colors.accentBlue} />
+            <View style={styles.seasonText}>
+              <Text style={styles.seasonTitle}>Haftalık sezon</Text>
+              <Text style={styles.seasonDates}>{seasonLabel}</Text>
             </View>
-            <Text style={styles.seasonHint}>
-              {LEADERBOARD_SCORE_EXPLAINER} Varsayılan itibar sıralamada avantaj sağlamaz.
-            </Text>
-          </AppCard>
-        </AppTutorialTarget>
+            <StatusBadge label="Canlı" variant="success" size="sm" />
+          </View>
+          <Text style={styles.seasonHint}>
+            {LEADERBOARD_SCORE_EXPLAINER} Varsayılan itibar sıralamada avantaj sağlamaz.
+          </Text>
+        </AppCard>
 
         {!eligible ? <GuestPromptCard /> : null}
         {eligible && usernameReady === false ? (
           <UsernamePromptCard onOpenAccountSettings={onOpenAccountSettings} />
         ) : null}
 
-        {eligible && usernameReady !== false && !rankedEligible ? (
-          <UnrankedEligibilityCard
-            completedDeliveries={completedDeliveries}
-            remaining={Math.max(
-              0,
-              leaderboardConfig.minCompletedDeliveriesToRank - completedDeliveries,
-            )}
+        {eligible && usernameReady !== false && playerEntry ? (
+          <PlayerSummaryCard
+            entry={playerEntry}
+            rank={playerRank}
+            outsideTop={playerOutsideTop}
           />
-        ) : null}
-
-        {eligible && rankedEligible && playerEntry ? (
-          <AppTutorialTarget tutorialId="leaderboard" targetId="my-rank" layoutMode="stretch">
-            <PlayerSummaryCard
-              entry={playerEntry}
-              rank={playerRank}
-              outsideTop={playerOutsideTop}
-            />
-          </AppTutorialTarget>
         ) : null}
 
         {localScoreBreakdown ? (
           <ScoreExplainerCard breakdown={localScoreBreakdown} />
         ) : null}
 
-        <AppTutorialTarget tutorialId="leaderboard" targetId="company-ranking" layoutMode="stretch">
-          <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
-        </AppTutorialTarget>
+        <SectionTitle title={`En iyi ${leaderboardConfig.leaderboardSize}`} compact />
       </View>
     ),
-    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, playerOutsideTop, rankedEligible, completedDeliveries, localScoreBreakdown],
+    [seasonLabel, eligible, usernameReady, onOpenAccountSettings, playerEntry, playerRank, playerOutsideTop, localScoreBreakdown],
   );
 
   const headerRightAction = (
-    <AppTutorialHelpButton {...leaderboardTutorial.helpButtonProps} />
+    <HelpGuideButton
+      onPress={() => openHelpGuide('seasons_challenges')}
+      accessibilityLabel="Yardım ve Rehber"
+    />
   );
 
   if (isLoading && entries.length === 0) {
@@ -652,16 +601,13 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
               rightAction={headerRightAction}
             />
           ) : (
-            <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header" layoutMode="stretch">
-              <ScreenHeader title="Liderlik Tablosu" compact rightAction={headerRightAction} />
-            </AppTutorialTarget>
+            <ScreenHeader title="Liderlik Tablosu" compact rightAction={headerRightAction} />
           )}
-          <View style={styles.loadingWrap} onLayout={markLayoutReady}>
+          <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={colors.accentBlue} />
             <Text style={styles.loadingText}>Sıralama yükleniyor...</Text>
           </View>
         </AppScreen>
-        <AppTutorialOverlay {...leaderboardTutorial.overlayProps} />
       </View>
     );
   }
@@ -678,14 +624,12 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
             rightAction={headerRightAction}
           />
         ) : (
-          <AppTutorialTarget tutorialId="leaderboard" targetId="leaderboard-header" layoutMode="stretch">
-            <ScreenHeader
-              title="Liderlik Tablosu"
-              subtitle={seasonLabel}
-              compact
-              rightAction={headerRightAction}
-            />
-          </AppTutorialTarget>
+          <ScreenHeader
+            title="Liderlik Tablosu"
+            subtitle={seasonLabel}
+            compact
+            rightAction={headerRightAction}
+          />
         )}
 
         <FlatList
@@ -694,11 +638,6 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           style={styles.list}
-          onLayout={markLayoutReady}
-          onScroll={leaderboardTutorial.handleScroll}
-          onScrollEndDrag={leaderboardTutorial.handleScrollEnd}
-          onMomentumScrollEnd={leaderboardTutorial.handleScrollEnd}
-          scrollEventThrottle={16}
         ListHeaderComponent={listHeader}
         ListFooterComponent={listFooter}
         ListEmptyComponent={
@@ -738,7 +677,6 @@ export default function LeaderboardScreen({ onBack, onOpenAccountSettings }: Lea
         windowSize={8}
       />
       </AppScreen>
-      <AppTutorialOverlay {...leaderboardTutorial.overlayProps} />
     </View>
   );
 }

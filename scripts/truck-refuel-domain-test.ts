@@ -62,9 +62,39 @@ assert(closeTo(fifty.litersToAdd, 50), '50 L seçimi canonical litreyi kullanır
 assert(closeTo(fifty.totalCost, 86), '50 L toplam maliyeti doğru');
 assert(closeTo(fifty.newFuelL, 120), '50 L sonrası yakıt özeti doğru');
 
+const hundred = calculateTruckRefuelQuote(makeTruck(70), 100, price);
+assert(closeTo(hundred.litersToAdd, 100), '100 L seçimi canonical litreyi kullanır');
+assert(closeTo(hundred.totalCost, 172), '100 L toplam maliyeti doğru');
+assert(closeTo(hundred.newFuelL, 170), '100 L sonrası tank seviyesi doğru');
+
+const hundredCapped = calculateTruckRefuelQuote(makeTruck(100), 100, price);
+assert(closeTo(hundredCapped.litersToAdd, 80), '100 L kalan tank alanına clamp edilir');
+assert(closeTo(hundredCapped.newFuelL, 180), '100 L tank overflow yapmaz');
+
 const full = calculateTruckRefuelQuote(makeTruck(70), 999, price);
 assert(closeTo(full.litersToAdd, 110), 'tam dolum boş tank alanına clamp edilir');
 assert(closeTo(full.newFuelL, 180), 'tam dolum kapasiteyi geçmez');
+
+function maxPurchasableLiters(
+  remainingTankCapacity: number,
+  cash: number,
+  unitPrice: number,
+): number {
+  if (!Number.isFinite(unitPrice) || unitPrice <= 0 || cash <= 0) return 0;
+  const affordable = Math.floor((cash / unitPrice) * 1000) / 1000;
+  return Math.min(Math.max(0, remainingTankCapacity), affordable);
+}
+
+const tankLimitedMax = maxPurchasableLiters(40, 10_000, price);
+assert(closeTo(tankLimitedMax, 40), 'maksimum al tank kapasitesiyle sınırlanır');
+const tankLimitedQuote = calculateTruckRefuelQuote(makeTruck(140), tankLimitedMax, price);
+assert(closeTo(tankLimitedQuote.litersToAdd, 40), 'maksimum al tank alanı kadar doldurur');
+assert(closeTo(tankLimitedQuote.newFuelL, 180), 'maksimum al tank overflow yapmaz');
+
+const cashLimitedMax = maxPurchasableLiters(110, 50, price);
+const cashLimitedQuote = calculateTruckRefuelQuote(makeTruck(70), cashLimitedMax, price);
+assert(cashLimitedQuote.totalCost <= 50, 'maksimum al oyuncu nakdini geçmez');
+assert(cashLimitedQuote.totalCost >= 0, 'maksimum al negatif nakit üretmez');
 
 const affordableLiters = Math.floor((50 / price) * 1000) / 1000;
 const maximum = calculateTruckRefuelQuote(makeTruck(70), affordableLiters, price);

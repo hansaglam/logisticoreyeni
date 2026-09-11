@@ -2,12 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InteractionManager, Platform, StyleSheet, View, type ScrollView } from 'react-native';
 import Constants from 'expo-constants';
 
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
-import BackendDiagnosticsGate from '../components/BackendDiagnosticsGate';
+import HelpGuideButton from '../components/help/HelpGuideButton';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 import UsernameSetupModal from '../components/username/UsernameSetupModal';
 import AccountConnectionTab from '../components/accountCenter/AccountConnectionTab';
 import AccountPreferencesTab from '../components/accountCenter/AccountPreferencesTab';
@@ -83,20 +79,12 @@ export default function AccountCenterScreen({
   const [leaderboardRank, setLeaderboardRank] = useState<number | null>(null);
   const [leaderboardUnavailable, setLeaderboardUnavailable] = useState(false);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const { openPrivacyOptions } = useAccountPrivacyOptions();
   useAdPrivacyAvailability();
   const showPrivacyOptions = shouldShowAccountPrivacyOptions(
     getAdsConsentSnapshot(),
     Platform.OS,
   );
-
-  const accountTutorial = useScreenAppTutorial({
-    tutorialId: 'account',
-    layoutReady,
-    blockingModals: vm.usernameModal != null,
-    scrollRef,
-  });
 
   const player = useGameStore((state) => state.player);
   const cities = useGameStore((state) => state.cities);
@@ -240,27 +228,27 @@ export default function AccountCenterScreen({
       <AppScreen
         scroll
         scrollRef={scrollRef}
-        onScroll={accountTutorial.handleScroll}
-        onScrollEndDrag={accountTutorial.handleScrollEnd}
-        onMomentumScrollEnd={accountTutorial.handleScrollEnd}
-        scrollEventThrottle={16}
         scrollBottomPadding={scrollBottomPadding}
         contentContainerStyle={styles.content}
       >
-        <View onLayout={markLayoutReady}>
+        <View>
       <ScreenHeader
         title={ACCOUNT_CENTER_HEADER.title}
         subtitle={ACCOUNT_CENTER_HEADER.subtitle}
         onBack={onBack}
         compact
-        rightAction={<AppTutorialHelpButton {...accountTutorial.helpButtonProps} />}
+        rightAction={
+          <HelpGuideButton
+            onPress={() => openHelpGuide('account_cloud')}
+            accessibilityLabel="Yardım ve Rehber"
+          />
+        }
       />
 
       <AccountSegmentedTabs active={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'profile' ? (
-        <AppTutorialTarget tutorialId="account" targetId="profile" layoutMode="stretch">
-          <AccountProfileTab
+        <AccountProfileTab
           isGuest={vm.isGuest}
           displayName={displayName}
           heroSubtitle={heroSubtitle}
@@ -290,12 +278,10 @@ export default function AccountCenterScreen({
           leaderboardRank={leaderboardRank}
           onOpenLeaderboard={handleOpenLeaderboard}
         />
-        </AppTutorialTarget>
       ) : null}
 
       {activeTab === 'account' ? (
-        <AppTutorialTarget tutorialId="account" targetId="cloud-save" layoutMode="stretch">
-          <AccountConnectionTab
+        <AccountConnectionTab
           isReady={vm.safeAccountStatus.isReady}
           isGuest={vm.isGuest}
           providerLabel={vm.providerLabel}
@@ -321,12 +307,10 @@ export default function AccountCenterScreen({
           onSignOut={vm.handleGoogleSignOut}
           onDeleteAccount={vm.handleDeleteAccount}
         />
-        </AppTutorialTarget>
       ) : null}
 
       {activeTab === 'preferences' ? (
-        <AppTutorialTarget tutorialId="account" targetId="preferences" layoutMode="stretch">
-          <AccountPreferencesTab
+        <AccountPreferencesTab
           prefs={prefs}
           appVersion={appVersion}
           buildNumber={buildNumber}
@@ -342,10 +326,9 @@ export default function AccountCenterScreen({
           onSupport={() => void handleOpenLegal('support', 'Destek')}
           onLegalDocuments={() => void handleOpenLegal('privacyPolicy', 'Yasal Belgeler')}
         />
-        </AppTutorialTarget>
       ) : null}
 
-      <BackendDiagnosticsGate />
+      {/* BackendDiagnosticsGate intentionally not mounted here — panel/gate code preserved. */}
       <UsernameSetupModal
         visible={vm.usernameModal != null}
         mode={vm.usernameModal === 'edit' ? 'edit' : 'setup'}
@@ -360,7 +343,6 @@ export default function AccountCenterScreen({
       />
         </View>
       </AppScreen>
-      <AppTutorialOverlay {...accountTutorial.overlayProps} />
     </View>
   );
 }

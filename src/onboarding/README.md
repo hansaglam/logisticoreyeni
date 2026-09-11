@@ -1,6 +1,7 @@
-# Onboarding (planlanıyor)
+# Onboarding
 
-Eski **spotlight tutorial** sistemi devre dışı bırakıldı (`ENABLE_SPOTLIGHT_TUTORIAL = false`).
+Eski **spotlight / AppTutorial / MarketTutorial** sistemleri tamamen kaldırıldı
+(`src/tutorial/`, `src/components/tutorial/`, ilgili hook ve store dosyaları silindi).
 
 ## Neden?
 
@@ -9,27 +10,14 @@ Eski **spotlight tutorial** sistemi devre dışı bırakıldı (`ENABLE_SPOTLIGH
 
 ## Şu an aktif olan
 
+- **Contextual Guide** (`src/contextualGuide/`) — ekran içi, bloklamayan kartlar.
+- **Yardım & Rehber** (`HelpGuideScreen` + `HelpGuideButton`) — manuel içerik ve Getting Started tekrarı.
 - **Başlangıç Görevleri** (`MissionsScreen`, Dashboard'daki "Sıradaki Hamle" kartı) — görev tabanlı ilerleme korunuyor.
 - Sözleşme, teslimat, piyasa ve filo oyun mantığı değişmedi.
 
-## Sonraki adım
+## Eski kayıtlar
 
-Yeni onboarding **görev tabanlı** olacak:
-
-1. İlk işini başlat
-2. İlk teslimat
-3. Piyasayı keşfet
-4. İlk ticaret
-5. Kâra geç
-
-Spotlight overlay yerine Görevler ekranı + dashboard kartları + hafif ipuçları düşünülüyor.
-
-## Tekrar açmak (geliştirme)
-
-`src/tutorial/featureFlags.ts` içinde:
-
-```ts
-export const ENABLE_SPOTLIGHT_TUTORIAL = true;
-```
-
-Ardından hedef ID’lerini güncel tab bar ve ekran yapısına göre güncelle.
+Eski save dosyalarındaki `spotlightTutorial`, `marketTutorialCompleted`,
+`marketTutorialVersion` ve `tutorialProgress` alanları artık yazılmıyor. Yüklemede yalnızca
+`hasLegacyTutorialActivityFromRawSave` (bkz. `src/contextualGuide/legacyTutorialSaveSignals.ts`)
+tarafından "bu oyuncu eski rehberi görmüş mü?" sinyali için okunur, sonra atılır.

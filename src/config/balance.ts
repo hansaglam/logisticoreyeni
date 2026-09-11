@@ -625,10 +625,11 @@ export const reputationBalance = {
   max: REPUTATION_MAX,
 } as const;
 
-/** Şirket puanı (Company Score) v2 — leaderboard ile aynı ölçek. */
+/** Şirket puanı (Company Score) v3 — leaderboard ile aynı ölçek; fresh baseline = 0. */
 export const companyScoreBalance = {
-  scoreVersion: 2,
-  minCompletedDeliveriesToRank: 3,
+  scoreVersion: 3,
+  /** v3: delivery gate removed — eligible linked players may rank at score 0. */
+  minCompletedDeliveriesToRank: 0,
   reputationBaseline: 50,
   truckValueWeight: 0,
   warehouseValueWeight: 0,

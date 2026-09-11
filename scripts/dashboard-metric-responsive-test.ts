@@ -54,7 +54,7 @@ console.log('\nSource guards');
   assert(hero.includes('metricRow'), 'hero uses single metric row');
   assert(hero.includes('metricCell'), 'hero uses equal flex cells');
   assert(hero.includes('metricTarget'), 'reputation target isolated from row flex');
-  assert(hero.includes('layoutMode="preserve"'), 'reputation target uses preserve');
+  assert(!hero.includes('layoutMode='), 'no legacy tutorial layoutMode wrappers');
   assert(!hero.includes('metricCellTwoColumn'), '2-column cell style removed');
   assert(!hero.includes('metricGrid'), '2×2 metric grid removed');
   assert(hero.includes('reputationMetricWithBadge'), 'badge reserves top padding');

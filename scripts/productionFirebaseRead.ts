@@ -59,6 +59,66 @@ export async function firestoreGetDocument(
   return decodeFirestoreFields(document.fields ?? {});
 }
 
+/** Read-only: returns null when document is absent (404). */
+export async function firestoreGetDocumentOrNull(
+  projectId: string,
+  documentPath: string,
+  accessToken: string,
+): Promise<Record<string, unknown> | null> {
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${documentPath}`;
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`FIRESTORE_READ_FAILED:${response.status}`);
+  const document = await response.json() as { fields?: Record<string, unknown> };
+  return decodeFirestoreFields(document.fields ?? {});
+}
+
+export type FirestoreListedDocument = {
+  id: string;
+  path: string;
+  fields: Record<string, unknown>;
+};
+
+/** Read-only collection list with pagination. Never writes. */
+export async function firestoreListDocuments(
+  projectId: string,
+  collectionPath: string,
+  accessToken: string,
+  options?: { pageSize?: number; maxDocuments?: number },
+): Promise<FirestoreListedDocument[]> {
+  const pageSize = Math.min(300, Math.max(1, options?.pageSize ?? 100));
+  const maxDocuments = Math.max(1, options?.maxDocuments ?? 5_000);
+  const out: FirestoreListedDocument[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({ pageSize: String(pageSize) });
+    if (pageToken) params.set('pageToken', pageToken);
+    const url =
+      `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionPath}?${params}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!response.ok) throw new Error(`FIRESTORE_LIST_FAILED:${response.status}:${collectionPath}`);
+    const body = (await response.json()) as {
+      documents?: Array<{ name?: string; fields?: Record<string, unknown> }>;
+      nextPageToken?: string;
+    };
+    for (const document of body.documents ?? []) {
+      const name = String(document.name ?? '');
+      const id = name.split('/').pop() ?? '';
+      out.push({
+        id,
+        path: name.replace(
+          `projects/${projectId}/databases/(default)/documents/`,
+          '',
+        ),
+        fields: decodeFirestoreFields(document.fields ?? {}),
+      });
+      if (out.length >= maxDocuments) return out;
+    }
+    pageToken = body.nextPageToken;
+  } while (pageToken);
+  return out;
+}
+
 export async function firestoreRunQuery(
   projectId: string,
   structuredQuery: Record<string, unknown>,

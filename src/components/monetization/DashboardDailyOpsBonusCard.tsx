@@ -16,7 +16,6 @@ import {
 } from 'react-native';
 
 import { dashboardAssetFlags, dashboardAssets } from '../../assets/dashboardAssets';
-import { shouldShowTestAdLabel } from '../../config/adMob';
 import { calculateDailyOperationSupportReward } from '../../domain/dailyOperationSupportReward';
 import {
   AD_REWARDED_LOAD_FAILED_MESSAGE,
@@ -52,25 +51,22 @@ function resolveAdStatusLabel(params: {
   eligibilityOk: boolean;
   rewardedAvailability: ReturnType<typeof resolveRewardedAdAvailability>;
   failed: boolean;
-  showTestLabel: boolean;
 }): string {
-  const { privacyChecking, loading, eligibilityOk, rewardedAvailability, failed, showTestLabel } =
-    params;
-  const testPrefix = showTestLabel ? 'Test reklamı · ' : '';
+  const { privacyChecking, loading, eligibilityOk, rewardedAvailability, failed } = params;
 
   if (!eligibilityOk) {
-    return `${testPrefix}Günlük destek bugün kullanıldı.`;
+    return 'Günlük destek bugün kullanıldı.';
   }
   if (privacyChecking || loading) {
-    return `${testPrefix}Reklam hazırlanıyor`;
+    return 'Reklam hazırlanıyor';
   }
   if (failed || rewardedAvailability === 'unavailable') {
-    return `${testPrefix}Reklam yüklenemedi`;
+    return 'Reklam yüklenemedi';
   }
   if (rewardedAvailability === 'ready' || rewardedAvailability === 'loading-ad') {
-    return `${testPrefix}Reklam izleyerek al`;
+    return 'Reklam izleyerek al';
   }
-  return `${testPrefix}${rewardedAdAvailabilityHelperText(rewardedAvailability) ?? 'Reklam izleyerek al'}`;
+  return rewardedAdAvailabilityHelperText(rewardedAvailability) ?? 'Reklam izleyerek al';
 }
 
 export default function DashboardDailyOpsBonusCard({
@@ -127,7 +123,6 @@ export default function DashboardDailyOpsBonusCard({
   }
 
   const rewardAmount = player ? calculateDailyOperationSupportReward(player) : 0;
-  const showTestLabel = shouldShowTestAdLabel();
 
   const buttonLabel = privacyChecking
     ? 'Hazırlanıyor…'
@@ -146,7 +141,6 @@ export default function DashboardDailyOpsBonusCard({
     eligibilityOk: eligibility.ok,
     rewardedAvailability,
     failed,
-    showTestLabel,
   });
 
   const isDisabled =

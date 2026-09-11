@@ -9,24 +9,11 @@ import {
   TAB_ITEM_MIN_HEIGHT,
 } from '../constants/layout';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
-import { TutorialTarget } from '../tutorial/TutorialTarget';
-import type { TutorialTargetId } from '../tutorial/types';
 import type { TabDefinition, TabKey } from '../navigation/tabTypes';
 import { colors, typography } from '../theme';
 import GameIcon from './ui/GameIcon';
 
 export type { TabDefinition, TabKey } from '../navigation/tabTypes';
-
-const TAB_TARGET_IDS: Record<TabKey, TutorialTargetId> = {
-  dashboard: 'tab-dashboard',
-  map: 'tab-map',
-  contracts: 'tab-contracts',
-  fleet: 'tab-fleet',
-  shop: 'tab-fleet',
-  market: 'tab-market',
-  vehicleMarketplace: 'tab-more',
-  more: 'tab-more',
-};
 
 interface BottomTabBarProps {
   tabs: TabDefinition[];
@@ -40,12 +27,7 @@ function TabButtons({ tabs, activeTab, onTabPress }: BottomTabBarProps) {
       {tabs.map((tab) => {
         const isActive = tab.key === activeTab;
         return (
-          <TutorialTarget
-            key={tab.key}
-            id={TAB_TARGET_IDS[tab.key]}
-            onTutorialPress={() => onTabPress(tab.key)}
-            style={styles.tabTargetWrap}
-          >
+          <View key={tab.key} style={styles.tabTargetWrap}>
             <TouchableOpacity
               style={[
                 styles.tabButton,
@@ -67,7 +49,7 @@ function TabButtons({ tabs, activeTab, onTabPress }: BottomTabBarProps) {
                 {tab.label}
               </Text>
             </TouchableOpacity>
-          </TutorialTarget>
+          </View>
         );
       })}
     </>

@@ -52,6 +52,30 @@ async function main() {
 
   assert.ok(
     validateStoreProductionEnv({
+      env: withEnv(productionBase, {
+        EXPO_PUBLIC_ENABLE_REWARDED_AD_DIAGNOSTIC: 'true',
+      }),
+    }).some((e) => e.includes('EXPO_PUBLIC_ENABLE_REWARDED_AD_DIAGNOSTIC')),
+    'production rewarded-ad diagnostic flag fails closed',
+  );
+
+  assert.ok(
+    validateStoreProductionEnv({
+      env: withEnv(productionBase, {
+        LOGISTICORE_ALLOW_PRODUCTION_DIAGNOSTICS: 'true',
+      }),
+    }).some((e) => e.includes('LOGISTICORE_ALLOW_PRODUCTION_DIAGNOSTICS')),
+    'production diagnostics allow hatch fails closed',
+  );
+
+  assert.equal(
+    productionBase.EXPO_PUBLIC_ENABLE_REWARDED_AD_DIAGNOSTIC,
+    undefined,
+    'committed .env.production has no rewarded-ad diagnostic flag',
+  );
+
+  assert.ok(
+    validateStoreProductionEnv({
       env: withEnv(productionBase, { EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC: 'true' }),
     }).some((e) => e.includes('ENABLE_TEST_MONEY_SYNC')),
     'production test money sync true fails',

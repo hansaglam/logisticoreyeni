@@ -5,17 +5,17 @@ import { colors, spacing } from '../../theme';
 import { AppDialog } from '../ui';
 
 interface MapHelpMenuProps {
-  tutorialOnPress: () => void;
-  tutorialDisabled?: boolean;
-  tutorialAccessibilityLabel: string;
+  helpGuideOnPress: () => void;
+  helpGuideDisabled?: boolean;
+  helpGuideAccessibilityLabel: string;
   onSyncMap: () => void;
   onInspectVehicles: () => void;
 }
 
 export default function MapHelpMenu({
-  tutorialOnPress,
-  tutorialDisabled = false,
-  tutorialAccessibilityLabel,
+  helpGuideOnPress,
+  helpGuideDisabled = false,
+  helpGuideAccessibilityLabel,
   onSyncMap,
   onInspectVehicles,
 }: MapHelpMenuProps) {
@@ -24,9 +24,9 @@ export default function MapHelpMenu({
   return (
     <>
       <Pressable
-        style={[styles.button, tutorialDisabled && styles.buttonDisabled]}
+        style={[styles.button, helpGuideDisabled && styles.buttonDisabled]}
         onPress={() => setVisible(true)}
-        disabled={tutorialDisabled}
+        disabled={helpGuideDisabled}
         accessibilityRole="button"
         accessibilityLabel="Harita yardımı"
         hitSlop={8}
@@ -51,10 +51,10 @@ export default function MapHelpMenu({
             variant: 'secondary',
           },
           {
-            label: tutorialAccessibilityLabel || 'Nasıl oynanır',
-            onPress: tutorialOnPress,
+            label: helpGuideAccessibilityLabel || 'Yardım & Rehber',
+            onPress: helpGuideOnPress,
             variant: 'secondary',
-            disabled: tutorialDisabled,
+            disabled: helpGuideDisabled,
           },
         ]}
         onDismiss={() => setVisible(false)}

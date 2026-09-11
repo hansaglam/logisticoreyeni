@@ -8,11 +8,8 @@ import {
   View,
 } from 'react-native';
 
-import AppTutorialHelpButton from '../tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../../hooks/useTutorialLayoutReady';
+import HelpGuideButton from '../help/HelpGuideButton';
+import { openHelpGuide } from '../../contextualGuide/openHelpGuide';
 
 import {
   REPUTATION_DECREASE_BEHAVIORS,
@@ -49,20 +46,6 @@ export default function ReputationDetailSheet({
   history,
   onClose,
 }: ReputationDetailSheetProps) {
-  const { layoutReady, markLayoutReady, resetLayoutReady } = useTutorialLayoutReady();
-
-  useEffect(() => {
-    if (!visible) {
-      resetLayoutReady();
-    }
-  }, [resetLayoutReady, visible]);
-
-  const reputationTutorial = useScreenAppTutorial({
-    tutorialId: 'reputation',
-    layoutReady,
-    blockingModals: !visible,
-    autoStart: true,
-  });
   const settlementHistory = useGameStore((state) => state.deliverySettlementHistory ?? []);
   const [selectedEntry, setSelectedEntry] = useState<ReputationHistoryEntry | null>(null);
 
@@ -82,7 +65,10 @@ export default function ReputationDetailSheet({
           <View style={styles.header}>
             <Text style={styles.title}>Şirket İtibarı</Text>
             <View style={styles.headerActions}>
-              <AppTutorialHelpButton {...reputationTutorial.helpButtonProps} />
+              <HelpGuideButton
+                onPress={() => openHelpGuide('reputation')}
+                accessibilityLabel="Yardım ve Rehber"
+              />
               <Pressable
                 onPress={onClose}
                 accessibilityRole="button"
@@ -104,10 +90,8 @@ export default function ReputationDetailSheet({
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={styles.scrollContent}
-            onLayout={markLayoutReady}
           >
-            <AppTutorialTarget tutorialId="reputation" targetId="reputation-score" layoutMode="stretch">
-              <View style={styles.scoreCard}>
+            <View style={styles.scoreCard}>
                 <Text style={styles.scoreValue}>
                   {summary.score}
                   <Text style={styles.scoreMax}>/100</Text>
@@ -126,11 +110,9 @@ export default function ReputationDetailSheet({
                 ) : (
                   <Text style={styles.nextTierText}>En yüksek itibar seviyesindesin</Text>
                 )}
-              </View>
-            </AppTutorialTarget>
+            </View>
 
-            <AppTutorialTarget tutorialId="reputation" targetId="reputation-how" layoutMode="stretch">
-              <View>
+            <View>
                 <Text style={styles.lead}>
                   İtibar; teslimat performansını, sözleşme güvenilirliğini ve operasyon
                   kararlarını yansıtır.
@@ -147,11 +129,9 @@ export default function ReputationDetailSheet({
                     </Text>
                   </View>
                 ))}
-              </View>
-            </AppTutorialTarget>
+            </View>
 
-            <AppTutorialTarget tutorialId="reputation" targetId="reputation-why" layoutMode="stretch">
-              <View>
+            <View>
                 <Text style={styles.sectionTitle}>Azaltan davranışlar</Text>
                 {REPUTATION_DECREASE_BEHAVIORS.map((item) => (
                   <View key={item.key} style={styles.ruleRow}>
@@ -194,11 +174,9 @@ export default function ReputationDetailSheet({
                     );
                   })
                 )}
-              </View>
-            </AppTutorialTarget>
+            </View>
           </ScrollView>
           )}
-          <AppTutorialOverlay {...reputationTutorial.overlayProps} />
         </Pressable>
       </Pressable>
     </Modal>

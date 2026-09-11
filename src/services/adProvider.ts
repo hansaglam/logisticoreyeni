@@ -23,6 +23,11 @@ import {
   type RewardedPlacement,
 } from '../config/rewardedPlacements';
 import { canRequestAdsAfterConsent, getAdsConsentSnapshot } from './adsConsentService';
+import {
+  GOOGLE_MOBILE_ADS_NATIVE_MODULE_NAME,
+  isGoogleMobileAdsNativeModuleRegistered,
+  isRewardedPreloadAttemptOwner,
+} from './googleMobileAdsNativeAvailability';
 import type { AdRewardSlotId } from '../types/monetization';
 
 export type AdShowResult = 'completed' | 'skipped' | 'failed';
@@ -67,6 +72,24 @@ export type AdsDiagnosticsSnapshot = {
   platform: string;
 };
 
+/** In-memory only — never persisted. Sanitized fields for console logs / tests (no player UI). */
+export type RewardedAdLoadDiagnostic = {
+  timestamp: number;
+  platform: string;
+  placement: string;
+  buildProfile: string;
+  useTestIds: boolean;
+  adUnitSource: 'test' | 'production';
+  loadState: string;
+  sdkInitialized: boolean;
+  stage: string;
+  networkOnline: boolean | null;
+  googleErrorDomain: string | null;
+  googleErrorCode: string | null;
+  googleErrorMessage: string | null;
+  category: RewardedAdErrorCategory | null;
+};
+
 declare const __DEV__: boolean | undefined;
 
 const STUB_AD_DELAY_MS = 350;
@@ -82,6 +105,7 @@ let lastErrorCategory: RewardedAdErrorCategory | null = null;
 let lastRewardEvent: AdsDiagnosticsSnapshot['lastRewardEvent'] = null;
 let rewardedLoaded = false;
 let diagnosticsListeners = new Set<() => void>();
+let lastRewardedLoadDiagnostic: RewardedAdLoadDiagnostic | null = null;
 
 export type RewardedPlacementRuntimeStatus =
   | 'disabled'
@@ -329,6 +353,13 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
 
   const mod = getMobileAdsModule();
   if (!mod) {
+    logRewardedFailure({
+      stage: 'preload-module',
+      category: 'module-unavailable',
+      usingTestId: shouldUseTestAdUnitIds() || mode === 'test',
+      networkOnline: getNetworkOnline(),
+      placement: placementFromSlot(slotId),
+    });
     setPlacementEntry(slotId, {
       status: 'failed',
       lastErrorCode: 'module-unavailable',
@@ -339,6 +370,13 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
 
   const { unitId, usingTestId } = resolveRewardedAdUnitId(mode, mod, slotId);
   if (!unitId) {
+    logRewardedFailure({
+      stage: 'preload-unit-id',
+      category: 'ad-unit-id-missing',
+      usingTestId,
+      networkOnline: getNetworkOnline(),
+      placement: placementFromSlot(slotId),
+    });
     setPlacementEntry(slotId, {
       status: 'failed',
       lastErrorCode: 'ad-unit-id-missing',
@@ -347,8 +385,16 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
     return;
   }
 
+  // SDK init must complete before rewarded.load().
   const initialized = await ensureMobileAdsInitialized();
   if (!initialized) {
+    logRewardedFailure({
+      stage: 'preload-init',
+      category: 'sdk-not-initialized',
+      usingTestId,
+      networkOnline: getNetworkOnline(),
+      placement: placementFromSlot(slotId),
+    });
     setPlacementEntry(slotId, {
       status: derivePlacementBaseStatus() === 'consent-required' ? 'consent-required' : 'failed',
       lastErrorCode: 'sdk-not-initialized',
@@ -357,22 +403,42 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
     return;
   }
 
-  const loadingPromise = new Promise<void>((resolve) => {
-    setPlacementEntry(slotId, { status: 'loading', loadingPromise });
-    const { RewardedAd, RewardedAdEventType, AdEventType } = mod;
-    const rewarded = RewardedAd.createForAdRequest(unitId, buildRewardedAdRequestOptions());
-    let settled = false;
+  // Re-check after await — another caller may own an in-flight preload.
+  const afterInit = getPlacementEntry(slotId);
+  if (afterInit.loadingPromise) {
+    return afterInit.loadingPromise;
+  }
+  if (afterInit.status === 'ready') {
+    return;
+  }
+  if (isShowingAd) {
+    return;
+  }
 
-    const finish = (status: RewardedPlacementRuntimeStatus, errorCode?: string) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
+  // Create promise identity FIRST, assign ownership, THEN attach load work.
+  // Do not reference `loadingPromise` inside `new Promise` executor before assignment
+  // (TDZ / undefined self-reference risk).
+  let settleLoading!: () => void;
+  const loadingPromise = new Promise<void>((resolve) => {
+    settleLoading = resolve;
+  });
+  setPlacementEntry(slotId, { status: 'loading', loadingPromise });
+
+  let settled = false;
+  let cleanup: () => void = () => {};
+
+  const finish = (status: RewardedPlacementRuntimeStatus, errorCode?: string) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    const current = getPlacementEntry(slotId);
+    if (isRewardedPreloadAttemptOwner(current.loadingPromise, loadingPromise)) {
       setPlacementEntry(slotId, {
         status,
         lastErrorCode: errorCode,
-        lastLoadedAt: status === 'ready' ? Date.now() : entry.lastLoadedAt,
+        lastLoadedAt: status === 'ready' ? Date.now() : current.lastLoadedAt,
         retryAt:
           status === 'ready'
             ? undefined
@@ -380,8 +446,13 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
         loadingPromise: undefined,
         cleanup: undefined,
       });
-      resolve();
-    };
+    }
+    settleLoading();
+  };
+
+  try {
+    const { RewardedAd, RewardedAdEventType, AdEventType } = mod;
+    const rewarded = RewardedAd.createForAdRequest(unitId, buildRewardedAdRequestOptions());
 
     const loadTimeout = setTimeout(() => {
       logRewardedFailure({
@@ -389,12 +460,18 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
         category: 'timeout',
         usingTestId,
         networkOnline: getNetworkOnline(),
+        placement: placementFromSlot(slotId),
       });
       finish('network-error', 'timeout');
     }, REWARDED_LOAD_TIMEOUT_MS);
 
     const unsubLoaded = rewarded.addAdEventListener(RewardedAdEventType.LOADED, () => {
       clearTimeout(loadTimeout);
+      recordRewardedLoadDiagnosticSuccess({
+        stage: 'preload-loaded',
+        placement: placementFromSlot(slotId),
+        usingTestId,
+      });
       finish('ready');
     });
 
@@ -406,21 +483,36 @@ async function preloadRewardedSlot(slotId: AdRewardSlotId): Promise<void> {
         category,
         usingTestId,
         networkOnline: getNetworkOnline(),
+        placement: placementFromSlot(slotId),
+        nativeError: error,
       });
-      finish(mapErrorCategoryToPlacementStatus(category), category);
+      const native = extractSanitizedAdError(error);
+      const errorCode = native.code ? `${category}:${native.code}` : category;
+      finish(mapErrorCategoryToPlacementStatus(category), errorCode);
     });
 
-    const cleanup = () => {
+    cleanup = () => {
       clearTimeout(loadTimeout);
       unsubLoaded();
       unsubError();
     };
 
-    setPlacementEntry(slotId, { cleanup });
+    if (isRewardedPreloadAttemptOwner(getPlacementEntry(slotId).loadingPromise, loadingPromise)) {
+      setPlacementEntry(slotId, { cleanup });
+    }
     rewarded.load();
-  });
+  } catch (error) {
+    logRewardedFailure({
+      stage: 'preload-exception',
+      category: 'internal-error',
+      usingTestId,
+      networkOnline: getNetworkOnline(),
+      placement: placementFromSlot(slotId),
+      nativeError: error,
+    });
+    finish('failed', 'preload-exception');
+  }
 
-  setPlacementEntry(slotId, { loadingPromise });
   await loadingPromise;
 }
 
@@ -441,29 +533,103 @@ function setLifecycle(next: RewardedAdLifecycle): void {
   notifyDiagnostics();
 }
 
-function categorizeAdError(error: unknown): RewardedAdErrorCategory {
-  const code =
-    error && typeof error === 'object' && 'code' in error
-      ? String((error as { code?: unknown }).code ?? '')
-      : '';
-  const message =
-    error instanceof Error
-      ? error.message
-      : error && typeof error === 'object' && 'message' in error
-        ? String((error as { message?: unknown }).message ?? '')
-        : String(error ?? '');
-  const blob = `${code} ${message}`.toLowerCase();
+type SanitizedAdError = {
+  domain: string | null;
+  code: string | null;
+  message: string | null;
+};
 
-  if (blob.includes('no-fill') || blob.includes('error_code_no_fill') || blob.includes('no fill')) {
+/** Strip IDFA / long tokens / emails — keep only AdMob-useful error text. */
+function sanitizeAdErrorText(raw: string): string {
+  return raw
+    .replace(
+      /\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b/g,
+      '[id]',
+    )
+    .replace(/\b[0-9A-Fa-f]{32,}\b/g, '[hex]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+function extractSanitizedAdError(error: unknown): SanitizedAdError {
+  if (!error || typeof error !== 'object') {
+    const message = sanitizeAdErrorText(String(error ?? ''));
+    return { domain: null, code: null, message: message || null };
+  }
+  const record = error as Record<string, unknown>;
+  const userInfo =
+    record.userInfo && typeof record.userInfo === 'object'
+      ? (record.userInfo as Record<string, unknown>)
+      : null;
+  const domainRaw =
+    record.domain ??
+    record.errorDomain ??
+    userInfo?.NSUnderlyingErrorDomain ??
+    userInfo?.domain;
+  const codeRaw = record.code ?? record.errorCode ?? userInfo?.code;
+  const messageRaw =
+    record.message ??
+    (error instanceof Error ? error.message : null) ??
+    userInfo?.NSLocalizedDescription ??
+    userInfo?.message;
+  return {
+    domain:
+      typeof domainRaw === 'string' && domainRaw.trim()
+        ? sanitizeAdErrorText(domainRaw)
+        : null,
+    code: codeRaw != null && String(codeRaw).trim() ? sanitizeAdErrorText(String(codeRaw)) : null,
+    message:
+      typeof messageRaw === 'string' && messageRaw.trim()
+        ? sanitizeAdErrorText(messageRaw)
+        : null,
+  };
+}
+
+function readBuildProfileForDiagnostics(): string {
+  const extra = Constants.expoConfig?.extra as { buildProfile?: unknown } | undefined;
+  if (typeof extra?.buildProfile === 'string' && extra.buildProfile.trim()) {
+    return extra.buildProfile.trim();
+  }
+  const fromEnv = process.env.LOGISTICORE_BUILD_PROFILE?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : 'unknown';
+}
+
+function categorizeAdError(error: unknown): RewardedAdErrorCategory {
+  const sanitized = extractSanitizedAdError(error);
+  const blob = `${sanitized.domain ?? ''} ${sanitized.code ?? ''} ${sanitized.message ?? ''}`.toLowerCase();
+
+  if (
+    blob.includes('no-fill') ||
+    blob.includes('error_code_no_fill') ||
+    blob.includes('nofill') ||
+    blob.includes('no fill') ||
+    /\bcode[_\s-]*3\b/.test(blob) ||
+    blob.includes('error-code-no-fill')
+  ) {
     return 'no-fill';
   }
-  if (blob.includes('network') || blob.includes('offline') || blob.includes('error_code_network')) {
+  if (
+    blob.includes('network') ||
+    blob.includes('offline') ||
+    blob.includes('error_code_network') ||
+    blob.includes('error-code-network') ||
+    /\bcode[_\s-]*2\b/.test(blob)
+  ) {
     return 'network-error';
   }
-  if (blob.includes('invalid') || blob.includes('error_code_invalid_request')) {
+  if (
+    blob.includes('invalid') ||
+    blob.includes('error_code_invalid_request') ||
+    blob.includes('error-code-invalid-request') ||
+    blob.includes('app id') ||
+    blob.includes('ad unit') ||
+    /\bcode[_\s-]*1\b/.test(blob)
+  ) {
     return 'invalid-request';
   }
-  if (blob.includes('consent') || blob.includes('ump')) {
+  if (blob.includes('consent') || blob.includes('ump') || blob.includes('privacy')) {
     return 'consent-required';
   }
   if (blob.includes('not loaded') || blob.includes('ad-not-loaded')) {
@@ -472,8 +638,22 @@ function categorizeAdError(error: unknown): RewardedAdErrorCategory {
   if (blob.includes('timeout')) {
     return 'timeout';
   }
-  if (blob.includes('internal')) {
+  if (
+    blob.includes('internal') ||
+    blob.includes('error_code_internal') ||
+    blob.includes('error-code-internal') ||
+    /\bcode[_\s-]*0\b/.test(blob)
+  ) {
     return 'internal-error';
+  }
+  if (
+    blob.includes('not ready') ||
+    blob.includes('application is not') ||
+    blob.includes('publisher') ||
+    blob.includes('account')
+  ) {
+    // Common AdMob pre-approval / inventory messaging — treat as no-fill class.
+    return 'no-fill';
   }
   return 'unknown';
 }
@@ -483,19 +663,82 @@ function logRewardedFailure(input: {
   category: RewardedAdErrorCategory;
   usingTestId: boolean;
   networkOnline: boolean | null;
+  placement?: RewardedPlacement | AdRewardSlotId;
+  nativeError?: unknown;
 }): void {
   lastErrorCategory = input.category;
   notifyDiagnostics();
-  console.warn('[rewarded-ad-failed]', {
+  const native = extractSanitizedAdError(input.nativeError);
+  const config = getAdsConfigAudit();
+  const placementLabel =
+    typeof input.placement === 'string' && input.placement.length > 0
+      ? String(input.placement)
+      : 'unknown';
+  const diagnostic: RewardedAdLoadDiagnostic = {
+    timestamp: Date.now(),
     platform: Platform.OS,
-    stage: input.stage,
-    code: input.category,
-    messageCategory: input.category,
-    usingTestId: input.usingTestId,
+    placement: placementLabel,
+    buildProfile: readBuildProfileForDiagnostics(),
+    useTestIds: config.useTestIds,
+    adUnitSource: input.usingTestId ? 'test' : 'production',
+    loadState: lifecycle,
     sdkInitialized,
-    adLoaded: rewardedLoaded,
+    stage: input.stage,
     networkOnline: input.networkOnline,
+    googleErrorDomain: native.domain,
+    googleErrorCode: native.code,
+    googleErrorMessage: native.message,
+    category: input.category,
+  };
+  lastRewardedLoadDiagnostic = diagnostic;
+  console.warn('[rewarded-ad-failed]', {
+    platform: diagnostic.platform,
+    placement: diagnostic.placement,
+    buildProfile: diagnostic.buildProfile,
+    useTestIds: diagnostic.useTestIds,
+    adUnitSource: diagnostic.adUnitSource,
+    loadState: diagnostic.loadState,
+    sdkInitialized: diagnostic.sdkInitialized,
+    googleErrorDomain: diagnostic.googleErrorDomain,
+    googleErrorCode: diagnostic.googleErrorCode,
+    googleErrorMessage: diagnostic.googleErrorMessage,
+    category: diagnostic.category,
+    stage: diagnostic.stage,
+    networkOnline: diagnostic.networkOnline,
   });
+}
+
+function recordRewardedLoadDiagnosticSuccess(input: {
+  stage: string;
+  placement: RewardedPlacement | AdRewardSlotId;
+  usingTestId: boolean;
+}): void {
+  const config = getAdsConfigAudit();
+  lastRewardedLoadDiagnostic = {
+    timestamp: Date.now(),
+    platform: Platform.OS,
+    placement: String(input.placement),
+    buildProfile: readBuildProfileForDiagnostics(),
+    useTestIds: config.useTestIds,
+    adUnitSource: input.usingTestId ? 'test' : 'production',
+    loadState: lifecycle,
+    sdkInitialized,
+    stage: input.stage,
+    networkOnline: getNetworkOnline(),
+    googleErrorDomain: null,
+    googleErrorCode: null,
+    googleErrorMessage: null,
+    category: null,
+  };
+}
+
+/** Last sanitized rewarded load diagnostic snapshot (in-memory; no player UI). */
+export function getLastRewardedLoadDiagnostic(): RewardedAdLoadDiagnostic | null {
+  return lastRewardedLoadDiagnostic;
+}
+
+export function __resetRewardedLoadDiagnosticForTests(): void {
+  lastRewardedLoadDiagnostic = null;
 }
 
 function getNetworkOnline(): boolean | null {
@@ -508,6 +751,19 @@ function getNetworkOnline(): boolean | null {
 let nativeModuleChecked = false;
 let nativeModuleAvailable = false;
 
+function readGoogleMobileAdsTurboModule(): unknown {
+  try {
+    // Non-enforcing lookup — never call getEnforcing here (Expo Go RedBox).
+    return TurboModuleRegistry.get(GOOGLE_MOBILE_ADS_NATIVE_MODULE_NAME);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve react-native-google-mobile-ads only when its native binding is registered
+ * on Bridge and/or TurboModuleRegistry. Never require NativeModules-only.
+ */
 function getMobileAdsModule(): MobileAdsModule | null {
   if (!isSupportedPlatform() || isRunningInExpoGo() || isExpoGo()) {
     return null;
@@ -515,26 +771,21 @@ function getMobileAdsModule(): MobileAdsModule | null {
 
   if (!nativeModuleChecked) {
     nativeModuleChecked = true;
-    // Expo Go'nun native binary'sinde AdMob modülü yoktur. require çağrısı
-    // TurboModuleRegistry.getEnforcing ile RedBox ürettiği için önce native
-    // kayıt kontrolü yapılır; development/production build'lerde modül vardır.
-    if (!NativeModules.RNGoogleMobileAdsModule) {
+    const registered = isGoogleMobileAdsNativeModuleRegistered({
+      bridgeModule: NativeModules[GOOGLE_MOBILE_ADS_NATIVE_MODULE_NAME],
+      turboModule: readGoogleMobileAdsTurboModule(),
+    });
+    if (!registered) {
+      // Avoid require() when native binding is absent — SDK import uses getEnforcing.
       nativeModuleAvailable = false;
-      return null;
-    }
-    try {
-      // Önce native modülün binary'de kayıtlı olduğunu throw etmeyen get() ile
-      // doğrula; SDK import'u getEnforcing() çağırdığı için modül yoksa
-      // Invariant Violation fırlatır ve LogBox'a ERROR düşer.
-      if (TurboModuleRegistry.get('RNGoogleMobileAdsModule') == null) {
-        nativeModuleAvailable = false;
-      } else {
+    } else {
+      try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         require('react-native-google-mobile-ads');
         nativeModuleAvailable = true;
+      } catch {
+        nativeModuleAvailable = false;
       }
-    } catch {
-      nativeModuleAvailable = false;
     }
   }
 
@@ -548,6 +799,12 @@ function getMobileAdsModule(): MobileAdsModule | null {
   } catch {
     return null;
   }
+}
+
+/** Test-only: clear native module probe cache. */
+export function __resetGoogleMobileAdsModuleCacheForTests(): void {
+  nativeModuleChecked = false;
+  nativeModuleAvailable = false;
 }
 
 function resolveRewardedAdUnitId(
@@ -593,12 +850,16 @@ async function ensureMobileAdsInitialized(): Promise<boolean> {
         adapterCount = adapters;
         console.info('[ads-sdk-init]', {
           platform: Platform.OS,
+          buildProfile: readBuildProfileForDiagnostics(),
           initialized: true,
           adapterCount: adapters,
           adsEnabled: isAdsEnabled(),
-          appIdConfigured: getAdsConfigAudit().androidAppIdConfigured || getAdsConfigAudit().iosAppIdConfigured,
+          appIdConfigured:
+            getAdsConfigAudit().androidAppIdConfigured || getAdsConfigAudit().iosAppIdConfigured,
           mode: resolveAdsMode(),
-          testIdActive: resolveAdsMode() === 'test' || shouldUseTestAdUnitIds(),
+          useTestIds: shouldUseTestAdUnitIds() || resolveAdsMode() === 'test',
+          adUnitSource:
+            shouldUseTestAdUnitIds() || resolveAdsMode() === 'test' ? 'test' : 'production',
         });
         notifyDiagnostics();
         return true;
@@ -869,6 +1130,8 @@ async function showNativeRewardedAd(slotId: AdRewardSlotId): Promise<AdShowResul
           category: categorizeAdError(error),
           usingTestId,
           networkOnline: getNetworkOnline(),
+          placement: placementFromSlot(slotId),
+          nativeError: error,
         });
         finish('failed');
       });

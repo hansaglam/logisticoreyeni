@@ -1,7 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { EmptyState } from '../ui';
 import { colors } from '../../theme';
 import type { OwnedWarehouseCardVm } from '../../utils/warehouseScreenViewModel';
@@ -54,41 +53,22 @@ export default function OwnedWarehousesSection({
           compact
         />
       ) : (
-        warehouses.map((card, index) => {
-          const warehouseCard = (
-            <OwnedWarehouseCard
-              key={card.warehouse.id}
-              card={card}
-              expanded={expandedWarehouseId === card.warehouse.id}
-              measureLayout={index === 0}
-              onToggle={() => onToggleWarehouse(card.warehouse.id)}
-              onManageStock={() => onManageStock(card.warehouse.id)}
-              onTransfer={() => onTransfer(card.warehouse.id)}
-              onUpgrade={() => onUpgrade(card.warehouse.id)}
-              onMore={() => onMore(card.warehouse.id)}
-              onGoToMarket={onGoToMarket}
-              onSellStock={(productId) => onSellStock(card.warehouse.id, productId)}
-              onTransferStock={(productId) => onTransferStock(card.warehouse.id, productId)}
-            />
-          );
-
-          if (index === 0) {
-            return (
-              <AppTutorialTarget
-                key={card.warehouse.id}
-                tutorialId="warehouses"
-                targetId="city-warehouse-link"
-                layoutMode="stretch"
-              >
-                <AppTutorialTarget tutorialId="warehouses" targetId="capacity" layoutMode="stretch">
-                  {warehouseCard}
-                </AppTutorialTarget>
-              </AppTutorialTarget>
-            );
-          }
-
-          return warehouseCard;
-        })
+        warehouses.map((card, index) => (
+          <OwnedWarehouseCard
+            key={card.warehouse.id}
+            card={card}
+            expanded={expandedWarehouseId === card.warehouse.id}
+            measureLayout={index === 0}
+            onToggle={() => onToggleWarehouse(card.warehouse.id)}
+            onManageStock={() => onManageStock(card.warehouse.id)}
+            onTransfer={() => onTransfer(card.warehouse.id)}
+            onUpgrade={() => onUpgrade(card.warehouse.id)}
+            onMore={() => onMore(card.warehouse.id)}
+            onGoToMarket={onGoToMarket}
+            onSellStock={(productId) => onSellStock(card.warehouse.id, productId)}
+            onTransferStock={(productId) => onTransferStock(card.warehouse.id, productId)}
+          />
+        ))
       )}
     </View>
   );

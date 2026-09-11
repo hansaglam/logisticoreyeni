@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState, InteractionManager } from 'react-native';
+import { AppState } from 'react-native';
 
 import { maybeSubmitLeaderboardForSeasonChange } from '../services/leaderboardSeasonSync';
 import {
@@ -16,7 +16,6 @@ export function useAppStateLifecycle(): boolean {
   const appStateRef = useRef(AppState.currentState);
 
   useEffect(() => {
-    let pendingBackgroundSave: ReturnType<typeof InteractionManager.runAfterInteractions> | null = null;
     const subscription = AppState.addEventListener('change', (nextState) => {
       const previousState = appStateRef.current;
       appStateRef.current = nextState;
@@ -40,22 +39,17 @@ export function useAppStateLifecycle(): boolean {
         }
       }
 
-      // Preserve the iOS inactive checkpoint and flush only on true background.
+      // iOS force-quit often kills during `inactive` without reaching `background`.
+      // Flush immediately (no InteractionManager defer) so mandatory tutorial + other
+      // dirty progress survive termination.
       if (nextState === 'background' || nextState === 'inactive') {
         useGameStore.getState().recordLastSeenRealTimeMs();
-        if (nextState === 'background') {
-          pendingBackgroundSave?.cancel();
-          pendingBackgroundSave = InteractionManager.runAfterInteractions(() => {
-            pendingBackgroundSave = null;
-            void useGameStore.getState().flushLifecycleSave('background');
-          });
-        }
+        void useGameStore.getState().flushLifecycleSave('background');
       }
     });
 
     return () => {
       subscription.remove();
-      pendingBackgroundSave?.cancel();
     };
   }, []);
 

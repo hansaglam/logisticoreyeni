@@ -5,7 +5,6 @@
 import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import { shouldShowTestAdLabel } from '../../config/adMob';
 import { slotIdToPlacement } from '../../config/rewardedPlacements';
 import {
   AD_REWARDED_LOAD_FAILED_MESSAGE,
@@ -84,7 +83,7 @@ export default function AdRewardButton({
     return null;
   }
 
-  const baseWatchLabel = shouldShowTestAdLabel() ? `${label} (Test reklam)` : label;
+  const baseWatchLabel = label;
   const rewardedAvailability = resolveRewardedAdAvailability({
     privacy: privacyAvailability,
     placementStatus: placementState.status,

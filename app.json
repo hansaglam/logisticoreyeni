@@ -22,6 +22,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.ethemsincar.logisticore",
+      "buildNumber": "2",
       "supportsTablet": false,
       "infoPlist": {
         "NSAppTransportSecurity": {

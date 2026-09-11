@@ -24,8 +24,6 @@ import TruckRefuelSheet from '../components/TruckRefuelSheet';
 import DeliveryBoostPanel from '../components/monetization/DeliveryBoostPanel';
 import AdRewardButton from '../components/monetization/AdRewardButton';
 import { contractGenerationBalance } from '../config/balance';
-import { TutorialTarget } from '../tutorial/TutorialTarget';
-import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
 import {
   AppScreen,
   EmptyState,
@@ -77,11 +75,9 @@ import {
   selectPlayerTrucks,
 } from '../store/selectors/playerFields';
 import { selectCurrentTimeQuarterHour } from '../store/selectors/timeBuckets';
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import HelpGuideButton from '../components/help/HelpGuideButton';
+import ContextualGuideHost from '../contextualGuide/components/ContextualGuideHost';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import TruckLocationHintRow from '../components/shared/TruckLocationHintRow';
 import {
@@ -92,7 +88,6 @@ import {
   type ContractsSegmentKey,
   type ContractsTabSegment,
 } from '../features/contracts/components/ContractsOverview';
-import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
 import { resolveDeliveryHealth } from '../domain/deliveryHealthStatus';
@@ -708,7 +703,6 @@ export default function ContractsScreen() {
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
   const [quickSheetContract, setQuickSheetContract] = useState<Contract | null>(null);
   const [quickSheetVisible, setQuickSheetVisible] = useState(false);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
 
   useEffect(() => {
     notifyContractsScreenOpened();
@@ -774,13 +768,6 @@ export default function ContractsScreen() {
     const names = idleTruckCityIds.map((cityId) => getCityName(cityId));
     return names.join(', ');
   }, [idleTruckCityIds]);
-
-  const contractsTutorial = useScreenAppTutorial({
-    tutorialId: 'contracts',
-    layoutReady,
-    blockingModals: assignmentModalVisible || quickSheetVisible,
-    stepOptions: { hasContracts: availableContracts.length > 0 },
-  });
 
   useEffect(() => {
     if (typeof __DEV__ === 'undefined' || !__DEV__) {
@@ -902,38 +889,8 @@ export default function ContractsScreen() {
     player?.homeCityId,
   ]);
 
-  const firstTutorialContractId = useMemo(() => {
-    for (const contract of filteredContracts) {
-      const preview = contractPreviewById.get(contract.id);
-      if (preview?.availability.canStart) {
-        return contract.id;
-      }
-    }
-    return filteredContracts[0]?.id ?? null;
-  }, [contractPreviewById, filteredContracts]);
-
   const hasActiveMarketFilter =
     isMarketOpportunityFilter(marketContractFilter) || isRouteContractFilter(marketContractFilter);
-
-  useEffect(() => {
-    if (!ENABLE_SPOTLIGHT_TUTORIAL || !__DEV__) {
-      return;
-    }
-    const spotlight = useSpotlightTutorialStore.getState();
-    if (
-      spotlight.isActive &&
-      spotlight.tutorialId === 'first_contract' &&
-      spotlight.currentStepIndex === 1 &&
-      spotlight.activeTab === 'contracts' &&
-      !firstTutorialContractId
-    ) {
-      console.warn('[tutorial] No starter contract found for first_contract tutorial');
-    }
-  }, [firstTutorialContractId]);
-
-  const scrollTutorialContractIntoView = useCallback(() => {
-    scrollRef.current?.scrollToOffset({ offset: 0, animated: true });
-  }, []);
 
   const completedPreviewById = useMemo(() => {
     if (activeSegment !== 'completed' || !globalEconomy) {
@@ -1186,7 +1143,7 @@ export default function ContractsScreen() {
           return null;
         }
 
-        const card = (
+        return (
           <ContractCard
             contract={item.contract}
             preview={preview}
@@ -1195,42 +1152,16 @@ export default function ContractsScreen() {
             onPress={() => openQuickSheet(item.contract)}
           />
         );
-
-        if (item.contract.id !== firstTutorialContractId) {
-          return card;
-        }
-
-        return (
-          <AppTutorialTarget tutorialId="contracts" targetId="payment-risk" layoutMode="stretch">
-            <AppTutorialTarget tutorialId="contracts" targetId="assignment" layoutMode="stretch">
-              <TutorialTarget
-                id="contract-first-card"
-                onTutorialPress={() => openQuickSheet(item.contract)}
-                scrollIntoView={scrollTutorialContractIntoView}
-              >
-                {card}
-              </TutorialTarget>
-            </AppTutorialTarget>
-          </AppTutorialTarget>
-        );
       }
 
       if (item.type === 'active') {
-        const deliveryCard = (
+        return (
           <ActiveDeliveryCard
             delivery={item.delivery}
             drivers={player.drivers ?? []}
             onBoostSuccess={handleDeliveryBoostSuccess}
           />
         );
-        if (runningDeliveries[0]?.id === item.delivery.id) {
-          return (
-            <AppTutorialTarget tutorialId="contracts" targetId="active-delivery" layoutMode="stretch">
-              {deliveryCard}
-            </AppTutorialTarget>
-          );
-        }
-        return deliveryCard;
       }
 
       const linkedDelivery = findDeliveryForContract(item.contract.id, activeDeliveries);
@@ -1246,13 +1177,10 @@ export default function ContractsScreen() {
       contractPreviewById,
       player,
       highlightedContractId,
-      firstTutorialContractId,
-      scrollTutorialContractIntoView,
       activeDeliveries,
       completedPreviewById,
       openQuickSheet,
       handleDeliveryBoostSuccess,
-      runningDeliveries,
     ],
   );
 
@@ -1390,30 +1318,28 @@ export default function ContractsScreen() {
 
   return (
     <View style={styles.screenRoot}>
-      <View
-        style={[styles.safeArea, { paddingTop: screenTopPadding }]}
-        onLayout={markLayoutReady}
-      >
-        <AppTutorialTarget tutorialId="contracts" targetId="contracts-header" layoutMode="stretch">
-          <ScreenHeader
-            title="Sözleşmeler"
-            compact
-            leftAction={
-              <AppTutorialHelpButton {...contractsTutorial.helpButtonProps} />
-            }
-            rightAction={
-              <IconButton
-                icon="refresh"
-                onPress={handleRefresh}
-                size={18}
-                color={COLORS.cyan}
-                backgroundColor={COLORS.card}
-                style={styles.headerIconButton}
-                disabled={isRefreshingContracts}
-              />
-            }
-          />
-        </AppTutorialTarget>
+      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
+        <ScreenHeader
+          title="Sözleşmeler"
+          compact
+          leftAction={
+            <HelpGuideButton
+              onPress={() => openHelpGuide('deliveries')}
+              accessibilityLabel="Yardım ve Rehber"
+            />
+          }
+          rightAction={
+            <IconButton
+              icon="refresh"
+              onPress={handleRefresh}
+              size={18}
+              color={COLORS.cyan}
+              backgroundColor={COLORS.card}
+              style={styles.headerIconButton}
+              disabled={isRefreshingContracts}
+            />
+          }
+        />
 
         {statusMessage ? (
           <View
@@ -1437,15 +1363,13 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        <AppTutorialTarget tutorialId="contracts" targetId="city-truck-requirement" layoutMode="stretch">
-          <ContractsSummaryStrip
-            availableCount={availableContracts.length}
-            activeCount={runningDeliveries.length}
-            bestPayment={topSummary.bestPayment}
-            playableCount={playableContractCount}
-            trucks={trucks}
-          />
-        </AppTutorialTarget>
+        <ContractsSummaryStrip
+          availableCount={availableContracts.length}
+          activeCount={runningDeliveries.length}
+          bestPayment={topSummary.bestPayment}
+          playableCount={playableContractCount}
+          trucks={trucks}
+        />
 
         {showTruckLocationHint ? (
           <TruckLocationHintRow style={styles.truckLocationHint} />
@@ -1468,13 +1392,11 @@ export default function ContractsScreen() {
           </View>
         ) : null}
 
-        <AppTutorialTarget tutorialId="contracts" targetId="available-jobs" layoutMode="stretch">
-          <ContractsTabBar
-            segments={tabSegments}
-            activeKey={activeSegment}
-            onChange={setActiveSegment}
-          />
-        </AppTutorialTarget>
+        <ContractsTabBar
+          segments={tabSegments}
+          activeKey={activeSegment}
+          onChange={setActiveSegment}
+        />
 
         <FlatList
           ref={scrollRef}
@@ -1485,10 +1407,6 @@ export default function ContractsScreen() {
           ListHeaderComponent={listHeader}
           ListEmptyComponent={listEmpty}
           style={styles.listScroll}
-          onScroll={contractsTutorial.handleScroll}
-          onScrollEndDrag={contractsTutorial.handleScrollEnd}
-          onMomentumScrollEnd={contractsTutorial.handleScrollEnd}
-          scrollEventThrottle={16}
           contentContainerStyle={[
             styles.listScrollContent,
             { paddingBottom: contentBottomPadding },
@@ -1527,7 +1445,10 @@ export default function ContractsScreen() {
         onConfirm={handleConfirmAssignment}
         onGoToFleet={handleGoToFleet}
       />
-      <AppTutorialOverlay {...contractsTutorial.overlayProps} />
+      <ContextualGuideHost
+        cardId="choose_contract"
+        blockingUi={assignmentModalVisible || quickSheetVisible}
+      />
     </View>
   );
 }

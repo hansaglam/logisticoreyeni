@@ -20,8 +20,6 @@ import {
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
 import { getContractAvailability } from '../../simulation/delivery';
 import { useGameStore } from '../../store/gameStore';
-import { TutorialTarget } from '../../tutorial/TutorialTarget';
-import type { TutorialTargetId } from '../../tutorial/types';
 import { countActiveMarketAlerts } from '../../utils/marketAlerts';
 import GameIcon from '../ui/GameIcon';
 import type { TabDefinition, TabKey } from '../../navigation/tabTypes';
@@ -29,13 +27,6 @@ import { MAIN_TAB_KEYS } from '../../navigation/tabTypes';
 import type { QuickAccessAction } from '../../navigation/quickAccessTypes';
 import QuickAccessMenu from './QuickAccessMenu';
 import { MARKET_ALARMS_ENABLED } from '../../config/backendRoadmap';
-
-const TAB_TARGET_IDS: Partial<Record<TabKey, TutorialTargetId>> = {
-  dashboard: 'tab-dashboard',
-  map: 'tab-map',
-  contracts: 'tab-contracts',
-  market: 'tab-market',
-};
 
 const LEFT_TAB_KEYS: TabKey[] = ['dashboard', 'map'];
 const RIGHT_TAB_KEYS: TabKey[] = ['contracts', 'market'];
@@ -136,8 +127,6 @@ interface SideTabButtonProps {
 }
 
 const SideTabButton = React.memo(function SideTabButton({ tab, isActive, badgeCount, onPress }: SideTabButtonProps) {
-  const targetId = TAB_TARGET_IDS[tab.key];
-
   const button = (
     <TouchableOpacity
       style={styles.sideTabButton}
@@ -164,19 +153,7 @@ const SideTabButton = React.memo(function SideTabButton({ tab, isActive, badgeCo
     </TouchableOpacity>
   );
 
-  if (!targetId) {
-    return <View style={styles.sideTabTarget}>{button}</View>;
-  }
-
-  return (
-    <TutorialTarget
-      id={targetId}
-      onTutorialPress={onPress}
-      style={styles.sideTabTarget}
-    >
-      {button}
-    </TutorialTarget>
-  );
+  return <View style={styles.sideTabTarget}>{button}</View>;
 });
 
 function GameTabBarContent({

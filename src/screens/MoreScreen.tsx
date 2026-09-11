@@ -42,10 +42,8 @@ import {
 import CompanyProgressFoundationCard from '../features/companyStats/CompanyProgressFoundationCard';
 import { useGameStore } from '../store/gameStore';
 import { colors, formatMoney, spacing, typography } from '../theme';
-import { restartSpotlightTutorial } from '../hooks/useSpotlightTutorialTriggers';
-import { ENABLE_SPOTLIGHT_TUTORIAL } from '../tutorial/featureFlags';
-import { useSpotlightTutorialStore } from '../store/spotlightTutorialStore';
 import AccountSection from '../components/AccountSection';
+import ContextualGuideHost from '../contextualGuide/components/ContextualGuideHost';
 import {
   resolveMoreScreenRoute,
   shouldFocusAccountSection,
@@ -73,6 +71,7 @@ const SeasonsChallengesScreen = lazy(
 const ProgressHistoryScreen = lazy(
   () => import('../features/progression/ProgressHistoryScreen'),
 );
+const HelpGuideScreen = lazy(() => import('./HelpGuideScreen'));
 const DebugSimulationScreen = lazy(() => import('./DebugSimulationScreen'));
 
 function EmbeddedScreenFallback() {
@@ -93,7 +92,8 @@ type MoreRoute =
   | 'upgrades'
   | 'account'
   | 'seasons-challenges'
-  | 'progress-history';
+  | 'progress-history'
+  | 'help';
 
 interface ModuleItem {
   key: MoreRoute | 'settings' | 'stats' | 'upgrades' | 'leaderboard';
@@ -248,6 +248,7 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
   const { alert: showAlert } = useAppDialog();
   const [route, setRoute] = useState<MoreRoute>('menu');
   const [focusAccountSection, setFocusAccountSection] = useState(false);
+  const [helpSessionKey, setHelpSessionKey] = useState(0);
   const player = useGameStore((state) => state.player);
   const companyStats = useGameStore((state) => state.companyStats);
   const progressionFoundationState = useGameStore((state) => state.progressionFoundation);
@@ -268,6 +269,9 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
       const nextRoute = resolveMoreScreenRoute(pendingMoreSubRoute);
       const focusAccount = shouldFocusAccountSection(pendingMoreSubRoute);
       if (nextRoute) {
+        if (nextRoute === 'help') {
+          setHelpSessionKey((key) => key + 1);
+        }
         setRoute(nextRoute);
       }
       setFocusAccountSection(focusAccount);
@@ -384,6 +388,16 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
     );
   }
 
+  if (route === 'help') {
+    return (
+      <View style={styles.embeddedRoot}>
+        <Suspense fallback={<EmbeddedScreenFallback />}>
+          <HelpGuideScreen key={helpSessionKey} onBack={() => setRoute('menu')} />
+        </Suspense>
+      </View>
+    );
+  }
+
   if (route === 'seasons-challenges' && SEASONS_ENABLED && CHALLENGES_ENABLED) {
     return (
       <View style={styles.embeddedRoot}>
@@ -461,6 +475,7 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
   const xpProgress = levelProgress?.progressRatio ?? 0;
 
   return (
+    <View style={styles.menuRoot}>
     <AppScreen scroll scrollRef={menuScrollRef}>
       <ScreenHeader
         title="Şirket"
@@ -502,6 +517,23 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
             LEADERBOARD_ENABLED ? () => setRoute('leaderboard') : undefined
           }
           onOpenAccountCenter={() => setRoute('account')}
+        />
+      </View>
+
+      <View style={styles.moduleList}>
+        <ListRowCard
+          title="Yardım & Rehber"
+          subtitle="Başlangıç rehberi ve oyun yardım konuları"
+          icon="help"
+          onPress={() => {
+            setHelpSessionKey((key) => key + 1);
+            setRoute('help');
+          }}
+          right={
+            <View style={styles.moduleRight}>
+              <ModuleChevron />
+            </View>
+          }
         />
       </View>
 
@@ -564,6 +596,7 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
 
       {__DEV__ ? (
         <View style={styles.moduleList}>
+          <SectionTitle title="DEV Araçları" compact />
           {DEV_MODULE_ITEMS.filter((item) => item.key === 'debug').map((item) => (
             <ListRowCard
               key={item.key}
@@ -584,44 +617,6 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
         </View>
       ) : null}
 
-      {__DEV__ && ENABLE_SPOTLIGHT_TUTORIAL ? (
-        <AppCard variant="soft" style={styles.debugNoteCard} padded>
-          <SectionTitle title="Tutorial (Test)" compact />
-          <Text style={styles.debugNoteText}>
-            Spotlight tutorial akışlarını yeniden başlatmak için aşağıdaki butonları kullan.
-          </Text>
-          <View style={styles.tutorialRestartRow}>
-            <TouchableOpacity
-              style={styles.tutorialRestartButton}
-              onPress={() => restartSpotlightTutorial('first_contract')}
-            >
-              <Text style={styles.tutorialRestartText}>İlk Sözleşme</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.tutorialRestartButton}
-              onPress={() => restartSpotlightTutorial('track_delivery')}
-            >
-              <Text style={styles.tutorialRestartText}>Teslimat Takibi</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.tutorialRestartButton}
-              onPress={() => restartSpotlightTutorial('market_basics')}
-            >
-              <Text style={styles.tutorialRestartText}>Piyasa</Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity
-            onPress={() => {
-              useGameStore.getState().resetSpotlightTutorials();
-              useSpotlightTutorialStore.getState().resetActive();
-              showAlert('Tutorial sıfırlandı', 'Tüm spotlight tutorial ilerlemesi temizlendi.');
-            }}
-          >
-            <Text style={styles.tutorialResetAll}>Tüm tutorial kaydını sıfırla</Text>
-          </TouchableOpacity>
-        </AppCard>
-      ) : null}
-
       {__DEV__ ? (
         <AppCard variant="soft" style={styles.debugNoteCard} padded>
           <SectionTitle title="Başlangıç Rehberi (Test)" compact />
@@ -631,7 +626,7 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
               showAlert('Rehber sıfırlandı', 'Başlangıç rehberi yeniden başlatıldı.');
             }}
           >
-            <Text style={styles.tutorialResetAll}>Onboarding&apos;i Sıfırla</Text>
+            <Text style={styles.devResetLink}>Onboarding&apos;i Sıfırla</Text>
           </TouchableOpacity>
         </AppCard>
       ) : null}
@@ -645,6 +640,8 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
         </AppCard>
       ) : null}
     </AppScreen>
+      <ContextualGuideHost cardId="need_help" />
+    </View>
   );
 }
 
@@ -668,6 +665,10 @@ function SubNavBar({ title, onBack }: { title: string; onBack: () => void }) {
 }
 
 const styles = StyleSheet.create({
+  menuRoot: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   embeddedRoot: {
     flex: 1,
     backgroundColor: colors.background,
@@ -847,27 +848,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: colors.textSecondary,
   },
-  tutorialRestartRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  tutorialRestartButton: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 10,
-    backgroundColor: colors.accentBlueSoft,
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.35)',
-  },
-  tutorialRestartText: {
-    ...typography.caption,
-    color: colors.accentBlue,
-    fontWeight: '700',
-  },
-  tutorialResetAll: {
+  devResetLink: {
     ...typography.caption,
     color: colors.accentAmber,
     fontWeight: '700',

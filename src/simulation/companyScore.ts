@@ -1,7 +1,7 @@
 /**
- * Şirket puanı (Company Score) v2 — haftalık leaderboard ile aynı formül.
+ * Şirket puanı (Company Score) v3 — haftalık leaderboard ile aynı formül.
  *
- * Varsayılan itibar (50) nötrdür. 0 teslimatlı hesaplar sıralamaya girmez.
+ * Varsayılan itibar (50) nötrdür. Başlangıç nakit / starter filo puan vermez.
  * Nakit 1:1 katkı vermez. Kiralık/ilanlı araçlar varlık puanına sayılmaz.
  *
  * Backend: backend/src/leaderboardScore.ts — sayıları senkron tut.
@@ -27,8 +27,17 @@ import { getCityProductMarketPrice, normalizeWarehouse } from './trading';
 
 export type { CompanyScoreBreakdown } from '../types/game';
 
-export const COMPANY_SCORE_VERSION = 2;
+export const COMPANY_SCORE_VERSION = 3;
 export { LEADERBOARD_MIN_COMPLETED_DELIVERIES, isLeaderboardRankedEligible };
+
+/** Matches backend LEADERBOARD_STARTER_BASELINE / SERVER_DEFAULT_*. */
+const STARTER = {
+  cash: 20_000,
+  starterTruckPurchasePrice: 45_000,
+  starterTruckCondition: 88,
+  starterWarehouseCapacityTons: 100,
+  starterWarehouseUpgradeTiers: 1,
+} as const;
 
 const SCORE = {
   deliveryLinear: 380,
@@ -93,6 +102,39 @@ export function formatCompanyScore(value: number): string {
 
 export function isCompanyScoreRankedEligible(completedDeliveries: number): boolean {
   return isLeaderboardRankedEligible(completedDeliveries);
+}
+
+function scaleAssetValue(value: number): number {
+  const safe = Math.max(0, value);
+  return SCORE.assetSqrt * Math.sqrt(safe) + SCORE.assetLog * Math.log1p(safe / SCORE.assetLogDivisor);
+}
+
+function scaleCash(cash: number): number {
+  const normalized = Math.max(0, cash);
+  const capped = Math.min(normalized, SCORE.cashSoftCap);
+  let score = SCORE.cashSqrt * Math.sqrt(capped);
+  if (normalized > SCORE.cashSoftCap) {
+    score += SCORE.cashOverflowLog * Math.log1p((normalized - SCORE.cashSoftCap) / SCORE.cashSoftCap);
+  }
+  return score;
+}
+
+function starterAssetBaseline(): number {
+  const fleetValue = STARTER.starterTruckPurchasePrice * (STARTER.starterTruckCondition / 100);
+  const warehouseValue =
+    STARTER.starterWarehouseCapacityTons *
+    SCORE.warehouseCapacityValue *
+    (1 +
+      (STARTER.starterWarehouseUpgradeTiers - 1) * SCORE.warehouseTierBonusRate);
+  return clamp(
+    safeScore(scaleAssetValue(fleetValue)) + safeScore(scaleAssetValue(warehouseValue)),
+    0,
+    SCORE.maxAssetScore,
+  );
+}
+
+function starterFinanceBaseline(): number {
+  return clamp(safeScore(scaleCash(STARTER.cash)), 0, SCORE.maxFinanceScore);
 }
 
 export function calculateTruckValue(trucks: Truck[] | undefined): number {
@@ -172,21 +214,6 @@ export function calculateWeeklyTradeProfit(
   return sales - purchases;
 }
 
-function scaleAssetValue(value: number): number {
-  const safe = Math.max(0, value);
-  return SCORE.assetSqrt * Math.sqrt(safe) + SCORE.assetLog * Math.log1p(safe / SCORE.assetLogDivisor);
-}
-
-function scaleCash(cash: number): number {
-  const normalized = Math.max(0, cash);
-  const capped = Math.min(normalized, SCORE.cashSoftCap);
-  let score = SCORE.cashSqrt * Math.sqrt(capped);
-  if (normalized > SCORE.cashSoftCap) {
-    score += SCORE.cashOverflowLog * Math.log1p((normalized - SCORE.cashSoftCap) / SCORE.cashSoftCap);
-  }
-  return score;
-}
-
 export function getCompanyScoreBreakdown(state: CompanyScoreGameState): CompanyScoreBreakdown {
   const player = state.player;
   const trucks = player?.trucks ?? [];
@@ -233,7 +260,7 @@ export function getCompanyScoreBreakdown(state: CompanyScoreGameState): CompanyS
 
   const truckValueScore = safeScore(scaleAssetValue(truckValue));
   const warehouseValueScore = safeScore(scaleAssetValue(warehouseValue));
-  const assetScore = clamp(truckValueScore + warehouseValueScore, 0, SCORE.maxAssetScore);
+  const rawAssetScore = clamp(truckValueScore + warehouseValueScore, 0, SCORE.maxAssetScore);
 
   const quality = clamp(
     (reputation - SCORE.reputationBaseline) / SCORE.reputationRange,
@@ -243,13 +270,13 @@ export function getCompanyScoreBreakdown(state: CompanyScoreGameState): CompanyS
   let reputationScore = safeScore(quality * SCORE.reputationAmplitude);
   if (reputationScore < 0) {
     const penaltyCap = -safeScore(
-      SCORE.reputationPenaltyCapRatio * (deliveryScore + progressionScore + assetScore),
+      SCORE.reputationPenaltyCapRatio * (deliveryScore + progressionScore + rawAssetScore),
     );
     reputationScore = Math.max(reputationScore, penaltyCap);
   }
   reputationScore = clamp(reputationScore, -SCORE.maxReputationAbs, SCORE.maxReputationAbs);
 
-  const financeScore = clamp(safeScore(scaleCash(cash)), 0, SCORE.maxFinanceScore);
+  const rawFinanceScore = clamp(safeScore(scaleCash(cash)), 0, SCORE.maxFinanceScore);
   const weeklyActivityScore = clamp(
     safeScore(
       weeklyCompletedDeliveries * SCORE.weeklyLinear +
@@ -259,14 +286,22 @@ export function getCompanyScoreBreakdown(state: CompanyScoreGameState): CompanyS
     SCORE.maxWeeklyScore,
   );
 
+  const assetBaseline = starterAssetBaseline();
+  const financeBaseline = starterFinanceBaseline();
+  const assetScore = Math.max(0, rawAssetScore - assetBaseline);
+  const financeScore = Math.max(0, rawFinanceScore - financeBaseline);
+
   const totalScore = clamp(
-    safeScore(
-      deliveryScore +
-        progressionScore +
-        reputationScore +
-        assetScore +
-        financeScore +
-        weeklyActivityScore,
+    Math.max(
+      0,
+      safeScore(
+        deliveryScore +
+          progressionScore +
+          reputationScore +
+          assetScore +
+          financeScore +
+          weeklyActivityScore,
+      ),
     ),
     0,
     SCORE.maxTotalScore,

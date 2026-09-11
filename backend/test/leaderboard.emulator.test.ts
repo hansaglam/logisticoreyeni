@@ -22,6 +22,7 @@ import { seedLeaderboardSeason } from '../src/leaderboardSeasonSeed';
 import {
   calculateLeaderboardScore,
   extractCanonicalPlayerStateFromServerState,
+  LEADERBOARD_SCORE_VERSION,
 } from '../src/leaderboardScore';
 import { getLeaderboardSeasonKey } from '../src/leaderboardSeason';
 
@@ -207,7 +208,7 @@ test('trusted score submit writes backend-calculated score from serverState', as
   assert.equal(snap.data()?.uid, 'player-1');
   assert.equal(typeof snap.data()?.username, 'string');
   assert.ok(String(snap.data()?.username).length > 0);
-  assert.equal(snap.data()?.scoreVersion, 2);
+  assert.equal(snap.data()?.scoreVersion, LEADERBOARD_SCORE_VERSION);
 });
 
 test('submit without username is rejected', async () => {
@@ -225,7 +226,7 @@ test('submit without username is rejected', async () => {
   assert.equal(result.reason, 'username-required');
 });
 
-test('current score overwrites previous score and ineligible players are removed', async () => {
+test('current score overwrites previous score; starter baseline may drop to zero but stays ranked', async () => {
   await seedServerState('player-2', {
     cash: 80_000,
     completedDeliveries: 40,
@@ -240,13 +241,13 @@ test('current score overwrites previous score and ineligible players are removed
   assert.equal(first.ok, true);
   if (!first.ok) return;
   assert.equal(first.rankedEligible, true);
+  assert.ok((first.score ?? 0) > 0);
 
   await seedServerState('player-2', {
-    cash: 1_000,
+    cash: 20_000,
     completedDeliveries: 0,
     companyLevel: 1,
-    reputation: 0,
-    ownedTrucks: [],
+    reputation: 50,
   });
   const second = await submitLeaderboardScoreTransaction(
     adminFirestore,
@@ -255,13 +256,15 @@ test('current score overwrites previous score and ineligible players are removed
   );
   assert.equal(second.ok, true);
   if (!second.ok) return;
-  assert.equal(second.reason, 'not-ranked-eligible');
-  assert.equal(second.rankedEligible, false);
+  assert.equal(second.rankedEligible, true);
+  assert.equal(second.score, 0);
 
   const snap = await adminFirestore
     .doc(`leaderboards/${first.seasonKey}/entries/player-2`)
     .get();
-  assert.equal(snap.exists, false);
+  assert.equal(snap.exists, true);
+  assert.equal(snap.data()?.companyScore, 0);
+  assert.equal(snap.data()?.scoreVersion, LEADERBOARD_SCORE_VERSION);
 });
 
 test('duplicate submit is idempotent', async () => {
@@ -647,7 +650,7 @@ test('cash alone does not dominate score unboundedly', () => {
   assert.ok(whale.financialScore <= 8_000);
 });
 
-test('zero-delivery default account is not ranked', async () => {
+test('zero-delivery default account ranks at companyScore 0', async () => {
   await seedServerState('fresh-uid');
   const result = await submitLeaderboardScoreTransaction(
     adminFirestore,
@@ -656,11 +659,14 @@ test('zero-delivery default account is not ranked', async () => {
   );
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.reason, 'not-ranked-eligible');
+  assert.equal(result.rankedEligible, true);
+  assert.equal(result.score, 0);
   const snap = await adminFirestore
     .doc(`leaderboards/${result.seasonKey}/entries/fresh-uid`)
     .get();
-  assert.equal(snap.exists, false);
+  assert.equal(snap.exists, true);
+  assert.equal(snap.data()?.companyScore, 0);
+  assert.equal(snap.data()?.scoreVersion, LEADERBOARD_SCORE_VERSION);
 });
 
 test('v1 ghost scores are excluded from ranking', async () => {
@@ -713,7 +719,8 @@ test('leaderboard bootstraps default serverState when canonical state missing', 
   );
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.reason, 'not-ranked-eligible');
+  assert.equal(result.rankedEligible, true);
+  assert.equal(result.score, 0);
   const serverSnap = await adminFirestore
     .doc('users/missing-save/serverState/current')
     .get();
@@ -722,7 +729,9 @@ test('leaderboard bootstraps default serverState when canonical state missing', 
   const entrySnap = await adminFirestore
     .doc(`leaderboards/${result.seasonKey}/entries/missing-save`)
     .get();
-  assert.equal(entrySnap.exists, false);
+  assert.equal(entrySnap.exists, true);
+  assert.equal(entrySnap.data()?.companyScore, 0);
+  assert.equal(entrySnap.data()?.scoreVersion, LEADERBOARD_SCORE_VERSION);
 });
 
 test('cross-platform: Android and iOS users share one leaderboard (no platform filter)', async () => {

@@ -11,11 +11,8 @@ import {
   View,
 } from 'react-native';
 
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import HelpGuideButton from '../components/help/HelpGuideButton';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 import { useAppDialog } from '../components/AppDialogProvider';
 import MarketplaceFiltersSheet from '../components/marketplace/MarketplaceFiltersSheet';
 import VehicleListingCreateSheet from '../components/marketplace/VehicleListingCreateSheet';
@@ -189,7 +186,6 @@ export default function VehicleMarketplaceScreen({
   const [isDeletingListing, setIsDeletingListing] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [isCreatingListing, setIsCreatingListing] = useState(false);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const requestSeqRef = useRef(0);
   const lastAuthUidRef = useRef<string | null>(null);
   const listRef = useRef<FlatList<VehicleMarketplaceListing>>(null);
@@ -200,17 +196,6 @@ export default function VehicleMarketplaceScreen({
     }
     return [];
   }, [screenState]);
-
-  const marketplaceTutorial = useScreenAppTutorial({
-    tutorialId: 'vehicle-marketplace',
-    layoutReady,
-    blockingModals:
-      filtersVisible ||
-      selected != null ||
-      purchaseTarget != null ||
-      createVisible,
-    stepOptions: { hasListings: listings.length > 0 },
-  });
 
   const isInitialLoading = screenState.status === 'idle' || screenState.status === 'loading';
   const isRefreshing = screenState.status === 'refreshing';
@@ -943,30 +928,13 @@ export default function VehicleMarketplaceScreen({
           ref={listRef}
           data={activeTab === 'available' && !isUnavailable ? visibleListings : []}
           keyExtractor={(item) => item.id}
-          onLayout={markLayoutReady}
-          onScroll={marketplaceTutorial.handleScroll}
-          onScrollEndDrag={marketplaceTutorial.handleScrollEnd}
-          onMomentumScrollEnd={marketplaceTutorial.handleScrollEnd}
-          scrollEventThrottle={16}
-          renderItem={({ item, index }) => {
-            const listingCard = (
-              <VehicleListingCard
-                listing={item}
-                onDetail={() => setSelected(item)}
-                onPurchase={() => beginPurchase(item)}
-              />
-            );
-
-            if (index === 0) {
-              return (
-                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="listings" layoutMode="stretch">
-                  {listingCard}
-                </AppTutorialTarget>
-              );
-            }
-
-            return listingCard;
-          }}
+          renderItem={({ item }) => (
+            <VehicleListingCard
+              listing={item}
+              onDetail={() => setSelected(item)}
+              onPurchase={() => beginPurchase(item)}
+            />
+          )}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         contentContainerStyle={[styles.content, { paddingBottom: scrollBottomPadding }]}
         refreshControl={
@@ -985,7 +953,12 @@ export default function VehicleMarketplaceScreen({
               onBack={handleBack}
               loading={isInitialLoading || isRefreshing}
               onCreateListing={() => setCreateVisible(true)}
-              helpAction={<AppTutorialHelpButton {...marketplaceTutorial.helpButtonProps} />}
+              helpAction={
+                <HelpGuideButton
+                  onPress={() => openHelpGuide('marketplace')}
+                  accessibilityLabel="Yardım ve Rehber"
+                />
+              }
             />
             <MarketplaceTabs
               activeTab={activeTab}
@@ -1001,13 +974,11 @@ export default function VehicleMarketplaceScreen({
                 <Text style={styles.resultText}>
                   {isInitialLoading ? 'Yükleniyor…' : `${visibleListings.length} araç gösteriliyor`}
                 </Text>
-                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="filters" layoutMode="stretch">
-                  <TouchableOpacity style={styles.filterButton} onPress={() => setFiltersVisible(true)}>
-                    <GameIcon name="filter" size={16} color={colors.accentBlue} />
-                    <Text style={styles.filterText}>Filtreler</Text>
-                    {filtersActive ? <View style={styles.filterDot} /> : null}
-                  </TouchableOpacity>
-                </AppTutorialTarget>
+                <TouchableOpacity style={styles.filterButton} onPress={() => setFiltersVisible(true)}>
+                  <GameIcon name="filter" size={16} color={colors.accentBlue} />
+                  <Text style={styles.filterText}>Filtreler</Text>
+                  {filtersActive ? <View style={styles.filterDot} /> : null}
+                </TouchableOpacity>
               </View>
             ) : activeTab === 'mine' ? (
               <View style={styles.toolbar}>
@@ -1064,15 +1035,13 @@ export default function VehicleMarketplaceScreen({
                   compact
                 />
               ) : (
-                <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="my-listings" layoutMode="stretch">
-                  <MyVehicleListings
-                    listings={activeMine}
-                    cancellingId={isDeletingListing}
-                    onDetail={setSelected}
-                    onCancel={requestCancel}
-                    onSellVehicle={() => setCreateVisible(true)}
-                  />
-                </AppTutorialTarget>
+                <MyVehicleListings
+                  listings={activeMine}
+                  cancellingId={isDeletingListing}
+                  onDetail={setSelected}
+                  onCancel={requestCancel}
+                  onSellVehicle={() => setCreateVisible(true)}
+                />
               )
             ) : null}
             {activeTab === 'history' && !isInitialLoading && !isUnavailable ? (
@@ -1123,7 +1092,6 @@ export default function VehicleMarketplaceScreen({
         onConfirm={() => void confirmPurchase()}
       />
       </AppScreen>
-      <AppTutorialOverlay {...marketplaceTutorial.overlayProps} />
     </View>
   );
 }

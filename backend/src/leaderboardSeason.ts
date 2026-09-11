@@ -35,6 +35,41 @@ export function getLeaderboardSeasonEndMs(nowMs: number = Date.now()): number {
   return getLeaderboardSeasonStartMs(nowMs) + 7 * MS_PER_DAY - 1;
 }
 
+/** Previous ISO week key relative to `nowMs` (the week that ended at current week's start). */
+export function getPreviousLeaderboardSeasonKey(nowMs: number = Date.now()): string {
+  return getLeaderboardSeasonKey(getLeaderboardSeasonStartMs(nowMs) - 1);
+}
+
+/**
+ * Deterministic UTC Monday-start / next-Monday-end bounds for a season key.
+ * Window is half-open [startsAt, endsAt) matching seasonPeriods weekly semantics.
+ */
+export function getLeaderboardSeasonBoundsFromKey(
+  seasonKey: string,
+): { startsAt: number; endsAt: number } | null {
+  if (!isValidLeaderboardSeasonKey(seasonKey)) {
+    return null;
+  }
+  const match = /^(\d{4})-W(\d{2})$/.exec(seasonKey);
+  if (!match) {
+    return null;
+  }
+  const isoYear = Number(match[1]);
+  const week = Number(match[2]);
+  if (!Number.isInteger(isoYear) || !Number.isInteger(week) || week < 1 || week > 53) {
+    return null;
+  }
+  const jan4 = Date.UTC(isoYear, 0, 4);
+  const jan4Day = new Date(jan4).getUTCDay() || 7;
+  const week1Monday = jan4 - (jan4Day - 1) * MS_PER_DAY;
+  const startsAt = week1Monday + (week - 1) * MS_PER_DAY * 7;
+  const endsAt = startsAt + 7 * MS_PER_DAY;
+  if (getLeaderboardSeasonKey(startsAt) !== seasonKey) {
+    return null;
+  }
+  return { startsAt, endsAt };
+}
+
 export function isValidLeaderboardSeasonKey(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-W\d{2}$/.test(value);
 }

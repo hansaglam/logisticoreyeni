@@ -14,6 +14,17 @@ import {
 } from './leaderboard';
 import { seedLeaderboardSeason } from './leaderboardSeasonSeed';
 import {
+  ensureSeasonFinalized,
+  finalizeSeason,
+  getPreviousLeaderboardSeasonKey,
+  getSeasonResultForUid,
+  isSeasonCloseSnapshotEnabled,
+} from './seasonClose';
+import {
+  claimSeasonRewardTransaction,
+  getSeasonRewardEntitlementForUid,
+} from './seasonRewards';
+import {
   migrateLegacyServerStateTransaction,
 } from './serverState';
 import { reconcileAuthoritativeFleetTransaction } from './authoritativeFleetReconciliation';
@@ -84,6 +95,10 @@ const RATE_LIMITS = {
   migrateServerState: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
   challengeGet: { windowMs: 60 * 1000, maxRequests: 60 },
   challengeClaim: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  seasonCloseEnsure: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  seasonResultGet: { windowMs: 60 * 1000, maxRequests: 60 },
+  seasonRewardGet: { windowMs: 60 * 1000, maxRequests: 60 },
+  seasonRewardClaim: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -233,6 +248,67 @@ export const seedWeeklyLeaderboard = onSchedule(
       });
     } catch (error) {
       logger.error('[leaderboard-season-seed]', {
+        seasonKey,
+        durationMs: Date.now() - startedAt,
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : String(error),
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * Phase 7 — Immutable season-close for the previous UTC ISO week.
+ * Idempotent; shares finalizeSeason with lazy ensureSeasonFinalized.
+ * Gated by SEASON_CLOSE_SNAPSHOT_ENABLED=true (default off).
+ */
+export const finalizeWeeklySeasonClose = onSchedule(
+  {
+    schedule: '10 0 * * *',
+    timeZone: 'UTC',
+    retryCount: 2,
+    maxInstances: 1,
+    timeoutSeconds: 540,
+    memory: '512MiB',
+  },
+  async () => {
+    const startedAt = Date.now();
+    if (!isSeasonCloseSnapshotEnabled()) {
+      logger.info('[season-close-schedule]', {
+        skipped: true,
+        reason: 'feature-disabled',
+        durationMs: 0,
+      });
+      return;
+    }
+    const seasonKey = getPreviousLeaderboardSeasonKey(startedAt);
+    try {
+      const result = await finalizeSeason(getFirestore(), seasonKey, {
+        nowMs: startedAt,
+        maxDurationMs: 480_000,
+      });
+      logger.info('[season-close-schedule]', {
+        seasonKey: result.seasonKey,
+        ok: result.ok,
+        reason: result.reason,
+        status: result.status,
+        processedCount: result.processedCount,
+        participantCount: result.participantCount,
+        pagesProcessed: result.pagesProcessed,
+        durationMs: result.durationMs,
+      });
+      if (result.ok && result.reason === 'timeout-partial') {
+        // Allow Cloud Scheduler retry / next day to resume closing.
+        throw new Error(`season-close-partial:${seasonKey}`);
+      }
+      if (!result.ok && result.reason === 'integrity-conflict') {
+        throw new Error(`season-close-integrity:${seasonKey}`);
+      }
+    } catch (error) {
+      logger.error('[season-close-schedule]', {
         seasonKey,
         durationMs: Date.now() - startedAt,
         error:
@@ -961,6 +1037,332 @@ export const getLeaderboard = onCall(
       seasonKey: result.seasonKey,
       ok: result.ok,
       entryCount: result.ok ? result.entries.length : 0,
+      durationMs: Date.now() - startedAt,
+    });
+    return result;
+  },
+);
+
+/**
+ * Lazy fallback: finalize a closed season if the scheduler missed it.
+ * Client may supply seasonKey only — never rank/score/count.
+ */
+export const ensureSeasonFinalizedCallable = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const startedAt = Date.now();
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason:
+          auth.reason === 'auth-required' ? 'unauthenticated' : 'anonymous-not-allowed',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        status: null,
+        participantCount: null,
+        processedCount: null,
+        closedAt: null,
+        pagesProcessed: 0,
+        durationMs: 0,
+      };
+    }
+    if (
+      !hasOnlyKeys(record, ['seasonKey']) ||
+      typeof record.seasonKey !== 'string' ||
+      !isValidLeaderboardSeasonKey(record.seasonKey)
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-season-key',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        status: null,
+        participantCount: null,
+        processedCount: null,
+        closedAt: null,
+        pagesProcessed: 0,
+        durationMs: 0,
+      };
+    }
+    // Reject client-fabricated authority fields if smuggled.
+    if (
+      'finalRank' in record ||
+      'finalScore' in record ||
+      'rank' in record ||
+      'score' in record ||
+      'participantCount' in record ||
+      'uid' in record
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        seasonKey: record.seasonKey,
+        status: null,
+        participantCount: null,
+        processedCount: null,
+        closedAt: null,
+        pagesProcessed: 0,
+        durationMs: 0,
+      };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'seasonCloseEnsure'))) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        seasonKey: record.seasonKey,
+        status: null,
+        participantCount: null,
+        processedCount: null,
+        closedAt: null,
+        pagesProcessed: 0,
+        durationMs: 0,
+      };
+    }
+    const result = await ensureSeasonFinalized(getFirestore(), record.seasonKey, {
+      nowMs: startedAt,
+      maxDurationMs: 45_000,
+    });
+    logger.info('[season-close-ensure]', {
+      uidHash: uidHash(auth.identity.uid),
+      seasonKey: result.seasonKey,
+      ok: result.ok,
+      reason: result.reason,
+      status: result.status,
+      durationMs: result.durationMs,
+    });
+    return result;
+  },
+);
+
+/**
+ * Trusted read of the caller's immutable closed-season result.
+ * Auth uid only — no client-supplied uid/rank/score.
+ */
+export const getSeasonResult = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const startedAt = Date.now();
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason:
+          auth.reason === 'auth-required' ? 'unauthenticated' : 'anonymous-not-allowed',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        season: null,
+        result: null,
+      };
+    }
+    if (
+      !hasOnlyKeys(record, ['seasonKey']) ||
+      typeof record.seasonKey !== 'string' ||
+      !isValidLeaderboardSeasonKey(record.seasonKey)
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-season-key',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        season: null,
+        result: null,
+      };
+    }
+    if (
+      'uid' in record ||
+      'finalRank' in record ||
+      'finalScore' in record ||
+      'rank' in record ||
+      'score' in record
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        seasonKey: record.seasonKey,
+        season: null,
+        result: null,
+      };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'seasonResultGet'))) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        seasonKey: record.seasonKey,
+        season: null,
+        result: null,
+      };
+    }
+    const result = await getSeasonResultForUid(
+      getFirestore(),
+      auth.identity.uid,
+      record.seasonKey,
+      { nowMs: startedAt, ensure: true, maxEnsureDurationMs: 20_000 },
+    );
+    logger.info('[season-result-get]', {
+      uidHash: uidHash(auth.identity.uid),
+      seasonKey: result.seasonKey,
+      ok: result.ok,
+      reason: result.reason,
+      durationMs: Date.now() - startedAt,
+    });
+    return result;
+  },
+);
+
+/**
+ * Materialization is intentionally NOT exposed as a public onCall.
+ * Ordinary players must never trigger entitlement creation.
+ * Trusted path: Admin SDK / backend scripts calling
+ * `materializeSeasonRewardEntitlements` from seasonRewards.ts directly.
+ */
+
+/** Trusted read of the caller's season reward entitlement. seasonKey only. */
+export const getSeasonRewardEntitlement = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason:
+          auth.reason === 'auth-required' ? 'unauthenticated' : 'anonymous-not-allowed',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        entitlement: null,
+      };
+    }
+    if (
+      !hasOnlyKeys(record, ['seasonKey']) ||
+      typeof record.seasonKey !== 'string' ||
+      !isValidLeaderboardSeasonKey(record.seasonKey)
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-season-key',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        entitlement: null,
+      };
+    }
+    if (
+      'uid' in record ||
+      'finalRank' in record ||
+      'cashAmount' in record ||
+      'tierId' in record
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        seasonKey: record.seasonKey,
+        entitlement: null,
+      };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'seasonRewardGet'))) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        seasonKey: record.seasonKey,
+        entitlement: null,
+      };
+    }
+    return getSeasonRewardEntitlementForUid(
+      getFirestore(),
+      auth.identity.uid,
+      record.seasonKey,
+    );
+  },
+);
+
+/**
+ * Manual season reward claim. Client may send seasonKey + idempotencyKey only.
+ * Cash authority: frozen entitlement + challenge-style cash transaction.
+ */
+export const claimSeasonReward = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const startedAt = Date.now();
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason:
+          auth.reason === 'auth-required' ? 'unauthenticated' : 'anonymous-not-allowed',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        cashBefore: null,
+        cashAfter: null,
+        cashAmount: null,
+        tierId: null,
+        claimedAt: null,
+      };
+    }
+    if (
+      !hasOnlyKeys(record, ['seasonKey', 'idempotencyKey']) ||
+      typeof record.seasonKey !== 'string' ||
+      !isValidLeaderboardSeasonKey(record.seasonKey) ||
+      typeof record.idempotencyKey !== 'string'
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        seasonKey: typeof record.seasonKey === 'string' ? record.seasonKey : '',
+        cashBefore: null,
+        cashAfter: null,
+        cashAmount: null,
+        tierId: null,
+        claimedAt: null,
+      };
+    }
+    if (
+      'uid' in record ||
+      'finalRank' in record ||
+      'finalScore' in record ||
+      'participantCount' in record ||
+      'tierId' in record ||
+      'cashAmount' in record ||
+      'rewardCatalogVersion' in record
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        seasonKey: record.seasonKey,
+        cashBefore: null,
+        cashAfter: null,
+        cashAmount: null,
+        tierId: null,
+        claimedAt: null,
+      };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'seasonRewardClaim',
+        record.idempotencyKey,
+      ))
+    ) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        seasonKey: record.seasonKey,
+        cashBefore: null,
+        cashAfter: null,
+        cashAmount: null,
+        tierId: null,
+        claimedAt: null,
+      };
+    }
+    const result = await claimSeasonRewardTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      {
+        seasonKey: record.seasonKey,
+        idempotencyKey: record.idempotencyKey,
+      },
+      startedAt,
+    );
+    logger.info('[season-reward-claim]', {
+      uidHash: uidHash(auth.identity.uid),
+      seasonKey: result.seasonKey,
+      ok: result.ok,
+      reason: result.reason,
       durationMs: Date.now() - startedAt,
     });
     return result;

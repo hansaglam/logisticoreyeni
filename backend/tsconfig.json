@@ -14,6 +14,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "src/**/*.d.ts",
     "scripts/**/*.ts",
     "../src/domain/truckResaleValuation.ts",
     "../src/domain/vehicleMarketplaceCloudMerge.ts"

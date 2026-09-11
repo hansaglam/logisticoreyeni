@@ -148,7 +148,6 @@ function run(): void {
   assert(true, 'fontScale 1.3 covered by short labels + adjustsFontSizeToFit');
   assert(true, 'Android layout shares getMarketProductColumnWidths');
   assert(true, 'iOS layout shares getMarketProductColumnWidths');
-  assert(true, 'tutorial enabled/disabled layout: TutorialTarget style-optional wrapper');
 
   const themeSrc = readSrc('src/utils/marketCardLayout.ts');
   assert(themeSrc.includes('MARKET_PRODUCT_CARD_MIN_HEIGHT'), 'minHeight token exported');
@@ -170,8 +169,8 @@ function run(): void {
   const tradeDisplaySrc = readSrc('src/utils/tradeDisplay.ts');
   assert(tradeDisplaySrc.includes('marketTradeState'), 'tradeDisplay re-exports marketTradeState');
 
-  // Tutorial wrapper should not force card widths
-  assert(marketSrc.includes('TutorialTarget'), 'tutorial targets present');
+  // Legacy tutorial wrappers are gone — nothing may force card widths
+  assert(!marketSrc.includes('TutorialTarget'), 'no legacy tutorial target wrappers');
   assert(
     !marketSrc.includes('layoutMode="fill"'),
     'no fill layoutMode forcing card stretch in MarketScreen',

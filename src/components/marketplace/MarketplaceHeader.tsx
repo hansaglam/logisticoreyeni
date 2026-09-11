@@ -1,7 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { AppTutorialTarget } from '../tutorial/AppTutorialTarget';
 import { colors, formatMoney, spacing, typography } from '../../theme';
 import { GameIcon, IconButton } from '../ui';
 
@@ -36,18 +35,16 @@ export default function MarketplaceHeader({
     <>
       <View style={styles.hero}>
         <IconButton icon="back" onPress={onBack} color={colors.textPrimary} />
-        <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="marketplace-header" layoutMode="stretch" style={styles.heroText}>
+        <View style={styles.heroText}>
           <Text style={styles.title}>Araç Pazarı</Text>
           <Text style={styles.subtitle}>
             Oyuncuların satışa çıkardığı kullanılmış araçları keşfet
           </Text>
-        </AppTutorialTarget>
+        </View>
         <View style={styles.heroActions}>
           {helpAction ?? null}
           {onCreateListing ? (
-            <AppTutorialTarget tutorialId="vehicle-marketplace" targetId="create-listing-button" layoutMode="content">
-              <IconButton icon="truck" onPress={onCreateListing} color={colors.info} />
-            </AppTutorialTarget>
+            <IconButton icon="truck" onPress={onCreateListing} color={colors.info} />
           ) : (
             <View style={styles.icon}>
               <GameIcon name="truck" size={24} color={colors.info} />

@@ -56,6 +56,44 @@ console.log('Card config');
     buildQuickAccessItems(false).length === 7,
     'marketplace disabled → 7 cards without removing Liderlik/Hesap',
   );
+  assert(
+    !buildQuickAccessItems(true).some((item) => item.key === 'seasonCloseCanary' as never),
+    'Phase 7 season-close Canary card absent from Yönetim grid',
+  );
+  assert(
+    !readFileSync('src/navigation/quickAccessConfig.ts', 'utf8').includes('Phase 7 Canary'),
+    'quickAccessConfig has no Phase 7 Canary label',
+  );
+  assert(
+    !readFileSync('src/navigation/quickAccessConfig.ts', 'utf8').includes('Reward Fail-Closed'),
+    'Reward Fail-Closed DEV harness card removed from config',
+  );
+  assert(
+    !buildQuickAccessItems(true).some((item) => (item.key as string) === 'seasonRewardFailClosed'),
+    'seasonRewardFailClosed absent from Yönetim grid',
+  );
+  assert(
+    !buildQuickAccessItems(true).some((item) => (item.key as string) === 'tutorialQaReset'),
+    'Tutorial QA Reset absent from Yönetim grid',
+  );
+  assert(
+    !readFileSync('src/navigation/quickAccessConfig.ts', 'utf8').includes('Tutorial QA Reset'),
+    'quickAccessConfig has no Tutorial QA Reset label',
+  );
+  assert(
+    !readFileSync('src/navigation/quickAccessTypes.ts', 'utf8').includes('tutorialQaReset'),
+    'quickAccessTypes has no tutorialQaReset action',
+  );
+  const previousDev = (globalThis as { __DEV__?: boolean }).__DEV__;
+  (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+  try {
+    assert(
+      !buildQuickAccessItems(true).some((item) => (item.key as string) === 'tutorialQaReset'),
+      'DEV Management grid also omits Tutorial QA Reset',
+    );
+  } finally {
+    (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
+  }
 }
 
 console.log('\nLayout constants');
@@ -113,7 +151,18 @@ console.log('\nNavigation wiring');
   assert(moreScreen.includes("setRoute('account')"), 'account opens AccountCenterScreen route');
   assert(moreScreen.includes('AccountCenterScreen'), 'AccountCenterScreen wired in MoreScreen');
   assert(moreScreen.includes("route === 'leaderboard'"), 'leaderboard sub-route always reachable');
-  assert(gameStore.includes("'account'"), 'pendingMoreSubRoute includes account');
+  const managementNav = readFileSync('src/navigation/managementNavigation.ts', 'utf8');
+  assert(managementNav.includes("'account'"), 'pendingMoreSubRoute includes account');
+  assert(!managementNav.includes("'season-close-canary'"), 'pendingMoreSubRoute has no season-close-canary');
+  assert(
+    !managementNav.includes("'season-reward-failclosed-canary'"),
+    'pendingMoreSubRoute has no reward fail-closed canary',
+  );
+  assert(!app.includes("case 'seasonCloseCanary'"), 'App has no seasonCloseCanary quick-access branch');
+  assert(!app.includes("case 'seasonRewardFailClosed'"), 'App has no Reward Fail-Closed DEV action');
+  assert(!app.includes("action === 'tutorialQaReset'"), 'App has no Tutorial QA Reset action');
+  assert(!app.includes('resetMandatoryContextualGuideForDevQa'), 'App has no mandatory tutorial QA reset');
+  assert(!app.includes('devResetMandatoryTutorial'), 'App has no tutorial QA reset helper import');
   assert(managementPanel.includes('onQuickAccess'), 'management panel forwards navigation actions');
 }
 

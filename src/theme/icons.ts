@@ -48,6 +48,7 @@ export const gameIcons = {
   refresh: 'refresh',
   settings: 'cog-outline',
   notification: 'bell-outline',
+  help: 'help-circle-outline',
   close: 'close',
   back: 'chevron-left',
   chevronDown: 'chevron-down',

@@ -8,10 +8,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import ContextualGuideHost from '../contextualGuide/components/ContextualGuideHost';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 
 import type { TabKey } from '../navigation/tabTypes';
 import { GAME_CENTER_BUTTON_LIFT } from '../constants/layout';
@@ -115,20 +113,12 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
   const getActiveWorldEventsValue = useGameStore((state) => state.getActiveWorldEventsValue);
   const addNotification = useGameStore((state) => state.addNotification);
   const [reputationSheetVisible, setReputationSheetVisible] = useState(false);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
   const scrollRef = useRef<ScrollView>(null);
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const { width: screenWidth } = useWindowDimensions();
   const useSplitLayout = screenWidth >= DASHBOARD_SPLIT_MIN_WIDTH;
 
   useOnboardingScreenVisit('Dashboard');
-
-  const dashboardTutorial = useScreenAppTutorial({
-    tutorialId: 'dashboard',
-    layoutReady,
-    blockingModals: reputationSheetVisible,
-    scrollRef,
-  });
 
   const runningDeliveries = useMemo(
     () => activeDeliveries.filter((d) => d.status === 'on_route' || d.status === 'preparing'),
@@ -309,10 +299,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
-        onScroll={dashboardTutorial.handleScroll}
-        onScrollEndDrag={dashboardTutorial.handleScrollEnd}
-        onMomentumScrollEnd={dashboardTutorial.handleScrollEnd}
-        scrollEventThrottle={16}
         contentContainerStyle={[
           styles.screenContent,
           {
@@ -323,20 +309,15 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
           },
         ]}
         showsVerticalScrollIndicator={false}
-        onLayout={markLayoutReady}
       >
-      <AppTutorialTarget tutorialId="dashboard" targetId="resource-bar" layoutMode="stretch">
       <DashboardResourceBar
         money={playerMoney}
         level={levelProgress.level}
         xpProgress={levelProgress.progressRatio}
-        onHelpPress={dashboardTutorial.helpButtonProps.onPress}
-        helpDisabled={dashboardTutorial.helpButtonProps.disabled}
-        helpAccessibilityLabel={dashboardTutorial.helpButtonProps.accessibilityLabel}
+        onHelpPress={() => openHelpGuide('getting_started')}
+        helpAccessibilityLabel="Yardım ve Rehber"
       />
-      </AppTutorialTarget>
 
-      <AppTutorialTarget tutorialId="dashboard" targetId="company-summary" layoutMode="stretch">
       <DashboardHeroCard
         companyName={playerCompanyName}
         level={levelProgress.level}
@@ -353,7 +334,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         activeDeliveries={runningDeliveries.length}
         onReputationPress={() => setReputationSheetVisible(true)}
       />
-      </AppTutorialTarget>
 
       {reputationSheetVisible ? (
         <ReputationDetailSheet
@@ -393,7 +373,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       </View>
 
       <View style={dashboardStyles.lowerSection}>
-      <AppTutorialTarget tutorialId="dashboard" targetId="management-tools" layoutMode="stretch">
       <DashboardModuleGrid
         onNavigate={handleNavigate}
         onOpenWarehouse={onOpenWarehouse ?? handleOpenWarehouse}
@@ -402,7 +381,6 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         warehouseFillRatio={warehouseFillRatio}
         onPressTip={(target) => handleTipPress(target)}
       />
-      </AppTutorialTarget>
 
       <DashboardDailyOpsBonusCard
         onboardingCompleted={onboardingCompleted}
@@ -410,7 +388,7 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
       />
       </View>
       </ScrollView>
-      <AppTutorialOverlay {...dashboardTutorial.overlayProps} />
+      <ContextualGuideHost cardId="welcome" />
     </View>
   );
 }

@@ -12,11 +12,8 @@ import {
 } from 'react-native';
 
 import { useAppDialog } from '../components/AppDialogProvider';
-import AppTutorialHelpButton from '../components/tutorial/AppTutorialHelpButton';
-import AppTutorialOverlay from '../components/tutorial/AppTutorialOverlay';
-import { AppTutorialTarget } from '../components/tutorial/AppTutorialTarget';
-import { useScreenAppTutorial } from '../hooks/useScreenAppTutorial';
-import { useTutorialLayoutReady } from '../hooks/useTutorialLayoutReady';
+import HelpGuideButton from '../components/help/HelpGuideButton';
+import { openHelpGuide } from '../contextualGuide/openHelpGuide';
 import TradeProductModal from '../components/TradeProductModal';
 import WarehouseStockTransferModal from '../components/WarehouseStockTransferModal';
 import {
@@ -102,7 +99,6 @@ export default function WarehouseScreen() {
   const [transferModalVisible, setTransferModalVisible] = useState(false);
   const [transferWarehouse, setTransferWarehouse] = useState<Warehouse | null>(null);
   const [transferProductId, setTransferProductId] = useState<ProductId | null>(null);
-  const { layoutReady, markLayoutReady } = useTutorialLayoutReady();
 
   const scrollRef = useRef<ScrollView>(null);
   const transfersOffsetRef = useRef(0);
@@ -376,15 +372,6 @@ export default function WarehouseScreen() {
     viewModel.limits.maxCount > 0
       ? `${viewModel.limits.currentCount} / ${viewModel.limits.maxCount} aktif depo`
       : `${viewModel.limits.currentCount} depo`;
-  const hasWarehouses = (player.warehouses ?? []).length > 0;
-
-  const warehouseTutorial = useScreenAppTutorial({
-    tutorialId: 'warehouses',
-    layoutReady,
-    blockingModals: tradeModalVisible || transferModalVisible,
-    stepOptions: { hasWarehouses },
-    scrollRef,
-  });
 
   return (
     <View style={styles.screenRoot}>
@@ -393,12 +380,8 @@ export default function WarehouseScreen() {
         scrollRef={scrollRef}
         embedded
         scrollBottomPadding={contentBottomPadding}
-        onScroll={warehouseTutorial.handleScroll}
-        onScrollEndDrag={warehouseTutorial.handleScrollEnd}
-        onMomentumScrollEnd={warehouseTutorial.handleScrollEnd}
-        scrollEventThrottle={16}
       >
-        <View onLayout={markLayoutReady}>
+        <View>
       <View
         style={styles.header}
         onLayout={(event) => {
@@ -408,13 +391,16 @@ export default function WarehouseScreen() {
           });
         }}
       >
-        <AppTutorialTarget tutorialId="warehouses" targetId="warehouse-header" layoutMode="stretch" style={styles.headerText}>
+        <View style={styles.headerText}>
           <Text style={styles.pageTitle}>Depolar</Text>
           <Text style={styles.pageSubtitle} numberOfLines={2}>
             Stoklarını ve şehirler arası ürün akışını yönet
           </Text>
-        </AppTutorialTarget>
-        <AppTutorialHelpButton {...warehouseTutorial.helpButtonProps} />
+        </View>
+        <HelpGuideButton
+          onPress={() => openHelpGuide('warehouses')}
+          accessibilityLabel="Yardım ve Rehber"
+        />
         <IconButton
           icon="plus"
           onPress={() => scrollTo(opportunitiesOffsetRef.current)}
@@ -439,28 +425,24 @@ export default function WarehouseScreen() {
         onViewTransfers={() => scrollTo(transfersOffsetRef.current)}
       />
 
-      <AppTutorialTarget tutorialId="warehouses" targetId="special-products" layoutMode="stretch">
-        <WarehouseInfoBanner onPress={handleShowGuide} />
-      </AppTutorialTarget>
+      <WarehouseInfoBanner onPress={handleShowGuide} />
 
-      <AppTutorialTarget tutorialId="warehouses" targetId="stock-management" layoutMode="stretch">
-        <OwnedWarehousesSection
-          warehouses={viewModel.warehouses}
-          limitLabel={limitLabel}
-          expandedWarehouseId={expandedWarehouseId}
-          onToggleWarehouse={(id) =>
-            setExpandedWarehouseId((current) => (current === id ? null : id))
-          }
-          onManageStock={handleManageStock}
-          onTransfer={handleTransferFromWarehouse}
-          onUpgrade={handleUpgrade}
-          onMore={handleWarehouseMore}
-          onGoToMarket={handleGoToMarket}
-          onSellStock={handleSellStock}
-          onTransferStock={handleTransferStock}
-          onOpenNewWarehouse={() => scrollTo(opportunitiesOffsetRef.current)}
-        />
-      </AppTutorialTarget>
+      <OwnedWarehousesSection
+        warehouses={viewModel.warehouses}
+        limitLabel={limitLabel}
+        expandedWarehouseId={expandedWarehouseId}
+        onToggleWarehouse={(id) =>
+          setExpandedWarehouseId((current) => (current === id ? null : id))
+        }
+        onManageStock={handleManageStock}
+        onTransfer={handleTransferFromWarehouse}
+        onUpgrade={handleUpgrade}
+        onMore={handleWarehouseMore}
+        onGoToMarket={handleGoToMarket}
+        onSellStock={handleSellStock}
+        onTransferStock={handleTransferStock}
+        onOpenNewWarehouse={() => scrollTo(opportunitiesOffsetRef.current)}
+      />
 
       <WarehouseTransfersSection
         activeTransfers={viewModel.activeTransfers}
@@ -527,7 +509,6 @@ export default function WarehouseScreen() {
       />
         </View>
       </AppScreen>
-      <AppTutorialOverlay {...warehouseTutorial.overlayProps} />
     </View>
   );
 }

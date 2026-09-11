@@ -35,9 +35,13 @@ assert(
   'AppState lifecycle registers one root listener',
 );
 assert(appState.includes('subscription.remove()'), 'AppState listener has deterministic cleanup');
-assert(appState.includes('pendingBackgroundSave?.cancel()'), 'deferred background save is deduplicated and cleaned');
+assert(
+  appState.includes("nextState === 'background' || nextState === 'inactive'") &&
+    appState.includes("flushLifecycleSave('background')"),
+  'inactive + background flush immediately for force-quit durability',
+);
+assert(!appState.includes('pendingBackgroundSave'), 'no deferred InteractionManager save that force-quit can skip');
 assert(appState.includes("applyOfflineProgressionIfNeeded('foreground')"), 'foreground progression remains connected');
-assert(appState.includes("flushLifecycleSave('background')"), 'background persistence remains connected');
 assert(appState.includes('retryCloudSaveSyncOnForeground()'), 'cloud retry shares the root foreground transition');
 assert(!cloudSaveSync.includes('AppState.addEventListener'), 'cloud sync does not register a second AppState listener');
 

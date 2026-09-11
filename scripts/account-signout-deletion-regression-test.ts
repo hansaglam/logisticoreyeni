@@ -80,6 +80,8 @@ assert(cloud.includes('prepareVehicleMarketplaceAccountDeletion'), 'trusted dele
 assert(backend.includes('deleteLinkedAccount'), 'server account deletion service');
 assert(backendDeletion.includes('releaseUsernameForUid'), 'username release on server');
 assert(backendDeletion.includes('deleteLeaderboardEntriesForUid'), 'leaderboard cleanup on server');
+assert(backendDeletion.includes('deleteSeasonCloseResultsForUid'), 'season close result cleanup');
+assert(backendDeletion.includes('deleteSeasonRewardDataForUid'), 'season reward entitlement/claim cleanup');
 assert(backend.includes('revokeAppleSignInTokens'), 'Apple revoke callable on server');
 assert(backendDeletion.includes('recursiveDelete'), 'admin recursive user delete');
 assert(backendDeletion.includes('auth.deleteUser'), 'Admin SDK auth deletion');

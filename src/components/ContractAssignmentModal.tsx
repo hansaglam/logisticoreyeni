@@ -60,7 +60,6 @@ import {
 } from './ui';
 import type { StatusBadgeVariant } from './ui';
 import { useAppSafeAreaInsets } from './AppSafeAreaProvider';
-import TutorialOverlay from './tutorial/TutorialOverlay';
 import TruckRefuelSheet from './TruckRefuelSheet';
 import FuelRequirementModal from './FuelRequirementModal';
 import DeliveryReadinessCard from './delivery/DeliveryReadinessCard';
@@ -71,7 +70,6 @@ import {
   getRentalFitBadgeLabel,
 } from '../domain/rentalAssignmentFit';
 import { getAttachedTrailerForTruck } from '../simulation/trailerAttachment';
-import { TutorialTarget } from '../tutorial/TutorialTarget';
 import type { Contract, Driver, Truck } from '../types/game';
 
 const START_BUTTON_HEIGHT = 50;
@@ -841,26 +839,14 @@ export default function ContractAssignmentModal({
             subtitle="Bu sözleşme için uygun kamyonu seç."
           >
             {renderNoTruckCard()}
-            {truckOptions.map((option, index) => {
-              const card = (
-                <TruckCard
-                  key={option.truck.id}
-                  option={option}
-                  selected={option.truck.id === selectedTruckId}
-                  onSelect={() => setSelectedTruckId(option.truck.id)}
-                />
-              );
-
-              if (index !== 0) {
-                return card;
-              }
-
-              return (
-                <TutorialTarget key={option.truck.id} id="assignment-truck-card">
-                  {card}
-                </TutorialTarget>
-              );
-            })}
+            {truckOptions.map((option) => (
+              <TruckCard
+                key={option.truck.id}
+                option={option}
+                selected={option.truck.id === selectedTruckId}
+                onSelect={() => setSelectedTruckId(option.truck.id)}
+              />
+            ))}
           </AssignmentSection>
 
           <AssignmentSection
@@ -869,27 +855,15 @@ export default function ContractAssignmentModal({
             subtitle="Teslimatı yapacak şoförü seç."
           >
             {renderNoDriverCard()}
-            {driverOptions.map((option, index) => {
-              const card = (
-                <DriverCard
-                  key={option.driver.id}
-                  option={option}
-                  selected={option.driver.id === selectedDriverId}
-                  driverContext={driverAssignmentContext}
-                  onSelect={() => setSelectedDriverId(option.driver.id)}
-                />
-              );
-
-              if (index !== 0) {
-                return card;
-              }
-
-              return (
-                <TutorialTarget key={option.driver.id} id="assignment-driver-card">
-                  {card}
-                </TutorialTarget>
-              );
-            })}
+            {driverOptions.map((option) => (
+              <DriverCard
+                key={option.driver.id}
+                option={option}
+                selected={option.driver.id === selectedDriverId}
+                driverContext={driverAssignmentContext}
+                onSelect={() => setSelectedDriverId(option.driver.id)}
+              />
+            ))}
           </AssignmentSection>
           <DeliveryReadinessCard
             readiness={fuelReadiness}
@@ -908,23 +882,17 @@ export default function ContractAssignmentModal({
           {!canConfirm ? (
             <Text style={styles.footerHint}>Başlamak için uygun kamyon ve şoför seç.</Text>
           ) : null}
-          <TutorialTarget
-            id="assignment-start-button"
-            onTutorialPress={handleStartDelivery}
-          >
-            <ActionButton
-              label={startLabel}
-              icon="truck"
-              onPress={handleStartDelivery}
-              disabled={!canConfirm}
-              fullWidth
-              variant="primary"
-              style={styles.startButton}
-            />
-          </TutorialTarget>
+          <ActionButton
+            label={startLabel}
+            icon="truck"
+            onPress={handleStartDelivery}
+            disabled={!canConfirm}
+            fullWidth
+            variant="primary"
+            style={styles.startButton}
+          />
         </View>
       </View>
-      <TutorialOverlay layer="modal" />
       {nestFuelUi ? fuelFlow : null}
     </Modal>
     {nestFuelUi ? null : fuelFlow}

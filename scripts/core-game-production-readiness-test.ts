@@ -166,7 +166,6 @@ function headlessToStoreState(headless: HeadlessSimState): StoreGameState {
     tutorial: undefined,
     missions: undefined,
     onboarding: undefined,
-    spotlightTutorial: undefined,
     marketAlerts: [],
     monetization: undefined,
   } as StoreGameState;

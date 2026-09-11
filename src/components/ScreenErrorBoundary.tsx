@@ -1,8 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { disableTutorialForSession, resetTutorialSessionDisables } from '../tutorial/app/controller';
-import { resolveScreenTutorialId } from '../tutorial/app/screenMap';
 import { colors, spacing, typography } from '../theme';
 
 interface Props {
@@ -23,15 +21,9 @@ export default class ScreenErrorBoundary extends React.PureComponent<Props, Stat
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
-    const tutorialId = resolveScreenTutorialId(this.props.screenName);
-    if (tutorialId) {
-      disableTutorialForSession(tutorialId);
-    }
-
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
       console.error('[screen-runtime-error]', {
         screenId: this.props.screenName,
-        tutorialId,
         message: error instanceof Error ? error.message : String(error),
         name: error instanceof Error ? error.name : 'Error',
         stack: error instanceof Error ? error.stack : undefined,
@@ -46,10 +38,6 @@ export default class ScreenErrorBoundary extends React.PureComponent<Props, Stat
   }
 
   private retry = () => {
-    const tutorialId = resolveScreenTutorialId(this.props.screenName);
-    if (tutorialId) {
-      disableTutorialForSession(tutorialId);
-    }
     this.setState({ error: null });
     this.props.onRetry?.();
   };
@@ -70,8 +58,6 @@ export default class ScreenErrorBoundary extends React.PureComponent<Props, Stat
     );
   }
 }
-
-export { resetTutorialSessionDisables };
 
 const styles = StyleSheet.create({
   root: {

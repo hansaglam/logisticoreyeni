@@ -91,19 +91,11 @@ console.log('\nSpacing tokens');
 assert(theme.includes('warehouseLayout'), 'canonical layout tokens');
 assert(theme.includes('pagePadding: 16'), 'page padding 16');
 
-console.log('\nTutorial targets preserved');
-assert(screen.includes('targetId="warehouse-header"'), 'warehouse-header target');
-assert(screen.includes('targetId="special-products"'), 'special-products target');
-assert(screen.includes('targetId="stock-management"'), 'stock-management target');
-assert(
-  ownedSection.includes('targetId="city-warehouse-link"') &&
-    ownedSection.includes('layoutMode="stretch"'),
-  'city-warehouse-link stretch',
-);
-assert(
-  ownedSection.includes('targetId="capacity"') && ownedSection.includes('layoutMode="stretch"'),
-  'capacity stretch',
-);
+console.log('\nLegacy tutorial targets removed');
+assert(!screen.includes('targetId='), 'screen has no tutorial target wrappers');
+assert(!screen.includes('TutorialTarget'), 'screen does not import TutorialTarget');
+assert(!ownedSection.includes('targetId='), 'owned section has no tutorial target wrappers');
+assert(!ownedSection.includes('layoutMode='), 'owned section has no tutorial layoutMode props');
 
 console.log('\nAction handlers preserved');
 assert(screen.includes('handleUpgrade'), 'upgrade handler');

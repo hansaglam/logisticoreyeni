@@ -40,7 +40,6 @@ const save = read('src/storage/saveGame.ts');
 const saveRevision = read('src/storage/saveRevision.ts');
 const account = read('src/screens/AccountCenterScreen.tsx');
 const contracts = read('src/screens/ContractsScreen.tsx');
-const tutorial = read('src/hooks/useScreenAppTutorial.ts');
 const mapPreload = read('src/utils/mapAssetPreload.ts');
 const gameStore = read('src/store/gameStore.ts');
 const more = read('src/screens/MoreScreen.tsx');
@@ -68,7 +67,6 @@ assert(saveIntegrity.includes('preparePayloadForChecksumShallow'), 'shallow chec
 
 assert(!account.includes('useGameStore()'), 'AccountCenter avoids whole-store subscription');
 assert(contracts.includes('selectCurrentTimeQuarterHour'), 'Contracts quantizes preview time');
-assert(tutorial.includes('if (!APP_TUTORIALS_ENABLED)'), 'tutorial hook no-op when globally disabled');
 assert(mapPreload.includes('preloadMapAssets'), 'shared map preload helper');
 
 assert(gameStore.includes('canSkipContractScheduleTick'), 'contract schedule no-op fast path');

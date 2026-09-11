@@ -64,5 +64,19 @@ target 'LogistiCore' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # EXConstants embeds EXConstants.bundle/app.config from the Pods EXConstants target
+    # (get-app-config-ios.sh), which does NOT inherit LogistiCore target build settings.
+    # Mirror LOGISTICORE_BUILD_PROFILE onto every Pod so Release Archive and Debug agree
+    # with the LogistiCore Xcode user-defined setting.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |cfg|
+        if cfg.name == 'Release'
+          cfg.build_settings['LOGISTICORE_BUILD_PROFILE'] = 'production'
+        else
+          cfg.build_settings['LOGISTICORE_BUILD_PROFILE'] = 'internal'
+        end
+      end
+    end
   end
 end

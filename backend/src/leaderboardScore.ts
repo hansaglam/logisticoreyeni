@@ -1,14 +1,26 @@
 /**
- * Backend-authoritative liderlik skoru (v2).
+ * Backend-authoritative liderlik skoru (v3).
  *
  * Client raw score kabul edilmez. Skor yalnız trusted serverState'ten üretilir.
- * Varsayılan itibar (50) nötrdür; 0 teslimatlı hesaplar sıralamaya giremez.
+ *
+ * v3 product rule: true-new / starter baseline produces companyScore = 0.
+ * Starter cash, Level 1, default reputation (50), starter truck, and starter
+ * warehouse do not grant free leaderboard points. Players climb by playing.
+ *
+ * v2 kept identifiable via LEADERBOARD_SCORE_VERSION history; closed seasons
+ * that captured scoreVersion 2 remain immutable historical truth.
  */
 
 import type { ServerStateDocument } from './serverStateTypes';
 
-export const LEADERBOARD_SCORE_VERSION = 2;
-export const LEADERBOARD_MIN_COMPLETED_DELIVERIES = 3;
+/** Semantic bump: fresh-player zero baseline + ranked eligibility without delivery gate. */
+export const LEADERBOARD_SCORE_VERSION = 3;
+
+/**
+ * @deprecated v2 gate — no longer used for ranking eligibility in v3.
+ * Retained only so historical docs/tests can reference the old constant name.
+ */
+export const LEADERBOARD_MIN_COMPLETED_DELIVERIES = 0;
 
 export const LEADERBOARD_SCORE_BALANCE = {
   deliveryLinear: 380,
@@ -52,6 +64,17 @@ export const LEADERBOARD_SCORE_BALANCE = {
   maxWarehouseValue: 20_000_000,
 } as const;
 
+/** Matches serverState new-account baseline (SERVER_DEFAULT_*). */
+export const LEADERBOARD_STARTER_BASELINE = {
+  cash: 20_000,
+  companyLevel: 1,
+  reputation: 50,
+  starterTruckPurchasePrice: 45_000,
+  starterTruckCondition: 88,
+  starterWarehouseCapacityTons: 100,
+  starterWarehouseUpgradeTiers: 1,
+} as const;
+
 export interface LeaderboardScoreBreakdown {
   deliveryScore: number;
   progressionScore: number;
@@ -72,6 +95,11 @@ export interface LeaderboardScoreBreakdown {
   fleetScore: number;
   warehouseNetworkScore: number;
   financialScore: number;
+  /** Raw asset/finance before starter baseline subtraction (debug/audit). */
+  rawAssetScore: number;
+  rawFinanceScore: number;
+  starterAssetBaseline: number;
+  starterFinanceBaseline: number;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -99,11 +127,12 @@ function safeRound(value: number): number {
   return Math.round(value);
 }
 
-export function isLeaderboardRankedEligible(completedDeliveries: number): boolean {
-  return (
-    Number.isFinite(completedDeliveries) &&
-    completedDeliveries >= LEADERBOARD_MIN_COMPLETED_DELIVERIES
-  );
+/**
+ * v3: every auth-eligible profile may appear on the board (including score 0).
+ * Delivery count is no longer a ranked gate.
+ */
+export function isLeaderboardRankedEligible(_completedDeliveries?: number): boolean {
+  return true;
 }
 
 function calculateOwnedFleetValue(trucks: unknown[]): number {
@@ -155,6 +184,51 @@ function scaleCash(cash: number): number {
       Math.log1p(overflow / LEADERBOARD_SCORE_BALANCE.cashSoftCap);
   }
   return score;
+}
+
+function calculateFleetScoreFromValue(fleetValue: number): number {
+  return safeRound(scaleAssetValue(fleetValue));
+}
+
+function calculateWarehouseScoreFromValue(warehouseValue: number): number {
+  return safeRound(scaleAssetValue(warehouseValue));
+}
+
+/** Deterministic starter asset/finance contribution (v3 zero-baseline). */
+export function getLeaderboardStarterBaselineScores(): {
+  assetScore: number;
+  financeScore: number;
+  fleetScore: number;
+  warehouseNetworkScore: number;
+} {
+  const fleetValue = clamp(
+    LEADERBOARD_STARTER_BASELINE.starterTruckPurchasePrice *
+      (LEADERBOARD_STARTER_BASELINE.starterTruckCondition / 100),
+    0,
+    LEADERBOARD_SCORE_BALANCE.maxFleetValue,
+  );
+  const warehouseValue = clamp(
+    LEADERBOARD_STARTER_BASELINE.starterWarehouseCapacityTons *
+      LEADERBOARD_SCORE_BALANCE.warehouseCapacityValue *
+      (1 +
+        (LEADERBOARD_STARTER_BASELINE.starterWarehouseUpgradeTiers - 1) *
+          LEADERBOARD_SCORE_BALANCE.warehouseTierBonusRate),
+    0,
+    LEADERBOARD_SCORE_BALANCE.maxWarehouseValue,
+  );
+  const fleetScore = calculateFleetScoreFromValue(fleetValue);
+  const warehouseNetworkScore = calculateWarehouseScoreFromValue(warehouseValue);
+  const assetScore = clamp(
+    fleetScore + warehouseNetworkScore,
+    0,
+    LEADERBOARD_SCORE_BALANCE.maxAssetScore,
+  );
+  const financeScore = clamp(
+    safeRound(scaleCash(LEADERBOARD_STARTER_BASELINE.cash)),
+    0,
+    LEADERBOARD_SCORE_BALANCE.maxFinanceScore,
+  );
+  return { assetScore, financeScore, fleetScore, warehouseNetworkScore };
 }
 
 export type CanonicalPlayerStateBuildResult =
@@ -254,7 +328,7 @@ export function resolveWeeklySeasonActivity(
 }
 
 /**
- * Canonical player state → liderlik skoru v2.
+ * Canonical player state → liderlik skoru v3 (zero-start baseline).
  */
 export function calculateLeaderboardScore(
   canonicalPlayerState: Record<string, unknown>,
@@ -311,9 +385,9 @@ export function calculateLeaderboardScore(
     LEADERBOARD_SCORE_BALANCE.maxProgressionScore,
   );
 
-  const fleetScore = safeRound(scaleAssetValue(fleetValue));
-  const warehouseNetworkScore = safeRound(scaleAssetValue(warehouseValue));
-  const assetScore = clamp(
+  const fleetScore = calculateFleetScoreFromValue(fleetValue);
+  const warehouseNetworkScore = calculateWarehouseScoreFromValue(warehouseValue);
+  const rawAssetScore = clamp(
     fleetScore + warehouseNetworkScore,
     0,
     LEADERBOARD_SCORE_BALANCE.maxAssetScore,
@@ -329,7 +403,7 @@ export function calculateLeaderboardScore(
   if (reputationScore < 0) {
     const penaltyCap = -safeRound(
       LEADERBOARD_SCORE_BALANCE.reputationPenaltyCapRatio *
-        (deliveryScore + progressionScore + assetScore),
+        (deliveryScore + progressionScore + rawAssetScore),
     );
     reputationScore = Math.max(reputationScore, penaltyCap);
   }
@@ -339,7 +413,7 @@ export function calculateLeaderboardScore(
     LEADERBOARD_SCORE_BALANCE.maxReputationAbs,
   );
 
-  const financeScore = clamp(
+  const rawFinanceScore = clamp(
     safeRound(scaleCash(cash)),
     0,
     LEADERBOARD_SCORE_BALANCE.maxFinanceScore,
@@ -354,15 +428,22 @@ export function calculateLeaderboardScore(
     LEADERBOARD_SCORE_BALANCE.maxWeeklyScore,
   );
 
+  const starter = getLeaderboardStarterBaselineScores();
+  const assetScore = Math.max(0, rawAssetScore - starter.assetScore);
+  const financeScore = Math.max(0, rawFinanceScore - starter.financeScore);
+
   const rankedEligible = isLeaderboardRankedEligible(completedContracts);
   const totalScore = clamp(
-    safeRound(
-      deliveryScore +
-        progressionScore +
-        reputationScore +
-        assetScore +
-        financeScore +
-        weeklyActivityScore,
+    Math.max(
+      0,
+      safeRound(
+        deliveryScore +
+          progressionScore +
+          reputationScore +
+          assetScore +
+          financeScore +
+          weeklyActivityScore,
+      ),
     ),
     0,
     LEADERBOARD_SCORE_BALANCE.maxTotalScore,
@@ -392,5 +473,9 @@ export function calculateLeaderboardScore(
     fleetScore,
     warehouseNetworkScore,
     financialScore: financeScore,
+    rawAssetScore,
+    rawFinanceScore,
+    starterAssetBaseline: starter.assetScore,
+    starterFinanceBaseline: starter.financeScore,
   };
 }

@@ -20,15 +20,11 @@ import {
   resolveManagementModule,
   type ManagementModule,
 } from './src/navigation/managementNavigation';
-import TutorialOverlay from './src/components/tutorial/TutorialOverlay';
-import { ENABLE_SPOTLIGHT_TUTORIAL } from './src/tutorial/featureFlags';
 import { useGameLoop } from './src/hooks/useGameLoop';
 import { useAppBootstrap } from './src/hooks/useAppBootstrap';
 import { useAppStateLifecycle } from './src/hooks/useAppStateLifecycle';
 import { useNativeAppLifecycle } from './src/hooks/useNativeAppLifecycle';
 import { usePostStartupLifecycle } from './src/hooks/usePostStartupLifecycle';
-import { useSpotlightTutorialTriggers } from './src/hooks/useSpotlightTutorialTriggers';
-import { useSpotlightTutorialStore } from './src/store/spotlightTutorialStore';
 import { useGameStore } from './src/store/gameStore';
 import SaveRecoveryScreen from './src/screens/SaveRecoveryScreen';
 import { getBuildFingerprint, logBuildFingerprintOnce } from './src/config/buildFingerprint';
@@ -45,7 +41,7 @@ import VehicleMarketplaceScreen from './src/screens/VehicleMarketplaceScreen';
 import OfflineProgressSummaryModal from './src/components/offline/OfflineProgressSummaryModal';
 import DeliveryResultSheet from './src/components/delivery/DeliveryResultSheet';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
-import { selectHasPendingDeliveryIncident } from './src/tutorial/app/selectors';
+import { selectHasPendingDeliveryIncident } from './src/store/selectors/deliverySelectors';
 import DeliveryIncidentModal from './src/components/delivery/DeliveryIncidentModal';
 import VehicleRecoverySheet from './src/components/delivery/VehicleRecoverySheet';
 import { UI } from './src/theme/ui';
@@ -62,6 +58,11 @@ import {
   markStartup,
 } from './src/utils/startupPerformance';
 import { enableImmersiveGameMode } from './src/utils/systemBars';
+import {
+  useContextualGuideResumeNavigation,
+  shouldBlockManualTabPressWhileGuideActive,
+  useContextualGuideInteractionLocked,
+} from './src/contextualGuide/useContextualGuideCoordinator';
 
 markStartup('APP_START');
 logBuildFingerprintOnce();
@@ -161,7 +162,6 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set(['dashboard']));
   const [screenRetryKeys, setScreenRetryKeys] = useState<Partial<Record<TabKey, number>>>({});
   const transitionRef = useRef<{ from: TabKey; to: TabKey; startedAt: number } | null>(null);
-  const isGameReady = useGameStore((state) => state.isGameReady);
   const navigationRequest = useGameStore((state) => state.navigationRequest);
   const clearNavigationRequest = useGameStore((state) => state.clearNavigationRequest);
   const pendingOfflineProgressSummary = useGameStore((state) => state.pendingOfflineProgressSummary);
@@ -176,21 +176,11 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
         )?.id
       : undefined,
   );
-
-  useSpotlightTutorialTriggers({ activeTab, isGameReady });
+  const guideInteractionLocked = useContextualGuideInteractionLocked();
+  useContextualGuideResumeNavigation(true);
 
   useLayoutEffect(() => {
     markStartup('FIRST_MAIN_SCREEN_RENDER');
-  }, []);
-
-  useEffect(() => {
-    if (!ENABLE_SPOTLIGHT_TUTORIAL) {
-      return;
-    }
-    useSpotlightTutorialStore.getState().setTabNavigator(setActiveTab);
-    return () => {
-      useSpotlightTutorialStore.getState().setTabNavigator(null);
-    };
   }, []);
 
   useEffect(() => {
@@ -205,6 +195,9 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   }, [activeTab]);
 
   const handleTabPress = useCallback((nextTab: TabKey) => {
+    if (shouldBlockManualTabPressWhileGuideActive()) {
+      return;
+    }
     if (nextTab === activeTab) return;
     const pressAt = readPerfNow();
     beginNavigationInteraction();
@@ -236,6 +229,9 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   };
 
   const handleQuickAccess = (action: QuickAccessAction) => {
+    if (guideInteractionLocked) {
+      return;
+    }
     const module = resolveManagementModule(action);
     if (module) {
       navigateToManagementModule(module);
@@ -358,7 +354,6 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
         }
       />
       <VehicleRecoverySheet />
-      {ENABLE_SPOTLIGHT_TUTORIAL ? <TutorialOverlay layer="root" /> : null}
       <GameTabBar
         tabs={MAIN_TABS}
         activeTab={activeTab}

@@ -1386,13 +1386,6 @@ export interface TutorialState {
   dismissedStepIds: string[];
 }
 
-export type SpotlightTutorialId = 'first_contract' | 'track_delivery' | 'market_basics';
-
-export interface SpotlightTutorialPersistence {
-  completedIds: SpotlightTutorialId[];
-  skippedIds: SpotlightTutorialId[];
-}
-
 export interface MissionsState {
   activeMissionIds: string[];
   completedMissionIds: string[];
@@ -1534,6 +1527,31 @@ export interface OnboardingState {
   completedAtGameTime?: number;
 }
 
+/** V1.1 Phase 6 — in-game contextual guide card IDs (stable). */
+export type ContextualGuideCardId =
+  | 'welcome'
+  | 'choose_contract'
+  | 'manage_fleet'
+  | 'follow_route'
+  | 'need_help';
+
+/**
+ * Durable contextual guide persistence (save-scoped).
+ * Independent from `onboarding.completed` (ads / legacy sequencing).
+ */
+export type ContextualGuideStatus =
+  | 'eligible'
+  | 'active'
+  | 'dismissed'
+  | 'completed';
+
+export interface ContextualGuideState {
+  version: number;
+  status: ContextualGuideStatus;
+  completedCardIds: ContextualGuideCardId[];
+  dismissedCardIds: ContextualGuideCardId[];
+}
+
 /**
  * Zustand store'un yönettiği ana oyun durumu.
  * Simülasyon modülleri için ayrı SimulationGameState tipi kullanılır.
@@ -1596,7 +1614,6 @@ export interface StoreGameState {
   financeTotals?: FinanceTotals;
   /** V1 başlangıç rehberi */
   tutorial: TutorialState;
-  spotlightTutorial: SpotlightTutorialPersistence;
   /** Başlangıç görevleri */
   missions: MissionsState;
   /** Retention Pack V1 — milestone ve haftalık sezon görevleri */
@@ -1605,11 +1622,11 @@ export interface StoreGameState {
   rewardReceipts?: Record<string, RewardReceipt>;
   /** Başlangıç rehberi (Onboarding Guide V1) */
   onboarding: OnboardingState;
-  /** Piyasa ekranı eğitimi — ilk giriş / yardım */
-  marketTutorialCompleted?: boolean;
-  marketTutorialVersion?: number;
-  /** Ekran bazlı ilk giriş rehberleri */
-  tutorialProgress?: import('../tutorial/app/types').TutorialProgressState;
+  /**
+   * V1.1 Phase 6 — in-game contextual guide (additive).
+   * Independent of `onboarding.completed` monetization gate.
+   */
+  contextualGuide: ContextualGuideState;
   /** Oyuncu tanımlı piyasa fiyat alarmları */
   marketAlerts: MarketPriceAlert[];
   /** Aktif piyasa/şehir olayları — Retention Pack V1 Phase 2 */

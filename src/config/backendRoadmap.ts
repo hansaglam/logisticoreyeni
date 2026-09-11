@@ -57,6 +57,14 @@ export const SEASON_HISTORY_ENABLED =
 export const INBOX_ENABLED =
   process.env.EXPO_PUBLIC_ENABLE_INBOX === 'true' ||
   readExtraFeatureFlag('inboxEnabled') === 'true';
+/** Phase 7 immutable season-close snapshot / trusted result APIs (client UI later). */
+export const SEASON_CLOSE_SNAPSHOT_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT === 'true' ||
+  readExtraFeatureFlag('seasonCloseSnapshotEnabled') === 'true';
+/** Phase 7 season cash rewards — independent of snapshot flag; production fail-closed. */
+export const SEASON_REWARDS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS === 'true' ||
+  readExtraFeatureFlag('seasonRewardsEnabled') === 'true';
 /** V1.1 Phase 4 retention/observability foundation; store production remains fail-closed. */
 export const MARKET_ALERTS_ENABLED =
   process.env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS === 'true' ||

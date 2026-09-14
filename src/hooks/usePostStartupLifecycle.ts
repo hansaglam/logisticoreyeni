@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { InteractionManager } from 'react-native';
 
 import type { AppBootPhase } from './useAppBootstrap';
+import { flushCanonicalDeliveryCompletionQueue } from '../domain/canonicalDeliveryCompletionQueue';
 import { initializeAdsPrivacyStack } from '../services/adsPrivacyBootstrap';
 import { endPostStartupMarketplaceCloudHold } from '../services/marketplaceStartupCloudHold';
 import {
@@ -72,6 +73,11 @@ export function usePostStartupLifecycle({
         } finally {
           markStartup('CLOUD_SYNC_DONE');
           endPostStartupMarketplaceCloudHold();
+        }
+        try {
+          await flushCanonicalDeliveryCompletionQueue();
+        } catch (error) {
+          logStartupError('canonical-delivery-flush', error);
         }
       })();
     });

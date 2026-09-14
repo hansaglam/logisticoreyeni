@@ -5,7 +5,7 @@
  * modül grid ve günlük destek.
  */
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import ContextualGuideHost from '../contextualGuide/components/ContextualGuideHost';
@@ -62,6 +62,12 @@ import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
 import { colors, formatMoney, spacing, typography } from '../theme';
 import type { Player } from '../types/game';
 import { navigateFromGameTip } from '../components/dashboard/SmartGameTipBanner';
+import { BACKEND_WEEKLY_MISSIONS_ENABLED } from '../config/backendRoadmap';
+import {
+  getBackendWeeklyDashboardSlice,
+  setBackendWeeklyMissionsCache,
+} from '../features/weeklyMissions/weeklyMissionCache';
+import { getWeeklyMissions } from '../services/weeklyMissionService';
 
 interface DashboardScreenProps {
   onNavigate?: (tab: TabKey) => void;
@@ -191,6 +197,42 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     () => getRetentionSummaryValue(),
     [getRetentionSummaryValue, retention],
   );
+
+  const [backendWeeklyTick, setBackendWeeklyTick] = useState(0);
+
+  useEffect(() => {
+    if (!BACKEND_WEEKLY_MISSIONS_ENABLED || !hasPlayer) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const result = await getWeeklyMissions();
+      if (cancelled || !result.ok) return;
+      setBackendWeeklyMissionsCache(result);
+      setBackendWeeklyTick((value) => value + 1);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasPlayer]);
+
+  const dashboardRetention = useMemo(() => {
+    if (!BACKEND_WEEKLY_MISSIONS_ENABLED) {
+      return retentionSummary;
+    }
+    const weekly = getBackendWeeklyDashboardSlice({
+      readyWeekly: 0,
+      weeklyInProgress: 0,
+      weeklyTotal: 3,
+    });
+    return {
+      readyMilestones: retentionSummary.readyMilestones,
+      readyWeekly: weekly.readyWeekly,
+      readyRewards: retentionSummary.readyMilestones + weekly.readyWeekly,
+      weeklyInProgress: weekly.weeklyInProgress,
+      weeklyTotal: weekly.weeklyTotal,
+    };
+  }, [retentionSummary, backendWeeklyTick]);
 
   const activeWorldEvents = useMemo(
     () => getActiveWorldEventsValue(),
@@ -362,11 +404,11 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         </View>
         <View style={dashboardStyles.splitItem}>
           <DashboardRetentionCard
-            readyRewards={retentionSummary.readyRewards}
-            readyMilestones={retentionSummary.readyMilestones}
-            readyWeekly={retentionSummary.readyWeekly}
-            weeklyInProgress={retentionSummary.weeklyInProgress}
-            weeklyTotal={retentionSummary.weeklyTotal}
+            readyRewards={dashboardRetention.readyRewards}
+            readyMilestones={dashboardRetention.readyMilestones}
+            readyWeekly={dashboardRetention.readyWeekly}
+            weeklyInProgress={dashboardRetention.weeklyInProgress}
+            weeklyTotal={dashboardRetention.weeklyTotal}
             onPress={handleOpenMissions}
           />
         </View>

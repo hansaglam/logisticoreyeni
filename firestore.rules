@@ -90,6 +90,21 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow write: if false;
       }
+
+      match /weeklyMissionClaims/{documentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /weeklyMissionBaselines/{weekKey} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalDeliveryCompletions/{deliveryId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
     }
 
     // Active offers are publicly browseable. Historical records are visible
@@ -164,6 +179,18 @@ service cloud.firestore {
       match /rewardClaims/{uid} {
         allow read, write: if false;
       }
+    }
+
+    // Weekly Missions — templates/rotations are public-to-signed-in reads.
+    // Claims, baselines and canonical delivery receipts are Admin SDK only.
+    match /weeklyMissionTemplates/{missionId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /weeklyMissionRotations/{weekKey} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     // Username reservations — Admin SDK only (setUsername callable).

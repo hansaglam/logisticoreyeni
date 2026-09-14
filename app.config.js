@@ -236,6 +236,8 @@ module.exports = () => {
           process.env.EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT ?? '',
         seasonRewardsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS ?? '',
+        backendWeeklyMissionsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_BACKEND_WEEKLY_MISSIONS ?? '',
         inboxEnabled:
           process.env.EXPO_PUBLIC_ENABLE_INBOX ?? '',
         marketAlertsEnabled:

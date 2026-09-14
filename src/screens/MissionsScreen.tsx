@@ -1,10 +1,14 @@
 /**
  * LogistiCore — Görevler ekranı (More > Görevler)
  * Retention Pack V1: Görevler · Haftalık · Başarılar
+ *
+ * Weekly tab: dual-mode.
+ * - BACKEND_WEEKLY_MISSIONS_ENABLED=false → legacy local weekly objectives
+ * - true → getWeeklyMissions / claimWeeklyMissionReward (no local cash mint)
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   MissionHeroHeader,
@@ -16,6 +20,7 @@ import {
   type PremiumMissionStatus,
 } from '../components/missions/MissionPresentation';
 import { AppCard, GameIcon } from '../components/ui';
+import { BACKEND_WEEKLY_MISSIONS_ENABLED } from '../config/backendRoadmap';
 import {
   CAREER_MISSIONS,
   STARTER_MISSIONS,
@@ -28,9 +33,28 @@ import {
 } from '../domain/rewardClaimIntegrity';
 import { getWeeklyObjectiveDefinitions } from '../data/weeklyObjectives';
 import {
+  canClaimBackendWeeklyMission,
+  createWeeklyMissionClaimAttempt,
+  formatWeeklyRemainingLabel,
+  getWeeklyMissionClaimErrorMessage,
+  getWeeklyMissionDifficultyLabel,
+  shouldRetainWeeklyMissionClaimAttempt,
+  weeklyMissionClaimAttemptKey,
+  type WeeklyMissionClaimAttempt,
+} from '../features/weeklyMissions/claimFlow';
+import { setBackendWeeklyMissionsCache } from '../features/weeklyMissions/weeklyMissionCache';
+import { reconcileChallengeClaimCash } from '../features/challenges/claimReconciliation';
+import {
   useOnboardingScreenVisit,
 } from '../hooks/useOnboardingScreenVisit';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { getAccountStatus } from '../services/authService';
+import {
+  claimWeeklyMissionReward,
+  createWeeklyMissionClaimIdempotencyKey,
+  getWeeklyMissions,
+  type WeeklyMissionPlayerView,
+} from '../services/weeklyMissionService';
 import { useGameStore } from '../store/gameStore';
 import {
   selectMissions,
@@ -104,6 +128,19 @@ function getRetentionStatus(isClaimed: boolean, isReady: boolean): PremiumMissio
   return 'in_progress';
 }
 
+type BackendWeeklyLoadState =
+  | { status: 'idle' | 'loading' }
+  | {
+      status: 'ready';
+      weekKey: string;
+      startsAt: number;
+      endsAt: number;
+      remainingMs: number;
+      claimAvailableForAccount: boolean;
+      missions: WeeklyMissionPlayerView[];
+    }
+  | { status: 'error'; reason: string };
+
 interface MissionsScreenProps {
   onBack: () => void;
 }
@@ -112,6 +149,10 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
   const [activeTab, setActiveTab] = useState<MissionsTabKey>('missions');
   const [claimingRewardKeys, setClaimingRewardKeys] = useState<Set<string>>(() => new Set());
+  const [backendWeekly, setBackendWeekly] = useState<BackendWeeklyLoadState>({ status: 'idle' });
+  const [backendClaimMessage, setBackendClaimMessage] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const claimAttemptsRef = useRef<Map<string, WeeklyMissionClaimAttempt>>(new Map());
 
   const currentTime = useGameStore(selectCurrentTimeQuarterHour);
   const missions = useGameStore(selectMissions);
@@ -123,15 +164,55 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   const syncRetentionProgress = useGameStore((state) => state.syncRetentionProgress);
   const claimMilestoneReward = useGameStore((state) => state.claimMilestoneReward);
   const claimWeeklyObjectiveReward = useGameStore((state) => state.claimWeeklyObjectiveReward);
+  const addNotification = useGameStore((state) => state.addNotification);
 
   useOnboardingScreenVisit('Missions');
-  const seasonKey = useMemo(() => getWeeklySeasonKey(), []);
-  const seasonLabel = useMemo(() => getWeeklySeasonLabel(), []);
+
+  // Legacy weekly season key — recompute so Monday boundary does not freeze forever.
+  const legacySeasonKey = useMemo(() => getWeeklySeasonKey(new Date(nowMs)), [nowMs]);
+  const legacySeasonLabel = useMemo(() => getWeeklySeasonLabel(new Date(nowMs)), [nowMs]);
 
   useEffect(() => {
     syncMissionProgress();
-    syncRetentionProgress();
+    if (!BACKEND_WEEKLY_MISSIONS_ENABLED) {
+      syncRetentionProgress();
+    }
   }, [syncMissionProgress, syncRetentionProgress]);
+
+  useEffect(() => {
+    if (!BACKEND_WEEKLY_MISSIONS_ENABLED || activeTab !== 'weekly') {
+      return;
+    }
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [activeTab]);
+
+  const loadBackendWeekly = useCallback(async () => {
+    if (!BACKEND_WEEKLY_MISSIONS_ENABLED) return;
+    setBackendWeekly({ status: 'loading' });
+    setBackendClaimMessage(null);
+    const result = await getWeeklyMissions();
+    if (!result.ok) {
+      setBackendWeekly({ status: 'error', reason: result.reason });
+      return;
+    }
+    setBackendWeeklyMissionsCache(result);
+    setBackendWeekly({
+      status: 'ready',
+      weekKey: result.weekKey,
+      startsAt: result.startsAt,
+      endsAt: result.endsAt,
+      remainingMs: result.remainingMs,
+      claimAvailableForAccount: result.claimAvailableForAccount,
+      missions: result.missions,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (BACKEND_WEEKLY_MISSIONS_ENABLED && activeTab === 'weekly') {
+      void loadBackendWeekly();
+    }
+  }, [activeTab, loadBackendWeekly]);
 
   const starterMissionIds = useMemo(() => {
     const ids = STARTER_MISSIONS.map((mission) => mission.id).filter((id) =>
@@ -148,8 +229,11 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
   }, [missions, getMissionProgressValue]);
 
   const weeklyObjectives = useMemo(
-    () => getWeeklyObjectiveDefinitions(seasonKey),
-    [seasonKey],
+    () =>
+      BACKEND_WEEKLY_MISSIONS_ENABLED
+        ? []
+        : getWeeklyObjectiveDefinitions(legacySeasonKey),
+    [legacySeasonKey],
   );
 
   const sortedMilestones = useMemo(() => {
@@ -184,6 +268,20 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     });
   }, [weeklyObjectives, retention.weeklyObjectives]);
 
+  const sortedBackendWeekly = useMemo(() => {
+    if (backendWeekly.status !== 'ready') return [];
+    return [...backendWeekly.missions].sort((a, b) => {
+      const score = (mission: WeeklyMissionPlayerView) => {
+        if (!mission.claimed && (mission.completed || mission.claimAvailable)) return 0;
+        if (!mission.claimed) return 1;
+        return 3;
+      };
+      const difference = score(a) - score(b);
+      if (difference !== 0) return difference;
+      return a.difficulty.localeCompare(b.difficulty);
+    });
+  }, [backendWeekly]);
+
   const missionProgressById = useMemo(() => {
     const ids = [...starterMissionIds, ...careerMissionIds];
     const map = new Map<string, MissionProgressResult>();
@@ -195,6 +293,18 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
 
   const summary = useMemo(() => {
     if (activeTab === 'weekly') {
+      if (BACKEND_WEEKLY_MISSIONS_ENABLED) {
+        if (backendWeekly.status !== 'ready') {
+          return { total: 0, completed: 0, ready: 0 };
+        }
+        let completed = 0;
+        let ready = 0;
+        for (const mission of backendWeekly.missions) {
+          if (mission.claimed) completed += 1;
+          else if (mission.completed || mission.claimAvailable) ready += 1;
+        }
+        return { total: backendWeekly.missions.length, completed, ready };
+      }
       let completed = 0;
       let ready = 0;
       for (const objective of sortedWeekly) {
@@ -231,6 +341,7 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     return { total: ids.length, completed, ready };
   }, [
     activeTab,
+    backendWeekly,
     careerMissionIds,
     missionProgressById,
     missions,
@@ -258,9 +369,13 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     },
     [claimMissionReward, claimingRewardKeys],
   );
-  const handleClaimWeeklyObjective = useCallback(
+
+  const handleClaimLegacyWeeklyObjective = useCallback(
     async (objectiveId: string) => {
-      const claimKey = buildRewardReceiptKey('weekly', objectiveId, seasonKey);
+      if (BACKEND_WEEKLY_MISSIONS_ENABLED) {
+        return;
+      }
+      const claimKey = buildRewardReceiptKey('weekly', objectiveId, legacySeasonKey);
       if (claimingRewardKeys.has(claimKey)) return;
       setClaimingRewardKeys((prev) => new Set(prev).add(claimKey));
       try {
@@ -273,8 +388,89 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
         });
       }
     },
-    [claimWeeklyObjectiveReward, claimingRewardKeys, seasonKey],
+    [claimWeeklyObjectiveReward, claimingRewardKeys, legacySeasonKey],
   );
+
+  const handleClaimBackendWeekly = useCallback(
+    async (mission: WeeklyMissionPlayerView) => {
+      if (!BACKEND_WEEKLY_MISSIONS_ENABLED || backendWeekly.status !== 'ready') {
+        return;
+      }
+      const account = getAccountStatus();
+      const linkedAccount =
+        Boolean(account.uid) && !account.isAnonymous && account.provider !== 'guest';
+      if (
+        !canClaimBackendWeeklyMission({
+          completed: mission.completed,
+          claimed: mission.claimed,
+          claimAvailable: mission.claimAvailable,
+          linkedAccount,
+          featuresEnabled: true,
+          requestPending: false,
+        })
+      ) {
+        if (!linkedAccount) {
+          setBackendClaimMessage('Hesabını bağlayarak ödül alabilirsin.');
+        }
+        return;
+      }
+
+      const attemptKey = weeklyMissionClaimAttemptKey(backendWeekly.weekKey, mission.id);
+      let attempt = claimAttemptsRef.current.get(attemptKey);
+      if (!attempt) {
+        attempt = createWeeklyMissionClaimAttempt(
+          backendWeekly.weekKey,
+          mission.id,
+          createWeeklyMissionClaimIdempotencyKey,
+        );
+        claimAttemptsRef.current.set(attemptKey, attempt);
+      }
+
+      if (claimingRewardKeys.has(attemptKey)) return;
+      setClaimingRewardKeys((prev) => new Set(prev).add(attemptKey));
+      setBackendClaimMessage(null);
+      try {
+        const result = await claimWeeklyMissionReward(attempt);
+        if (result.ok) {
+          claimAttemptsRef.current.delete(attemptKey);
+          await reconcileChallengeClaimCash(result.cashAfter);
+          addNotification({
+            time: useGameStore.getState().currentTime,
+            type: 'success',
+            title: 'Haftalık ödül alındı',
+            message: `${mission.title} · +${formatMoney(result.cashAmount)}`,
+            autoDismissMs: 3500,
+          });
+          await loadBackendWeekly();
+          return;
+        }
+        if (result.reason === 'already-claimed') {
+          claimAttemptsRef.current.delete(attemptKey);
+          setBackendClaimMessage(getWeeklyMissionClaimErrorMessage(result.reason));
+          await loadBackendWeekly();
+          return;
+        }
+        if (result.reason === 'not-complete' || result.reason === 'week-not-current') {
+          claimAttemptsRef.current.delete(attemptKey);
+          setBackendClaimMessage(getWeeklyMissionClaimErrorMessage(result.reason));
+          await loadBackendWeekly();
+          return;
+        }
+        if (!shouldRetainWeeklyMissionClaimAttempt(result.reason)) {
+          claimAttemptsRef.current.delete(attemptKey);
+        }
+        setBackendClaimMessage(getWeeklyMissionClaimErrorMessage(result.reason));
+      } finally {
+        setClaimingRewardKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(attemptKey);
+          return next;
+        });
+      }
+    },
+    [addNotification, backendWeekly, claimingRewardKeys, loadBackendWeekly],
+  );
+
   const handleClaimMilestone = useCallback(
     async (milestoneId: string) => {
       const claimKey = buildRewardReceiptKey('achievement', milestoneId);
@@ -293,13 +489,6 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     [claimMilestoneReward, claimingRewardKeys],
   );
 
-  const isMissionClaimed = useCallback(
-    (missionId: string) =>
-      missions.claimedMissionRewardIds.includes(missionId) ||
-      isRewardClaimed(rewardReceipts, buildRewardReceiptKey('mission', missionId)),
-    [missions.claimedMissionRewardIds, rewardReceipts],
-  );
-
   const isAchievementClaimed = useCallback(
     (milestoneId: string) => {
       const entry = retention.milestones[milestoneId];
@@ -311,16 +500,29 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
     [retention.milestones, rewardReceipts],
   );
 
-  const isWeeklyClaimed = useCallback(
+  const isLegacyWeeklyClaimed = useCallback(
     (objectiveId: string) => {
       const entry = retention.weeklyObjectives[objectiveId];
       return (
         entry?.isClaimed === true ||
-        isRewardClaimed(rewardReceipts, buildRewardReceiptKey('weekly', objectiveId, seasonKey))
+        isRewardClaimed(
+          rewardReceipts,
+          buildRewardReceiptKey('weekly', objectiveId, legacySeasonKey),
+        )
       );
     },
-    [retention.weeklyObjectives, rewardReceipts, seasonKey],
+    [retention.weeklyObjectives, rewardReceipts, legacySeasonKey],
   );
+
+  const backendCountdownLabel = useMemo(() => {
+    if (backendWeekly.status !== 'ready') return null;
+    const remaining = Math.max(0, backendWeekly.endsAt - nowMs);
+    return formatWeeklyRemainingLabel(remaining);
+  }, [backendWeekly, nowMs]);
+
+  const account = getAccountStatus();
+  const linkedAccount =
+    Boolean(account.uid) && !account.isAnonymous && account.provider !== 'guest';
 
   return (
     <ScrollView
@@ -411,54 +613,157 @@ export default function MissionsScreen({ onBack }: MissionsScreenProps) {
       ) : null}
 
       {activeTab === 'weekly' ? (
-        <>
-          <AppCard variant="soft" style={styles.seasonCard} padded>
-            <View style={styles.seasonHeader}>
-              <View style={styles.seasonIcon}>
-                <GameIcon name="time" size={19} color={colors.primaryLight} />
+        BACKEND_WEEKLY_MISSIONS_ENABLED ? (
+          <>
+            <AppCard variant="soft" style={styles.seasonCard} padded>
+              <View style={styles.seasonHeader}>
+                <View style={styles.seasonIcon}>
+                  <GameIcon name="time" size={19} color={colors.primaryLight} />
+                </View>
+                <View style={styles.seasonCopy}>
+                  <Text style={styles.seasonTitle}>Haftalık Sezon</Text>
+                  <Text style={styles.seasonDates}>
+                    {backendWeekly.status === 'ready'
+                      ? backendWeekly.weekKey
+                      : 'Yükleniyor…'}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.seasonCopy}>
-                <Text style={styles.seasonTitle}>Haftalık Sezon</Text>
-                <Text style={styles.seasonDates}>{seasonLabel}</Text>
-              </View>
-            </View>
-            <Text style={styles.seasonHint}>
-              Leaderboard ile aynı haftayı takip eder. Yeni hafta başladığında görevler yenilenir.
-            </Text>
-          </AppCard>
+              {backendCountdownLabel ? (
+                <Text style={styles.seasonHint}>Yenilenmeye {backendCountdownLabel}</Text>
+              ) : (
+                <Text style={styles.seasonHint}>
+                  Leaderboard ile aynı haftayı takip eder. Yeni hafta başladığında görevler yenilenir.
+                </Text>
+              )}
+              {!linkedAccount ? (
+                <Text style={styles.seasonHint}>
+                  Hesabını bağlayarak ödül alabilirsin.
+                </Text>
+              ) : null}
+              {backendClaimMessage ? (
+                <Text style={styles.claimMessage}>{backendClaimMessage}</Text>
+              ) : null}
+            </AppCard>
 
-          <MissionSectionHeader title="Bu Haftanın Görevleri" icon="time" />
-          {sortedWeekly.map((objective) => {
-            const entry = retention.weeklyObjectives[objective.id] ?? {
-              progress: 0,
-              isClaimed: false,
-            };
-            const claimed = isWeeklyClaimed(objective.id);
-            const isReady = !claimed && entry.progress >= objective.target;
-            const claimKey = buildRewardReceiptKey('weekly', objective.id, seasonKey);
-            return (
-              <PremiumMissionCard
-                key={objective.id}
-                id={objective.id}
-                category={objective.category}
-                title={objective.title}
-                description={objective.description}
-                progress={objective.target > 0 ? entry.progress / objective.target : 0}
-                progressLabel={formatRetentionProgress(
-                  entry.progress,
-                  objective.target,
-                  objective.metric === 'weekly_trade_profit',
-                )}
-                rewardLabel={formatRetentionReward(objective.reward)}
-                status={getRetentionStatus(claimed, isReady)}
-                completedAt={entry.completedAt}
-                currentTime={currentTime}
-                isClaiming={claimingRewardKeys.has(claimKey)}
-                onClaim={() => handleClaimWeeklyObjective(objective.id)}
-              />
-            );
-          })}
-        </>
+            <MissionSectionHeader title="Bu Haftanın Görevleri" icon="time" />
+
+            {backendWeekly.status === 'loading' || backendWeekly.status === 'idle' ? (
+              <View style={styles.stateBlock}>
+                <ActivityIndicator color={colors.primaryLight} />
+                <Text style={styles.stateText}>Haftalık görevler yükleniyor…</Text>
+              </View>
+            ) : null}
+
+            {backendWeekly.status === 'error' ? (
+              <View style={styles.stateBlock}>
+                <Text style={styles.stateText}>
+                  {backendWeekly.reason === 'feature-disabled'
+                    ? 'Haftalık görevler şu anda kullanılamıyor.'
+                    : 'Haftalık görevlere ulaşılamadı.'}
+                </Text>
+                <Pressable onPress={() => void loadBackendWeekly()} style={styles.retryButton}>
+                  <Text style={styles.retryButtonText}>Tekrar Dene</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {backendWeekly.status === 'ready' && sortedBackendWeekly.length === 0 ? (
+              <View style={styles.stateBlock}>
+                <Text style={styles.stateText}>Bu hafta için görev bulunamadı.</Text>
+              </View>
+            ) : null}
+
+            {backendWeekly.status === 'ready'
+              ? sortedBackendWeekly.map((mission) => {
+                  const claimed = mission.claimed;
+                  const isReady = !claimed && (mission.completed || mission.claimAvailable);
+                  const attemptKey = weeklyMissionClaimAttemptKey(
+                    backendWeekly.weekKey,
+                    mission.id,
+                  );
+                  const canClaim =
+                    isReady &&
+                    linkedAccount &&
+                    canClaimBackendWeeklyMission({
+                      completed: mission.completed,
+                      claimed: mission.claimed,
+                      claimAvailable: mission.claimAvailable,
+                      linkedAccount,
+                      featuresEnabled: true,
+                      requestPending: claimingRewardKeys.has(attemptKey),
+                    });
+                  return (
+                    <PremiumMissionCard
+                      key={mission.id}
+                      id={mission.id}
+                      category="contracts"
+                      title={mission.title}
+                      description={mission.description}
+                      difficultyLabel={getWeeklyMissionDifficultyLabel(mission.difficulty)}
+                      progress={mission.target > 0 ? mission.progress / mission.target : 0}
+                      progressLabel={formatRetentionProgress(mission.progress, mission.target)}
+                      rewardLabel={`+${formatMoney(mission.reward.cash)}`}
+                      status={getRetentionStatus(claimed, isReady)}
+                      completedAt={mission.claimedAt ?? undefined}
+                      currentTime={currentTime}
+                      isClaiming={claimingRewardKeys.has(attemptKey)}
+                      onClaim={canClaim ? () => handleClaimBackendWeekly(mission) : undefined}
+                    />
+                  );
+                })
+              : null}
+          </>
+        ) : (
+          <>
+            <AppCard variant="soft" style={styles.seasonCard} padded>
+              <View style={styles.seasonHeader}>
+                <View style={styles.seasonIcon}>
+                  <GameIcon name="time" size={19} color={colors.primaryLight} />
+                </View>
+                <View style={styles.seasonCopy}>
+                  <Text style={styles.seasonTitle}>Haftalık Sezon</Text>
+                  <Text style={styles.seasonDates}>{legacySeasonLabel}</Text>
+                </View>
+              </View>
+              <Text style={styles.seasonHint}>
+                Leaderboard ile aynı haftayı takip eder. Yeni hafta başladığında görevler yenilenir.
+              </Text>
+            </AppCard>
+
+            <MissionSectionHeader title="Bu Haftanın Görevleri" icon="time" />
+            {sortedWeekly.map((objective) => {
+              const entry = retention.weeklyObjectives[objective.id] ?? {
+                progress: 0,
+                isClaimed: false,
+              };
+              const claimed = isLegacyWeeklyClaimed(objective.id);
+              const isReady = !claimed && entry.progress >= objective.target;
+              const claimKey = buildRewardReceiptKey('weekly', objective.id, legacySeasonKey);
+              return (
+                <PremiumMissionCard
+                  key={objective.id}
+                  id={objective.id}
+                  category={objective.category}
+                  title={objective.title}
+                  description={objective.description}
+                  progress={objective.target > 0 ? entry.progress / objective.target : 0}
+                  progressLabel={formatRetentionProgress(
+                    entry.progress,
+                    objective.target,
+                    objective.metric === 'weekly_trade_profit',
+                  )}
+                  rewardLabel={formatRetentionReward(objective.reward)}
+                  status={getRetentionStatus(claimed, isReady)}
+                  completedAt={entry.completedAt}
+                  currentTime={currentTime}
+                  isClaiming={claimingRewardKeys.has(claimKey)}
+                  onClaim={() => handleClaimLegacyWeeklyObjective(objective.id)}
+                />
+              );
+            })}
+          </>
+        )
       ) : null}
 
       {activeTab === 'achievements' ? (
@@ -513,36 +818,6 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: spacing.md,
   },
-  tabRow: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  tabButton: {
-    flex: 1,
-    minHeight: 44,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: 4,
-    borderRadius: 10,
-    backgroundColor: colors.cardSoft,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabButtonActive: {
-    backgroundColor: colors.accentBlueSoft,
-    borderColor: 'rgba(56, 189, 248, 0.45)',
-  },
-  tabButtonText: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.textMuted,
-    textAlign: 'center',
-  },
-  tabButtonTextActive: {
-    color: colors.accentBlue,
-  },
   sectionSpaced: {
     marginTop: spacing.sm,
   },
@@ -585,5 +860,33 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     lineHeight: 16,
+  },
+  claimMessage: {
+    ...typography.caption,
+    color: colors.amber,
+    lineHeight: 16,
+  },
+  stateBlock: {
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.lg,
+  },
+  stateText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  retryButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 10,
+    backgroundColor: colors.accentBlueSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(57,160,255,0.34)',
+  },
+  retryButtonText: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.primaryLight,
   },
 });

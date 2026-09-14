@@ -64,7 +64,16 @@ import {
   claimChallengeRewardTransaction,
   getCurrentChallengeState,
 } from './challenges';
+import {
+  isValidCanonicalDeliveryId,
+  recordCanonicalDeliveryCompletionTransaction,
+} from './canonicalDeliveryCompletion';
 import { getSeasonDefinition } from './seasonPeriods';
+import {
+  claimWeeklyMissionRewardTransaction,
+  ensureWeeklyMissionRotation,
+  getWeeklyMissionsState,
+} from './weeklyMissions';
 import {
   APPLE_SIGNIN_SECRETS,
   readAppleSignInSecretValuesFromBinding,
@@ -99,6 +108,9 @@ const RATE_LIMITS = {
   seasonResultGet: { windowMs: 60 * 1000, maxRequests: 60 },
   seasonRewardGet: { windowMs: 60 * 1000, maxRequests: 60 },
   seasonRewardClaim: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  weeklyMissionGet: { windowMs: 60 * 1000, maxRequests: 60 },
+  weeklyMissionClaim: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalDelivery: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -249,6 +261,51 @@ export const seedWeeklyLeaderboard = onSchedule(
     } catch (error) {
       logger.error('[leaderboard-season-seed]', {
         seasonKey,
+        durationMs: Date.now() - startedAt,
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : String(error),
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * Weekly Missions rotation — create-if-missing for the current UTC ISO week.
+ * Gated by WEEKLY_MISSIONS_BACKEND_ENABLED=true (default off).
+ * Runs after leaderboard seed (00:05) and season close (00:10).
+ */
+export const seedWeeklyMissionRotation = onSchedule(
+  {
+    schedule: '15 0 * * *',
+    timeZone: 'UTC',
+    retryCount: 2,
+    maxInstances: 1,
+    timeoutSeconds: 120,
+    memory: '256MiB',
+  },
+  async () => {
+    const startedAt = Date.now();
+    try {
+      const result = await ensureWeeklyMissionRotation(getFirestore(), startedAt);
+      if (result.ok && result.created) {
+        logger.info('[weekly-rotation-created]', {
+          weekKey: result.rotation.weekKey,
+          missionCount: result.rotation.missionIds.length,
+          durationMs: Date.now() - startedAt,
+        });
+      } else {
+        logger.info('[weekly-mission-rotation]', {
+          ok: result.ok,
+          reason: result.ok ? 'existing' : result.reason,
+          weekKey: result.ok ? result.rotation.weekKey : null,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    } catch (error) {
+      logger.error('[weekly-mission-rotation]', {
         durationMs: Date.now() - startedAt,
         error:
           error instanceof Error
@@ -1452,6 +1509,150 @@ export const claimChallengeReward = onCall(
       ok: result.ok,
       reason: result.ok ? 'success' : result.reason,
     });
+    return result;
+  },
+);
+
+export const recordCanonicalDeliveryCompletion = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, deliveryId: '' };
+    }
+    if (!hasOnlyKeys(record, ['deliveryId']) || !isValidCanonicalDeliveryId(record.deliveryId)) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        deliveryId: typeof record.deliveryId === 'string' ? record.deliveryId : '',
+      };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalDelivery',
+        record.deliveryId as string,
+      ))
+    ) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        deliveryId: record.deliveryId,
+      };
+    }
+    const result = await recordCanonicalDeliveryCompletionTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      record.deliveryId as string,
+      Date.now(),
+    );
+    if (result.ok) {
+      logger.info('[canonical-delivery-recorded]', {
+        uidHash: uidHash(auth.identity.uid),
+        alreadyRecorded: result.alreadyRecorded,
+      });
+    } else {
+      logger.info('[canonical-delivery-completion]', {
+        uidHash: uidHash(auth.identity.uid),
+        ok: false,
+        reason: result.reason,
+      });
+    }
+    return result;
+  },
+);
+
+export const getWeeklyMissions = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    if (!request.auth?.uid) {
+      return { ok: false, reason: 'auth-required' };
+    }
+    const record = requestRecord(request.data);
+    if (!hasOnlyKeys(record, [])) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(request.auth.uid, 'weeklyMissionGet'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    const linkedAccount = resolveSignInProvider(request.auth.token) !== 'anonymous';
+    return getWeeklyMissionsState(
+      getFirestore(),
+      {
+        uid: request.auth.uid,
+        linkedAccount,
+      },
+      Date.now(),
+    );
+  },
+);
+
+export const claimWeeklyMissionReward = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        reason: auth.reason,
+        weekKey: typeof record.weekKey === 'string' ? record.weekKey : '',
+        missionId: typeof record.missionId === 'string' ? record.missionId : '',
+      };
+    }
+    if (
+      !hasOnlyKeys(record, ['weekKey', 'missionId', 'idempotencyKey']) ||
+      !isBoundedId(record.weekKey) ||
+      !isBoundedId(record.missionId) ||
+      !isBoundedId(record.idempotencyKey)
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        weekKey: typeof record.weekKey === 'string' ? record.weekKey : '',
+        missionId: typeof record.missionId === 'string' ? record.missionId : '',
+      };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'weeklyMissionClaim',
+        record.idempotencyKey as string,
+      ))
+    ) {
+      return {
+        ok: false,
+        reason: 'rate-limited',
+        weekKey: record.weekKey,
+        missionId: record.missionId,
+      };
+    }
+    const result = await claimWeeklyMissionRewardTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      {
+        weekKey: record.weekKey as string,
+        missionId: record.missionId as string,
+        idempotencyKey: record.idempotencyKey as string,
+      },
+      Date.now(),
+    );
+    if (result.ok) {
+      logger.info('[weekly-claim-succeeded]', {
+        uidHash: uidHash(auth.identity.uid),
+        weekKey: record.weekKey,
+        missionId: record.missionId,
+        cashAmount: result.cashAmount,
+      });
+    } else {
+      logger.info('[weekly-claim-rejected]', {
+        uidHash: uidHash(auth.identity.uid),
+        weekKey: record.weekKey,
+        missionId: record.missionId,
+        reason: result.reason,
+      });
+    }
     return result;
   },
 );

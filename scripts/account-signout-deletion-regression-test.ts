@@ -84,6 +84,7 @@ assert(backendDeletion.includes('deleteSeasonCloseResultsForUid'), 'season close
 assert(backendDeletion.includes('deleteSeasonRewardDataForUid'), 'season reward entitlement/claim cleanup');
 assert(backend.includes('revokeAppleSignInTokens'), 'Apple revoke callable on server');
 assert(backendDeletion.includes('recursiveDelete'), 'admin recursive user delete');
+assert(backendDeletion.includes('weeklyMissionClaims'), 'weekly mission user docs in recursive delete');
 assert(backendDeletion.includes('auth.deleteUser'), 'Admin SDK auth deletion');
 assert(
   backendMarketplace.includes('// Equality-only query — no composite index required'),

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { maybeSubmitLeaderboardForSeasonChange } from '../services/leaderboardSeasonSync';
+import { flushCanonicalDeliveryCompletionQueue } from '../domain/canonicalDeliveryCompletionQueue';
 import {
   reconcileVehicleMarketplaceOnForeground,
   retryPostStartupMarketplaceReconcileIfNeeded,
@@ -34,6 +35,7 @@ export function useAppStateLifecycle(): boolean {
           retryPostStartupMarketplaceReconcileIfNeeded();
           safeVoid('marketplace-foreground-reconcile', reconcileVehicleMarketplaceOnForeground());
           retryCloudSaveSyncOnForeground();
+          safeVoid('canonical-delivery-flush', flushCanonicalDeliveryCompletionQueue());
         } catch (error) {
           logStartupError('appstate-foreground', error);
         }

@@ -255,6 +255,8 @@ export interface PremiumMissionCardProps {
   currentTime: number;
   onClaim?: () => void;
   isClaiming?: boolean;
+  /** Optional difficulty chip (Kolay / Orta / Zor). */
+  difficultyLabel?: string;
 }
 
 export const PremiumMissionCard = React.memo(function PremiumMissionCard({
@@ -270,6 +272,7 @@ export const PremiumMissionCard = React.memo(function PremiumMissionCard({
   currentTime,
   onClaim,
   isClaiming = false,
+  difficultyLabel,
 }: PremiumMissionCardProps) {
   const theme = STATUS_THEME[status];
   const icon = resolveMissionPresentationIcon(id, category);
@@ -290,9 +293,16 @@ export const PremiumMissionCard = React.memo(function PremiumMissionCard({
         </View>
 
         <View style={styles.cardHeading}>
-          <Text style={styles.cardTitle} numberOfLines={1}>
-            {title}
-          </Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.cardTitle} numberOfLines={1}>
+              {title}
+            </Text>
+            {difficultyLabel ? (
+              <View style={styles.difficultyChip}>
+                <Text style={styles.difficultyChipText}>{difficultyLabel}</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={styles.cardDescription} numberOfLines={2}>
             {description}
           </Text>
@@ -585,11 +595,33 @@ const styles = StyleSheet.create({
     minWidth: 0,
     paddingTop: 1,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+  },
+  difficultyChip: {
+    flexShrink: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accentBlueSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(57,160,255,0.34)',
+  },
+  difficultyChipText: {
+    ...typography.caption,
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.primaryLight,
+  },
   cardTitle: {
     ...typography.cardTitle,
     fontSize: 14,
     lineHeight: 18,
     color: colors.textPrimary,
+    flexShrink: 1,
   },
   cardDescription: {
     ...typography.caption,

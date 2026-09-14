@@ -100,6 +100,11 @@ export function validateStoreProductionEnv(input: StoreProductionValidationInput
   if (env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS === 'true') {
     errors.push('EXPO_PUBLIC_ENABLE_SEASON_REWARDS must remain false for store production');
   }
+  if (env.EXPO_PUBLIC_ENABLE_BACKEND_WEEKLY_MISSIONS === 'true') {
+    errors.push(
+      'EXPO_PUBLIC_ENABLE_BACKEND_WEEKLY_MISSIONS must remain false for store production',
+    );
+  }
   if (env.EXPO_PUBLIC_ENABLE_INBOX === 'true') {
     errors.push('EXPO_PUBLIC_ENABLE_INBOX must remain false for store production');
   }

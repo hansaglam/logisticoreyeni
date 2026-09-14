@@ -65,6 +65,14 @@ export const SEASON_CLOSE_SNAPSHOT_ENABLED =
 export const SEASON_REWARDS_ENABLED =
   process.env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS === 'true' ||
   readExtraFeatureFlag('seasonRewardsEnabled') === 'true';
+/**
+ * Backend-driven Weekly Missions UI + claim path.
+ * Independent of server WEEKLY_MISSIONS_BACKEND_ENABLED — both must be on for payouts.
+ * Production/store fail-closed; internal canary may enable the Expo flag only.
+ */
+export const BACKEND_WEEKLY_MISSIONS_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_BACKEND_WEEKLY_MISSIONS === 'true' ||
+  readExtraFeatureFlag('backendWeeklyMissionsEnabled') === 'true';
 /** V1.1 Phase 4 retention/observability foundation; store production remains fail-closed. */
 export const MARKET_ALERTS_ENABLED =
   process.env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS === 'true' ||

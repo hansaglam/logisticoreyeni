@@ -185,6 +185,8 @@ export async function deleteLinkedAccount(
     const userRef = firestore.doc(`users/${uid}`);
     const userSnap = await userRef.get();
     if (userSnap.exists) {
+      // Removes users/{uid} and all subcollections, including weeklyMissionClaims,
+      // weeklyMissionBaselines, and canonicalDeliveryCompletions.
       await firestore.recursiveDelete(userRef);
     }
     logStage(ACCOUNT_DELETE_STAGE.RECURSIVE_DATA, uid, { success: true });

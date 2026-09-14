@@ -480,6 +480,9 @@ import {
 import { createDefaultMissionsState } from '../config/missions';
 import { getMilestoneById } from '../data/milestones';
 import { getWeeklyObjectiveById, getWeeklyObjectiveDefinitions } from '../data/weeklyObjectives';
+import { BACKEND_WEEKLY_MISSIONS_ENABLED } from '../config/backendRoadmap';
+import { notifyCanonicalDeliveryCompleted } from '../domain/canonicalDeliveryCompletionQueue';
+import { isLocalWeeklyCashMintAllowed } from '../features/weeklyMissions/claimFlow';
 import {
   applyRetentionEvent,
   claimMilestoneRewardState,
@@ -3659,6 +3662,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   claimWeeklyObjectiveReward: (objectiveId) => {
+    if (!isLocalWeeklyCashMintAllowed(BACKEND_WEEKLY_MISSIONS_ENABLED)) {
+      return {
+        success: false,
+        message: 'Haftalık ödüller sunucu üzerinden alınır.',
+      };
+    }
     const state = get();
     const seasonKey = getWeeklySeasonKey();
     const synced = syncRetentionProgressState(state);
@@ -8154,6 +8163,9 @@ const elapsed = plan.elapsed;
     }
     get().processExpiredLeases();
     get().advanceOnboardingProgress();
+    // Fail-soft: linked accounts only. Never blocks or rolls back local completion.
+    // Guests do not enqueue; historic guest deliveries are not retroactively submitted after link.
+    notifyCanonicalDeliveryCompleted(deliveryId);
   },
 
   failDeliveryById: (deliveryId: string, reason: DeliveryFailureReason) => {

@@ -1,0 +1,92 @@
+{
+  "contentHash": "sha256:40610c5e7c65c0d99bf9ade3382edb07222ecf2d3feb73617c313d7a0ffff1ec",
+  "sourceAirportArtifactHash": "sha256:880b97d5d2326396d8436fec8fc0601c7e3016bdbf6ad614081c3949f1659032",
+  "corridorCount": 7,
+  "unresolvedCount": 0,
+  "bytes": 6237,
+  "rows": [
+    {
+      "id": "corridor.tur.air.istanbul.izmir.v1",
+      "pair": "istanbul-izmir",
+      "iata": "IST-ADB",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 358087,
+      "sampleCount": 10,
+      "projectedVertexCount": 10,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.ankara.istanbul.v1",
+      "pair": "ankara-istanbul",
+      "iata": "ESB-IST",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 381269,
+      "sampleCount": 11,
+      "projectedVertexCount": 11,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.antalya.istanbul.v1",
+      "pair": "antalya-istanbul",
+      "iata": "AYT-IST",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 518557,
+      "sampleCount": 14,
+      "projectedVertexCount": 14,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.istanbul.trabzon.v1",
+      "pair": "istanbul-trabzon",
+      "iata": "IST-TZX",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 925463,
+      "sampleCount": 24,
+      "projectedVertexCount": 24,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.ankara.diyarbakir.v1",
+      "pair": "ankara-diyarbakir",
+      "iata": "ESB-DIY",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 669189,
+      "sampleCount": 18,
+      "projectedVertexCount": 18,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.adana.ankara.v1",
+      "pair": "adana-ankara",
+      "iata": "COV-ESB",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 401563,
+      "sampleCount": 11,
+      "projectedVertexCount": 11,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.antalya.izmir.v1",
+      "pair": "antalya-izmir",
+      "iata": "AYT-ADB",
+      "status": "VERIFIED_ENDPOINTS_PREVIEW",
+      "geodesicDistanceMeters": 356207,
+      "sampleCount": 10,
+      "projectedVertexCount": 10,
+      "readiness": "READY/READY",
+      "cargo": "VERIFIED_SUPPORTED/VERIFIED_SUPPORTED"
+    },
+    {
+      "id": "corridor.tur.air.adana.diyarbakir.v1",
+      "pair": "adana-diyarbakir",
+      "status": "REJECTED",
+      "reason": "optional-duplicate-coverage: Ankara already covers both inland READY cities; keep skeleton ≤7"
+    }
+  ]
+}

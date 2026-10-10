@@ -70,7 +70,7 @@ export function normalizeTutorialState(raw?: Partial<TutorialState> | null): Tut
   };
 }
 
-function migrateLegacyMissionId(missionId: string): string {
+export function migrateLegacyMissionId(missionId: string): string {
   return missionId === 'first_contract' ? 'first_contract_start' : missionId;
 }
 

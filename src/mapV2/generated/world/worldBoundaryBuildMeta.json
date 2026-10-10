@@ -1,0 +1,18 @@
+{
+  "generatedAt": "2026-09-16T18:31:24.644Z",
+  "contentHash": "sha256:d5e680ef4e64f576f203c72df53ccef5e58cca4c0044a810219319ebdf9b2c5b",
+  "stats": {
+    "countries": 230,
+    "sourceCountryCount": 230,
+    "renderedCountryCount": 229,
+    "omittedPolarFeatures": 1,
+    "unresolvedIdentities": 0,
+    "packageBytes": 3341526,
+    "WORLD_LOW_vertices": 34195,
+    "WORLD_MEDIUM_vertices": 88394,
+    "COUNTRY_HIGH_vertices": 127417,
+    "WORLD_LOW_polygons": 678,
+    "WORLD_MEDIUM_polygons": 1386,
+    "COUNTRY_HIGH_polygons": 3441
+  }
+}

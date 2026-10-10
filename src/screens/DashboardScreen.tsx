@@ -35,6 +35,7 @@ import {
 } from '../simulation/worldEvents';
 import { getSnapshotFuelPrice } from '../simulation/globalMarketSnapshot';
 import { getLevelProgress } from '../simulation/leveling';
+import { useEffectiveCompanyProgression } from '../hooks/useEffectiveCompanyProgression';
 import { getWarehouseUsedCapacityTon, normalizeWarehouse } from '../simulation/trading';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
@@ -262,6 +263,8 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     onboarding?.visitedScreens?.length,
   ]);
 
+  const effectiveProgression = useEffectiveCompanyProgression(player);
+
   if (!hasPlayer || !player) {
     return (
       <View style={styles.screenRoot}>
@@ -274,7 +277,23 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
     );
   }
 
-  const levelProgress = getLevelProgress(player);
+  const progressionPlayer =
+    effectiveProgression.status === 'ready' && effectiveProgression.level != null
+      ? {
+          ...player,
+          level: effectiveProgression.level,
+          companyLevel: effectiveProgression.level,
+          xp: effectiveProgression.xp ?? 0,
+          xpToNextLevel: effectiveProgression.xpToNextLevel ?? 0,
+          totalXp: effectiveProgression.totalXp ?? 0,
+          reputation: effectiveProgression.reputation ?? 0,
+        }
+      : null;
+  const levelProgress = progressionPlayer ? getLevelProgress(progressionPlayer) : null;
+  const canonicalReputationSummary =
+    progressionPlayer && effectiveProgression.source !== 'LOCAL_GUEST' && effectiveProgression.source !== 'LOCAL_LEGACY'
+      ? selectReputationSummary({ player: progressionPlayer, reputationHistory })
+      : reputationSummary;
   const fuelPrice = getSnapshotFuelPrice(globalSnapshot, globalEconomy);
   const showCashWarning = playerMoney < LOW_CASH_THRESHOLD;
   const onboardingCompleted = onboarding?.completed === true;
@@ -352,6 +371,8 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         ]}
         showsVerticalScrollIndicator={false}
       >
+      {levelProgress && canonicalReputationSummary ? (
+      <>
       <DashboardResourceBar
         money={playerMoney}
         level={levelProgress.level}
@@ -371,16 +392,24 @@ export default function DashboardScreen({ onNavigate, onOpenWarehouse }: Dashboa
         isMaxLevel={levelProgress.isMaxLevel}
         money={playerMoney}
         companyScore={companyScore}
-        reputationSummary={reputationSummary!}
+        reputationSummary={canonicalReputationSummary}
         idleTrucks={fleetSnapshot.idleTrucks}
         activeDeliveries={runningDeliveries.length}
         onReputationPress={() => setReputationSheetVisible(true)}
       />
+      </>
+      ) : (
+        <Text style={styles.loadingText}>
+          {effectiveProgression.status === 'loading'
+            ? 'Şirket ilerlemesi yükleniyor'
+            : 'Şirket ilerlemesi şu an gösterilemiyor'}
+        </Text>
+      )}
 
-      {reputationSheetVisible ? (
+      {reputationSheetVisible && effectiveProgression.status === 'ready' && canonicalReputationSummary ? (
         <ReputationDetailSheet
           visible={reputationSheetVisible}
-          summary={reputationSummary!}
+          summary={canonicalReputationSummary}
           history={reputationHistory}
           onClose={() => setReputationSheetVisible(false)}
         />

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://logisticore.local/schemas/map-v2-reference-manifest-v1.json",
+  "title": "LogistiCore Map V2 reference screen manifest",
+  "type": "object",
+  "required": [
+    "specVersion",
+    "orientation",
+    "targetAspectRatio",
+    "screens"
+  ],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "mapDataSourcePolicyVersion": { "type": "integer" },
+    "orientation": { "const": "portrait" },
+    "targetAspectRatio": { "const": "9:16" },
+    "referenceImagesAreVisualSourceOfTruth": { "type": "boolean" },
+    "referenceImagesAreNotDataSource": { "type": "boolean" },
+    "referenceDirectory": { "type": "string" },
+    "howToAddFiles": { "type": "string" },
+    "legacyStableGameplayCityIds": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "screens": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "referenceFile",
+          "orientation",
+          "targetAspectRatio",
+          "purpose"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^MAP-0[1-9]$"
+          },
+          "name": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["PENDING_REFERENCE_FILE", "approved"]
+          },
+          "referenceFile": {
+            "type": ["string", "null"]
+          },
+          "orientation": { "const": "portrait" },
+          "targetAspectRatio": { "const": "9:16" },
+          "purpose": { "type": "string" },
+          "entryPoints": { "type": "array", "items": { "type": "string" } },
+          "exitPoints": { "type": "array", "items": { "type": "string" } },
+          "parentView": { "type": ["string", "null"] },
+          "childViews": { "type": "array", "items": { "type": "string" } },
+          "requiredUIRegions": { "type": "array", "items": { "type": "string" } },
+          "optionalUIRegions": { "type": "array", "items": { "type": "string" } },
+          "mapLayers": { "type": "array", "items": { "type": "string" } },
+          "interactionTypes": { "type": "array", "items": { "type": "string" } },
+          "dataDependencies": { "type": "array", "items": { "type": "string" } },
+          "visualPriority": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  }
+}

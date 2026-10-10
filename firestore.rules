@@ -105,6 +105,180 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow write: if false;
       }
+
+      // Canonical cash receipts — Admin SDK only. Own-record read for future
+      // ledger mirror; no client writes. Not HUD authority.
+      match /canonicalCashTransactions/{transactionId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRoadContracts/{contractId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRoadContractBatches/{batchId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRoadDeliveries/{deliveryId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalFleetAssets/{assetId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalFleetRuntime/{assetId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalContractClock/{clockId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRoadContractRefresh/{refreshId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRoadContractRefreshReceipts/{receiptId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalCompanyProgression/{progressionId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalProgressionReceipts/{receiptId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalProgressionMigration/{migrationId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalProgressionMigrationReceipts/{receiptId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalProgressionMigrationSource/{sourceId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalProgressionMigrationSourceReceipts/{receiptId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalFleetMutationReceipts/{receiptId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalPurchaseReceipts/{purchaseId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalFuelReceipts/{operationId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalVehicleLeases/{leaseId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalLeaseReceipts/{intentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalDrivers/{driverId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalDriverReceipts/{intentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalDriverRosterMeta/{docId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalVehicleSaleReceipts/{intentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalOpexState/{docId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalDailyOpexReceipts/{periodId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalWarehouses/{warehouseId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalWarehouseReceipts/{operationId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalCargoInventory/{inventoryId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalCargoMarketReceipts/{operationId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRewardClaims/{claimId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRewardProgress/{progressId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /canonicalRoadSettlements/{deliveryId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      // Canonical multimodal shipments — Admin SDK / Functions only.
+      // Clients receive receipts via callables; direct writes are denied.
+      match /canonicalMultimodalShipments/{shipmentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
     }
 
     // Active offers are publicly browseable. Historical records are visible
@@ -145,6 +319,23 @@ service cloud.firestore {
     match /globalEconomy/{documentId} {
       allow read: if signedIn();
       allow write: if false;
+    }
+
+    match /canonicalWorldMarkets/{marketId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /canonicalMarketClock/{documentId} {
+      allow read, write: if false;
+    }
+
+    match /canonicalMarketTicks/{tickId} {
+      allow read, write: if false;
+    }
+
+    match /canonicalRoadContractEvents/{documentId} {
+      allow read, write: if false;
     }
 
     match /globalEconomySnapshots/{snapshotId} {

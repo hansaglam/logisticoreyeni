@@ -1,0 +1,15 @@
+{
+  "file": "src/mapV2/generated/visual/turkey-country-base.svg",
+  "format": "SVG",
+  "viewBox": [
+    0,
+    0,
+    960,
+    480
+  ],
+  "encodedBytes": 14217,
+  "estimatedDecodedMemoryBytes": 14217,
+  "note": "Vector; runtime Map V2 country dashboard uses the Skia COUNTRY_HIGH path. This file is the same outline for design/review.",
+  "geographyLod": "COUNTRY_HIGH",
+  "vertexTokens": 235
+}

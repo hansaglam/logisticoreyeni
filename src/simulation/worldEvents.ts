@@ -383,11 +383,24 @@ export interface GenerateWorldEventsInput {
   worldEvents: WorldEvent[];
   currentDay: number;
   seedKey: string;
+  /**
+   * Wall-clock instant used for startsAt/endsAt.
+   * Omitted calls keep the device economy clock. Canonical issuance passes server time.
+   */
+  nowMs?: number;
+}
+
+export function isWorldEventActiveAt(
+  event: WorldEvent,
+  nowMs: number,
+  currentDay = 1,
+): boolean {
+  return isEventActive(event, currentDay, nowMs);
 }
 
 export function generateWorldEventsForDay(input: GenerateWorldEventsInput): WorldEvent[] {
   const { currentDay, seedKey } = input;
-  const nowMs = getEconomyNow();
+  const nowMs = input.nowMs ?? getEconomyNow();
   let events = expireOldWorldEvents(input.worldEvents, currentDay, nowMs);
   const activeCount = events.filter((event) => event.isActive).length;
   if (activeCount >= MAX_ACTIVE_WORLD_EVENTS) {
@@ -442,6 +455,8 @@ export function processWorldEventsForDayRange(input: {
   fromDay: number;
   toDay: number;
   seedKey: string;
+  /** Per-day wall clock. Omitted calls keep using getEconomyNow inside generation. */
+  nowMsForDay?: (day: number) => number;
 }): { worldEvents: WorldEvent[]; lastWorldEventGeneratedDay: number } {
   let events = input.worldEvents;
   const startDay = Math.max(1, input.fromDay);
@@ -452,11 +467,12 @@ export function processWorldEventsForDayRange(input: {
       worldEvents: events,
       currentDay: day,
       seedKey: input.seedKey,
+      nowMs: input.nowMsForDay?.(day),
     });
   }
 
   return {
-    worldEvents: refreshActiveFlags(events, endDay),
+    worldEvents: refreshActiveFlags(events, endDay, input.nowMsForDay?.(endDay)),
     lastWorldEventGeneratedDay: endDay,
   };
 }

@@ -189,6 +189,8 @@ export function buildWarehouseScreenViewModel(params: {
   currentTime?: number;
   playerLevel: number;
   playerMoney: number;
+  /** Canonical progression is loading or unavailable. Do not unlock from the save. */
+  lockProgressionEligibility?: boolean;
 }): WarehouseScreenViewModel {
   const {
     warehouses,
@@ -202,6 +204,7 @@ export function buildWarehouseScreenViewModel(params: {
     currentTime = 0,
     playerLevel,
     playerMoney,
+    lockProgressionEligibility = false,
   } = params;
 
   const cityById = new Map(cities.map((city) => [city.id, city]));
@@ -235,7 +238,9 @@ export function buildWarehouseScreenViewModel(params: {
     const canAffordUpgrade = upgradePreview.canAfford;
     const requiredLevel = upgradePreview.requiredPlayerLevel;
     const isMaxed = upgradePreview.isMaxLevel || upgradePreview.nextLevel == null;
-    const levelLocked = requiredLevel != null && playerLevel < requiredLevel;
+    const levelLocked = lockProgressionEligibility
+      ? !isMaxed
+      : requiredLevel != null && playerLevel < requiredLevel;
     const upgradeDisabled = isMaxed || levelLocked || !canAffordUpgrade;
 
     const stocks: WarehouseStockRowVm[] = (warehouse.inventory ?? [])
@@ -352,7 +357,7 @@ export function buildWarehouseScreenViewModel(params: {
       coldDailyCost: estimateNewWarehouseDailyOperatingCost(city.id, 'cold', city),
       hasStandard: false,
       hasCold: false,
-      cityUnlocked: isWarehouseCityUnlocked(city.id, playerLevel),
+      cityUnlocked: lockProgressionEligibility ? false : isWarehouseCityUnlocked(city.id, playerLevel),
       requiredLevel: getCityUnlockLevel(city.id),
       mode: 'new-city',
     });
@@ -373,7 +378,7 @@ export function buildWarehouseScreenViewModel(params: {
       coldDailyCost: estimateNewWarehouseDailyOperatingCost(city.id, 'cold', city),
       hasStandard: cityHasWarehouseType(warehouses, city.id, 'standard'),
       hasCold: false,
-      cityUnlocked: isWarehouseCityUnlocked(city.id, playerLevel),
+      cityUnlocked: lockProgressionEligibility ? false : isWarehouseCityUnlocked(city.id, playerLevel),
       requiredLevel: getCityUnlockLevel(city.id),
       mode: 'add-cold',
     });
@@ -402,8 +407,8 @@ export function buildWarehouseScreenViewModel(params: {
     opportunities,
     limits: {
       currentCount: warehouses.length,
-      maxCount: getMaxWarehousesForLevel(playerLevel),
-      canOpenMore: canOpenMoreWarehouses(playerLevel, warehouses.length),
+      maxCount: lockProgressionEligibility ? warehouses.length : getMaxWarehousesForLevel(playerLevel),
+      canOpenMore: lockProgressionEligibility ? false : canOpenMoreWarehouses(playerLevel, warehouses.length),
       nextLevelForMore: getNextLevelForMoreWarehouses(warehouses.length),
     },
   };

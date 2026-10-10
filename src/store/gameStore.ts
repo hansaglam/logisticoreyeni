@@ -30,6 +30,32 @@ import {
   reconcileDriverAssignments,
 } from '../domain/driverOperationalState';
 import {
+  allowMultimodalRailAcceptance,
+  isMultimodalInternalTestEnabled,
+} from '../domain/multimodalFeatureRollout';
+import {
+  applyCanonicalAcceptanceReceiptToPrepared,
+  commitRailMultimodalAcceptance,
+  prepareRailMultimodalAcceptance,
+} from '../domain/multimodalRailAcceptance';
+import {
+  cancelInternalMultimodalShipment,
+  progressExecutableMultimodalShipments,
+} from '../domain/multimodalRailExecution';
+import {
+  commitMultimodalRailSettlement,
+  prepareMultimodalRailSettlement,
+  type CommitMultimodalRailSettlementResult,
+} from '../domain/multimodalRailSettlement';
+import { isLinkedAccountForCanonicalDelivery } from '../domain/canonicalDeliveryCompletionQueue';
+import {
+  enqueueCanonicalMultimodalCancellation,
+  notifyCanonicalMultimodalShipmentCompleted,
+} from '../domain/canonicalMultimodalCompletionQueue';
+import { acceptCanonicalMultimodalShipment } from '../services/canonicalMultimodalService';
+import { requireClientProgressionLevel } from '../services/canonicalProgressionEligibility';
+import { getTurkeyRoadTransferAccessArtifact } from '../mapV2/world/multimodalRoadTransferAccessLoader';
+import {
   attemptRewardClaim,
   hydrateRewardClaimState,
   isRewardClaimed,
@@ -947,7 +973,8 @@ export type AutoSaveReason =
   | 'delivery_incident'
   | 'offline_progress'
   | 'vehicle_recovery'
-  | 'contextual_guide';
+  | 'contextual_guide'
+  | 'multimodal_internal';
 
 const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'critical',
@@ -967,6 +994,7 @@ const IMMEDIATE_SAVE_REASONS = new Set<AutoSaveReason>([
   'background',
   'manual',
   'offline_progress',
+  'multimodal_internal',
   'vehicle_recovery',
   'marketplace-purchase',
   'marketplace-reconciliation',
@@ -1824,6 +1852,7 @@ export function createInitialGameState(): StoreGameState {
     routes: structuredClone(ROUTES),
     contracts: ensuredPlayable,
     activeDeliveries: [],
+    multimodalShipments: [],
     activeTransfers: [],
     completedTransfers: [],
     activeWarehouseStockTransfers: [],
@@ -2036,6 +2065,24 @@ export interface GameStore extends StoreGameState {
   expireContracts: () => void;
   startDelivery: (contractId: string, truckId: string, driverId: string) => StartDeliveryResult;
   startDeliveryAutoAssign: (contractId: string) => StartDeliveryResult;
+  acceptRailMultimodalOfferInternal: (offer: unknown) => Promise<{
+    status: string;
+    shipmentId?: string;
+    message: string;
+  }>;
+  progressMultimodalShipments: (hoursPassed: number) => void;
+  settleRailMultimodalShipmentInternal: (shipmentId: string) => {
+    status: string;
+    shipmentId?: string;
+    message: string;
+    netCashDelta?: number;
+    alreadySettled?: boolean;
+  };
+  cancelMultimodalShipmentInternal: (shipmentId: string) => Promise<{ status: string }>;
+  applyInternalTestMultimodalFleetFixture: (input: {
+    originCityId: string;
+    destinationCityId: string;
+  }) => { status: string };
   updateDeliveries: (hoursPassed: number) => void;
   updateTransfers: (hoursPassed: number) => void;
   updateWarehouseStockTransfers: (hoursPassed: number) => void;
@@ -4975,6 +5022,8 @@ const elapsed = plan.elapsed;
 
     get().updateDeliveries(hours);
     finishStage('delivery');
+    get().progressMultimodalShipments(hours);
+    finishStage('multimodal');
     get().updateTransfers(hours);
     finishStage('transfers');
     get().updateWarehouseStockTransfers(hours);
@@ -6561,6 +6610,14 @@ const elapsed = plan.elapsed;
       };
     }
 
+    if (truck.assignedMultimodalShipmentId) {
+      return {
+        success: false,
+        errorCode: 'TRUCK_BUSY',
+        message: 'Bu kamyon çok modlu bir sevkiyat için rezerve.',
+      };
+    }
+
     const rawDriver = state.player.drivers.find((d) => d.id === driverId);
     if (!rawDriver) {
       return {
@@ -6841,6 +6898,327 @@ const elapsed = plan.elapsed;
       void maybeRequestGameplayNotificationPermission(false);
     }
     return { success: true };
+  },
+
+  acceptRailMultimodalOfferInternal: async (offer: unknown) => {
+    const state = get();
+    if (!allowMultimodalRailAcceptance()) {
+      return { status: 'FEATURE_DISABLED', message: 'INTERNAL_TEST required' };
+    }
+    const playerSlice = {
+      trucks: state.player.trucks,
+      drivers: state.player.drivers,
+      trailers: state.player.trailers ?? [],
+      money: state.player.money,
+      reputation: state.player.reputation,
+      xp: state.player.xp ?? 0,
+    };
+    const prepared = prepareRailMultimodalAcceptance({
+      offer,
+      accessArtifact: getTurkeyRoadTransferAccessArtifact(),
+      fleet: {
+        trucks: playerSlice.trucks,
+        drivers: playerSlice.drivers,
+        trailers: playerSlice.trailers,
+        activeDeliveries: state.activeDeliveries,
+        activeTransfers: state.activeTransfers ?? [],
+        currentTime: state.currentTime,
+      },
+      shipments: state.multimodalShipments ?? [],
+      currentTimeGameHours: state.currentTime,
+      nowMs: getEconomyNow(),
+      allowAcceptance: true,
+    });
+    if (prepared.status !== 'READY_TO_COMMIT') {
+      return {
+        status: prepared.status,
+        shipmentId: 'shipmentId' in prepared ? prepared.shipmentId : undefined,
+        message: prepared.reason,
+      };
+    }
+
+    let toCommit = prepared;
+    if (isLinkedAccountForCanonicalDelivery()) {
+      const railOffer = offer as {
+        generationSeed?: string;
+        originCityId?: string;
+        destinationCityId?: string;
+        cargo?: { productId?: string; quantity?: number };
+        offerId?: string;
+      };
+      const request = {
+        generationSeed: String(railOffer.generationSeed ?? ''),
+        originCityId: String(railOffer.originCityId ?? ''),
+        destinationCityId: String(railOffer.destinationCityId ?? ''),
+        productId: String(railOffer.cargo?.productId ?? ''),
+        cargoQuantity: Number(railOffer.cargo?.quantity),
+        sourceOfferId: String(railOffer.offerId ?? ''),
+        transportPattern: 'ROAD_RAIL_ROAD' as const,
+        playerLevel: Number(state.player.level ?? 1),
+        canonicalSchemaVersion: 1 as const,
+      };
+      let server = await acceptCanonicalMultimodalShipment(request);
+      if (!server.ok && server.reason === 'timeout') {
+        server = await acceptCanonicalMultimodalShipment(request);
+      }
+      if (!server.ok) {
+        return { status: server.reason, shipmentId: prepared.shipmentId, message: server.reason };
+      }
+      const applied = applyCanonicalAcceptanceReceiptToPrepared(prepared, server.receipt);
+      if ('status' in applied && applied.status === 'CANONICAL_ACCEPTANCE_CONFLICT') {
+        return { status: applied.status, shipmentId: prepared.shipmentId, message: applied.reason };
+      }
+      toCommit = applied;
+    } else {
+      toCommit = {
+        ...prepared,
+        shipment: {
+          ...prepared.shipment,
+          canonicalAuthority: 'LOCAL_GUEST_AUTHORITY',
+        },
+      };
+    }
+
+    const committed = commitRailMultimodalAcceptance({
+      player: playerSlice,
+      activeDeliveries: state.activeDeliveries,
+      availableContracts: state.contracts,
+      financeLedger: state.financeLedger ?? [],
+      multimodalShipments: state.multimodalShipments ?? [],
+      prepared: toCommit,
+    });
+    if (committed.status !== 'COMMITTED') {
+      return { status: committed.status, shipmentId: committed.shipmentId, message: committed.status };
+    }
+    set((live) => ({
+      player: {
+        ...live.player,
+        trucks: committed.player.trucks,
+        drivers: committed.player.drivers,
+        trailers: committed.player.trailers,
+        money: live.player.money,
+      },
+      multimodalShipments: committed.multimodalShipments,
+    }));
+    get().autoSave('multimodal_internal');
+    return { status: 'COMMITTED', shipmentId: committed.shipmentId, message: 'accepted' };
+  },
+
+  progressMultimodalShipments: (hoursPassed: number) => {
+    const state = get();
+    const seconds = Math.max(0, Math.floor(hoursPassed * 3600));
+    if (seconds <= 0) return;
+    const progressed = progressExecutableMultimodalShipments({
+      shipments: state.multimodalShipments ?? [],
+      player: {
+        trucks: state.player.trucks,
+        drivers: state.player.drivers,
+        trailers: state.player.trailers ?? [],
+        money: state.player.money,
+        reputation: state.player.reputation,
+        xp: state.player.xp ?? 0,
+      },
+      elapsedGameSeconds: seconds,
+      nowMs: getEconomyNow(),
+    });
+    const sameShipments = progressed.shipments === state.multimodalShipments;
+    const trucksUnchanged = progressed.player.trucks === state.player.trucks;
+    if (sameShipments && trucksUnchanged && progressed.status === 'NO_ELAPSED_TIME') {
+      return;
+    }
+    set((live) => ({
+      player: {
+        ...live.player,
+        trucks: progressed.player.trucks,
+        drivers: progressed.player.drivers,
+        trailers: progressed.player.trailers,
+        money: live.player.money,
+        reputation: live.player.reputation,
+        xp: live.player.xp,
+      },
+      multimodalShipments: progressed.shipments,
+    }));
+    if (isMultimodalInternalTestEnabled() && !isLinkedAccountForCanonicalDelivery()) {
+      for (const row of get().multimodalShipments ?? []) {
+        if (
+          'status' in row &&
+          row.status === 'COMPLETED_UNSETTLED' &&
+          row.settlementState !== 'SETTLED' &&
+          row.shipmentId
+        ) {
+          get().settleRailMultimodalShipmentInternal(row.shipmentId);
+        }
+      }
+    }
+    if (isMultimodalInternalTestEnabled() && isLinkedAccountForCanonicalDelivery()) {
+      for (const row of get().multimodalShipments ?? []) {
+        if ('status' in row && row.status === 'COMPLETED_UNSETTLED' && row.shipmentId) {
+          notifyCanonicalMultimodalShipmentCompleted(row.shipmentId);
+        }
+      }
+    }
+  },
+
+  settleRailMultimodalShipmentInternal: (shipmentId: string) => {
+    if (!isMultimodalInternalTestEnabled()) {
+      return { status: 'FEATURE_DISABLED', shipmentId, message: 'INTERNAL_TEST required' };
+    }
+    const state = get();
+    const prepared = prepareMultimodalRailSettlement({
+      shipmentId,
+      shipments: state.multimodalShipments ?? [],
+      financeLedger: state.financeLedger ?? [],
+      allowSettlement: true,
+      signedInLinked: isLinkedAccountForCanonicalDelivery(),
+    });
+    const committed: CommitMultimodalRailSettlementResult = commitMultimodalRailSettlement({
+      prepared,
+      shipments: state.multimodalShipments ?? [],
+      financeLedger: state.financeLedger ?? [],
+      financeTotals: state.financeTotals,
+      playerMoney: state.player.money,
+      reputation: state.player.reputation,
+      xp: state.player.xp ?? 0,
+      currentTime: state.currentTime,
+      nowMs: getEconomyNow(),
+    });
+    if (committed.status === 'SETTLED') {
+      set((live) => ({
+        player: {
+          ...live.player,
+          money: committed.playerMoney,
+          reputation: live.player.reputation,
+          xp: live.player.xp,
+        },
+        financeLedger: committed.financeLedger,
+        financeTotals: committed.financeTotals,
+        multimodalShipments: committed.multimodalShipments,
+      }));
+      get().autoSave('multimodal_internal');
+      return {
+        status: 'SETTLED',
+        shipmentId: committed.shipmentId,
+        message: 'settled',
+        netCashDelta: committed.receipt.netCashDelta,
+      };
+    }
+    if (committed.status === 'ALREADY_SETTLED') {
+      return {
+        status: 'ALREADY_SETTLED',
+        shipmentId: committed.shipmentId,
+        message: 'ALREADY_SETTLED',
+        netCashDelta: 0,
+        alreadySettled: true,
+      };
+    }
+    return {
+      status: committed.status,
+      shipmentId: committed.shipmentId,
+      message: committed.reason,
+    };
+  },
+
+  cancelMultimodalShipmentInternal: async (shipmentId: string) => {
+    if (!isMultimodalInternalTestEnabled()) {
+      return { status: 'FEATURE_DISABLED' };
+    }
+    if (isLinkedAccountForCanonicalDelivery()) {
+      const { cancelCanonicalMultimodalShipment } = await import('../services/canonicalMultimodalService');
+      let server = await cancelCanonicalMultimodalShipment({ shipmentId });
+      if (!server.ok && server.reason === 'timeout') {
+        server = await cancelCanonicalMultimodalShipment({ shipmentId });
+      }
+      if (!server.ok && server.reason !== 'SHIPMENT_NOT_FOUND') {
+        enqueueCanonicalMultimodalCancellation(shipmentId);
+        return { status: 'CANCELLATION_REQUIRES_SERVER' };
+      }
+    }
+    const state = get();
+    const cancelled = cancelInternalMultimodalShipment({
+      shipments: state.multimodalShipments ?? [],
+      player: {
+        trucks: state.player.trucks,
+        drivers: state.player.drivers,
+        trailers: state.player.trailers ?? [],
+        money: state.player.money,
+        reputation: state.player.reputation,
+        xp: state.player.xp ?? 0,
+      },
+      shipmentId,
+      nowMs: getEconomyNow(),
+    });
+    set((live) => ({
+      player: {
+        ...live.player,
+        trucks: cancelled.player.trucks,
+        drivers: cancelled.player.drivers,
+        trailers: cancelled.player.trailers,
+        money: live.player.money,
+      },
+      multimodalShipments: cancelled.shipments,
+    }));
+    get().autoSave('multimodal_internal');
+    return { status: cancelled.status };
+  },
+
+  applyInternalTestMultimodalFleetFixture: (input: {
+    originCityId: string;
+    destinationCityId: string;
+  }) => {
+    if (!isMultimodalInternalTestEnabled()) {
+      return { status: 'FEATURE_DISABLED' };
+    }
+    set((live) => {
+      const trucks = [...live.player.trucks];
+      const drivers = [...live.player.drivers];
+      const originIdle = trucks.find(
+        (row) => row.status === 'idle' && !row.assignedMultimodalShipmentId && row.currentCityId === input.originCityId,
+      );
+      const destIdle = trucks.find(
+        (row) =>
+          row.status === 'idle' &&
+          !row.assignedMultimodalShipmentId &&
+          row.currentCityId === input.destinationCityId,
+      );
+      if (!originIdle) {
+        trucks.push({
+          ...structuredClone(STARTER_TRUCK),
+          id: 'internal-test-origin-truck',
+          name: 'INTERNAL_TEST origin',
+          currentCityId: input.originCityId,
+          homeCityId: input.originCityId,
+          status: 'idle',
+        });
+        drivers.push({
+          ...structuredClone(STARTER_DRIVER),
+          id: 'internal-test-origin-driver',
+          name: 'INTERNAL_TEST origin driver',
+          assignedTruckId: 'internal-test-origin-truck',
+          status: 'idle',
+          currentCityId: input.originCityId,
+        });
+      }
+      if (!destIdle) {
+        trucks.push({
+          ...structuredClone(STARTER_TRUCK),
+          id: 'internal-test-dest-truck',
+          name: 'INTERNAL_TEST destination',
+          currentCityId: input.destinationCityId,
+          homeCityId: input.destinationCityId,
+          status: 'idle',
+        });
+        drivers.push({
+          ...structuredClone(STARTER_DRIVER),
+          id: 'internal-test-dest-driver',
+          name: 'INTERNAL_TEST destination driver',
+          assignedTruckId: 'internal-test-dest-truck',
+          status: 'idle',
+          currentCityId: input.destinationCityId,
+        });
+      }
+      return { player: { ...live.player, trucks, drivers } };
+    });
+    return { status: 'READY' };
   },
 
   startDeliveryAutoAssign: (contractId: string): StartDeliveryResult => {
@@ -7416,6 +7794,14 @@ const elapsed = plan.elapsed;
             : truck.status === 'on_route'
               ? 'Kamyon şu anda yolda.'
               : 'Kamyon şu anda müsait değil.',
+      };
+    }
+
+    if (truck.assignedMultimodalShipmentId) {
+      return {
+        success: false,
+        errorCode: 'TRUCK_BUSY',
+        message: 'Bu kamyon çok modlu bir sevkiyat için rezerve.',
       };
     }
 
@@ -8545,7 +8931,11 @@ const elapsed = plan.elapsed;
       };
     }
 
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const progressionLevel = requireClientProgressionLevel(state.player);
+    if (!progressionLevel.ok) {
+      return { success: false, message: progressionLevel.message };
+    }
+    const playerLevel = progressionLevel.level;
     const requiredLevel = resolveTruckMarketRequiredLevel(template);
     if (playerLevel < requiredLevel) {
       return {
@@ -8627,7 +9017,11 @@ const elapsed = plan.elapsed;
   buyTrailer: (catalogId: string): TradeActionResult => {
     const state = get();
     const template = findTrailerMarketItem(catalogId);
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const progressionLevel = requireClientProgressionLevel(state.player);
+    if (!progressionLevel.ok) {
+      return { success: false, message: progressionLevel.message };
+    }
+    const playerLevel = progressionLevel.level;
     const validation = validateTrailerPurchase(
       template,
       playerLevel,
@@ -8760,7 +9154,11 @@ const elapsed = plan.elapsed;
       const periodLabel = getLeasePeriodLabel(leasePeriod);
       const durationLabel = getLeasePeriodDurationLabel(leasePeriod);
 
-      const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+      const progressionLevel = requireClientProgressionLevel(state.player);
+      if (!progressionLevel.ok) {
+        return { success: false, message: progressionLevel.message };
+      }
+      const playerLevel = progressionLevel.level;
       const requiredLevel = resolveTruckMarketRequiredLevel(template);
       if (playerLevel < requiredLevel) {
         return {
@@ -8871,7 +9269,11 @@ const elapsed = plan.elapsed;
       };
     }
 
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const progressionLevel = requireClientProgressionLevel(state.player);
+    if (!progressionLevel.ok) {
+      return { success: false, message: progressionLevel.message };
+    }
+    const playerLevel = progressionLevel.level;
     const requiredLevel = resolveDriverRequiredLevel(template);
     if (playerLevel < requiredLevel) {
       return {
@@ -9758,7 +10160,11 @@ const elapsed = plan.elapsed;
     }
 
     const warehouses = state.player.warehouses ?? [];
-    const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+    const progressionLevel = requireClientProgressionLevel(state.player);
+    if (!progressionLevel.ok) {
+      return tradeFail('level-required', progressionLevel.message);
+    }
+    const playerLevel = progressionLevel.level;
 
     if (!isWarehouseCityUnlocked(cityId, playerLevel)) {
       const requiredCityLevel = getCityUnlockLevel(cityId);
@@ -9878,7 +10284,11 @@ const elapsed = plan.elapsed;
         return tradeFail('warehouse-required', 'Depo bulunamadı.', 'WAREHOUSE_NOT_FOUND');
       }
 
-      const playerLevel = Math.max(1, state.player.level ?? state.player.companyLevel ?? 1);
+      const progressionLevel = requireClientProgressionLevel(state.player);
+      if (!progressionLevel.ok) {
+        return tradeFail('level-required', progressionLevel.message);
+      }
+      const playerLevel = progressionLevel.level;
       const playerMoney = state.player.money ?? 0;
       const city = state.cities.find((candidate) => candidate.id === warehouse.cityId);
       const preview = getWarehouseUpgradePreview(warehouse, city, playerMoney);

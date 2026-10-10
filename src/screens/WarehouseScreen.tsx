@@ -31,6 +31,11 @@ import {
   IconButton,
 } from '../components/ui';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
+import { useEffectiveCompanyProgression } from '../hooks/useEffectiveCompanyProgression';
+import {
+  isCanonicalProgressionEligibilityAllowed,
+  resolveProgressionEligibilityAuthority,
+} from '../domain/canonicalProgressionEligibility';
 import {
   getCityProductMarketPrice,
   normalizeWarehouse,
@@ -46,7 +51,6 @@ import {
   selectHasPlayer,
   selectPlayer,
   selectPlayerDrivers,
-  selectPlayerLevel,
   selectPlayerMoney,
   selectPlayerTrailers,
   selectPlayerTrucks,
@@ -75,7 +79,18 @@ export default function WarehouseScreen() {
   const trucks = useGameStore(selectPlayerTrucks);
   const trailers = useGameStore(selectPlayerTrailers);
   const drivers = useGameStore(selectPlayerDrivers);
-  const playerLevel = useGameStore(selectPlayerLevel);
+  const effectiveProgression = useEffectiveCompanyProgression(player);
+  const localLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const progressionEligibility = resolveProgressionEligibilityAuthority({
+    eligibilityGateEnabled: isCanonicalProgressionEligibilityAllowed(),
+    progression: effectiveProgression,
+    localLevel,
+    localReputation: player?.reputation ?? 0,
+  });
+  const playerLevel =
+    progressionEligibility.canEvaluate && progressionEligibility.level != null
+      ? progressionEligibility.level
+      : 0;
   const playerMoney = useGameStore(selectPlayerMoney);
   const cities = useGameStore(selectCities);
   const products = useGameStore(selectProducts);
@@ -124,6 +139,7 @@ export default function WarehouseScreen() {
       currentTime: currentTimeQuarterHour,
       playerLevel,
       playerMoney,
+      lockProgressionEligibility: !progressionEligibility.canEvaluate,
     });
   }, [
     hasPlayer,
@@ -139,6 +155,7 @@ export default function WarehouseScreen() {
     currentTimeQuarterHour,
     playerLevel,
     playerMoney,
+    progressionEligibility.canEvaluate,
   ]);
 
   const sellCity = useMemo(
@@ -190,16 +207,23 @@ export default function WarehouseScreen() {
       return;
     }
 
-    if (preview.requiredPlayerLevel != null) {
-      const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
-      if (playerLevel < preview.requiredPlayerLevel) {
+    if (!progressionEligibility.canEvaluate) {
+      showAlert(
+        'Şirket ilerlemesi',
+        progressionEligibility.status === 'loading'
+          ? 'Şirket ilerlemesi yükleniyor.'
+          : 'Şirket ilerlemesi şu an kullanılamıyor.',
+      );
+      return;
+    }
+
+    if (preview.requiredPlayerLevel != null && playerLevel < preview.requiredPlayerLevel) {
         showAlert(
           'Seviye yetersiz',
           `Bu yükseltme için Level ${preview.requiredPlayerLevel} gerekli.`,
         );
         return;
       }
-    }
 
     const afterMoney = money - preview.upgradeCost;
     const body =

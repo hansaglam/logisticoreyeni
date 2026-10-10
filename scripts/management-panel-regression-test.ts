@@ -77,6 +77,10 @@ console.log('Card config');
     'Tutorial QA Reset absent from Yönetim grid',
   );
   assert(
+    !buildQuickAccessItems(true).some((item) => item.key === 'debug'),
+    'Simülasyon Testi absent from production Yönetim grid',
+  );
+  assert(
     !readFileSync('src/navigation/quickAccessConfig.ts', 'utf8').includes('Tutorial QA Reset'),
     'quickAccessConfig has no Tutorial QA Reset label',
   );
@@ -88,9 +92,10 @@ console.log('Card config');
   (globalThis as { __DEV__?: boolean }).__DEV__ = true;
   try {
     assert(
-      !buildQuickAccessItems(true).some((item) => (item.key as string) === 'tutorialQaReset'),
-      'DEV Management grid also omits Tutorial QA Reset',
+      buildQuickAccessItems(true).some((item) => item.key === 'debug' && item.label === 'Simülasyon Testi'),
+      'DEV Management grid includes Simülasyon Testi',
     );
+    assert(buildQuickAccessItems(true).length === 9, 'DEV marketplace grid is 9 cards');
   } finally {
     (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
   }
@@ -147,6 +152,7 @@ console.log('\nNavigation wiring');
 
   assert(app.includes("pendingMoreSubRoute: 'leaderboard'"), 'leaderboard route via more tab');
   assert(app.includes("pendingMoreSubRoute: 'account'"), 'account route via more tab');
+  assert(app.includes("pendingMoreSubRoute: 'debug'"), 'debug route via more tab');
   assert(moreScreen.includes("pendingMoreSubRoute === 'account'"), 'account deep-link handled in MoreScreen');
   assert(moreScreen.includes("setRoute('account')"), 'account opens AccountCenterScreen route');
   assert(moreScreen.includes('AccountCenterScreen'), 'AccountCenterScreen wired in MoreScreen');

@@ -17,6 +17,17 @@
     "src/**/*.d.ts",
     "scripts/**/*.ts",
     "../src/domain/truckResaleValuation.ts",
-    "../src/domain/vehicleMarketplaceCloudMerge.ts"
+    "../src/domain/vehicleMarketplaceCloudMerge.ts",
+    "../src/domain/canonicalCashOperation.ts",
+    "../src/domain/canonicalRoadDelivery.ts",
+    "../src/domain/canonicalRoadEconomics.ts",
+    "../src/domain/canonicalRoadContract.ts",
+    "../src/data/routes.ts",
+    "../src/data/products.ts",
+    "../src/simulation/contractEconomics.ts",
+    "../src/domain/canonicalMultimodalRailEconomics.ts",
+    "../src/domain/multimodalRailTariff.ts",
+    "../src/domain/multimodalRoadAccess.ts",
+    "../src/mapV2/generated/multimodal/turkey-road-transfer-access.json"
   ]
 }

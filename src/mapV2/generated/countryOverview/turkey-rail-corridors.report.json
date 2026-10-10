@@ -1,0 +1,270 @@
+{
+  "sourceRailPackageHash": "sha256:979ab9b9cae0645f4500f607234e735d4e71c6d22caea97c6577ae0ad5cb7d2b",
+  "routeAlgorithmVersion": "dijkstra-length-usageweight-undirected-overview-v1",
+  "routeCostPolicyVersion": "rail-usage-service-v1",
+  "giantComponentId": "tn.tur.rail.n.43.6286239_40.7370708",
+  "giantComponentSize": 17025,
+  "eligibleCities": [
+    "izmir",
+    "istanbul",
+    "ankara",
+    "adana",
+    "diyarbakir"
+  ],
+  "unresolvedCities": [
+    "bursa",
+    "antalya",
+    "trabzon"
+  ],
+  "access": [
+    {
+      "legacyCityId": "izmir",
+      "geoCityId": "city.tur.ne.1159149371",
+      "nodeId": "tn.tur.rail.n.27.1485131_38.4387915",
+      "status": "PROVISIONAL",
+      "accessName": "Alsancak",
+      "accessKind": "RAIL_STATION",
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "componentSize": 17025,
+      "distanceMeters": 140,
+      "notes": "Candidate only (RAIL_STATION, component 17025). 140 m. Not VERIFIED. Station ≠ freight terminal."
+    },
+    {
+      "legacyCityId": "istanbul",
+      "geoCityId": "city.tur.ne.1159151579",
+      "nodeId": "tn.tur.rail.n.28.9784435_41.0149976",
+      "status": "PROVISIONAL",
+      "accessName": "Sirkeci",
+      "accessKind": "RAIL_STATION",
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "componentSize": 17025,
+      "distanceMeters": 454,
+      "notes": "Candidate only (RAIL_STATION, component 17025). 454 m. Not VERIFIED. Station ≠ freight terminal."
+    },
+    {
+      "legacyCityId": "ankara",
+      "geoCityId": "city.tur.ne.1159151255",
+      "nodeId": "tn.tur.rail.n.32.8594740_39.9289862",
+      "status": "PROVISIONAL",
+      "accessName": "Yenişehir",
+      "accessKind": "RAIL_STATION",
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "componentSize": 17025,
+      "distanceMeters": 254,
+      "notes": "Candidate only (RAIL_STATION, component 17025). 254 m. Not VERIFIED. Station ≠ freight terminal."
+    },
+    {
+      "legacyCityId": "adana",
+      "geoCityId": "city.tur.ne.1159149381",
+      "nodeId": "tn.tur.rail.n.35.0553773_36.9748405",
+      "status": "PROVISIONAL",
+      "accessName": "Yenice",
+      "accessKind": "RAIL_STATION",
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "componentSize": 17025,
+      "distanceMeters": 23460,
+      "notes": "Candidate only (RAIL_STATION, component 17025). 23460 m. Not VERIFIED. Station ≠ freight terminal."
+    },
+    {
+      "legacyCityId": "diyarbakir",
+      "geoCityId": "city.tur.ne.1159135229",
+      "nodeId": "tn.tur.rail.n.40.2153734_37.9136090",
+      "status": "PROVISIONAL",
+      "accessName": "Diyarbakır",
+      "accessKind": "RAIL_STATION",
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "componentSize": 17025,
+      "distanceMeters": 1494,
+      "notes": "Candidate only (RAIL_STATION, component 17025). 1494 m. Not VERIFIED. Station ≠ freight terminal."
+    },
+    {
+      "legacyCityId": "bursa",
+      "geoCityId": "city.tur.ne.1159149373",
+      "nodeId": null,
+      "status": "UNRESOLVED",
+      "accessName": null,
+      "accessKind": null,
+      "componentId": null,
+      "componentSize": null,
+      "distanceMeters": null,
+      "notes": "No suitable mainline-scale component within radius. Isolated fragments are not forced access."
+    },
+    {
+      "legacyCityId": "antalya",
+      "geoCityId": "city.tur.ne.1159147717",
+      "nodeId": null,
+      "status": "UNRESOLVED",
+      "accessName": null,
+      "accessKind": null,
+      "componentId": null,
+      "componentSize": null,
+      "distanceMeters": null,
+      "notes": "No suitable mainline-scale component within radius. Isolated fragments are not forced access."
+    },
+    {
+      "legacyCityId": "trabzon",
+      "geoCityId": "city.tur.ne.1159146377",
+      "nodeId": null,
+      "status": "UNRESOLVED",
+      "accessName": null,
+      "accessKind": null,
+      "componentId": null,
+      "componentSize": null,
+      "distanceMeters": null,
+      "notes": "No suitable mainline-scale component within radius. Isolated fragments are not forced access."
+    }
+  ],
+  "resolved": [
+    {
+      "id": "corridor.tur.rail.ankara.istanbul.v1",
+      "fromLegacyCityId": "istanbul",
+      "toLegacyCityId": "ankara",
+      "fromAccess": {
+        "name": "Sirkeci",
+        "nodeId": "tn.tur.rail.n.28.9784435_41.0149976",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 454
+      },
+      "toAccess": {
+        "name": "Yenişehir",
+        "nodeId": "tn.tur.rail.n.32.8594740_39.9289862",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 254
+      },
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "sourceEdgeCount": 588,
+      "rawVertexCount": 2187,
+      "simplifiedVertexCount": 104,
+      "sourceRouteLengthMeters": 559329,
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "qaFlag": null,
+      "optional": false
+    },
+    {
+      "id": "corridor.tur.rail.ankara.izmir.v1",
+      "fromLegacyCityId": "izmir",
+      "toLegacyCityId": "ankara",
+      "fromAccess": {
+        "name": "Alsancak",
+        "nodeId": "tn.tur.rail.n.27.1485131_38.4387915",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 140
+      },
+      "toAccess": {
+        "name": "Yenişehir",
+        "nodeId": "tn.tur.rail.n.32.8594740_39.9289862",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 254
+      },
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "sourceEdgeCount": 654,
+      "rawVertexCount": 2594,
+      "simplifiedVertexCount": 195,
+      "sourceRouteLengthMeters": 812366,
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "qaFlag": null,
+      "optional": false
+    },
+    {
+      "id": "corridor.tur.rail.adana.ankara.v1",
+      "fromLegacyCityId": "ankara",
+      "toLegacyCityId": "adana",
+      "fromAccess": {
+        "name": "Yenişehir",
+        "nodeId": "tn.tur.rail.n.32.8594740_39.9289862",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 254
+      },
+      "toAccess": {
+        "name": "Yenice",
+        "nodeId": "tn.tur.rail.n.35.0553773_36.9748405",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 23460
+      },
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "sourceEdgeCount": 627,
+      "rawVertexCount": 2119,
+      "simplifiedVertexCount": 157,
+      "sourceRouteLengthMeters": 624830,
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "qaFlag": null,
+      "optional": false
+    },
+    {
+      "id": "corridor.tur.rail.adana.diyarbakir.v1",
+      "fromLegacyCityId": "adana",
+      "toLegacyCityId": "diyarbakir",
+      "fromAccess": {
+        "name": "Yenice",
+        "nodeId": "tn.tur.rail.n.35.0553773_36.9748405",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 23460
+      },
+      "toAccess": {
+        "name": "Diyarbakır",
+        "nodeId": "tn.tur.rail.n.40.2153734_37.9136090",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 1494
+      },
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "sourceEdgeCount": 984,
+      "rawVertexCount": 3397,
+      "simplifiedVertexCount": 216,
+      "sourceRouteLengthMeters": 968295,
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "qaFlag": null,
+      "optional": false
+    },
+    {
+      "id": "corridor.tur.rail.istanbul.izmir.v1",
+      "fromLegacyCityId": "izmir",
+      "toLegacyCityId": "istanbul",
+      "fromAccess": {
+        "name": "Alsancak",
+        "nodeId": "tn.tur.rail.n.27.1485131_38.4387915",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 140
+      },
+      "toAccess": {
+        "name": "Sirkeci",
+        "nodeId": "tn.tur.rail.n.28.9784435_41.0149976",
+        "status": "PROVISIONAL",
+        "kind": "RAIL_STATION",
+        "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+        "distanceMeters": 454
+      },
+      "componentId": "tn.tur.rail.n.43.6286239_40.7370708",
+      "sourceEdgeCount": 930,
+      "rawVertexCount": 3690,
+      "simplifiedVertexCount": 214,
+      "sourceRouteLengthMeters": 874998,
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "qaFlag": null,
+      "optional": true
+    }
+  ],
+  "unresolved": [],
+  "notes": [
+    "Adana gameplay city stays Adana; rail access is Yenice. No synthetic Yenice→Adana connector.",
+    "TCDD is QA/reference only. Geometry is OSM source-backed.",
+    "UNRESOLVED cities are not force-connected."
+  ]
+}

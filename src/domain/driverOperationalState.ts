@@ -114,6 +114,20 @@ export function getDriverOperationalState(
   const assignedTruckValid =
     driver.assignedTruckId != null && context.truckIds.has(driver.assignedTruckId);
 
+  if (driver.assignedMultimodalShipmentId) {
+    return {
+      kind: 'assigned',
+      persistedStatus: driver.status === 'driving' ? 'driving' : 'idle',
+      assignedTruckId: assignedTruckValid ? driver.assignedTruckId : null,
+      activeDeliveryId: null,
+      activeTransferId: null,
+      selectableForDelivery: false,
+      assignmentBlockedReason: 'Şoför çok modlu sevkiyatta',
+      statusBadgeLabel: driver.status === 'driving' ? 'GÖREVDE' : 'REZERVE',
+      assignmentBadgeLabel: 'ATANMIŞ',
+    };
+  }
+
   if (activeDelivery) {
     return {
       kind: 'on_delivery',
@@ -231,6 +245,16 @@ export function reconcileDriverAssignments(input: {
       };
       if (operational.assignedTruckId) {
         claimedTruckIds.add(operational.assignedTruckId);
+      }
+    } else if (driver.assignedMultimodalShipmentId) {
+      next = {
+        ...next,
+        status: driver.status === 'driving' ? 'driving' : 'idle',
+        assignedTruckId: driver.assignedTruckId,
+        assignedMultimodalShipmentId: driver.assignedMultimodalShipmentId,
+      };
+      if (next.assignedTruckId) {
+        claimedTruckIds.add(next.assignedTruckId);
       }
     } else {
       const hadStaleDriving = driver.status === 'driving';

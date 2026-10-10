@@ -26,32 +26,43 @@ const publicFirebase = require('./src/config/firebase.public.json');
 function readFirebaseExtraValue(envKey, publicKey) {
   const fromEnv =
     typeof process.env[envKey] === 'string' ? process.env[envKey].trim() : '';
+
   if (fromEnv.length > 0) {
     return fromEnv;
   }
+
   const fromPublic = publicFirebase?.[publicKey];
   return typeof fromPublic === 'string' ? fromPublic : '';
 }
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
+
   const out = {};
+
   for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
     const trimmed = line.trim();
+
     if (!trimmed || trimmed.startsWith('#')) continue;
+
     const eq = trimmed.indexOf('=');
+
     if (eq <= 0) continue;
+
     out[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
   }
+
   return out;
 }
 
 function applyEnvVars(vars, { override = false, preserveKeys = [] } = {}) {
   const preserve = new Set(preserveKeys);
+
   for (const [key, value] of Object.entries(vars)) {
     if (preserve.has(key) && process.env[key] !== undefined) {
       continue;
     }
+
     if (override || process.env[key] === undefined) {
       process.env[key] = value;
     }
@@ -65,9 +76,11 @@ function applyEnvVars(vars, { override = false, preserveKeys = [] } = {}) {
  */
 function isXcodeIosReleaseBuildContext() {
   const configuration = String(process.env.CONFIGURATION ?? '');
+
   if (!/Release/i.test(configuration)) {
     return false;
   }
+
   return Boolean(
     process.env.XCODE_VERSION_ACTUAL ||
       process.env.PODS_ROOT ||
@@ -78,9 +91,12 @@ function isXcodeIosReleaseBuildContext() {
 }
 
 const root = __dirname;
+
 applyEnvVars(parseEnvFile(path.join(root, '.env')));
 
-const rawProfile = process.env.LOGISTICORE_BUILD_PROFILE?.trim().toLowerCase() ?? '';
+const rawProfile =
+  process.env.LOGISTICORE_BUILD_PROFILE?.trim().toLowerCase() ?? '';
+
 if (isXcodeIosReleaseBuildContext() && rawProfile !== 'production') {
   throw new Error(
     `[app.config] iOS Xcode Release/Archive requires LOGISTICORE_BUILD_PROFILE=production ` +
@@ -90,9 +106,11 @@ if (isXcodeIosReleaseBuildContext() && rawProfile !== 'production') {
 }
 
 const buildProfile = rawProfile || 'internal';
+
 applyEnvVars(parseEnvFile(path.join(root, `.env.${buildProfile}`)), {
   override: true,
 });
+
 process.env.LOGISTICORE_BUILD_PROFILE = buildProfile;
 
 function readGitCommit() {
@@ -100,9 +118,14 @@ function readGitCommit() {
     typeof process.env.EXPO_PUBLIC_GIT_COMMIT === 'string'
       ? process.env.EXPO_PUBLIC_GIT_COMMIT.trim()
       : '';
+
   if (fromEnv.length > 0) return fromEnv;
+
   try {
-    return execSync('git rev-parse HEAD', { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] })
+    return execSync('git rev-parse HEAD', {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
       .toString()
       .trim();
   } catch {
@@ -116,12 +139,16 @@ module.exports = () => {
 
   return {
     ...expo,
+
+    owner: 'ethem35',
+
     androidNavigationBar: {
       visible: 'immersive',
       barStyle: 'light-content',
       backgroundColor: '#020712',
       ...(expo.androidNavigationBar ?? {}),
     },
+
     android: {
       ...(expo.android ?? {}),
       package: 'com.ethemsincar.logisticore',
@@ -133,6 +160,7 @@ module.exports = () => {
         'android.permission.MANAGE_EXTERNAL_STORAGE',
       ],
     },
+
     ios: {
       ...(expo.ios ?? {}),
       bundleIdentifier: 'com.ethemsincar.logisticore',
@@ -146,6 +174,7 @@ module.exports = () => {
         },
       },
     },
+
     plugins: [
       ...existingPlugins,
       'expo-asset',
@@ -163,26 +192,33 @@ module.exports = () => {
         },
       ],
       'expo-apple-authentication',
-      // Native Google Sign-In — Expo Go'da çalışmayabilir; development build gerekir.
-      // iosUrlScheme: GoogleService-Info.plist REVERSED_CLIENT_ID değeri.
       [
         '@react-native-google-signin/google-signin',
         {
-          iosUrlScheme: 'com.googleusercontent.apps.363783837598-tvbeuhmirctkrpdam51lsqm5uj8nac3l',
+          iosUrlScheme:
+            'com.googleusercontent.apps.363783837598-tvbeuhmirctkrpdam51lsqm5uj8nac3l',
         },
       ],
-      // AdMob — Expo Go desteklemez; development build / EAS gerekir.
       [
         'react-native-google-mobile-ads',
         {
-          androidAppId: 'ca-app-pub-8214453687597896~5560651696',
-          iosAppId: 'ca-app-pub-8214453687597896~4247570027',
+          androidAppId:
+            'ca-app-pub-8214453687597896~5560651696',
+          iosAppId:
+            'ca-app-pub-8214453687597896~4247570027',
         },
       ],
     ],
-      extra: {
+
+    extra: {
       ...(expo.extra ?? {}),
+
+      eas: {
+        projectId: 'fa65b469-53e0-4d68-890a-06c4f7be9ea9',
+      },
+
       buildProfile,
+
       buildFingerprint: {
         gitCommit: readGitCommit(),
         buildTimestamp: new Date().toISOString(),
@@ -194,10 +230,20 @@ module.exports = () => {
         expoUpdatesEnabled: false,
         mapMarkerRevision: 'chevron-circle-v2',
       },
+
       firebase: {
-        apiKey: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_API_KEY', 'apiKey'),
-        authDomain: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN', 'authDomain'),
-        projectId: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID', 'projectId'),
+        apiKey: readFirebaseExtraValue(
+          'EXPO_PUBLIC_FIREBASE_API_KEY',
+          'apiKey',
+        ),
+        authDomain: readFirebaseExtraValue(
+          'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
+          'authDomain',
+        ),
+        projectId: readFirebaseExtraValue(
+          'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
+          'projectId',
+        ),
         storageBucket: readFirebaseExtraValue(
           'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
           'storageBucket',
@@ -206,50 +252,82 @@ module.exports = () => {
           'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
           'messagingSenderId',
         ),
-        appId: readFirebaseExtraValue('EXPO_PUBLIC_FIREBASE_APP_ID', 'appId'),
+        appId: readFirebaseExtraValue(
+          'EXPO_PUBLIC_FIREBASE_APP_ID',
+          'appId',
+        ),
       },
+
       google: {
-        webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '',
-        iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '',
+        webClientId:
+          process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '',
+        iosClientId:
+          process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '',
       },
+
       ads: {
         mode: process.env.EXPO_PUBLIC_ADS_MODE ?? '',
         enabled: process.env.EXPO_PUBLIC_ADS_ENABLED ?? '',
-        useTestIds: process.env.EXPO_PUBLIC_ADS_USE_TEST_IDS ?? '',
+        useTestIds:
+          process.env.EXPO_PUBLIC_ADS_USE_TEST_IDS ?? '',
       },
+
       features: {
         vehicleMarketplaceEnabled:
           process.env.EXPO_PUBLIC_VEHICLE_MARKETPLACE_ENABLED ?? '',
-        leaderboardEnabled: process.env.EXPO_PUBLIC_LEADERBOARD_ENABLED ?? '',
-        marketAlarmsEnabled: process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED ?? '',
-        seasonsEnabled: process.env.EXPO_PUBLIC_ENABLE_SEASONS ?? '',
-        challengesEnabled: process.env.EXPO_PUBLIC_ENABLE_CHALLENGES ?? '',
+
+        leaderboardEnabled:
+          process.env.EXPO_PUBLIC_LEADERBOARD_ENABLED ?? '',
+
+        marketAlarmsEnabled:
+          process.env.EXPO_PUBLIC_MARKET_ALARMS_ENABLED ?? '',
+
+        seasonsEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_SEASONS ?? '',
+
+        challengesEnabled:
+          process.env.EXPO_PUBLIC_ENABLE_CHALLENGES ?? '',
+
         driverProgressionEnabled:
           process.env.EXPO_PUBLIC_ENABLE_DRIVER_PROGRESSION ?? '',
+
         companyStatsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_COMPANY_STATS ?? '',
+
         achievementsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_ACHIEVEMENTS ?? '',
+
         seasonHistoryEnabled:
           process.env.EXPO_PUBLIC_ENABLE_SEASON_HISTORY ?? '',
+
         seasonCloseSnapshotEnabled:
           process.env.EXPO_PUBLIC_ENABLE_SEASON_CLOSE_SNAPSHOT ?? '',
+
         seasonRewardsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_SEASON_REWARDS ?? '',
+
         backendWeeklyMissionsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_BACKEND_WEEKLY_MISSIONS ?? '',
+
         inboxEnabled:
           process.env.EXPO_PUBLIC_ENABLE_INBOX ?? '',
+
         marketAlertsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_MARKET_ALERTS ?? '',
+
         notificationCenterEnabled:
           process.env.EXPO_PUBLIC_ENABLE_NOTIFICATION_CENTER ?? '',
+
         v11AnalyticsEnabled:
           process.env.EXPO_PUBLIC_ENABLE_V11_ANALYTICS ?? '',
+
         backendDiagnosticsEnabled:
           process.env.EXPO_PUBLIC_BACKEND_DIAGNOSTICS_ENABLED ?? '',
-        enableTestMoneySync: process.env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC ?? '',
+
+        enableTestMoneySync:
+          process.env.EXPO_PUBLIC_ENABLE_TEST_MONEY_SYNC ?? '',
       },
+
       firebaseFunctionsRegion: 'us-central1',
     },
   };

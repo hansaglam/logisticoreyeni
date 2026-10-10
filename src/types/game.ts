@@ -348,10 +348,19 @@ export interface Truck {
   /** Ana üs / satın alındığı şehir — eski kayıtlarda yoksa currentCityId kullanılır */
   homeCityId?: string;
   status: TruckStatus;
+  /** INTERNAL_TEST multimodal reservation owner. Not a ROAD Delivery id. */
+  assignedMultimodalShipmentId?: string;
   /** Toplam geliştirme seviyesi (0–3) */
   upgradeLevel?: number;
   /** Parça bazlı geliştirme seviyeleri (0–3) */
   upgrades?: TruckUpgrades;
+  /**
+   * Optional local cache of a server canonical fleet asset.
+   * Not authority: server `canonicalFleetAssets` is the source of truth.
+   */
+  canonicalFleetAssetId?: string;
+  fleetAuthorityClass?: string;
+  canonicalEconomicRevision?: number;
 }
 
 /** Kamyon geliştirme parçaları */
@@ -390,10 +399,16 @@ export interface Trailer {
   status: TrailerStatus;
   /** Bağlı olduğu kamyon — boşta ise null */
   attachedTruckId?: string | null;
+  /** INTERNAL_TEST multimodal reservation owner. Cargo transfers; trailer does not ride RAIL. */
+  assignedMultimodalShipmentId?: string;
   /** Oyuncuya ait mi */
   isOwned: boolean;
   /** Satın alındığı oyun zamanı (saat) */
   createdAtGameTime: number;
+  /** Optional local cache. Server canonicalFleetAssets is authority. */
+  canonicalFleetAssetId?: string;
+  fleetAuthorityClass?: string;
+  canonicalEconomicRevision?: number;
 }
 
 /** Şoför kalite kademesi — levelConfig.driverUnlocks ile eşleşir */
@@ -441,6 +456,8 @@ export interface Driver {
   /** Atandığı kamyon; boştaysa null */
   assignedTruckId: string | null;
   status: DriverStatus;
+  /** INTERNAL_TEST multimodal reservation owner. Driver does not travel by RAIL. */
+  assignedMultimodalShipmentId?: string;
   /** Kalıcı şehir konumu — teslimat/transfer sonrası güncellenir */
   currentCityId?: string;
   /** Şoför XP — teslimatlarla kazanılır */
@@ -904,6 +921,7 @@ export interface Warehouse {
 export type FinanceLedgerCategory =
   | 'contract_revenue'
   | 'contract_income'
+  | 'multimodal_revenue'
   | 'fuel_purchase'
   | 'roadside_fuel'
   | 'trade_sale'
@@ -932,6 +950,7 @@ export type FinanceLedgerCategory =
   | 'driver_severance'
   | 'warehouse_open'
   | 'other_expense'
+  | 'rail_carrier_expense'
   | 'delivery_income'
   | 'delivery_expense'
   | 'fleet_purchase'
@@ -1586,6 +1605,11 @@ export interface StoreGameState {
   contracts: Contract[];
   /** Aktif ve geçmiş teslimatlar */
   activeDeliveries: Delivery[];
+  /**
+   * Additive multimodal shipment execution records.
+   * Independent of legacy Delivery. Missing saves hydrate to [].
+   */
+  multimodalShipments: import('../domain/multimodalShipmentPersistence').PersistedMultimodalShipment[];
   /** Aktif boş kamyon transferleri */
   activeTransfers: TruckTransfer[];
   /** Tamamlanan boş kamyon transferleri */

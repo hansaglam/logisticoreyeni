@@ -1,0 +1,159 @@
+{
+  "sourceRoadPackageHash": "sha256:b506587dfd7e390794a448a0a855b773af640ebfeba316a4ffc86bacf4d45882",
+  "canonicalComponentCount": 823,
+  "giantComponentSize": 99125,
+  "access": [
+    {
+      "legacyCityId": "izmir",
+      "geoCityId": "city.tur.ne.1159149371",
+      "candidateNodeId": "tn.tur.road.n.27.1487457_38.4396692",
+      "distanceMeters": 199.54513041926805,
+      "roadClass": "primary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    },
+    {
+      "legacyCityId": "istanbul",
+      "geoCityId": "city.tur.ne.1159151579",
+      "candidateNodeId": "tn.tur.road.n.29.0115806_41.0087370",
+      "distanceMeters": 3281.4459467633487,
+      "roadClass": "trunk",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored candidate unused; nearest giant-component node within 15 km (still PROVISIONAL)"
+    },
+    {
+      "legacyCityId": "ankara",
+      "geoCityId": "city.tur.ne.1159151255",
+      "candidateNodeId": "tn.tur.road.n.32.8620855_39.9285188",
+      "distanceMeters": 80.10000771558722,
+      "roadClass": "primary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    },
+    {
+      "legacyCityId": "bursa",
+      "geoCityId": "city.tur.ne.1159149373",
+      "candidateNodeId": "tn.tur.road.n.29.0691768_40.2005061",
+      "distanceMeters": 185.2021655663723,
+      "roadClass": "secondary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    },
+    {
+      "legacyCityId": "antalya",
+      "geoCityId": "city.tur.ne.1159147717",
+      "candidateNodeId": "tn.tur.road.n.30.6979104_36.8918579",
+      "distanceMeters": 13.186518272481074,
+      "roadClass": "primary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    },
+    {
+      "legacyCityId": "adana",
+      "geoCityId": "city.tur.ne.1159149381",
+      "candidateNodeId": "tn.tur.road.n.35.3183831_36.9970961",
+      "distanceMeters": 33.97720409036852,
+      "roadClass": "primary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    },
+    {
+      "legacyCityId": "diyarbakir",
+      "geoCityId": "city.tur.ne.1159135229",
+      "candidateNodeId": "tn.tur.road.n.40.2264411_37.9173039",
+      "distanceMeters": 470.0610291340746,
+      "roadClass": "secondary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    },
+    {
+      "legacyCityId": "trabzon",
+      "geoCityId": "city.tur.ne.1159146377",
+      "candidateNodeId": "tn.tur.road.n.39.7188724_40.9884070",
+      "distanceMeters": 940.5403776284687,
+      "roadClass": "primary",
+      "componentId": "tn.tur.road.n.39.4327908_38.8865189",
+      "componentSize": 99125,
+      "status": "PROVISIONAL",
+      "notes": "Stored PROVISIONAL candidate is in the giant component"
+    }
+  ],
+  "resolved": [
+    {
+      "id": "corridor.tur.adana.ankara.v1",
+      "sourceEdgeCount": 323,
+      "sourceRouteLengthMeters": 492791
+    },
+    {
+      "id": "corridor.tur.adana.antalya.v1",
+      "sourceEdgeCount": 483,
+      "sourceRouteLengthMeters": 655748
+    },
+    {
+      "id": "corridor.tur.adana.diyarbakir.v1",
+      "sourceEdgeCount": 387,
+      "sourceRouteLengthMeters": 572101
+    },
+    {
+      "id": "corridor.tur.ankara.antalya.v1",
+      "sourceEdgeCount": 418,
+      "sourceRouteLengthMeters": 533282
+    },
+    {
+      "id": "corridor.tur.ankara.diyarbakir.v1",
+      "sourceEdgeCount": 561,
+      "sourceRouteLengthMeters": 894222
+    },
+    {
+      "id": "corridor.tur.ankara.istanbul.v1",
+      "sourceEdgeCount": 901,
+      "sourceRouteLengthMeters": 733196
+    },
+    {
+      "id": "corridor.tur.ankara.trabzon.v1",
+      "sourceEdgeCount": 811,
+      "sourceRouteLengthMeters": 982734
+    },
+    {
+      "id": "corridor.tur.antalya.izmir.v1",
+      "sourceEdgeCount": 649,
+      "sourceRouteLengthMeters": 473648
+    },
+    {
+      "id": "corridor.tur.bursa.istanbul.v1",
+      "sourceEdgeCount": 519,
+      "sourceRouteLengthMeters": 345358
+    },
+    {
+      "id": "corridor.tur.bursa.izmir.v1",
+      "sourceEdgeCount": 379,
+      "sourceRouteLengthMeters": 401235
+    }
+  ],
+  "unresolved": [],
+  "connectedCities": [
+    "adana",
+    "ankara",
+    "antalya",
+    "bursa",
+    "diyarbakir",
+    "istanbul",
+    "izmir",
+    "trabzon"
+  ],
+  "disconnectedCities": []
+}

@@ -24,6 +24,7 @@ const ITEM_TONES: Record<QuickAccessAction, ManagementTone> = {
   leaderboard: 'gold',
   settings: 'slate',
   account: 'slate',
+  debug: 'amber',
 };
 
 function resolveAccountSubtitle(status: AccountStatus): string {
@@ -176,6 +177,9 @@ export function useManagementItems(): ManagementItem[] {
           case 'account':
             subtitle = accountState.subtitle;
             badgeAttention = accountState.needsAttention;
+            break;
+          case 'debug':
+            subtitle = 'Map V2 ve internal test';
             break;
           default:
             break;

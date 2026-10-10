@@ -17,7 +17,7 @@ export interface ProfileHeroCardProps {
   cloudStatusLabel?: string;
   cloudStatusVariant?: StatusBadgeVariant;
   stats: {
-    level: number;
+    level: number | null;
     contracts: number;
     trucks: number;
     warehouses: number;
@@ -65,7 +65,7 @@ export default function ProfileHeroCard({
 
       <View style={styles.statRow}>
         <Text style={styles.statChip}>
-          <Text style={styles.statValue}>Sv.{stats.level}</Text>
+          <Text style={styles.statValue}>{stats.level == null ? '…' : `Sv.${stats.level}`}</Text>
         </Text>
         <Text style={styles.statDivider}>·</Text>
         <Text style={styles.statChip} numberOfLines={1}>

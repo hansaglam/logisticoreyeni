@@ -277,6 +277,14 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
           pendingMoreSubRoute: 'account',
         });
         break;
+      case 'debug':
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          useGameStore.setState({
+            navigationRequest: { tab: 'more' },
+            pendingMoreSubRoute: 'debug',
+          });
+        }
+        break;
       default:
         break;
     }

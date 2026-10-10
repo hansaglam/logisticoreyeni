@@ -8,4 +8,5 @@ export type QuickAccessAction =
   | 'vehicleMarketplace'
   | 'leaderboard'
   | 'settings'
-  | 'account';
+  | 'account'
+  | 'debug';

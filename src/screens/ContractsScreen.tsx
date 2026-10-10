@@ -88,6 +88,19 @@ import {
   type ContractsSegmentKey,
   type ContractsTabSegment,
 } from '../features/contracts/components/ContractsOverview';
+import { isMultimodalInternalTestEnabled } from '../domain/multimodalFeatureRollout';
+import { isMultimodalUiPreviewEnabled } from '../domain/multimodalUiPreviewGate';
+import {
+  isExecutablePersistedMultimodalShipment,
+} from '../domain/multimodalShipmentPersistence';
+import {
+  HIDDEN_RAIL_PREVIEW_SESSION,
+  loadPreviewRailOffers,
+} from '../features/contracts/multimodal/loadPreviewRailOffers';
+import MultimodalActiveShipmentCard from '../features/contracts/multimodal/MultimodalActiveShipmentCard';
+import MultimodalRailOfferCard from '../features/contracts/multimodal/MultimodalRailOfferCard';
+import MultimodalRailOfferDetailModal from '../features/contracts/multimodal/MultimodalRailOfferDetailModal';
+import type { RailOfferCardViewModel } from '../domain/presentation/multimodalRailOfferPresentation';
 import { colors, formatMoney, formatRatioPercent, spacing } from '../theme';
 import type { Contract, Delivery, Driver, MarketContractFilter, Truck } from '../types/game';
 import { resolveDeliveryHealth } from '../domain/deliveryHealthStatus';
@@ -338,7 +351,9 @@ function findDeliveryForContract(contractId: string, deliveries: Delivery[]): De
 type ContractsListItem =
   | { key: string; type: 'available'; contract: Contract }
   | { key: string; type: 'active'; delivery: Delivery }
-  | { key: string; type: 'completed'; contract: Contract };
+  | { key: string; type: 'completed'; contract: Contract }
+  | { key: string; type: 'rail'; viewModel: RailOfferCardViewModel }
+  | { key: string; type: 'rail-shipment'; shipment: import('../domain/multimodalShipmentPersistence').PersistedReadableMultimodalShipment };
 
 interface ContractCardProps {
   contract: Contract;
@@ -703,6 +718,10 @@ export default function ContractsScreen() {
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
   const [quickSheetContract, setQuickSheetContract] = useState<Contract | null>(null);
   const [quickSheetVisible, setQuickSheetVisible] = useState(false);
+  const [selectedRailOfferId, setSelectedRailOfferId] = useState<string | null>(null);
+  const [railAcceptPending, setRailAcceptPending] = useState(false);
+  const acceptRailMultimodalOfferInternal = useGameStore((state) => state.acceptRailMultimodalOfferInternal);
+  const multimodalShipments = useGameStore((state) => state.multimodalShipments ?? []);
 
   useEffect(() => {
     notifyContractsScreenOpened();
@@ -798,6 +817,51 @@ export default function ContractsScreen() {
   const completedContracts = useMemo(
     () => contracts.filter((c) => c.status === 'completed'),
     [contracts],
+  );
+
+  const railPreviewEnabled = isMultimodalUiPreviewEnabled();
+  const railInternalTest = isMultimodalInternalTestEnabled();
+  const executableShipments = useMemo(
+    () => multimodalShipments.filter(isExecutablePersistedMultimodalShipment),
+    [multimodalShipments],
+  );
+  const railSectionVisible = railPreviewEnabled || railInternalTest || executableShipments.length > 0;
+  const railPreview = useMemo(() => {
+    if (!railPreviewEnabled && !railInternalTest) {
+      return HIDDEN_RAIL_PREVIEW_SESSION;
+    }
+    return loadPreviewRailOffers({
+      previewEnabled: railPreviewEnabled || railInternalTest,
+      mutationEnabled: railInternalTest,
+      playerLevel,
+      trucks,
+      drivers,
+      trailers,
+      activeDeliveries,
+      currentTime,
+      multimodalShipments,
+    });
+  }, [
+    railPreviewEnabled,
+    railInternalTest,
+    playerLevel,
+    trucks,
+    drivers,
+    trailers,
+    activeDeliveries,
+    currentTime,
+    multimodalShipments,
+  ]);
+
+  useEffect(() => {
+    if (!railSectionVisible && activeSegment === 'rail') {
+      setActiveSegment('available');
+    }
+  }, [railSectionVisible, activeSegment]);
+
+  const selectedRailViewModel = useMemo(
+    () => railPreview.viewModels.find((row) => row.offerId === selectedRailOfferId) ?? null,
+    [railPreview.viewModels, selectedRailOfferId],
   );
 
   const topSummary = useMemo(() => {
@@ -918,14 +982,32 @@ export default function ContractsScreen() {
     return previews;
   }, [activeSegment, completedContracts, previewTrucks, trailers, previewDrivers, globalEconomy, playerLevel, playerReputation, currentTime, activeWorldEvents, playerHomeCityId]);
 
-  const tabSegments = useMemo<ContractsTabSegment[]>(
-    () => [
+  const tabSegments = useMemo<ContractsTabSegment[]>(() => {
+    const base: ContractsTabSegment[] = [
       { key: 'available', label: 'Müsait', count: availableContracts.length },
       { key: 'active', label: 'Aktif', count: runningDeliveries.length },
       { key: 'completed', label: 'Tamamlanan', count: completedContracts.length },
-    ],
-    [availableContracts.length, runningDeliveries.length, completedContracts.length],
-  );
+    ];
+    if (!railSectionVisible) {
+      return base;
+    }
+    return [
+      ...base,
+      {
+        key: 'rail',
+        label: 'Raylı',
+        count: railPreview.viewModels.length + executableShipments.length,
+        accessibilityLabel: 'Demiryolu Taşımacılığı',
+      },
+    ];
+  }, [
+    availableContracts.length,
+    runningDeliveries.length,
+    completedContracts.length,
+    railSectionVisible,
+    railPreview.viewModels.length,
+    executableShipments.length,
+  ]);
 
   const marketMatchStats = useMemo(() => {
     if (!isMarketOpportunityFilter(marketContractFilter)) {
@@ -1124,16 +1206,29 @@ export default function ContractsScreen() {
     if (activeSegment === 'active') {
       return runningDeliveries.map((delivery) => ({
         key: delivery.id,
-        type: 'active',
+        type: 'active' as const,
         delivery,
       }));
+    }
+    if (activeSegment === 'rail') {
+      const shipmentItems = executableShipments.map((shipment) => ({
+        key: `shipment:${shipment.shipmentId}`,
+        type: 'rail-shipment' as const,
+        shipment,
+      }));
+      const offerItems = railPreview.viewModels.map((viewModel) => ({
+        key: viewModel.offerId,
+        type: 'rail' as const,
+        viewModel,
+      }));
+      return [...shipmentItems, ...offerItems];
     }
     return completedContracts.map((contract) => ({
       key: contract.id,
       type: 'completed',
       contract,
     }));
-  }, [activeSegment, filteredContracts, runningDeliveries, completedContracts]);
+  }, [activeSegment, filteredContracts, runningDeliveries, completedContracts, railPreview.viewModels, executableShipments]);
 
   const renderContractListItem = useCallback(
     ({ item }: { item: ContractsListItem }) => {
@@ -1160,6 +1255,19 @@ export default function ContractsScreen() {
             delivery={item.delivery}
             drivers={player.drivers ?? []}
             onBoostSuccess={handleDeliveryBoostSuccess}
+          />
+        );
+      }
+
+      if (item.type === 'rail-shipment') {
+        return <MultimodalActiveShipmentCard shipment={item.shipment} />;
+      }
+
+      if (item.type === 'rail') {
+        return (
+          <MultimodalRailOfferCard
+            viewModel={item.viewModel}
+            onPress={() => setSelectedRailOfferId(item.viewModel.offerId)}
           />
         );
       }
@@ -1197,10 +1305,29 @@ export default function ContractsScreen() {
     if (activeSegment === 'available') {
       return `${highlightedContractId ?? ''}:${monetization.totalRewardedAdsToday}`;
     }
+    if (activeSegment === 'rail') {
+      return railPreview.status;
+    }
     return activeSegment;
-  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday, trucks]);
+  }, [activeSegment, activeDeliveries, highlightedContractId, monetization.totalRewardedAdsToday, trucks, railPreview.status]);
 
   const listHeader = useMemo(() => {
+    if (activeSegment === 'rail') {
+      return (
+        <View style={styles.railPreviewBanner}>
+          <Text style={styles.railPreviewBannerTitle}>
+            {railInternalTest ? 'Demiryolu Taşımacılığı · INTERNAL_TEST' : 'Demiryolu Taşımacılığı · iç önizleme'}
+          </Text>
+          <Text style={styles.railPreviewBannerText}>
+            {railInternalTest
+              ? 'Kamyon → Tren → Kamyon. Kabul filoyu rezerve eder; ödeme henüz yatmaz.'
+              : executableShipments.length > 0 && !railPreviewEnabled
+                ? 'Yeni teklif yok. Mevcut sevkiyat devam edebilir.'
+                : 'Kamyon → Tren → Kamyon. Tren üçüncü taraf taşıyıcıdır; kabul henüz açık değildir.'}
+          </Text>
+        </View>
+      );
+    }
     if (activeSegment !== 'available') {
       return null;
     }
@@ -1299,6 +1426,25 @@ export default function ContractsScreen() {
       );
     }
 
+    if (activeSegment === 'rail') {
+      if (railPreview.status === 'error') {
+        return (
+          <EmptyState
+            title="Demiryolu teklifleri şu anda gösterilemiyor."
+            message="Daha sonra tekrar dene."
+            icon="train"
+          />
+        );
+      }
+      return (
+        <EmptyState
+          title="Şu anda uygun demiryolu taşıma teklifi bulunmuyor."
+          message="Uygun koridor ve yük oluştuğunda burada görünecek."
+          icon="train"
+        />
+      );
+    }
+
     return (
       <EmptyState
         title="Henüz tamamlanan sözleşme yok."
@@ -1314,6 +1460,7 @@ export default function ContractsScreen() {
     handleRefresh,
     idleTruckCityLabel,
     isRefreshingContracts,
+    railPreview.status,
   ]);
 
   return (
@@ -1445,6 +1592,38 @@ export default function ContractsScreen() {
         onConfirm={handleConfirmAssignment}
         onGoToFleet={handleGoToFleet}
       />
+      <MultimodalRailOfferDetailModal
+        visible={selectedRailViewModel != null}
+        viewModel={selectedRailViewModel}
+        onClose={() => setSelectedRailOfferId(null)}
+        accepting={railAcceptPending}
+        onAccept={() => {
+          const offer = railPreview.offers.find((row) => row.offerId === selectedRailOfferId);
+          if (!offer || railAcceptPending) return;
+          showAlert(
+            'Teklifi kabul et',
+            `${selectedRailViewModel?.originName} → ${selectedRailViewModel?.destinationName}. İlk ve son mil kamyonları rezerve edilecek. Tren üçüncü taraf taşıyıcıdır; ödeme şimdi yatmaz.`,
+            [
+              { text: 'Vazgeç', style: 'cancel' },
+              {
+                text: 'Kabul et',
+                onPress: () => {
+                  setRailAcceptPending(true);
+                  void (async () => {
+                    const result = await acceptRailMultimodalOfferInternal(offer);
+                    setRailAcceptPending(false);
+                    if (result.status !== 'COMMITTED') {
+                      showAlert('Kabul edilemedi', result.message);
+                      return;
+                    }
+                    setSelectedRailOfferId(null);
+                  })();
+                },
+              },
+            ],
+          );
+        }}
+      />
       <ContextualGuideHost
         cardId="choose_contract"
         blockingUi={assignmentModalVisible || quickSheetVisible}
@@ -1468,6 +1647,26 @@ const styles = StyleSheet.create({
   },
   listScrollContent: {
     paddingTop: spacing.sm,
+  },
+  railPreviewBanner: {
+    backgroundColor: colors.cardSoft,
+    borderWidth: 1,
+    borderColor: '#3D5166',
+    borderRadius: 10,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: 4,
+  },
+  railPreviewBannerTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#8BA3B8',
+  },
+  railPreviewBannerText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    lineHeight: 16,
   },
   headerIconButton: {
     width: 44,

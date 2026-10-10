@@ -1,0 +1,11 @@
+{
+  "attributes": {
+    "type": true,
+    "id": true,
+    "version": false,
+    "changeset": false,
+    "timestamp": false,
+    "uid": false,
+    "user": false
+  }
+}

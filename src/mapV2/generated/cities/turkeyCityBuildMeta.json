@@ -1,0 +1,57 @@
+{
+  "generatedAt": "2026-09-16T19:17:25.721Z",
+  "contentHash": "sha256:37c901e73c5d257c053363c9f5b985f5b14fa3ba610e40d339b89abefc16d7a5",
+  "stats": {
+    "cityCount": 83,
+    "overviewCount": 15,
+    "regionalCount": 75,
+    "localCount": 83,
+    "mappedGameplayCities": 8
+  },
+  "inCountry": {
+    "VERIFIED_INSIDE": 79,
+    "VERIFIED_SOURCE_EXCEPTION": 4
+  },
+  "mappings": [
+    {
+      "gameplayCityId": "izmir",
+      "geoCityId": "city.tur.ne.1159149371",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "istanbul",
+      "geoCityId": "city.tur.ne.1159151579",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "ankara",
+      "geoCityId": "city.tur.ne.1159151255",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "bursa",
+      "geoCityId": "city.tur.ne.1159149373",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "antalya",
+      "geoCityId": "city.tur.ne.1159147717",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "adana",
+      "geoCityId": "city.tur.ne.1159149381",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "diyarbakir",
+      "geoCityId": "city.tur.ne.1159135229",
+      "status": "VERIFIED"
+    },
+    {
+      "gameplayCityId": "trabzon",
+      "geoCityId": "city.tur.ne.1159146377",
+      "status": "VERIFIED"
+    }
+  ]
+}

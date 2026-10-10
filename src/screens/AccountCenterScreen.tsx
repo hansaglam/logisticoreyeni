@@ -13,6 +13,7 @@ import { ACCOUNT_CENTER_HEADER } from '../components/accountCenter/constants';
 import { useAppDialog } from '../components/AppDialogProvider';
 import { AppScreen, ScreenHeader } from '../components/ui';
 import { CITIES_BY_ID } from '../data/cities';
+import { useEffectiveCompanyProgression } from '../hooks/useEffectiveCompanyProgression';
 import { LEADERBOARD_ENABLED } from '../config/backendRoadmap';
 import { isAccountSwitchRecoveryRequired } from '../services/accountSwitchService';
 import {
@@ -92,7 +93,11 @@ export default function AccountCenterScreen({
   const financeLedger = useGameStore((state) => state.financeLedger);
   const currentTime = useGameStore((state) => Math.floor(state.currentTime));
 
-  const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const effectiveProgression = useEffectiveCompanyProgression(player);
+  const level =
+    effectiveProgression.status === 'ready' && effectiveProgression.level != null
+      ? effectiveProgression.level
+      : null;
   const trucks = player?.trucks ?? [];
   const warehouses = player?.warehouses ?? [];
   const completedContracts = player?.completedContracts ?? 0;

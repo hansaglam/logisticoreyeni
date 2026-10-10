@@ -22,7 +22,7 @@ export interface AccountProfileTabProps {
   cloudStatusLabel?: string;
   cloudStatusVariant?: StatusBadgeVariant;
   stats: {
-    level: number;
+    level: number | null;
     contracts: number;
     trucks: number;
     warehouses: number;
@@ -33,7 +33,7 @@ export interface AccountProfileTabProps {
   onSetupUsername: () => void;
   onEditUsername: () => void;
   companyName: string;
-  companyLevel: number;
+  companyLevel: number | null;
   companyScore: number;
   homeCityName: string;
   truckCount: number;
@@ -126,7 +126,7 @@ export default function AccountProfileTab({
               {companyName}
             </Text>
             <Text style={styles.companyMeta} numberOfLines={1}>
-              {homeCityName} · Seviye {companyLevel}
+              {homeCityName} · {companyLevel == null ? 'Seviye yükleniyor' : `Seviye ${companyLevel}`}
             </Text>
           </View>
         </View>

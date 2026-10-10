@@ -79,6 +79,14 @@ export function usePostStartupLifecycle({
         } catch (error) {
           logStartupError('canonical-delivery-flush', error);
         }
+        try {
+          const { flushCanonicalMultimodalCompletionQueue } = await import(
+            '../domain/canonicalMultimodalCompletionQueue'
+          );
+          await flushCanonicalMultimodalCompletionQueue();
+        } catch (error) {
+          logStartupError('canonical-multimodal-flush', error);
+        }
       })();
     });
 

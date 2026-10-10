@@ -34,6 +34,7 @@ import {
 import type { GameIconName } from '../theme/icons';
 import { CITIES_BY_ID } from '../data/cities';
 import { getLevelProgress } from '../simulation/leveling';
+import { useEffectiveCompanyProgression } from '../hooks/useEffectiveCompanyProgression';
 import { getDriverProgress, MAX_DRIVER_LEVEL } from '../simulation/driverProgress';
 import {
   captureCompanyStatsPeaks,
@@ -297,10 +298,19 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
     accountSectionYRef.current = event.nativeEvent.layout.y;
   };
 
-  const levelProgress = useMemo(
-    () => (player ? getLevelProgress(player) : null),
-    [player],
-  );
+  const effectiveProgression = useEffectiveCompanyProgression(player ?? null);
+  const levelProgress = useMemo(() => {
+    if (!player || effectiveProgression.status !== 'ready' || effectiveProgression.level == null) return null;
+    return getLevelProgress({
+      ...player,
+      level: effectiveProgression.level,
+      companyLevel: effectiveProgression.level,
+      xp: effectiveProgression.xp ?? 0,
+      xpToNextLevel: effectiveProgression.xpToNextLevel ?? 0,
+      totalXp: effectiveProgression.totalXp ?? 0,
+      reputation: effectiveProgression.reputation ?? 0,
+    });
+  }, [player, effectiveProgression]);
   const progressionFoundation = useMemo(() => {
     if (!player || !DRIVER_PROGRESSION_ENABLED || !COMPANY_STATS_ENABLED) return null;
     const driver = player.drivers[0];
@@ -464,8 +474,9 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
     );
   }
 
-  const level = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
-  const reputation = player?.reputation ?? 0;
+  const progressionReady = effectiveProgression.status === 'ready' && effectiveProgression.level != null;
+  const level = progressionReady ? effectiveProgression.level! : null;
+  const reputation = progressionReady ? (effectiveProgression.reputation ?? 0) : null;
   const trucks = player?.trucks ?? [];
   const drivers = player?.drivers ?? [];
   const warehouses = player?.warehouses ?? [];
@@ -484,7 +495,30 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
         compact
       />
 
-      {player ? (
+      {__DEV__ ? (
+        <View style={styles.moduleList}>
+          <SectionTitle title="DEV Araçları" compact />
+          {DEV_MODULE_ITEMS.filter((item) => item.key === 'debug').map((item) => (
+            <ListRowCard
+              key={item.key}
+              title={item.label}
+              subtitle={item.subtitle}
+              icon={item.icon}
+              onPress={() => handleModulePress(item)}
+              right={
+                <View style={styles.moduleRight}>
+                  {item.badge ? (
+                    <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
+                  ) : null}
+                  <ModuleChevron />
+                </View>
+              }
+            />
+          ))}
+        </View>
+      ) : null}
+
+      {player && progressionReady && level != null && reputation != null ? (
         <>
           <CompanyProfileCard
             companyName={companyName}
@@ -502,13 +536,21 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
             truckCount={trucks.length}
             warehouseCount={warehouses.length}
           />
-
-          <View style={styles.cashStrip}>
-            <GameIcon name="cash" size={16} color={colors.success} />
-            <Text style={styles.cashLabel}>Nakit</Text>
-            <Text style={styles.cashValue}>{formatMoney(player.money ?? 0)}</Text>
-          </View>
         </>
+      ) : player ? (
+        <Text style={styles.profileMeta}>
+          {effectiveProgression.status === 'loading'
+            ? 'Şirket ilerlemesi yükleniyor'
+            : 'Şirket ilerlemesi şu an gösterilemiyor'}
+        </Text>
+      ) : null}
+
+      {player ? (
+        <View style={styles.cashStrip}>
+          <GameIcon name="cash" size={16} color={colors.success} />
+          <Text style={styles.cashLabel}>Nakit</Text>
+          <Text style={styles.cashValue}>{formatMoney(player.money ?? 0)}</Text>
+        </View>
       ) : null}
 
       <View onLayout={handleAccountSectionLayout} collapsable={false}>
@@ -593,29 +635,6 @@ export default function MoreScreen({ isActive = true }: { isActive?: boolean }) 
 
       {/* Finans / Depolar / Görevler / Geliştirmeler bu ekranda tekrarlanmaz —
           mevcut tab ve deep-link (pendingMoreSubRoute) girişleri korunur. */}
-
-      {__DEV__ ? (
-        <View style={styles.moduleList}>
-          <SectionTitle title="DEV Araçları" compact />
-          {DEV_MODULE_ITEMS.filter((item) => item.key === 'debug').map((item) => (
-            <ListRowCard
-              key={item.key}
-              title={item.label}
-              subtitle={item.subtitle}
-              icon={item.icon}
-              onPress={() => handleModulePress(item)}
-              right={
-                <View style={styles.moduleRight}>
-                  {item.badge ? (
-                    <StatusBadge label={item.badge.label} variant={item.badge.variant} size="sm" />
-                  ) : null}
-                  <ModuleChevron />
-                </View>
-              }
-            />
-          ))}
-        </View>
-      ) : null}
 
       {__DEV__ ? (
         <AppCard variant="soft" style={styles.debugNoteCard} padded>

@@ -1,0 +1,35 @@
+{
+  "cli": {
+    "version": ">= 16.28.0",
+    "appVersionSource": "local",
+    "promptToConfigurePushNotifications": false
+  },
+  "build": {
+    "map-v2-ios-simulator": {
+      "distribution": "internal",
+      "developmentClient": false,
+      "env": {
+        "LOGISTICORE_BUILD_PROFILE": "internal"
+      },
+      "ios": {
+        "simulator": true,
+        "buildConfiguration": "Debug",
+        "image": "macos-sequoia-15.6-xcode-26.0",
+        "withoutCredentials": true
+      }
+    },
+    "map-v2-android-preview": {
+      "distribution": "internal",
+      "developmentClient": false,
+      "env": {
+        "LOGISTICORE_BUILD_PROFILE": "internal"
+      },
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug",
+        "image": "ubuntu-24.04-jdk-17-ndk-r27b",
+        "withoutCredentials": true
+      }
+    }
+  }
+}

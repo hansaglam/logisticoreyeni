@@ -36,6 +36,12 @@ export function useAppStateLifecycle(): boolean {
           safeVoid('marketplace-foreground-reconcile', reconcileVehicleMarketplaceOnForeground());
           retryCloudSaveSyncOnForeground();
           safeVoid('canonical-delivery-flush', flushCanonicalDeliveryCompletionQueue());
+          safeVoid(
+            'canonical-multimodal-flush',
+            import('../domain/canonicalMultimodalCompletionQueue').then((mod) =>
+              mod.flushCanonicalMultimodalCompletionQueue(),
+            ),
+          );
         } catch (error) {
           logStartupError('appstate-foreground', error);
         }

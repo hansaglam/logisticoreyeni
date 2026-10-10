@@ -1,0 +1,537 @@
+{
+  "sourceHash": "sha256:c970f9006b9f05c1495ed9f49120f68407378ddf18865d1ded198b4926617b68",
+  "contentHash": "sha256:880b97d5d2326396d8436fec8fc0601c7e3016bdbf6ad614081c3949f1659032",
+  "stats": {
+    "sourceFeatureCount": 7684,
+    "candidateObjectCount": 1606,
+    "logicalAirportCount": 110,
+    "commercialCount": 59,
+    "logisticsEligibleCount": 20,
+    "passengerOnlyCount": 0,
+    "militaryRestrictedCount": 29,
+    "heliportExcludedCount": 4481,
+    "closedCount": 3,
+    "provisionalCount": 110,
+    "unresolvedCount": 0,
+    "iataCount": 67,
+    "icaoCount": 85,
+    "cargoVerifiedCount": 20,
+    "cargoProvisionalCount": 27,
+    "cargoUnknownCount": 63,
+    "cargoUnavailableCount": 0,
+    "logisticsPreviewCount": 25,
+    "airReadyCount": 20
+  },
+  "cityAssociations": [
+    {
+      "gameplayCityId": "izmir",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.e4530d0fd95d",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.e4530d0fd95d",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.e4530d0fd95d",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.e4530d0fd95d",
+        "infra.tur.airport.a47440336615",
+        "infra.tur.airport.668eac1e6c40"
+      ]
+    },
+    {
+      "gameplayCityId": "istanbul",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.e74a1b3bc202",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.e74a1b3bc202",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.aa3e37d41090",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.e74a1b3bc202",
+        "infra.tur.airport.aa3e37d41090",
+        "infra.tur.airport.714c81e3fd9a",
+        "infra.tur.airport.cbabc3209ab9"
+      ]
+    },
+    {
+      "gameplayCityId": "ankara",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.6071a49c8a16",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.6071a49c8a16",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.6071a49c8a16",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.6071a49c8a16"
+      ]
+    },
+    {
+      "gameplayCityId": "bursa",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.cbabc3209ab9",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.cbabc3209ab9",
+      "primaryLogisticsAirportCandidateId": null,
+      "airLogisticsReadiness": "NOT_READY",
+      "airportIds": [
+        "infra.tur.airport.e74a1b3bc202",
+        "infra.tur.airport.cbabc3209ab9"
+      ]
+    },
+    {
+      "gameplayCityId": "antalya",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.92bedf0729a3",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.92bedf0729a3",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.92bedf0729a3",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.92bedf0729a3"
+      ]
+    },
+    {
+      "gameplayCityId": "adana",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.65d352663716",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.65d352663716",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.65d352663716",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.65d352663716"
+      ]
+    },
+    {
+      "gameplayCityId": "diyarbakir",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.c708729d5025",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.c708729d5025",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.c708729d5025",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.c708729d5025",
+        "infra.tur.airport.575d137a654d",
+        "infra.tur.airport.5cd64586c237"
+      ]
+    },
+    {
+      "gameplayCityId": "trabzon",
+      "associationType": "DIRECT",
+      "primaryAirportCandidateId": "infra.tur.airport.b45d84379b3c",
+      "primaryPassengerAirportCandidateId": "infra.tur.airport.b45d84379b3c",
+      "primaryLogisticsAirportCandidateId": "infra.tur.airport.b45d84379b3c",
+      "airLogisticsReadiness": "READY",
+      "airportIds": [
+        "infra.tur.airport.b45d84379b3c",
+        "infra.tur.airport.f749ac3186e5"
+      ]
+    }
+  ],
+  "classificationBreakdown": {
+    "COMMERCIAL_AIRPORT": 35,
+    "GENERAL_AVIATION": 20,
+    "INTERNATIONAL_AIRPORT": 12,
+    "MILITARY_AIRFIELD": 28,
+    "CLOSED_OR_INACTIVE": 3,
+    "DOMESTIC_AIRPORT": 12
+  },
+  "iataSample": [
+    {
+      "id": "infra.tur.airport.0174e0ef97b9",
+      "iata": "GKD",
+      "name": "Gökçeada Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.047e5593becb",
+      "iata": "AOE",
+      "name": "Eskişehir Hasan Polatkan",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.0c66d73ad041",
+      "iata": "IGD",
+      "name": "Iğdır",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.132bf25d06df",
+      "iata": "OGU",
+      "name": "Ordu-Giresun",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.15b661c59226",
+      "iata": "ONQ",
+      "name": "Çaycuma Havaalanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.1d8bfd384cb8",
+      "iata": "ISE",
+      "name": "Isparta Süleyman Demirel",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.1fba4352e137",
+      "iata": "ASR",
+      "name": "Kayseri",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.20fd1f307b80",
+      "iata": "ADF",
+      "name": "Adıyaman",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.229e47e250dc",
+      "iata": "ADA",
+      "name": "Adana Şakirpaşa",
+      "class": "CLOSED_OR_INACTIVE"
+    },
+    {
+      "id": "infra.tur.airport.265f93f50d55",
+      "iata": "AJI",
+      "name": "Ağrı Ahmed-i Hani",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.2c916295ff99",
+      "iata": "GZP",
+      "name": "Gazipaşa-Alanya",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.3fd70ccba4d5",
+      "iata": "CKZ",
+      "name": "Çanakkale",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.448e824cd896",
+      "iata": "BJV",
+      "name": "Milas-Bodrum",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.45890295fb19",
+      "iata": "ANK",
+      "name": "Ankara Havaalanı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.46f22d7684d6",
+      "iata": "EDO",
+      "name": "Balıkesir Koca Seyit",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.47bf7bed6442",
+      "iata": "BDM",
+      "name": "6. Ana Jet Üs Komutanlığı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.492177c84ee0",
+      "iata": "KCO",
+      "name": "Cengiz Topel Havaalanı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.575d137a654d",
+      "iata": "BAL",
+      "name": "Batman",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.596daa74773f",
+      "iata": "NIL",
+      "name": "Ondokuz Mayıs Havaalanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.5cd64586c237",
+      "iata": "MQM",
+      "name": "Mardin",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.6071a49c8a16",
+      "iata": "ESB",
+      "name": "Ankara Esenboğa",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.61959cf47cbf",
+      "iata": "ISL",
+      "name": "İstanbul Atatürk",
+      "class": "CLOSED_OR_INACTIVE"
+    },
+    {
+      "id": "infra.tur.airport.62007e341067",
+      "iata": "DNZ",
+      "name": "Denizli Çardak",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.65d352663716",
+      "iata": "COV",
+      "name": "Çukurova",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.668eac1e6c40",
+      "iata": "CII",
+      "name": "Çıldır Havaalanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.6e4862db5f27",
+      "iata": "NAV",
+      "name": "Nevşehir Kapadokya",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.714c81e3fd9a",
+      "iata": "TEQ",
+      "name": "Tekirdağ Çorlu",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.723818b1bd55",
+      "iata": "KFS",
+      "name": "Kastamonu Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.742a07aee5ab",
+      "iata": "KSY",
+      "name": "Kars Harakani",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.743dd5210106",
+      "iata": "NKT",
+      "name": "Şırnak Şerafettin Elçi Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.79eb2cb4a2c7",
+      "iata": "AFY",
+      "name": "Afyon Havaalanı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.87d7e38a81b3",
+      "iata": "EZS",
+      "name": "Elazığ",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.88e474507879",
+      "iata": "ERZ",
+      "name": "Erzurum",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.8bea5175086e",
+      "iata": "YKO",
+      "name": "Hakkari Yüksekova Selahaddin Eyyubi Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.918a576ade59",
+      "iata": "GNY",
+      "name": "Şanlıurfa GAP",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.91de70464bc6",
+      "iata": "BGG",
+      "name": "Bingöl Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.92bedf0729a3",
+      "iata": "AYT",
+      "name": "Antalya",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.93b4e231f556",
+      "iata": "MLX",
+      "name": "Malatya",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.94ed8080ef59",
+      "iata": "TJK",
+      "name": "Tokat Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.9628c46c69fe",
+      "iata": "UAB",
+      "name": "İncirlik Hava Üssü",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.9878a040054b",
+      "iata": "BXN",
+      "name": "Bodrum Imsık Havaalanı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.9b2e88fd36cc",
+      "iata": "IGL",
+      "name": "Çiğli 2. Ana Jet Üssü",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.a0186e309ca0",
+      "iata": "NOP",
+      "name": "Sinop",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.a03a6ac930e7",
+      "iata": "DLM",
+      "name": "Dalaman",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.a47440336615",
+      "iata": "IZM",
+      "name": "Selçuk-Efes Havaalanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.aa3e37d41090",
+      "iata": "IST",
+      "name": "İstanbul Havalimanı",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.ae9291a86c57",
+      "iata": "GZT",
+      "name": "Gaziantep",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.b1db6885ce79",
+      "iata": "MZH",
+      "name": "Merzifon Havalimanı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.b3d6d58822e7",
+      "iata": "SXZ",
+      "name": "Siirt Havaalanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.b45d84379b3c",
+      "iata": "TZX",
+      "name": "Trabzon",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.b81343842af4",
+      "iata": "KCM",
+      "name": "Kahramanmaraş",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.b867a67a9e1f",
+      "iata": "ERC",
+      "name": "Erzincan",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.bc396f40b162",
+      "iata": "KZR",
+      "name": "Zafer Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.c541226925ee",
+      "iata": "MSR",
+      "name": "Muş",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.c6cb7690b633",
+      "iata": "USQ",
+      "name": "Uşak Havalimanı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.c708729d5025",
+      "iata": "DIY",
+      "name": "Diyarbakır",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.cac88265071d",
+      "iata": "VAN",
+      "name": "Van Ferit Melen",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.cbabc3209ab9",
+      "iata": "YEI",
+      "name": "Bursa Yenişehir",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.d2333718d883",
+      "iata": "KYA",
+      "name": "Konya",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.d6a863c5c15b",
+      "iata": "BZI",
+      "name": "Balıkesir Merkez",
+      "class": "DOMESTIC_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.dd590c942688",
+      "iata": "SZF",
+      "name": "Samsun Çarşamba",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.df28fb1fb943",
+      "iata": "VAS",
+      "name": "Sivas Nuri Demirağ",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.e4530d0fd95d",
+      "iata": "ADB",
+      "name": "İzmir Adnan Menderes",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.e74a1b3bc202",
+      "iata": "SAW",
+      "name": "İstanbul Sabiha Gökçen",
+      "class": "INTERNATIONAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.eb39a0cd4044",
+      "iata": "ESK",
+      "name": "1. Ana Jet Üs Komutanlığı",
+      "class": "MILITARY_AIRFIELD"
+    },
+    {
+      "id": "infra.tur.airport.f749ac3186e5",
+      "iata": "RZV",
+      "name": "Rize-Artvin Havalimanı",
+      "class": "COMMERCIAL_AIRPORT"
+    },
+    {
+      "id": "infra.tur.airport.faa9d1dabbb3",
+      "iata": "HTY",
+      "name": "Hatay",
+      "class": "COMMERCIAL_AIRPORT"
+    }
+  ],
+  "issueCount": 11
+}

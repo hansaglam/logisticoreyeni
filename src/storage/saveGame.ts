@@ -62,6 +62,10 @@ import {
   type CompanyStats,
 } from '../domain/companyStats';
 import {
+  normalizeMultimodalShipments,
+  type PersistedMultimodalShipment,
+} from '../domain/multimodalShipmentPersistence';
+import {
   normalizeProgressionFoundationState,
   type ProgressionFoundationState,
 } from '../domain/progressionFoundation';
@@ -187,6 +191,11 @@ export interface SaveGamePayload {
   routes: Route[];
   contracts: Contract[];
   activeDeliveries: Delivery[];
+  /**
+   * Additive multimodal execution records (Step 22 foundation).
+   * Missing on V6 saves ⇒ []. Never converted from Delivery.
+   */
+  multimodalShipments?: PersistedMultimodalShipment[];
   activeTransfers?: TruckTransfer[];
   completedTransfers?: TruckTransfer[];
   activeWarehouseStockTransfers?: WarehouseStockTransfer[];
@@ -670,6 +679,7 @@ export function createDefaultSaveFallbacks(
     activeDeliveries: isArray(payload.activeDeliveries)
       ? (payload.activeDeliveries as Delivery[])
       : [],
+    multimodalShipments: normalizeMultimodalShipments(payload.multimodalShipments),
     activeTransfers: isArray(payload.activeTransfers)
       ? (payload.activeTransfers as TruckTransfer[])
       : [],
@@ -848,6 +858,7 @@ export function normalizeSavePayload(
       player.trucks,
       currentTime,
     ),
+    multimodalShipments: normalizeMultimodalShipments(withFallbacks.multimodalShipments),
     activeTransfers: normalizeTruckTransferFuelJobs(
       withFallbacks.activeTransfers as TruckTransfer[],
       player.trucks,
@@ -1534,6 +1545,7 @@ export function analyzeSavePayloadSize(payload: SaveGamePayload): SavePayloadSiz
     'routes',
     'contracts',
     'activeDeliveries',
+    'multimodalShipments',
     'globalEconomy',
     'marketNews',
     'eventLog',
@@ -1690,6 +1702,7 @@ export function serializeGameState(
       state.currentTime,
     ),
     activeDeliveries: structuredClone(state.activeDeliveries),
+    multimodalShipments: normalizeMultimodalShipments(state.multimodalShipments),
     activeTransfers: structuredClone(state.activeTransfers ?? []),
     completedTransfers: structuredClone(state.completedTransfers ?? []),
     activeWarehouseStockTransfers: structuredClone(state.activeWarehouseStockTransfers ?? []),
@@ -1875,6 +1888,7 @@ export function payloadToStoreState(payload: SaveGamePayload): StoreGameState {
       player.trucks,
       safeCurrentTime,
     ),
+    multimodalShipments: normalizeMultimodalShipments(payload.multimodalShipments),
     activeTransfers: normalizeTruckTransferFuelJobs(
       payload.activeTransfers,
       player.trucks,

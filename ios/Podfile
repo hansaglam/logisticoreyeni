@@ -71,6 +71,8 @@ target 'LogistiCore' do
     # with the LogistiCore Xcode user-defined setting.
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |cfg|
+        cfg.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+
         if cfg.name == 'Release'
           cfg.build_settings['LOGISTICORE_BUILD_PROFILE'] = 'production'
         else

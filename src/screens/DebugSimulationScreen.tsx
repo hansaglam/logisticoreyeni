@@ -46,6 +46,12 @@ import { getLevelProgress } from '../simulation/leveling';
 import { contractBalance } from '../config/balance';
 import { sendTestMarketNotification } from '../services/notifications';
 import { getMaxContractTonnageForLevel } from '../config/levelConfig';
+import MapV2RendererSpikeScreen from '../mapV2/spike/MapV2RendererSpikeScreen';
+import MapV2WorldGeometryScreen from '../mapV2/world/MapV2WorldGeometryScreen';
+import MapV2WorldScreen from '../mapV2/screens/MapV2WorldScreen';
+import MapV2TransportInspectorScreen from '../mapV2/screens/MapV2TransportInspectorScreen';
+import MapV2MultimodalInspectorScreen from '../mapV2/screens/MapV2MultimodalInspectorScreen';
+import MapV2MultimodalShipmentSimulatorScreen from '../mapV2/screens/MapV2MultimodalShipmentSimulatorScreen';
 import type {
   City,
   CityProductState,
@@ -542,6 +548,13 @@ export default function DebugSimulationScreen() {
     type: 'info',
     text: 'Debug panel ready.',
   });
+  const [showMapV2Spike, setShowMapV2Spike] = useState(false);
+  const [showMapV2World, setShowMapV2World] = useState(false);
+  const [showMapV2Experience, setShowMapV2Experience] = useState(false);
+  const [showMapV2ProgressionPreview, setShowMapV2ProgressionPreview] = useState(false);
+  const [showMapV2Transport, setShowMapV2Transport] = useState(false);
+  const [showMapV2Multimodal, setShowMapV2Multimodal] = useState(false);
+  const [showMapV2MultimodalSim, setShowMapV2MultimodalSim] = useState(false);
   const [cloudSaveInfo, setCloudSaveInfo] = useState(getCloudSaveStatus);
 
   const trucks = player?.trucks ?? [];
@@ -1015,6 +1028,39 @@ export default function DebugSimulationScreen() {
     setSuccess(amount === 0 ? 'Nakit sıfırlandı' : `Nakit ${formatMoney(amount)} yapıldı`);
   };
 
+  if (showMapV2Transport) {
+    return <MapV2TransportInspectorScreen onClose={() => setShowMapV2Transport(false)} />;
+  }
+
+  if (showMapV2Multimodal) {
+    return <MapV2MultimodalInspectorScreen onClose={() => setShowMapV2Multimodal(false)} />;
+  }
+
+  if (showMapV2MultimodalSim) {
+    return <MapV2MultimodalShipmentSimulatorScreen onClose={() => setShowMapV2MultimodalSim(false)} />;
+  }
+
+  if (showMapV2Experience) {
+    return <MapV2WorldScreen onClose={() => setShowMapV2Experience(false)} />;
+  }
+
+  if (showMapV2ProgressionPreview) {
+    return (
+      <MapV2WorldScreen
+        onClose={() => setShowMapV2ProgressionPreview(false)}
+        cityProgressionMode="MAP_V2_PROGRESSION_PREVIEW"
+      />
+    );
+  }
+
+  if (showMapV2World) {
+    return <MapV2WorldGeometryScreen onClose={() => setShowMapV2World(false)} />;
+  }
+
+  if (showMapV2Spike) {
+    return <MapV2RendererSpikeScreen onClose={() => setShowMapV2Spike(false)} />;
+  }
+
   if (!isGameReady || !player) {
     return (
       <View style={styles.safeArea}>
@@ -1036,6 +1082,49 @@ export default function DebugSimulationScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>Simülasyon Testi</Text>
           <Text style={styles.subtitle}>Internal test araçları — geliştirici kullanımı</Text>
+          <View style={styles.buttonGrid}>
+            <DebugButton
+              label="Map V2 Skia Spike"
+              onPress={() => setShowMapV2Spike(true)}
+              variant="primary"
+            />
+            <DebugButton
+              label="Map V2 World Geometry"
+              onPress={() => setShowMapV2World(true)}
+              variant="primary"
+            />
+            <DebugButton
+              label="Map V2 World Experience"
+              onPress={() => setShowMapV2Experience(true)}
+              variant="primary"
+            />
+            {__DEV__ ? (
+              <DebugButton
+                label="Map V2 City Progression Preview"
+                onPress={() => setShowMapV2ProgressionPreview(true)}
+                variant="primary"
+              />
+            ) : null}
+            <DebugButton
+              label="Map V2 Transport Inspector"
+              onPress={() => setShowMapV2Transport(true)}
+              variant="primary"
+            />
+            {__DEV__ ? (
+              <DebugButton
+                label="Map V2 Multimodal Inspector"
+                onPress={() => setShowMapV2Multimodal(true)}
+                variant="primary"
+              />
+            ) : null}
+            {__DEV__ ? (
+              <DebugButton
+                label="Multimodal Shipment Simulator"
+                onPress={() => setShowMapV2MultimodalSim(true)}
+                variant="primary"
+              />
+            ) : null}
+          </View>
           <View style={styles.headerStatsRow}>
             <View style={styles.headerStatBadge}>
               <Text style={[styles.headerStatValue, { color: COLORS.primary }]}>

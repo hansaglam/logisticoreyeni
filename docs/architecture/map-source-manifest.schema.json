@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://logisticore.local/schemas/map-source-manifest-v1.json",
+  "title": "LogistiCore Map Source Manifest",
+  "description": "MAP_DATA_SOURCE_POLICY_VERSION = 1. Do not invent missing metadata; use unresolved sentinels.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policyVersion",
+    "datasetId",
+    "datasetType",
+    "sourceName",
+    "sourceURL",
+    "license",
+    "licenseURL",
+    "sourceVersion",
+    "retrievedAt",
+    "sourceHash",
+    "originalFormat",
+    "processedFormat",
+    "processingVersion",
+    "derivedFrom",
+    "attributionRequired",
+    "productionApproved",
+    "notes"
+  ],
+  "properties": {
+    "policyVersion": {
+      "const": 1
+    },
+    "datasetId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable LogistiCore dataset identity, not a display name."
+    },
+    "datasetType": {
+      "type": "string",
+      "enum": [
+        "administrative-boundary",
+        "physical-base",
+        "transport-network",
+        "rail-network",
+        "road-network",
+        "airport",
+        "port",
+        "poi",
+        "gameplay-graph",
+        "localization",
+        "other",
+        "unresolved"
+      ]
+    },
+    "sourceName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceURL": {
+      "description": "Canonical URL or unresolved",
+      "oneOf": [
+        { "type": "string", "format": "uri" },
+        { "const": "unresolved" }
+      ]
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "description": "e.g. CC-BY-4.0, ODbL-1.0, public-domain, unresolved"
+    },
+    "licenseURL": {
+      "oneOf": [
+        { "type": "string", "format": "uri" },
+        { "const": "unresolved" }
+      ]
+    },
+    "sourceVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pinned upstream release. Use unresolved if unknown."
+    },
+    "retrievedAt": {
+      "description": "ISO-8601 date or unresolved",
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "string", "format": "date" },
+        { "const": "unresolved" }
+      ]
+    },
+    "sourceHash": {
+      "description": "Checksum of the imported bytes, or unresolved",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^(sha256:[a-f0-9]{64}|unresolved)$"
+        }
+      ]
+    },
+    "originalFormat": {
+      "type": "string",
+      "minLength": 1
+    },
+    "processedFormat": {
+      "type": "string",
+      "minLength": 1
+    },
+    "processingVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "derivedFrom": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Parent datasetIds. Empty if this is a primary import."
+    },
+    "attributionRequired": {
+      "type": "boolean"
+    },
+    "productionApproved": {
+      "type": "boolean",
+      "description": "Must be false if license, version, or provenance is unresolved."
+    },
+    "geoBoundariesReleaseType": {
+      "description": "Required when source is geoBoundaries. Commercial game: gbOpen only.",
+      "type": "string",
+      "enum": ["gbOpen", "forbidden-gbAuthoritative", "unresolved"]
+    },
+    "notes": {
+      "type": "string"
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["withDatasetId", "summary", "resolution"],
+        "properties": {
+          "withDatasetId": { "type": "string" },
+          "summary": { "type": "string" },
+          "resolution": {
+            "type": "string",
+            "enum": ["unresolved", "human-accepted-primary", "human-accepted-secondary"]
+          }
+        }
+      }
+    }
+  }
+}

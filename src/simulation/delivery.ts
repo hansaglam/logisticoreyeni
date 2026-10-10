@@ -173,7 +173,7 @@ export function isTruckLeaseActive(truck: Truck, currentTime: number): boolean {
 
 /** Kamyon fiziksel olarak boşta mı (kiralık/sahip ayrımı yok)? */
 export function isTruckIdle(truck: Truck): boolean {
-  return truck.status === 'idle';
+  return truck.status === 'idle' && !truck.assignedMultimodalShipmentId;
 }
 
 /** Kiralık kamyon görev için kullanılamaz mı? */
@@ -191,6 +191,9 @@ export function isTruckAvailableForAssignment(
   activeDelivery?: import('../types/game').Delivery | null,
 ): boolean {
   if (truck.status !== 'idle') {
+    return false;
+  }
+  if (truck.assignedMultimodalShipmentId) {
     return false;
   }
   return isTruckEligibleForNewAssignment(truck, currentTime, activeDelivery);
@@ -254,7 +257,7 @@ export function isTruckTransferring(truck: Truck): boolean {
 
 /** Şoför görev için boşta mı? */
 export function isDriverIdle(driver: Driver): boolean {
-  return driver.status === 'idle';
+  return driver.status === 'idle' && !driver.assignedMultimodalShipmentId;
 }
 
 export function resolveTruckCityId(

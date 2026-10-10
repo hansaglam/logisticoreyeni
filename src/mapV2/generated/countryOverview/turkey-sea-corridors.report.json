@@ -1,0 +1,171 @@
+{
+  "salipazariPreflight": {
+    "diagnosis": "ok",
+    "previousNodeId": "tn.tur.sea.l.289920.409840",
+    "previousChannel": null,
+    "previousRegion": "MARMARA",
+    "replacementNodeId": null,
+    "replacementMeters": null,
+    "replacementKind": null,
+    "note": "Access node is already MARMARA without BOSPHORUS channel identity."
+  },
+  "eligibleCities": [
+    "istanbul",
+    "izmir",
+    "bursa",
+    "antalya",
+    "adana",
+    "trabzon"
+  ],
+  "nonSeaCities": [
+    "ankara",
+    "diyarbakir"
+  ],
+  "corridorCount": 6,
+  "unresolved": [],
+  "corridors": [
+    {
+      "id": "corridor.tur.sea.istanbul.izmir.v1",
+      "fromLegacyCityId": "istanbul",
+      "toLegacyCityId": "izmir",
+      "fromPort": "Salıpazarı Limanı",
+      "toPort": "2. Liman",
+      "fromAccessNode": "tn.tur.sea.l.289920.409840",
+      "toAccessNode": "tn.tur.sea.l.268640.383760",
+      "associationFrom": "DIRECT",
+      "associationTo": "DIRECT",
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "rawEdgeCount": 106,
+      "rawNodeCount": 107,
+      "routeLengthMeters": 507881,
+      "regions": [
+        "AEGEAN",
+        "MARMARA"
+      ],
+      "channels": [
+        "DARDANELLES"
+      ],
+      "simplifiedVertices": 107,
+      "landValidation": "GRAPH_EDGE_FALLBACK"
+    },
+    {
+      "id": "corridor.tur.sea.istanbul.trabzon.v1",
+      "fromLegacyCityId": "istanbul",
+      "toLegacyCityId": "trabzon",
+      "fromPort": "Salıpazarı Limanı",
+      "toPort": "Trabzon Limanı",
+      "fromAccessNode": "tn.tur.sea.l.289920.409840",
+      "toAccessNode": "tn.tur.sea.l.397440.410160",
+      "associationFrom": "DIRECT",
+      "associationTo": "DIRECT",
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "rawEdgeCount": 100,
+      "rawNodeCount": 101,
+      "routeLengthMeters": 995193,
+      "regions": [
+        "BLACK_SEA",
+        "MARMARA"
+      ],
+      "channels": [
+        "BOSPHORUS"
+      ],
+      "simplifiedVertices": 101,
+      "landValidation": "GRAPH_EDGE_FALLBACK"
+    },
+    {
+      "id": "corridor.tur.sea.antalya.izmir.v1",
+      "fromLegacyCityId": "izmir",
+      "toLegacyCityId": "antalya",
+      "fromPort": "2. Liman",
+      "toPort": "Port Akdeniz",
+      "fromAccessNode": "tn.tur.sea.l.268640.383760",
+      "toAccessNode": "tn.tur.sea.l.306160.368320",
+      "associationFrom": "DIRECT",
+      "associationTo": "DIRECT",
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "rawEdgeCount": 45,
+      "rawNodeCount": 46,
+      "routeLengthMeters": 723327,
+      "regions": [
+        "AEGEAN",
+        "MEDITERRANEAN"
+      ],
+      "channels": [],
+      "simplifiedVertices": 27,
+      "landValidation": "PASS"
+    },
+    {
+      "id": "corridor.tur.sea.adana.antalya.v1",
+      "fromLegacyCityId": "antalya",
+      "toLegacyCityId": "adana",
+      "fromPort": "Port Akdeniz",
+      "toPort": "Yumurtalik Limani",
+      "fromAccessNode": "tn.tur.sea.l.306160.368320",
+      "toAccessNode": "tn.tur.sea.l.357920.367680",
+      "associationFrom": "DIRECT",
+      "associationTo": "REGIONAL",
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "rawEdgeCount": 36,
+      "rawNodeCount": 37,
+      "routeLengthMeters": 520703,
+      "regions": [
+        "MEDITERRANEAN"
+      ],
+      "channels": [],
+      "simplifiedVertices": 37,
+      "landValidation": "GRAPH_EDGE_FALLBACK"
+    },
+    {
+      "id": "corridor.tur.sea.bursa.trabzon.v1",
+      "fromLegacyCityId": "bursa",
+      "toLegacyCityId": "trabzon",
+      "fromPort": "Borusan Port",
+      "toPort": "Trabzon Limanı",
+      "fromAccessNode": "tn.tur.sea.l.290800.404160",
+      "toAccessNode": "tn.tur.sea.l.397440.410160",
+      "associationFrom": "DIRECT",
+      "associationTo": "DIRECT",
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "rawEdgeCount": 114,
+      "rawNodeCount": 115,
+      "routeLengthMeters": 1079750,
+      "regions": [
+        "BLACK_SEA",
+        "MARMARA"
+      ],
+      "channels": [
+        "BOSPHORUS"
+      ],
+      "simplifiedVertices": 115,
+      "landValidation": "GRAPH_EDGE_FALLBACK"
+    },
+    {
+      "id": "corridor.tur.sea.bursa.izmir.v1",
+      "fromLegacyCityId": "bursa",
+      "toLegacyCityId": "izmir",
+      "fromPort": "Borusan Port",
+      "toPort": "2. Liman",
+      "fromAccessNode": "tn.tur.sea.l.290800.404160",
+      "toAccessNode": "tn.tur.sea.l.268640.383760",
+      "associationFrom": "DIRECT",
+      "associationTo": "DIRECT",
+      "status": "PROVISIONAL_SOURCE_PATH",
+      "rawEdgeCount": 103,
+      "rawNodeCount": 104,
+      "routeLengthMeters": 505431,
+      "regions": [
+        "AEGEAN",
+        "MARMARA"
+      ],
+      "channels": [
+        "DARDANELLES"
+      ],
+      "simplifiedVertices": 104,
+      "landValidation": "GRAPH_EDGE_FALLBACK"
+    }
+  ],
+  "bytes": 10790,
+  "contentHash": "sha256:28aa7f456a6292b50a2a0756e6838f097c7859d5c5f17193576f9226ce6e2d6e",
+  "sourceSeaPackageHash": "sha256:2588dc93ef822899b2f74fec92e01df354d2ebe2fcf1783ddc1a454016eb9973",
+  "sourcePortsArtifactHash": "sha256:46fbb29dfb18e7a87e25a9a7658c68679c718c060586ece3df075ba8c2dbafca"
+}

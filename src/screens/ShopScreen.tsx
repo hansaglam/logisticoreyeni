@@ -42,6 +42,11 @@ import {
 } from '../data/drivers';
 import { getTrailerTypeLabel } from '../simulation/trailerOps';
 import { getLevelProgress } from '../simulation/leveling';
+import { useEffectiveCompanyProgression } from '../hooks/useEffectiveCompanyProgression';
+import {
+  isCanonicalProgressionEligibilityAllowed,
+  resolveProgressionEligibilityAuthority,
+} from '../domain/canonicalProgressionEligibility';
 import {
   formatLeaseDailyEquivalent,
   formatLeaseOfferCost,
@@ -123,12 +128,32 @@ export default function ShopScreen() {
 
   const trucks = useMemo(() => player?.trucks ?? [], [player?.trucks]);
   const drivers = useMemo(() => player?.drivers ?? [], [player?.drivers]);
-  const playerLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const localLevel = Math.max(1, player?.level ?? player?.companyLevel ?? 1);
+  const localReputation = player?.reputation ?? 0;
   const playerMoney = player?.money ?? 0;
-  const levelProgress = useMemo(
-    () => (player ? getLevelProgress(player) : { level: 1, progressRatio: 0 }),
-    [player],
-  );
+  const effectiveProgression = useEffectiveCompanyProgression(player ?? null);
+  const progressionEligibility = resolveProgressionEligibilityAuthority({
+    eligibilityGateEnabled: isCanonicalProgressionEligibilityAllowed(),
+    progression: effectiveProgression,
+    localLevel,
+    localReputation,
+  });
+  const playerLevel =
+    progressionEligibility.canEvaluate && progressionEligibility.level != null
+      ? progressionEligibility.level
+      : 0;
+  const levelProgress = useMemo(() => {
+    if (!player || effectiveProgression.status !== 'ready' || effectiveProgression.level == null) return null;
+    return getLevelProgress({
+      ...player,
+      level: effectiveProgression.level,
+      companyLevel: effectiveProgression.level,
+      xp: effectiveProgression.xp ?? 0,
+      xpToNextLevel: effectiveProgression.xpToNextLevel ?? 0,
+      totalXp: effectiveProgression.totalXp ?? 0,
+      reputation: effectiveProgression.reputation ?? 0,
+    });
+  }, [player, effectiveProgression]);
 
   const sortedTruckMarket = useMemo(
     () =>
@@ -421,7 +446,7 @@ export default function ShopScreen() {
     <AppScreen scroll scrollBottomPadding={contentBottomPadding} contentContainerStyle={styles.screenContent}>
       <View style={styles.screenStack}>
         <View style={styles.topSection}>
-          {player ? (
+          {player && levelProgress ? (
             <ShopResourceBar
               money={playerMoney}
               level={levelProgress.level}
@@ -429,6 +454,12 @@ export default function ShopScreen() {
               isPaused={isPaused}
               onTogglePause={isPaused ? resumeGame : pauseGame}
             />
+          ) : player ? (
+            <Text style={styles.statusBannerText}>
+              {effectiveProgression.status === 'loading'
+                ? 'Şirket ilerlemesi yükleniyor'
+                : 'Şirket ilerlemesi şu an gösterilemiyor'}
+            </Text>
           ) : null}
 
           <View style={styles.heroWrap}>

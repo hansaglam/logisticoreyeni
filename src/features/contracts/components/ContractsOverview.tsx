@@ -10,12 +10,13 @@ import {
 import { colors, formatMoney, spacing } from '../../../theme';
 import type { Delivery, Truck } from '../../../types/game';
 
-export type ContractsSegmentKey = 'available' | 'active' | 'completed';
+export type ContractsSegmentKey = 'available' | 'active' | 'completed' | 'rail';
 
 export interface ContractsTabSegment {
   key: ContractsSegmentKey;
   label: string;
   count: number;
+  accessibilityLabel?: string;
 }
 
 interface ContractsTabBarProps {
@@ -36,9 +37,19 @@ export function ContractsTabBar({ segments, activeKey, onChange }: ContractsTabB
               style={styles.tabItem}
               onPress={() => onChange(segment.key)}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityLabel={segment.accessibilityLabel ?? segment.label}
+              accessibilityState={{ selected: isActive }}
             >
               <View style={styles.tabLabelRow}>
-                <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    segments.length > 3 && styles.tabLabelCompact,
+                    isActive && styles.tabLabelActive,
+                  ]}
+                  numberOfLines={1}
+                >
                   {segment.label}
                 </Text>
                 {segment.count > 0 ? (
@@ -163,6 +174,7 @@ const styles = StyleSheet.create({
   tabDivider: { width: 1, backgroundColor: colors.borderStrong, marginVertical: spacing.sm },
   tabLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   tabLabel: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  tabLabelCompact: { fontSize: 11 },
   tabLabelActive: { color: colors.info, fontWeight: '800' },
   tabBadge: {
     minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.danger,

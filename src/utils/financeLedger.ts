@@ -13,6 +13,8 @@ export const FINANCE_LEDGER_MAX_COUNT = 200;
 
 const CATEGORY_ALIASES: Record<string, FinanceLedgerCategory> = {
   contract_revenue: 'contract_revenue',
+  multimodal_revenue: 'multimodal_revenue',
+  rail_carrier_expense: 'rail_carrier_expense',
   contract: 'contract_income',
   delivery_income: 'contract_income',
   contract_income: 'contract_income',

@@ -95,10 +95,24 @@ export const QUICK_ACCESS_CARD_ORDER: QuickAccessAction[] = [
   'account',
 ];
 
+const DEV_SIMULATION_TEST_ITEM: QuickAccessItemDef = {
+  key: 'debug',
+  label: 'Simülasyon Testi',
+  defaultSubtitle: 'Map V2 ve internal test',
+  icon: 'maintenance',
+  iconTone: 'amber',
+  accessibilityLabel: 'Simülasyon testini aç',
+  accessibilityHint: 'Map V2 ve diğer internal test araçlarını açar',
+};
+
 export function buildQuickAccessItems(vehicleMarketplaceEnabled: boolean): QuickAccessItemDef[] {
-  return [
+  const items = [
     ...BASE_QUICK_ACCESS_ITEMS,
     ...(vehicleMarketplaceEnabled ? [VEHICLE_MARKETPLACE_ITEM] : []),
     ...TRAILING_QUICK_ACCESS_ITEMS,
   ];
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    items.push(DEV_SIMULATION_TEST_ITEM);
+  }
+  return items;
 }

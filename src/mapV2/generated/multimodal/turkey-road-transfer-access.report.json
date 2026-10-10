@@ -1,0 +1,31 @@
+{
+  "sourceRoadPackageHash": "sha256:b506587dfd7e390794a448a0a855b773af640ebfeba316a4ffc86bacf4d45882",
+  "algorithmId": "dijkstra-road-transfer-access-v1",
+  "routingDirectionality": "OVERVIEW_UNDIRECTED_SOURCE_BACKED",
+  "snapPolicy": {
+    "maxMeters": 15000,
+    "attachedExactMeters": 25,
+    "note": "Nearest giant-component ROAD node. OSM snap is provisional, not VERIFIED freight access."
+  },
+  "snapDiagnostics": {
+    "count": 17,
+    "min": 99.6761770185302,
+    "median": 2391.772954227231,
+    "p90": 14169.032716487394,
+    "p95": 34712.77384946802,
+    "max": 34712.77384946802
+  },
+  "giantComponentSize": 99125,
+  "recordCount": 17,
+  "unresolved": [
+    {
+      "logicalKey": "trabzon|AIR|infra.tur.airport.b45d84379b3c",
+      "reason": "ROAD_PATH_DETOUR_OR_UNRESOLVED",
+      "cityAnchor": "tn.tur.road.n.39.7188724_40.9884070",
+      "maxRoute": 80000,
+      "crow": 5924.238461278079
+    }
+  ],
+  "contentHash": "sha256:6cce9bbd4e2628f56ac6cc4302378819cd422db84d3546b90e5159e43b0828a2",
+  "bytes": 17932
+}

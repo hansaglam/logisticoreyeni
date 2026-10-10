@@ -1,0 +1,19 @@
+{
+  "policyVersion": 1,
+  "datasetId": "unresolved.example",
+  "datasetType": "unresolved",
+  "sourceName": "unresolved",
+  "sourceURL": "unresolved",
+  "license": "unresolved",
+  "licenseURL": "unresolved",
+  "sourceVersion": "unresolved",
+  "retrievedAt": "unresolved",
+  "sourceHash": "unresolved",
+  "originalFormat": "unresolved",
+  "processedFormat": "unresolved",
+  "processingVersion": "unresolved",
+  "derivedFrom": [],
+  "attributionRequired": true,
+  "productionApproved": false,
+  "notes": "Copy this template per dataset. Do not invent URLs, hashes, or versions. productionApproved must stay false until license, pin, and checksum are verified."
+}

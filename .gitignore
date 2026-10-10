@@ -66,3 +66,17 @@ android/app/*.keystore
 
 # Metro / cache
 .metro-health-check*
+
+# Map V2 bulk source / staging (do not commit SHP/GeoJSON dumps)
+data/map-raw/
+data/map-staging/
+
+# Canonical ROAD ingest package is a build artifact (~237MB). Runtime uses chunked files.
+src/mapV2/generated/transport/turkey-road-network.json
+
+# Canonical RAIL ingest package can be large. Metro uses runtime manifest + debug view.
+src/mapV2/generated/transport/turkey-sea-network.json
+
+# Full sourceEdgeIds lineage is rebuildable; player artifact is committed.
+src/mapV2/generated/countryOverview/turkey-road-corridors.lineage.json
+src/mapV2/generated/countryOverview/turkey-rail-corridors.lineage.json

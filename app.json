@@ -7,11 +7,13 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "icon": "./assets/branding/icon.png",
+
     "splash": {
       "image": "./assets/branding/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#020712"
     },
+
     "android": {
       "package": "com.ethemsincar.logisticore",
       "versionCode": 33,
@@ -20,6 +22,7 @@
         "backgroundColor": "#020712"
       }
     },
+
     "ios": {
       "bundleIdentifier": "com.ethemsincar.logisticore",
       "buildNumber": "2",
@@ -28,9 +31,18 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false
         },
-        "UIBackgroundModes": ["remote-notification"]
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
       }
     },
+
+    "extra": {
+      "eas": {
+        "projectId": "fa65b469-53e0-4d68-890a-06c4f7be9ea9"
+      }
+    },
+
     "plugins": [
       "expo-notifications",
       [

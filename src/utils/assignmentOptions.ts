@@ -93,6 +93,9 @@ export function evaluateTruckOption(
   if (truck.status !== 'idle') {
     return { truck, issue: 'on_route', label: 'Müsait değil', selectable: false };
   }
+  if (truck.assignedMultimodalShipmentId) {
+    return { truck, issue: 'on_route', label: 'Çok modlu rezervasyon', selectable: false };
+  }
 
   const truckCityId = resolveTruckCityId(truck);
   if (originCityId && truckCityId !== originCityId) {

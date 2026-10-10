@@ -86,6 +86,7 @@ export default function ActionButton({
       activeOpacity={0.85}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled }}
       style={[
         styles.button,
         compact && styles.buttonCompact,

@@ -68,6 +68,141 @@ import {
   isValidCanonicalDeliveryId,
   recordCanonicalDeliveryCompletionTransaction,
 } from './canonicalDeliveryCompletion';
+import {
+  acceptCanonicalMultimodalShipmentTransaction,
+  cancelCanonicalMultimodalShipmentTransaction,
+  hasOnlyAcceptKeys,
+  isValidCanonicalMultimodalShipmentId,
+  reportCanonicalMultimodalShipmentCompletedTransaction,
+} from './canonicalMultimodalShipment';
+import {
+  acceptCanonicalRoadDeliveryTransaction,
+  hasOnlyCanonicalRoadAcceptKeys,
+  hasOnlyCanonicalRoadCompleteKeys,
+  reportCanonicalRoadDeliveryCompletedTransaction,
+} from './canonicalRoadDelivery';
+import {
+  applyCanonicalRoadDeliveryWearTransaction,
+} from './canonicalFleetWear';
+import { hasOnlyCanonicalRoadWearKeys } from '../../src/domain/canonicalFleetConditionWear';
+import {
+  finalizeCanonicalRoadExecutionTransaction,
+  hasOnlyCanonicalRoadFinalizeKeys,
+} from './canonicalRoadExecution';
+import {
+  repairCanonicalFleetAssetTransaction,
+  upgradeCanonicalFleetAssetTransaction,
+} from './canonicalFleetRepairUpgrade';
+import {
+  hasOnlyCanonicalFleetRepairKeys,
+  hasOnlyCanonicalFleetUpgradeKeys,
+} from '../../src/domain/canonicalFleetRepairUpgrade';
+import { purchaseCanonicalCatalogAssetTransaction } from './canonicalCatalogPurchase';
+import { containsForbiddenNonDeliveryXpClientKeys } from '../../src/domain/canonicalNonDeliveryCompanyXp';
+import { hasOnlyCanonicalCatalogPurchaseKeys } from '../../src/domain/remainingRoadCashPathCanonicalization';
+import { purchaseCanonicalFuelTransaction } from './canonicalFuel';
+import { hasOnlyCanonicalFuelPurchaseKeys } from '../../src/domain/canonicalFuelTankPrice';
+import {
+  advanceCanonicalRoadExecutionTransaction,
+  setCanonicalRoadExecutionPausedTransaction,
+  setCanonicalRoadExecutionSpeedTransaction,
+} from './canonicalProgressiveFuel';
+import {
+  hasOnlyCanonicalProgressiveAdvanceKeys,
+  hasOnlyCanonicalProgressivePauseKeys,
+  hasOnlyCanonicalProgressiveSpeedKeys,
+} from '../../src/domain/canonicalProgressiveFuel';
+import {
+  createCanonicalVehicleLeaseTransaction,
+  fireCanonicalDriverTransaction,
+  hireCanonicalDriverTransaction,
+  recoverCanonicalVehicleTransaction,
+  sellCanonicalFleetAssetTransaction,
+} from './canonicalCoreVehicleStaffCash';
+import {
+  hasOnlyCanonicalDriverFireKeys,
+  hasOnlyCanonicalDriverHireKeys,
+  hasOnlyCanonicalLeaseStartKeys,
+  hasOnlyCanonicalVehicleRecoveryKeys,
+  hasOnlyCanonicalVehicleSaleKeys,
+} from '../../src/domain/canonicalCoreVehicleStaffCash';
+import { settleCanonicalDailyOpexInternalTransaction } from './canonicalDailyOpex';
+import { hasOnlyCanonicalDailyOpexKeys } from '../../src/domain/canonicalDailyOpexStaffState';
+import {
+  openCanonicalWarehouseTransaction,
+  upgradeCanonicalWarehouseTransaction,
+} from './canonicalWarehouse';
+import {
+  hasOnlyCanonicalWarehouseOpenKeys,
+  hasOnlyCanonicalWarehouseUpgradeKeys,
+} from '../../src/domain/canonicalWarehouseState';
+import {
+  bootstrapInternalCanonicalCargoMarketTransaction,
+  buyCanonicalCargoTransaction,
+  sellCanonicalCargoTransaction,
+} from './canonicalCargoMarket';
+import { advanceCanonicalProductionMarketTickTransaction } from './canonicalProductionMarketTick';
+import { generateCanonicalProductionRoadBatchTransaction } from './canonicalProductionRoadContractIssuance';
+import { initializeCanonicalCompanyProgressionForNewAccount } from './canonicalCompanyProgression';
+import {
+  containsForbiddenProgressionClientKeys,
+  hasOnlyCanonicalProgressionInitKeys,
+} from '../../src/domain/canonicalCompanyProgression';
+import {
+  advanceCanonicalContractClockTransaction,
+  setCanonicalContractClockPausedTransaction,
+  setCanonicalContractClockSpeedTransaction,
+} from './canonicalContractClock';
+import {
+  hasOnlyCanonicalContractClockPauseKeys,
+  hasOnlyCanonicalContractClockSpeedKeys,
+} from '../../src/domain/canonicalContractGameTimeExpiry';
+import {
+  hasOnlyCanonicalCargoBootstrapKeys,
+  hasOnlyCanonicalCargoBuyKeys,
+  hasOnlyCanonicalCargoSellKeys,
+} from '../../src/domain/canonicalCargoMarketWorldState';
+import { hasOnlyCanonicalMarketTickKeys } from '../../src/domain/canonicalProductionMarketTick';
+import {
+  hasOnlyCanonicalRoadRefreshKeys,
+  parseCanonicalRefreshIntentId,
+} from '../../src/domain/canonicalContractRefresh';
+import { hasOnlyCanonicalProductionRoadIssuanceKeys } from '../../src/domain/canonicalProductionRoadContractIssuance';
+import { claimCanonicalLocalRewardTransaction } from './canonicalLocalReward';
+import { hasOnlyCanonicalLocalRewardKeys } from '../../src/domain/canonicalLocalRewardClaim';
+import { claimCanonicalClientRewardTransaction } from './canonicalClientRewardXp';
+import {
+  applyCanonicalLegacyProgressionMigration,
+  cutoverCanonicalLegacyProgressionMigration,
+  freezeCanonicalProgressionMigrationSource,
+  previewCanonicalLegacyProgressionMigration,
+} from './canonicalLegacyProgressionMigration';
+import {
+  CANONICAL_PROGRESSION_IMMEDIATE_CUTOVER_POLICY_VERSION,
+  CANONICAL_PROGRESSION_MIGRATION_SOURCE_POLICY_VERSION,
+  hasOnlyCanonicalProgressionImmediateCutoverKeys,
+  hasOnlyCanonicalProgressionMigrationApplyKeys,
+  hasOnlyCanonicalProgressionMigrationFreezeKeys,
+  hasOnlyCanonicalProgressionMigrationPreviewKeys,
+} from '../../src/domain/canonicalLegacyProgressionMigration';
+import {
+  hasOnlyCanonicalClientRewardClaimKeys,
+  isCanonicalClientRewardXpAllowed,
+} from '../../src/domain/canonicalClientRewardXp';
+import {
+  settleCanonicalRoadDeliveryInternalTransaction,
+  hasOnlyCanonicalRoadSettleKeys,
+} from './canonicalRoadSettlement';
+import {
+  bootstrapInternalCanonicalFleetFixturesTransaction,
+} from './canonicalFleet';
+import { hasOnlyCanonicalFleetBootstrapKeys } from '../../src/domain/canonicalRoadFleet';
+import {
+  assertIssuanceSchema,
+  getOrIssueCanonicalRoadContractsTransaction,
+  hasOnlyCanonicalRoadIssuanceKeys,
+} from './canonicalRoadContract';
+import { CANONICAL_ROAD_INTERNAL_FUEL_FALLBACK } from '../../src/domain/canonicalRoadContract';
 import { getSeasonDefinition } from './seasonPeriods';
 import {
   claimWeeklyMissionRewardTransaction,
@@ -111,6 +246,45 @@ const RATE_LIMITS = {
   weeklyMissionGet: { windowMs: 60 * 1000, maxRequests: 60 },
   weeklyMissionClaim: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
   canonicalDelivery: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalMultimodalAccept: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalMultimodalComplete: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalMultimodalCancel: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalRoadAccept: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalRoadComplete: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalRoadIssue: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalFleetBootstrap: { windowMs: 60 * 60 * 1000, maxRequests: 10 },
+  canonicalRoadSettle: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalRoadWear: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalRoadFinalize: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalFleetRepair: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalFleetUpgrade: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalCatalogPurchase: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalFuelPurchase: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalRoadProgress: { windowMs: 60 * 60 * 1000, maxRequests: 120 },
+  canonicalRoadSpeed: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalRoadPause: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalVehicleLease: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalDriverHire: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalDriverFire: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalVehicleSale: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalVehicleRecovery: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalDailyOpex: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalWarehouseOpen: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalWarehouseUpgrade: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalCargoMarketBootstrap: { windowMs: 60 * 60 * 1000, maxRequests: 10 },
+  canonicalCargoBuy: { windowMs: 60 * 60 * 1000, maxRequests: 40 },
+  canonicalCargoSell: { windowMs: 60 * 60 * 1000, maxRequests: 40 },
+  canonicalProductionMarketTick: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalProductionRoadContractIssuance: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalContractClock: { windowMs: 60 * 60 * 1000, maxRequests: 120 },
+  canonicalRoadContractRefresh: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalCompanyProgressionInit: { windowMs: 60 * 60 * 1000, maxRequests: 10 },
+  canonicalLocalReward: { windowMs: 60 * 60 * 1000, maxRequests: 20 },
+  canonicalClientReward: { windowMs: 60 * 60 * 1000, maxRequests: 60 },
+  canonicalProgressionMigrationPreview: { windowMs: 60 * 60 * 1000, maxRequests: 30 },
+  canonicalProgressionMigrationApply: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
+  canonicalProgressionMigrationFreeze: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
+  canonicalProgressionImmediateCutover: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3 },
 } as const;
 
 function requestRecord(data: unknown): Record<string, unknown> {
@@ -1560,6 +1734,1285 @@ export const recordCanonicalDeliveryCompletion = onCall(
       });
     }
     return result;
+  },
+);
+
+export const acceptCanonicalMultimodalShipment = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyAcceptKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalMultimodalAccept'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    const result = await acceptCanonicalMultimodalShipmentTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      record,
+      Date.now(),
+    );
+    logger.info('[canonical-multimodal-accept]', {
+      uidHash: uidHash(auth.identity.uid),
+      ok: result.ok,
+      reason: result.ok ? (result.receipt.alreadyAccepted ? 'already-accepted' : 'accepted') : result.reason,
+    });
+    return result;
+  },
+);
+
+export const reportCanonicalMultimodalShipmentCompleted = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, shipmentId: '' };
+    }
+    if (!hasOnlyKeys(record, ['shipmentId']) || !isValidCanonicalMultimodalShipmentId(record.shipmentId)) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        shipmentId: typeof record.shipmentId === 'string' ? record.shipmentId : '',
+      };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalMultimodalComplete',
+        record.shipmentId as string,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited', shipmentId: record.shipmentId };
+    }
+    const result = await reportCanonicalMultimodalShipmentCompletedTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      record.shipmentId,
+      Date.now(),
+    );
+    logger.info('[canonical-multimodal-complete]', {
+      uidHash: uidHash(auth.identity.uid),
+      ok: result.ok,
+      reason: result.ok ? (result.alreadyReported ? 'already-reported' : 'reported') : result.reason,
+    });
+    return result;
+  },
+);
+
+export const cancelCanonicalMultimodalShipment = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, shipmentId: '' };
+    }
+    if (!hasOnlyKeys(record, ['shipmentId']) || !isValidCanonicalMultimodalShipmentId(record.shipmentId)) {
+      return {
+        ok: false,
+        reason: 'invalid-request',
+        shipmentId: typeof record.shipmentId === 'string' ? record.shipmentId : '',
+      };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalMultimodalCancel',
+        record.shipmentId as string,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited', shipmentId: record.shipmentId };
+    }
+    const result = await cancelCanonicalMultimodalShipmentTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      record.shipmentId,
+      Date.now(),
+    );
+    logger.info('[canonical-multimodal-cancel]', {
+      uidHash: uidHash(auth.identity.uid),
+      ok: result.ok,
+      reason: result.ok ? (result.alreadyCancelled ? 'already-cancelled' : 'cancelled') : result.reason,
+    });
+    return result;
+  },
+);
+
+export const bootstrapInternalCanonicalFleetFixtures = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalFleetBootstrapKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalFleetBootstrap'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return bootstrapInternalCanonicalFleetFixturesTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      { envValue: process.env.CANONICAL_ROAD_INTERNAL_TEST },
+    );
+  },
+);
+
+export const getOrIssueCanonicalRoadContracts = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalRoadIssuanceKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!assertIssuanceSchema(record.canonicalSchemaVersion)) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadIssue'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    let fuelPricePerLiter = CANONICAL_ROAD_INTERNAL_FUEL_FALLBACK;
+    try {
+      const eco = await getFirestore().doc('globalEconomy/current').get();
+      const raw = Number(eco.data()?.fuelPricePerLiter);
+      if (Number.isFinite(raw) && raw > 0) {
+        fuelPricePerLiter = raw;
+      }
+    } catch {
+      fuelPricePerLiter = CANONICAL_ROAD_INTERNAL_FUEL_FALLBACK;
+    }
+    return getOrIssueCanonicalRoadContractsTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      fuelPricePerLiter,
+    );
+  },
+);
+
+export const acceptCanonicalRoadDelivery = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalRoadAcceptKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadAccept'))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return acceptCanonicalRoadDeliveryTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      {
+        contractId: String(record.contractId ?? ''),
+        originCityId:
+          record.originCityId === undefined ? undefined : String(record.originCityId),
+        destinationCityId:
+          record.destinationCityId === undefined ? undefined : String(record.destinationCityId),
+        productId: record.productId === undefined ? undefined : String(record.productId),
+        cargoAmount:
+          record.cargoAmount === undefined ? undefined : Number(record.cargoAmount),
+        canonicalSchemaVersion: Number(record.canonicalSchemaVersion),
+        selectedTruckId:
+          record.selectedTruckId === undefined ? undefined : String(record.selectedTruckId),
+        selectedTrailerId:
+          record.selectedTrailerId === undefined ? undefined : String(record.selectedTrailerId),
+        selectedDriverId:
+          record.selectedDriverId === undefined ? undefined : String(record.selectedDriverId),
+        canonicalTruckAssetId:
+          record.canonicalTruckAssetId === undefined
+            ? undefined
+            : String(record.canonicalTruckAssetId),
+        canonicalTrailerAssetId:
+          record.canonicalTrailerAssetId === undefined
+            ? undefined
+            : String(record.canonicalTrailerAssetId),
+      },
+      Date.now(),
+      { executionEnvValue: process.env.CANONICAL_ROAD_EXECUTION_AUTHORITY, fuelEnvValue: process.env.CANONICAL_FUEL_AUTHORITY, progressiveEnvValue: process.env.CANONICAL_PROGRESSIVE_FUEL_AUTHORITY, timingEnvValue: process.env.CANONICAL_ROAD_TIMING_AUTHORITY, runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY, expiryEnvValue: process.env.CANONICAL_ROAD_CONTRACT_GAME_TIME_EXPIRY, driverRiskEnvValue: process.env.CANONICAL_ROAD_DRIVER_RISK_AUTHORITY ?? null, eventEnvValue: process.env.CANONICAL_CONTRACT_WORLD_EVENT_AUTHORITY ?? null },
+    );
+  },
+);
+
+export const reportCanonicalRoadDeliveryCompleted = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, deliveryId: '' };
+    }
+    if (!hasOnlyCanonicalRoadCompleteKeys(record)) {
+      return { ok: false, reason: 'invalid-request', deliveryId: String(record.deliveryId ?? '') };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadComplete', deliveryId))) {
+      return { ok: false, reason: 'rate-limited', deliveryId };
+    }
+    const outcome = record.outcome === 'FAILED' ? 'FAILED' : record.outcome === 'COMPLETED' ? 'COMPLETED' : '';
+    if (outcome !== 'FAILED' && outcome !== 'COMPLETED') {
+      return { ok: false, reason: 'invalid-request', deliveryId };
+    }
+    return reportCanonicalRoadDeliveryCompletedTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      outcome,
+      Date.now(),
+      record.actualTravelHours === undefined ? null : Number(record.actualTravelHours),
+      {
+        runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const applyCanonicalRoadDeliveryWear = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, deliveryId: String(record.deliveryId ?? '') };
+    }
+    if (!hasOnlyCanonicalRoadWearKeys(record)) {
+      return { ok: false, reason: 'invalid-request', deliveryId: String(record.deliveryId ?? '') };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA', deliveryId: String(record.deliveryId ?? '') };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadWear', deliveryId))) {
+      return { ok: false, reason: 'rate-limited', deliveryId };
+    }
+    return applyCanonicalRoadDeliveryWearTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      Date.now(),
+    );
+  },
+);
+
+export const finalizeCanonicalRoadExecution = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, deliveryId: String(record.deliveryId ?? '') };
+    }
+    if (!hasOnlyCanonicalRoadFinalizeKeys(record)) {
+      return { ok: false, reason: 'invalid-request', deliveryId: String(record.deliveryId ?? '') };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA', deliveryId: String(record.deliveryId ?? '') };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadFinalize', deliveryId))) {
+      return { ok: false, reason: 'rate-limited', deliveryId };
+    }
+    return finalizeCanonicalRoadExecutionTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      Date.now(),
+      { envValue: process.env.CANONICAL_ROAD_EXECUTION_AUTHORITY },
+    );
+  },
+);
+
+export const repairCanonicalFleetAsset = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, assetId: String(record.assetId ?? '') };
+    }
+    if (!hasOnlyCanonicalFleetRepairKeys(record)) {
+      return { ok: false, reason: 'invalid-request', assetId: String(record.assetId ?? '') };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA', assetId: String(record.assetId ?? '') };
+    }
+    const assetId = String(record.assetId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalFleetRepair', assetId))) {
+      return { ok: false, reason: 'rate-limited', assetId };
+    }
+    return repairCanonicalFleetAssetTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      assetId,
+      String(record.repairIntentId ?? ''),
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_FLEET_MUTATIONS,
+        repairAction: record.repairAction === undefined ? undefined : String(record.repairAction),
+      },
+    );
+  },
+);
+
+export const purchaseCanonicalFuel = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalFuelPurchaseKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const assetId = String(record.assetId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalFuelPurchase', assetId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    let fuelPriceRaw: unknown;
+    try {
+      const eco = await getFirestore().doc('globalEconomy/current').get();
+      fuelPriceRaw = eco.data()?.fuelPricePerLiter;
+    } catch {
+      fuelPriceRaw = undefined;
+    }
+    return purchaseCanonicalFuelTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      assetId,
+      String(record.fuelPurchaseIntentId ?? ''),
+      String(record.mode ?? ''),
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_FUEL_AUTHORITY,
+        requestedLiters:
+          record.requestedLiters === undefined ? undefined : Number(record.requestedLiters),
+        fuelPriceRaw,
+      },
+    );
+  },
+);
+
+export const advanceCanonicalRoadExecution = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressiveAdvanceKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadProgress', deliveryId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return advanceCanonicalRoadExecutionTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      Number(record.canonicalSchemaVersion),
+      Date.now(),
+      { envValue: process.env.CANONICAL_PROGRESSIVE_FUEL_AUTHORITY, runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY },
+    );
+  },
+);
+
+export const setCanonicalRoadExecutionSpeed = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressiveSpeedKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadSpeed', deliveryId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return setCanonicalRoadExecutionSpeedTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      Number(record.gameSpeed),
+      Number(record.canonicalSchemaVersion),
+      Date.now(),
+      { envValue: process.env.CANONICAL_PROGRESSIVE_FUEL_AUTHORITY, runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY },
+    );
+  },
+);
+
+export const setCanonicalRoadExecutionPaused = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressivePauseKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (typeof record.paused !== 'boolean') {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadPause', deliveryId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return setCanonicalRoadExecutionPausedTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      record.paused,
+      Number(record.canonicalSchemaVersion),
+      Date.now(),
+      { envValue: process.env.CANONICAL_PROGRESSIVE_FUEL_AUTHORITY, runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY },
+    );
+  },
+);
+
+export const purchaseCanonicalCatalogAsset = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (containsForbiddenNonDeliveryXpClientKeys(record) || !hasOnlyCanonicalCatalogPurchaseKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const purchaseId = String(record.purchaseId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalCatalogPurchase', purchaseId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return purchaseCanonicalCatalogAssetTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.catalogModelId ?? ''),
+      purchaseId,
+      String(record.assetType ?? ''),
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_CATALOG_PURCHASE,
+        nonDeliveryXpEnvValue: process.env.CANONICAL_NON_DELIVERY_XP_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const createCanonicalVehicleLease = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalLeaseStartKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const leaseIntentId = String(record.leaseIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalVehicleLease', leaseIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return createCanonicalVehicleLeaseTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.catalogModelId ?? ''),
+      leaseIntentId,
+      String(record.leasePeriod ?? ''),
+      Date.now(),
+      { envValue: process.env.CANONICAL_CORE_VEHICLE_STAFF_CASH },
+    );
+  },
+);
+
+export const hireCanonicalDriver = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (containsForbiddenNonDeliveryXpClientKeys(record) || !hasOnlyCanonicalDriverHireKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const hireIntentId = String(record.hireIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalDriverHire', hireIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return hireCanonicalDriverTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.poolId ?? ''),
+      hireIntentId,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_CORE_VEHICLE_STAFF_CASH,
+        nonDeliveryXpEnvValue: process.env.CANONICAL_NON_DELIVERY_XP_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const fireCanonicalDriver = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalDriverFireKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const fireIntentId = String(record.fireIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalDriverFire', fireIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return fireCanonicalDriverTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.driverId ?? ''),
+      fireIntentId,
+      Date.now(),
+      { envValue: process.env.CANONICAL_CORE_VEHICLE_STAFF_CASH },
+    );
+  },
+);
+
+export const sellCanonicalFleetAsset = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalVehicleSaleKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const saleIntentId = String(record.saleIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalVehicleSale', saleIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return sellCanonicalFleetAssetTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.assetId ?? ''),
+      saleIntentId,
+      Date.now(),
+      { envValue: process.env.CANONICAL_CORE_VEHICLE_STAFF_CASH },
+    );
+  },
+);
+
+export const recoverCanonicalVehicle = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalVehicleRecoveryKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const recoveryIntentId = String(record.recoveryIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalVehicleRecovery', recoveryIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return recoverCanonicalVehicleTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.assetId ?? ''),
+      recoveryIntentId,
+      { envValue: process.env.CANONICAL_CORE_VEHICLE_STAFF_CASH },
+    );
+  },
+);
+
+export const settleCanonicalDailyOpexInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalDailyOpexKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalDailyOpex', auth.identity.uid))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return settleCanonicalDailyOpexInternalTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_DAILY_OPEX,
+        expectedPeriodIndex:
+          record.expectedPeriodIndex === undefined ? undefined : Number(record.expectedPeriodIndex),
+      },
+    );
+  },
+);
+
+export const openCanonicalWarehouse = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (containsForbiddenNonDeliveryXpClientKeys(record) || !hasOnlyCanonicalWarehouseOpenKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const openIntentId = String(record.openIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalWarehouseOpen', openIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return openCanonicalWarehouseTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.cityId ?? ''),
+      String(record.warehouseType ?? ''),
+      openIntentId,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_WAREHOUSE_AUTHORITY,
+        nonDeliveryXpEnvValue: process.env.CANONICAL_NON_DELIVERY_XP_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const upgradeCanonicalWarehouse = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (containsForbiddenNonDeliveryXpClientKeys(record) || !hasOnlyCanonicalWarehouseUpgradeKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const warehouseId = String(record.warehouseId ?? '');
+    const upgradeIntentId = String(record.upgradeIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalWarehouseUpgrade', warehouseId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return upgradeCanonicalWarehouseTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      warehouseId,
+      upgradeIntentId,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_WAREHOUSE_AUTHORITY,
+        nonDeliveryXpEnvValue: process.env.CANONICAL_NON_DELIVERY_XP_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const bootstrapInternalCanonicalCargoMarket = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (!hasOnlyCanonicalCargoBootstrapKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (
+      !(await consumeRateLimit(auth.identity.uid, 'canonicalCargoMarketBootstrap', auth.identity.uid))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return bootstrapInternalCanonicalCargoMarketTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      { envValue: process.env.CANONICAL_CARGO_MARKET_AUTHORITY },
+    );
+  },
+);
+
+export const buyCanonicalCargo = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (containsForbiddenNonDeliveryXpClientKeys(record) || !hasOnlyCanonicalCargoBuyKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const purchaseIntentId = String(record.purchaseIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalCargoBuy', purchaseIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return buyCanonicalCargoTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.cityId ?? ''),
+      String(record.productId ?? ''),
+      Number(record.quantity),
+      String(record.warehouseId ?? ''),
+      purchaseIntentId,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_CARGO_MARKET_AUTHORITY,
+        nonDeliveryXpEnvValue: process.env.CANONICAL_NON_DELIVERY_XP_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const sellCanonicalCargo = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason };
+    }
+    if (containsForbiddenNonDeliveryXpClientKeys(record) || !hasOnlyCanonicalCargoSellKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const saleIntentId = String(record.saleIntentId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalCargoSell', saleIntentId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return sellCanonicalCargoTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      String(record.cityId ?? ''),
+      String(record.productId ?? ''),
+      Number(record.quantity),
+      String(record.warehouseId ?? ''),
+      saleIntentId,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_CARGO_MARKET_AUTHORITY,
+        nonDeliveryXpEnvValue: process.env.CANONICAL_NON_DELIVERY_XP_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const advanceCanonicalProductionMarketInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalMarketTickKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalProductionMarketTick',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return advanceCanonicalProductionMarketTickTransaction(
+      getFirestore(),
+      Date.now(),
+      { envValue: process.env.CANONICAL_PRODUCTION_MARKET_TICK_AUTHORITY },
+    );
+  },
+);
+
+export const generateCanonicalProductionRoadBatchInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProductionRoadIssuanceKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalProductionRoadContractIssuance',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return generateCanonicalProductionRoadBatchTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_ROAD_CONTRACT_ISSUANCE_AUTHORITY,
+        eventEnvValue: process.env.CANONICAL_CONTRACT_WORLD_EVENT_AUTHORITY,
+        runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY,
+        expiryEnvValue: process.env.CANONICAL_ROAD_CONTRACT_GAME_TIME_EXPIRY,
+        refreshEnvValue: process.env.CANONICAL_ROAD_CONTRACT_REFRESH_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+      },
+    );
+  },
+);
+
+export const refreshCanonicalRoadContractBatchInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalRoadRefreshKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const intent = parseCanonicalRefreshIntentId(record.refreshIntentId);
+    if (!intent.ok) return { ok: false, reason: intent.reason };
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalRoadContractRefresh',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return generateCanonicalProductionRoadBatchTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      {
+        envValue: process.env.CANONICAL_ROAD_CONTRACT_ISSUANCE_AUTHORITY,
+        eventEnvValue: process.env.CANONICAL_CONTRACT_WORLD_EVENT_AUTHORITY,
+        runtimeEnvValue: process.env.CANONICAL_FLEET_RUNTIME_LOCATION_AUTHORITY,
+        expiryEnvValue: process.env.CANONICAL_ROAD_CONTRACT_GAME_TIME_EXPIRY,
+        refreshEnvValue: process.env.CANONICAL_ROAD_CONTRACT_REFRESH_AUTHORITY,
+        progressionEnvValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY,
+        refreshIntentId: intent.intentId,
+      },
+    );
+  },
+);
+
+export const initializeCanonicalCompanyProgressionInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (containsForbiddenProgressionClientKeys(record) || !hasOnlyCanonicalProgressionInitKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalCompanyProgressionInit',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    const result = await initializeCanonicalCompanyProgressionForNewAccount(
+      getFirestore(),
+      auth.identity.uid,
+      Date.now(),
+      { envValue: process.env.CANONICAL_COMPANY_PROGRESSION_AUTHORITY },
+    );
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      alreadyInitialized: result.alreadyInitialized,
+      progressionRevision: result.state.progressionRevision,
+    };
+  },
+);
+
+export const advanceCanonicalContractClock = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalContractClockSpeedKeys({ canonicalSchemaVersion: record.canonicalSchemaVersion })) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Object.keys(record).some((key) => key !== 'canonicalSchemaVersion')) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalContractClock', auth.identity.uid))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return advanceCanonicalContractClockTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Number(record.canonicalSchemaVersion),
+      Date.now(),
+      { envValue: process.env.CANONICAL_ROAD_CONTRACT_GAME_TIME_EXPIRY },
+    );
+  },
+);
+
+export const setCanonicalContractClockSpeed = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalContractClockSpeedKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalContractClock', `speed:${auth.identity.uid}`))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return setCanonicalContractClockSpeedTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      Number(record.gameSpeed),
+      Number(record.canonicalSchemaVersion),
+      Date.now(),
+      { envValue: process.env.CANONICAL_ROAD_CONTRACT_GAME_TIME_EXPIRY },
+    );
+  },
+);
+
+export const setCanonicalContractClockPaused = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalContractClockPauseKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalContractClock', `pause:${auth.identity.uid}`))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return setCanonicalContractClockPausedTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      record.paused === true,
+      Number(record.canonicalSchemaVersion),
+      Date.now(),
+      { envValue: process.env.CANONICAL_ROAD_CONTRACT_GAME_TIME_EXPIRY },
+    );
+  },
+);
+
+export const claimCanonicalLocalReward = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalLocalRewardKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const rewardId = String(record.rewardId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalLocalReward', rewardId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    if (isCanonicalClientRewardXpAllowed()) {
+      return claimCanonicalClientRewardTransaction(getFirestore(), auth.identity.uid, rewardId, Date.now());
+    }
+    return claimCanonicalLocalRewardTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      rewardId,
+      Date.now(),
+      { envValue: process.env.CANONICAL_LOCAL_REWARD_AUTHORITY },
+    );
+  },
+);
+
+export const previewCanonicalLegacyProgressionMigrationInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressionMigrationPreviewKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalProgressionMigrationPreview',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return previewCanonicalLegacyProgressionMigration(getFirestore(), auth.identity.uid, Date.now(), {
+      envValue: process.env.CANONICAL_PROGRESSION_MIGRATION,
+    });
+  },
+);
+
+export const freezeCanonicalProgressionMigrationSourceInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressionMigrationFreezeKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const policy = record.migrationPolicyVersion;
+    if (
+      policy !== undefined &&
+      policy !== CANONICAL_PROGRESSION_MIGRATION_SOURCE_POLICY_VERSION
+    ) {
+      return { ok: false, reason: 'MIGRATION_SOURCE_POLICY_UNKNOWN' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalProgressionMigrationFreeze',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return freezeCanonicalProgressionMigrationSource(getFirestore(), auth.identity.uid, Date.now(), {
+      envValue: process.env.CANONICAL_PROGRESSION_MIGRATION,
+      migrationPolicyVersion: typeof policy === 'string' ? policy : undefined,
+    });
+  },
+);
+
+export const cutoverCanonicalLegacyProgressionMigrationInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressionImmediateCutoverKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const policy = record.cutoverPolicyVersion;
+    if (policy !== undefined && policy !== CANONICAL_PROGRESSION_IMMEDIATE_CUTOVER_POLICY_VERSION) {
+      return { ok: false, reason: 'MIGRATION_SOURCE_POLICY_UNKNOWN' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalProgressionImmediateCutover',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return cutoverCanonicalLegacyProgressionMigration(getFirestore(), auth.identity.uid, Date.now(), {
+      envValue: process.env.CANONICAL_PROGRESSION_IMMEDIATE_CUTOVER,
+      cutoverPolicyVersion: typeof policy === 'string' ? policy : undefined,
+    });
+  },
+);
+
+export const applyCanonicalLegacyProgressionMigrationInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalProgressionMigrationApplyKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    if (
+      !(await consumeRateLimit(
+        auth.identity.uid,
+        'canonicalProgressionMigrationApply',
+        auth.identity.uid,
+      ))
+    ) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return applyCanonicalLegacyProgressionMigration(getFirestore(), auth.identity.uid, Date.now(), {
+      envValue: process.env.CANONICAL_PROGRESSION_MIGRATION,
+    });
+  },
+);
+
+export const claimCanonicalClientReward = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) return { ok: false, reason: auth.reason };
+    if (!hasOnlyCanonicalClientRewardClaimKeys(record) || !hasOnlyCanonicalLocalRewardKeys(record)) {
+      return { ok: false, reason: 'invalid-request' };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA' };
+    }
+    const rewardId = String(record.rewardId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalClientReward', rewardId))) {
+      return { ok: false, reason: 'rate-limited' };
+    }
+    return claimCanonicalClientRewardTransaction(getFirestore(), auth.identity.uid, rewardId, Date.now());
+  },
+);
+
+export const upgradeCanonicalFleetAsset = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, assetId: String(record.assetId ?? '') };
+    }
+    if (!hasOnlyCanonicalFleetUpgradeKeys(record)) {
+      return { ok: false, reason: 'invalid-request', assetId: String(record.assetId ?? '') };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA', assetId: String(record.assetId ?? '') };
+    }
+    const assetId = String(record.assetId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalFleetUpgrade', assetId))) {
+      return { ok: false, reason: 'rate-limited', assetId };
+    }
+    return upgradeCanonicalFleetAssetTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      assetId,
+      String(record.upgradeType ?? ''),
+      String(record.upgradeIntentId ?? ''),
+      Date.now(),
+      { envValue: process.env.CANONICAL_FLEET_MUTATIONS },
+    );
+  },
+);
+
+export const settleCanonicalRoadDeliveryInternal = onCall(
+  VEHICLE_MARKETPLACE_FUNCTION_OPTIONS,
+  async (request) => {
+    const auth = resolveLeaderboardIdentity(request);
+    const record = requestRecord(request.data);
+    if (!auth.ok) {
+      return { ok: false, reason: auth.reason, deliveryId: String(record.deliveryId ?? '') };
+    }
+    if (!hasOnlyCanonicalRoadSettleKeys(record)) {
+      return { ok: false, reason: 'invalid-request', deliveryId: String(record.deliveryId ?? '') };
+    }
+    if (Number(record.canonicalSchemaVersion) !== 1) {
+      return { ok: false, reason: 'UNSUPPORTED_SCHEMA', deliveryId: String(record.deliveryId ?? '') };
+    }
+    const deliveryId = String(record.deliveryId ?? '');
+    if (!(await consumeRateLimit(auth.identity.uid, 'canonicalRoadSettle', deliveryId))) {
+      return { ok: false, reason: 'rate-limited', deliveryId };
+    }
+    return settleCanonicalRoadDeliveryInternalTransaction(
+      getFirestore(),
+      auth.identity.uid,
+      deliveryId,
+      Date.now(),
+      { envValue: process.env.CANONICAL_ROAD_SERVER_CASH_SHADOW },
+    );
   },
 );
 

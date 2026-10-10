@@ -1,0 +1,470 @@
+{
+  "sourceHash": "sha256:c970f9006b9f05c1495ed9f49120f68407378ddf18865d1ded198b4926617b68",
+  "contentHash": "sha256:672c4830e596d116edb239078764fd094e199c4d20db969d9f4481a6ff6760a7",
+  "stats": {
+    "sourceFeatureCount": 1560,
+    "candidateObjectCount": 456,
+    "logicalPortCount": 273,
+    "logisticsEligibleCount": 97,
+    "passengerOnlyCount": 155,
+    "localMaritimeCount": 0,
+    "provisionalCount": 273,
+    "unresolvedCount": 0
+  },
+  "cityAssociations": [
+    {
+      "gameplayCityId": "izmir",
+      "geoCityId": "city.tur.ne.1159149371",
+      "associationType": "DIRECT",
+      "portIds": [
+        "infra.tur.port.cdea96093a6f",
+        "infra.tur.port.10506d71bc1d",
+        "infra.tur.port.2809a53dd4b3",
+        "infra.tur.port.82d5227d0b91",
+        "infra.tur.port.463668c2cc08",
+        "infra.tur.port.06db470e96a1",
+        "infra.tur.port.74ba29c051ac",
+        "infra.tur.port.795e0c40a044",
+        "infra.tur.port.14d6fdeb1427",
+        "infra.tur.port.58d640134639"
+      ],
+      "primaryPortCandidateId": "infra.tur.port.cdea96093a6f",
+      "notes": "Primary candidate is the nearest LOGISTICS_ELIGIBLE port within direct radius (eligibility before distance)."
+    },
+    {
+      "gameplayCityId": "istanbul",
+      "geoCityId": "city.tur.ne.1159151579",
+      "associationType": "DIRECT",
+      "portIds": [
+        "infra.tur.port.d697ddfcbe9f",
+        "infra.tur.port.3eeaea0655f5",
+        "infra.tur.port.91dc9c591ed7",
+        "infra.tur.port.54e8e975fca5",
+        "infra.tur.port.a155f87bf878",
+        "infra.tur.port.1a5a7923d8dd",
+        "infra.tur.port.8f50b86c39b0",
+        "infra.tur.port.01a3f9f1e426",
+        "infra.tur.port.69f3dbf6a104",
+        "infra.tur.port.a83e2d137cb8",
+        "infra.tur.port.4608d0e16c89",
+        "infra.tur.port.92de567d78f4",
+        "infra.tur.port.7a601868c8c0",
+        "infra.tur.port.e24b174b15f9",
+        "infra.tur.port.cd93c0e5d8cb",
+        "infra.tur.port.86ce257a5cbc",
+        "infra.tur.port.5b6585324bc6",
+        "infra.tur.port.64a6118d9eb9",
+        "infra.tur.port.56b3663d89e2",
+        "infra.tur.port.2d0ad21816ae",
+        "infra.tur.port.9c72f150f3ad",
+        "infra.tur.port.a9ae63a5fc18",
+        "infra.tur.port.4f85b7d5b883",
+        "infra.tur.port.a72c94ad4d6e",
+        "infra.tur.port.b8652a8e1d7c",
+        "infra.tur.port.9f6a6a4584ca",
+        "infra.tur.port.a381dbfb5668",
+        "infra.tur.port.f1fdc0fb2e92",
+        "infra.tur.port.bd32ce97aa6f",
+        "infra.tur.port.21a3ed9f4429",
+        "infra.tur.port.4de79ae3f147",
+        "infra.tur.port.a0fe22360ff0"
+      ],
+      "primaryPortCandidateId": "infra.tur.port.d697ddfcbe9f",
+      "notes": "Primary candidate is the nearest LOGISTICS_ELIGIBLE port within direct radius (eligibility before distance)."
+    },
+    {
+      "gameplayCityId": "ankara",
+      "geoCityId": "city.tur.ne.1159151255",
+      "associationType": "NONE",
+      "portIds": [],
+      "primaryPortCandidateId": null,
+      "notes": "No LOGISTICS_ELIGIBLE port within regional radius. Passenger/marina facilities are not assigned."
+    },
+    {
+      "gameplayCityId": "bursa",
+      "geoCityId": "city.tur.ne.1159149373",
+      "associationType": "DIRECT",
+      "portIds": [
+        "infra.tur.port.b8652a8e1d7c",
+        "infra.tur.port.21a3ed9f4429",
+        "infra.tur.port.9c72f150f3ad",
+        "infra.tur.port.92de567d78f4",
+        "infra.tur.port.cd93c0e5d8cb",
+        "infra.tur.port.64a6118d9eb9",
+        "infra.tur.port.5b6585324bc6",
+        "infra.tur.port.e24b174b15f9",
+        "infra.tur.port.7a601868c8c0",
+        "infra.tur.port.86ce257a5cbc",
+        "infra.tur.port.56b3663d89e2",
+        "infra.tur.port.9f6a6a4584ca",
+        "infra.tur.port.4608d0e16c89",
+        "infra.tur.port.a83e2d137cb8",
+        "infra.tur.port.2d0ad21816ae",
+        "infra.tur.port.bd32ce97aa6f",
+        "infra.tur.port.a9ae63a5fc18",
+        "infra.tur.port.4f85b7d5b883",
+        "infra.tur.port.a72c94ad4d6e",
+        "infra.tur.port.54e8e975fca5",
+        "infra.tur.port.a381dbfb5668",
+        "infra.tur.port.f1fdc0fb2e92",
+        "infra.tur.port.91dc9c591ed7",
+        "infra.tur.port.4de79ae3f147",
+        "infra.tur.port.a0fe22360ff0"
+      ],
+      "primaryPortCandidateId": "infra.tur.port.b8652a8e1d7c",
+      "notes": "Primary candidate is the nearest LOGISTICS_ELIGIBLE port within direct radius (eligibility before distance)."
+    },
+    {
+      "gameplayCityId": "antalya",
+      "geoCityId": "city.tur.ne.1159147717",
+      "associationType": "DIRECT",
+      "portIds": [
+        "infra.tur.port.c3522b0d4419",
+        "infra.tur.port.9e386c709305"
+      ],
+      "primaryPortCandidateId": "infra.tur.port.c3522b0d4419",
+      "notes": "Primary candidate is the nearest LOGISTICS_ELIGIBLE port within direct radius (eligibility before distance)."
+    },
+    {
+      "gameplayCityId": "adana",
+      "geoCityId": "city.tur.ne.1159149381",
+      "associationType": "REGIONAL",
+      "portIds": [
+        "infra.tur.port.673d1753b588",
+        "infra.tur.port.689819c60681",
+        "infra.tur.port.e211e31e46d0"
+      ],
+      "primaryPortCandidateId": "infra.tur.port.673d1753b588",
+      "notes": "Regional LOGISTICS_ELIGIBLE port only. Not a city-center facility."
+    },
+    {
+      "gameplayCityId": "diyarbakir",
+      "geoCityId": "city.tur.ne.1159135229",
+      "associationType": "NONE",
+      "portIds": [],
+      "primaryPortCandidateId": null,
+      "notes": "No LOGISTICS_ELIGIBLE port within regional radius. Passenger/marina facilities are not assigned."
+    },
+    {
+      "gameplayCityId": "trabzon",
+      "geoCityId": "city.tur.ne.1159146377",
+      "associationType": "DIRECT",
+      "portIds": [
+        "infra.tur.port.8fd1b0cb14f1",
+        "infra.tur.port.3ad2f166cbbb",
+        "infra.tur.port.a183acd647e6",
+        "infra.tur.port.e9ca327f0913"
+      ],
+      "primaryPortCandidateId": "infra.tur.port.8fd1b0cb14f1",
+      "notes": "Primary candidate is the nearest LOGISTICS_ELIGIBLE port within direct radius (eligibility before distance)."
+    }
+  ],
+  "logisticsSample": [
+    {
+      "id": "infra.tur.port.01a3f9f1e426",
+      "name": "Marport Ana",
+      "class": "CONTAINER_PORT"
+    },
+    {
+      "id": "infra.tur.port.06db470e96a1",
+      "name": "Unnamed harbour",
+      "class": "INDUSTRIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.10506d71bc1d",
+      "name": "Unnamed harbour",
+      "class": "INDUSTRIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.14d6fdeb1427",
+      "name": "Davutlar Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.1a5a7923d8dd",
+      "name": "Kumport",
+      "class": "CONTAINER_PORT"
+    },
+    {
+      "id": "infra.tur.port.1c9ed007d4f4",
+      "name": "Abana Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.21a3ed9f4429",
+      "name": "Tirilye Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.271961030c10",
+      "name": "Port of Erdemir",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.274234298324",
+      "name": "Lapseki Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.2809a53dd4b3",
+      "name": "Aliağa Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.2a0471e30ad8",
+      "name": "Alanya Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.2d0ad21816ae",
+      "name": "Karayolları Tavşancıl Asfalt İskelesi",
+      "class": "INDUSTRIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.39436499a8e2",
+      "name": "Bandırma Liman Sahası",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.3ad2f166cbbb",
+      "name": "Çamburnu Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.3b300189b311",
+      "name": "İbrice Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.3c10a7fe3421",
+      "name": "Port of Fatsa",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.3eeaea0655f5",
+      "name": "Port of Istanbul",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.3f9844aac899",
+      "name": "Port of Inebolu",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.4608d0e16c89",
+      "name": "Anadolu Port",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.463668c2cc08",
+      "name": "Özdere Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.4de79ae3f147",
+      "name": "Derince Liman",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.4f85b7d5b883",
+      "name": "Diler Demir Çelik Endüstri ve Ticaret A.Ş. Liman Tesisleri",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.4fd025b725f7",
+      "name": "Taşucu Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.50968070d0b1",
+      "name": "Amasra Büyük Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.54e8e975fca5",
+      "name": "Bostancı Kayıkçı Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.56b3663d89e2",
+      "name": "Alemdar Limanı",
+      "class": "INDUSTRIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.58d640134639",
+      "name": "Güzelçamlı Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.5b6585324bc6",
+      "name": "Unnamed harbour",
+      "class": "INDUSTRIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.5e11b50c80c7",
+      "name": "Sinop Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.611b4a16f36a",
+      "name": "Port of Ordu",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.61d8cb18bddb",
+      "name": "Datça Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.64a6118d9eb9",
+      "name": "Unnamed harbour",
+      "class": "INDUSTRIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.673d1753b588",
+      "name": "Yumurtalik Limani",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.689819c60681",
+      "name": "Sönmez Port",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.69f3dbf6a104",
+      "name": "Marport Bati",
+      "class": "CONTAINER_PORT"
+    },
+    {
+      "id": "infra.tur.port.6e88fd84d0b7",
+      "name": "Gumbet limani",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.7123149c01a5",
+      "name": "İlişi Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.73cf9a1f8393",
+      "name": "İçdaş Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.73e3affe2234",
+      "name": "Kurucaşile Limanı",
+      "class": "COMMERCIAL_PORT"
+    },
+    {
+      "id": "infra.tur.port.74ba29c051ac",
+      "name": "Dikili Limanı",
+      "class": "COMMERCIAL_PORT"
+    }
+  ],
+  "seaAccess": {
+    "resolved": 96,
+    "unresolved": 1,
+    "logisticsEvaluated": 97,
+    "failureReasons": {
+      "NO_NAVIGABLE_WATER_NEARBY": 0,
+      "PORT_GEOMETRY_AMBIGUOUS": 0,
+      "LAND_INTERSECTION": 0,
+      "CLUSTER_AMBIGUITY": 0,
+      "INSUFFICIENT_SOURCE": 0,
+      "HARBOUR_GEOMETRY_MISSING": 0,
+      "SOURCE_POSITION_SUSPECT": 0,
+      "UNKNOWN": 0,
+      "LAND_MASK_COARSE": 0,
+      "HARBOUR_WATER_MISSING": 0,
+      "NO_APPROACH_PATH": 0,
+      "NO_TRUNK_CONNECTION": 0,
+      "PORT_POSITION_INLAND": 1,
+      "SOURCE_AMBIGUOUS": 0
+    }
+  },
+  "maritimeSmoke": [
+    {
+      "id": "istanbul-izmir",
+      "fromPortId": "infra.tur.port.d697ddfcbe9f",
+      "toPortId": "infra.tur.port.cdea96093a6f",
+      "ok": true,
+      "meters": 505790,
+      "nodeCount": 124,
+      "channels": [
+        "BOSPHORUS",
+        "DARDANELLES"
+      ],
+      "requiredChannels": [
+        "DARDANELLES"
+      ],
+      "notes": "diagnostic path only"
+    },
+    {
+      "id": "istanbul-trabzon",
+      "fromPortId": "infra.tur.port.d697ddfcbe9f",
+      "toPortId": "infra.tur.port.8fd1b0cb14f1",
+      "ok": true,
+      "meters": 981020,
+      "nodeCount": 110,
+      "channels": [
+        "BOSPHORUS"
+      ],
+      "requiredChannels": [
+        "BOSPHORUS"
+      ],
+      "notes": "diagnostic path only"
+    },
+    {
+      "id": "izmir-antalya",
+      "fromPortId": "infra.tur.port.cdea96093a6f",
+      "toPortId": "infra.tur.port.c3522b0d4419",
+      "ok": true,
+      "meters": 672848,
+      "nodeCount": 77,
+      "channels": [],
+      "requiredChannels": [],
+      "notes": "diagnostic path only"
+    },
+    {
+      "id": "bursa-trabzon",
+      "fromPortId": "infra.tur.port.b8652a8e1d7c",
+      "toPortId": "infra.tur.port.8fd1b0cb14f1",
+      "ok": true,
+      "meters": 1067810,
+      "nodeCount": 110,
+      "channels": [
+        "BOSPHORUS"
+      ],
+      "requiredChannels": [
+        "BOSPHORUS"
+      ],
+      "notes": "diagnostic path only"
+    },
+    {
+      "id": "marmara-black-sea",
+      "fromPortId": "infra.tur.port.01a3f9f1e426",
+      "toPortId": "infra.tur.port.1c9ed007d4f4",
+      "ok": true,
+      "meters": 494975,
+      "nodeCount": 72,
+      "channels": [
+        "BOSPHORUS"
+      ],
+      "requiredChannels": [
+        "BOSPHORUS"
+      ],
+      "notes": "diagnostic path only"
+    },
+    {
+      "id": "antalya-adana",
+      "fromPortId": "infra.tur.port.c3522b0d4419",
+      "toPortId": "infra.tur.port.673d1753b588",
+      "ok": true,
+      "meters": 520169,
+      "nodeCount": 47,
+      "channels": [],
+      "requiredChannels": [],
+      "notes": "diagnostic path only"
+    }
+  ]
+}

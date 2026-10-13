@@ -138,7 +138,7 @@ Production unlocks that still read the local level or reputation are listed abov
 
 ## 18. Remaining local write behavior
 
-`addCompanyXp` and reputation mutations still update the save for guest and pre-migration accounts. After cutover they are `POST_MIGRATION_LOCAL_PROGRESSION_WRITES_NON_AUTHORITATIVE`. The canonical UI ignores them. Level-up and reputation toasts still fire from those local commits: `POST_CUTOVER_LOCAL_XP_TOAST_NON_AUTHORITATIVE`. Mission and milestone progress UI stays local. That is a remaining partial split: company level/XP/reputation display can be canonical while mission progress is not.
+`addCompanyXp` and reputation mutations still update the save for guest and pre-migration accounts. Step 29AO blocks those company writes for a canonical account when `CANONICAL_PROGRESSION_WRITE_AUTHORITY=INTERNAL_TEST` (`MAP_V2_CANONICAL_PROGRESSION_WRITE_AUTHORITY.md`). With that gate off, the local commits and their toasts remain. Mission and milestone progress UI stays local.
 
 ## 19. Migration readiness impact
 
@@ -159,3 +159,5 @@ Do not enable public migration, public Contracts, or ROAD settlement from this r
 The dominant remaining blocker, once the internal read gate is on, is `PROGRESSION_UI_ELIGIBILITY_STILL_LOCAL`: displayed company level can be canonical while warehouse, shop, contract, map, and ad gates still follow the local save. Local progression writes and their toasts are the adjacent write-authority gap (`POST_MIGRATION_LOCAL_PROGRESSION_WRITES_NON_AUTHORITATIVE`). Public migration UI stays unwired until those are explicit.
 
 Step 29AN switched shop and warehouse client level gates, plus the Map v2 preview snapshot, behind `CANONICAL_PROGRESSION_ELIGIBILITY_AUTHORITY=INTERNAL_TEST` (`MAP_V2_CANONICAL_PROGRESSION_ELIGIBILITY_AUTHORITY.md`). Contracts, the tab badge, ads, and delivery boost stay local. Status `CANONICAL_PROGRESSION_ELIGIBILITY_AUTHORITY_PASS_PARTIAL`. Cash authority and ROAD settlement are unchanged.
+
+Step 29AO blocks local company XP and reputation writes for a canonical account when `CANONICAL_PROGRESSION_WRITE_AUTHORITY=INTERNAL_TEST`. Guest and unmigrated writes stay local.

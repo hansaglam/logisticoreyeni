@@ -54,6 +54,14 @@ import {
 } from '../domain/canonicalMultimodalCompletionQueue';
 import { acceptCanonicalMultimodalShipment } from '../services/canonicalMultimodalService';
 import { requireClientProgressionLevel } from '../services/canonicalProgressionEligibility';
+import { resolveLiveCanonicalProgressionWrite } from '../services/canonicalProgressionWriteAuthority';
+import {
+  applyGuardedCompanyReputation,
+  applyGuardedCompanyXp,
+  normalizeClientProgressionWriteSource,
+  type ClientProgressionWriteSource,
+} from '../domain/canonicalProgressionWriteAuthority';
+import type { ReputationChangeInput } from '../simulation/reputationService';
 import { getTurkeyRoadTransferAccessArtifact } from '../mapV2/world/multimodalRoadTransferAccessLoader';
 import {
   attemptRewardClaim,
@@ -285,7 +293,6 @@ import {
   calculateDeliveryReputationResult,
   deliveryFailureReasonToReputationDelta,
 } from '../simulation/reputationSettlement';
-import { mergeReputationIntoStore } from '../simulation/reputationService';
 import {
   applyAuthoritativeMarketplaceSales,
   applyCompanyStatsEvent,
@@ -1247,6 +1254,26 @@ function appendLevelUpEvents(
     );
   }
   return log;
+}
+
+function companyProgressionWriteIsLocal(
+  player: Player,
+  source: ClientProgressionWriteSource,
+): boolean {
+  return resolveLiveCanonicalProgressionWrite(player, source).decision === 'LOCAL_AUTHORITATIVE';
+}
+
+function commitCompanyReputation(
+  player: Player,
+  history: GameStore['reputationHistory'],
+  input: ReputationChangeInput,
+  source: ClientProgressionWriteSource,
+) {
+  return applyGuardedCompanyReputation(
+    { player, reputationHistory: history },
+    input,
+    resolveLiveCanonicalProgressionWrite(player, source),
+  );
 }
 
 function commitXpResult(
@@ -2216,7 +2243,7 @@ export interface GameStore extends StoreGameState {
   resetContextualGuideForReplay: () => void;
   /** Restores pre-replay durable guide; no-op if not in manual replay. */
   exitContextualGuideReplay: () => void;
-  addCompanyXp: (amount: number, reason?: string) => void;
+  addCompanyXp: (amount: number, reason?: string) => boolean;
   checkLevelUp: () => void;
   getLevelBenefits: (level?: number) => LevelBenefits;
   /** Debug/test — production'da gizlenmeli */
@@ -3497,8 +3524,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const reputationPatch =
       reputationReward !== 0
-        ? mergeReputationIntoStore(
-            { player: state.player, reputationHistory: state.reputationHistory },
+        ? commitCompanyReputation(
+            state.player,
+            state.reputationHistory,
             {
               source: 'mission-reward',
               delta: reputationReward,
@@ -3506,6 +3534,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
               idempotencyKey: `reputation:mission:${missionId}`,
               createdAt: state.currentTime,
             },
+            'mission_reward',
           )
         : null;
 
@@ -3655,8 +3684,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const reputationPatch =
       reputationReward !== 0
-        ? mergeReputationIntoStore(
-            { player: state.player, reputationHistory: state.reputationHistory },
+        ? commitCompanyReputation(
+            state.player,
+            state.reputationHistory,
             {
               source: 'milestone-reward',
               delta: reputationReward,
@@ -3664,6 +3694,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
               idempotencyKey: `reputation:milestone:${milestoneId}`,
               createdAt: state.currentTime,
             },
+            'milestone_reward',
           )
         : null;
 
@@ -3793,8 +3824,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const reputationPatch =
       reputationReward !== 0
-        ? mergeReputationIntoStore(
-            { player: state.player, reputationHistory: state.reputationHistory },
+        ? commitCompanyReputation(
+            state.player,
+            state.reputationHistory,
             {
               source: 'weekly-reward',
               delta: reputationReward,
@@ -3802,6 +3834,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
               idempotencyKey: `reputation:weekly:${seasonKey}:${objectiveId}`,
               createdAt: state.currentTime,
             },
+            'weekly_objective_reward',
           )
         : null;
 
@@ -3845,18 +3878,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return { success: true };
   },
 
-  addCompanyXp: (amount: number, _reason?: string) => {
+  addCompanyXp: (amount: number, reason?: string) => {
     if (amount <= 0) {
-      return;
+      return false;
     }
 
     const state = get();
-    const xpResult = applyXpToPlayer(normalizePlayerProgress(state.player), amount);
-    commitXpResult(get, set, xpResult);
+    const guarded = applyGuardedCompanyXp(
+      normalizePlayerProgress(state.player),
+      amount,
+      resolveLiveCanonicalProgressionWrite(state.player, normalizeClientProgressionWriteSource(reason)),
+    );
+    if (!guarded.applied || !guarded.xpResult) {
+      return false;
+    }
+    commitXpResult(get, set, guarded.xpResult);
+    return true;
   },
 
   checkLevelUp: () => {
     const state = get();
+    if (!companyProgressionWriteIsLocal(state.player, 'level_check')) {
+      return;
+    }
     const normalized = normalizePlayerProgress(state.player);
 
     if (normalized.level >= levelConfig.maxLevel) {
@@ -8252,7 +8296,10 @@ const elapsed = plan.elapsed;
     const destinationCityName = getCityName(delivery.destinationCityId);
     const locationToastMessage = formatDeliveryCompleteLocationToast(destinationCityName, !!delivery.driverId);
     const notificationMessage = `${locationToastMessage} Net kâr: ${formatNotificationMoney(netProfit)}`;
-    const eventMessage = `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`;
+    const deliveryXpIsLocal = companyProgressionWriteIsLocal(state.player, 'delivery_completed');
+    const eventMessage = deliveryXpIsLocal
+      ? `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)} · +${xpGain} XP`
+      : `${routeLabel} teslimatı tamamlandı. Ödeme: ${formatNotificationMoney(settlement.grossRevenue)} · Net kâr: ${formatNotificationMoney(netProfit)}`;
     const completedTruck = newSimState.trucks.find((t) => t.id === delivery.truckId);
     const driverXpGain = calculateDriverDeliveryXp({
       contract,
@@ -8300,8 +8347,9 @@ const elapsed = plan.elapsed;
         );
       }
     }
-    const reputationPatch = mergeReputationIntoStore(
-      { player: state.player, reputationHistory: state.reputationHistory },
+    const reputationPatch = commitCompanyReputation(
+      state.player,
+      state.reputationHistory,
       {
         source: 'delivery-settlement',
         delta: deliveryReputationResult.delta,
@@ -8311,6 +8359,7 @@ const elapsed = plan.elapsed;
         deliveryId,
         contractId: contract.id,
       },
+      'delivery_completed',
     );
     const truckArrivalMessage = completedTruck
       ? `${completedTruck.name} ${destinationCityName}'ya ulaştı ve yeni işler için hazır.`
@@ -8648,8 +8697,9 @@ const elapsed = plan.elapsed;
             : reason === 'cancelled'
               ? 'Sözleşme iptal edildi'
               : 'Teslimat başarısız oldu';
-    const reputationPatch = mergeReputationIntoStore(
-      { player: state.player, reputationHistory: state.reputationHistory },
+    const reputationPatch = commitCompanyReputation(
+      state.player,
+      state.reputationHistory,
       {
         source: failureReputation.source,
         delta: failureReputation.delta,
@@ -8660,6 +8710,7 @@ const elapsed = plan.elapsed;
         deliveryId,
         contractId: contract?.id,
       },
+      reason === 'cancelled' ? 'delivery_cancel' : 'delivery_failure',
     );
     const settledDeliveries = (merged.activeDeliveries ?? []).map((item) =>
       item.id === deliveryId ? { ...item, settledAt } : item,
@@ -8871,8 +8922,9 @@ const elapsed = plan.elapsed;
 
     const reputationPatch =
       resolved.reputationDelta !== 0
-        ? mergeReputationIntoStore(
-            { player: nextPlayer, reputationHistory: state.reputationHistory },
+        ? commitCompanyReputation(
+            nextPlayer,
+            state.reputationHistory,
             {
               source: 'delivery-operation',
               delta: resolved.reputationDelta,
@@ -8881,6 +8933,7 @@ const elapsed = plan.elapsed;
               idempotencyKey: `vehicle-recovery:${truckId}:${actionId}:${state.currentTime}`,
               createdAt: state.currentTime,
             },
+            'vehicle_recovery',
           )
         : {
             player: nextPlayer,
@@ -10013,13 +10066,21 @@ const elapsed = plan.elapsed;
       }
 
       if (result.effects.playerXpDelta > 0) {
-        nextPlayer = applyXpToPlayer(nextPlayer, result.effects.playerXpDelta).player;
+        const guardedXp = applyGuardedCompanyXp(
+          nextPlayer,
+          result.effects.playerXpDelta,
+          resolveLiveCanonicalProgressionWrite(nextPlayer, 'operation_choice'),
+        );
+        if (guardedXp.applied && guardedXp.xpResult) {
+          nextPlayer = guardedXp.xpResult.player;
+        }
       }
 
       let operationReputationHistory = state.reputationHistory;
       if (result.effects.reputationDelta !== 0) {
-        const reputationPatch = mergeReputationIntoStore(
-          { player: nextPlayer, reputationHistory: state.reputationHistory },
+        const reputationPatch = commitCompanyReputation(
+          nextPlayer,
+          state.reputationHistory,
           {
             source: 'delivery-operation',
             delta: result.effects.reputationDelta,
@@ -10034,6 +10095,7 @@ const elapsed = plan.elapsed;
             deliveryId,
             eventId,
           },
+          'operation_choice',
         );
         nextPlayer = reputationPatch.player;
         operationReputationHistory = reputationPatch.reputationHistory;
@@ -10770,15 +10832,22 @@ const elapsed = plan.elapsed;
       ),
     });
 
+    const saleXpIsLocal = companyProgressionWriteIsLocal(state.player, 'trade_sale');
+    const saleNotificationMessage =
+      profit > 0
+        ? saleXpIsLocal
+          ? `Kâr: ${formatNotificationMoney(profit)} · +${xpGain} XP`
+          : `Kâr: ${formatNotificationMoney(profit)}`
+        : saleXpIsLocal
+          ? `Satış tamamlandı · +${xpGain} XP`
+          : 'Satış tamamlandı';
+
     try {
       get().addNotification({
         time: state.currentTime,
         type: 'success',
         title: 'Ürün satıldı',
-        message:
-          profit > 0
-            ? `Kâr: ${formatNotificationMoney(profit)} · +${xpGain} XP`
-            : `Satış tamamlandı · +${xpGain} XP`,
+        message: saleNotificationMessage,
         actionLabel: 'Finansı Gör',
         actionTarget: 'finance',
         autoDismissMs: 3000,

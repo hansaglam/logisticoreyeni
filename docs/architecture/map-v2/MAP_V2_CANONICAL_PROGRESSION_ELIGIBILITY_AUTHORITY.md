@@ -107,7 +107,7 @@ Switched reputation input: Map v2 preview requirements. Contract reputation filt
 
 ## 19. Local write divergence
 
-`addCompanyXp` and reputation mutations still update the save. Switched gates ignore those numbers after cutover. Toasts remain `POST_CUTOVER_LOCAL_XP_TOAST_NON_AUTHORITATIVE`.
+Step 29AO stops canonical accounts from advancing those save fields when the write gate is on. Switched eligibility gates already ignore the local numbers. See `MAP_V2_CANONICAL_PROGRESSION_WRITE_AUTHORITY.md`.
 
 ## 20. UI security versus server authorization
 
@@ -119,10 +119,10 @@ A client lock is not a security boundary. Issuance, reward claims, and other ser
 
 ## 22. Remaining blockers
 
-`CONTRACTS_ELIGIBILITY_BLOCKED_LOCAL_CONTRACT_SOURCE`. `PROGRESSION_ELIGIBILITY_BLOCKED_ECONOMY_PARITY` for ads and delivery boost. `POST_MIGRATION_LOCAL_PROGRESSION_WRITES_NON_AUTHORITATIVE`. `PUBLIC_MIGRATION_UI_UNWIRED`.
+`CONTRACTS_ELIGIBILITY_BLOCKED_LOCAL_CONTRACT_SOURCE`. `PROGRESSION_ELIGIBILITY_BLOCKED_ECONOMY_PARITY` for ads and delivery boost. `PUBLIC_MIGRATION_UI_UNWIRED`. Local company writes for a canonical account are gated in Step 29AO.
 
 ## 23. Next step
 
 Do not switch contract filters, ad grants, or delivery boost in the next step. Do not enable public migration or ROAD settlement.
 
-Recommended Step 29AO: post-cutover local progression write authority, so local XP and reputation mutations stop being presented as company authority. Leave Contracts source, cash, and RAIL/SEA/AIR unchanged.
+Step 29AO landed the internal write gate. The next domain gap is contract eligibility, which still reads the local save. Leave cash and RAIL/SEA/AIR unchanged.

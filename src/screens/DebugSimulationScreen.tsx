@@ -1173,8 +1173,8 @@ export default function DebugSimulationScreen() {
             <DebugButton label="Save Now" onPress={() => void handleSaveNow()} variant="primary" />
             <DebugButton label="Clear Save" onPress={() => void handleClearSave()} variant="danger" />
             <DebugButton label="Reset Game" onPress={handleResetGame} variant="danger" />
-            <DebugButton label="+50 XP" onPress={() => { addCompanyXp(50, 'debug'); setInfo('+50 XP eklendi'); }} />
-            <DebugButton label="+250 XP" onPress={() => { addCompanyXp(250, 'debug'); setInfo('+250 XP eklendi'); }} variant="primary" />
+            <DebugButton label="+50 XP" onPress={() => { setInfo(addCompanyXp(50, 'debug') ? '+50 XP eklendi' : 'Yerel şirket XP yazımı kapalı'); }} />
+            <DebugButton label="+250 XP" onPress={() => { setInfo(addCompanyXp(250, 'debug') ? '+250 XP eklendi' : 'Yerel şirket XP yazımı kapalı'); }} variant="primary" />
           </View>
         </Section>
 

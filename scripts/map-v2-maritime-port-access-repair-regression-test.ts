@@ -2,6 +2,7 @@
  * Map V2 Step 12 port-access repair.
  * Run: npx tsx scripts/map-v2-maritime-port-access-repair-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -110,7 +111,7 @@ assert(dijkstraMaritime(bos, chain, 'black', 'marm')?.channels.includes('BOSPHOR
 assert(dijkstraMaritime(bos, chain, 'marm', 'aeg')?.channels.includes('DARDANELLES') === true, 'Marmara → Aegean uses Dardanelles');
 assert(dijkstraMaritime(bos, chain.filter((edge) => edge.channel !== 'BOSPHORUS'), 'black', 'marm') == null, 'no Marmara↔Black land shortcut');
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(!world.includes('turkey-sea-network'), 'player country does not load sea graph');
 assert(!world.includes('turkey-ports'), 'player country does not load ports');
 assert(read('src/mapV2/screens/MapV2TransportLegend.tsx').includes('active: false'), 'Denizyolu Yakında');
@@ -134,7 +135,10 @@ assert(
   runtime.smokeTests.some((row) => row.ok && row.requiredChannels.includes('BOSPHORUS')),
   'smoke still validates Bosphorus when endpoints exist',
 );
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 
 console.log(`\nPASS: ${pass}`);

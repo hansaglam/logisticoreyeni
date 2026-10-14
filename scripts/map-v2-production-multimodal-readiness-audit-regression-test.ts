@@ -2,6 +2,7 @@
  * Map V2 Step 21 — production multimodal readiness audit isolation.
  * Run: npx tsx scripts/map-v2-production-multimodal-readiness-audit-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -48,7 +49,10 @@ assert(!read('src/store/gameStore.ts').includes('prototypes/productionMultimodal
 assert(!read('src/simulation/contracts.ts').includes('prototypes/productionMultimodal'), 'contracts.ts does not import prototypes');
 assert(!read('src/simulation/delivery.ts').includes('prototypes/productionMultimodal'), 'delivery.ts does not import prototypes');
 assert(!read('src/screens/ContractsScreen.tsx').includes('prototypes/productionMultimodal'), 'ContractsScreen does not import prototypes');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(!read('firestore.rules').includes('multimodalShipments'), 'firestore.rules have no multimodal collection');
 assert(!read('src/simulation/contracts.ts').includes('ROAD_RAIL_ROAD'), 'generator not emitting multimodal patterns');

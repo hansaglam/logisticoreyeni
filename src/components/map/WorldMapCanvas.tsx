@@ -114,6 +114,11 @@ export type WorldMapCanvasProps = {
   onDeliveryPress?: (deliveryId: string) => void;
   onMapGestureActiveChange?: (active: boolean) => void;
   calibrationMode?: boolean;
+  /**
+   * Fill the command-center slot. Gesture size comes from this view's layout,
+   * not from the portrait canvas constants.
+   */
+  fill?: boolean;
 };
 
 interface MapBounds {
@@ -184,6 +189,7 @@ function WorldMapCanvasInner(
     onDeliveryPress,
     onMapGestureActiveChange,
     calibrationMode = false,
+    fill = false,
   }: WorldMapCanvasProps,
   ref: React.ForwardedRef<WorldMapCanvasHandle>,
 ) {
@@ -196,7 +202,14 @@ function WorldMapCanvasInner(
 
   const { width: screenWidth } = useWindowDimensions();
   const isCompact = screenWidth < COMPACT_BREAKPOINT;
-  const viewportHeight = isCompact ? MAP_VIEWPORT_HEIGHT_COMPACT : MAP_VIEWPORT_HEIGHT;
+  const [filledHeight, setFilledHeight] = useState(0);
+  const portraitHeight = isCompact ? MAP_VIEWPORT_HEIGHT_COMPACT : MAP_VIEWPORT_HEIGHT;
+  const viewportHeight = fill ? filledHeight : portraitHeight;
+  const handleFillLayout = useCallback((event: { nativeEvent: { layout: { height: number } } }) => {
+    const next = Math.round(event.nativeEvent.layout.height);
+    if (next <= 0) return;
+    setFilledHeight((current) => (Math.abs(current - next) < 2 ? current : next));
+  }, []);
   const [mapImageReady, setMapImageReady] = React.useState(false);
   const calibrationSession = useMapCalibrationSession();
   const calibrationDots = calibrationSession.points;
@@ -563,7 +576,10 @@ function WorldMapCanvasInner(
   }, []);
 
   return (
-    <View style={styles.wrapper}>
+    <View
+      style={fill ? styles.wrapperFill : styles.wrapper}
+      onLayout={fill ? handleFillLayout : undefined}
+    >
       {showCalibrationUi ? (
         <View style={styles.calibrationBadge} pointerEvents="none">
           <Text style={styles.calibrationBadgeText}>
@@ -583,6 +599,7 @@ function WorldMapCanvasInner(
 
       <InteractiveTurkeyMap
         ref={mapRef}
+        fill={fill}
         viewportHeight={viewportHeight}
         contentSize={contentSize}
         onCalibrationTap={handleCalibrationTap}
@@ -797,6 +814,7 @@ export default WorldMapCanvas;
 
 const styles = StyleSheet.create({
   wrapper: { width: '100%' },
+  wrapperFill: { flex: 1, width: '100%', minHeight: 0, alignSelf: 'stretch' },
   fallback: { ...StyleSheet.absoluteFillObject, backgroundColor: MAP_VIEWPORT_BACKGROUND },
   calibrationBadge: {
     position: 'absolute',

@@ -27,6 +27,7 @@ import {
   clampWorldCamera,
   contentFitScale,
   getVisibleWorldBounds,
+  preserveGeographicCenter,
   screenToWorld,
   worldToScreen,
   worldFitScale,
@@ -367,6 +368,7 @@ function MapV2GeographicCanvasInner(
   const [visibleIds, setVisibleIds] = useState<string[]>(allIds);
   const [activeLod, setActiveLod] = useState<GeometryLodId>('WORLD_LOW');
   const fittedRef = useRef(false);
+  const prevViewportRef = useRef({ width: 0, height: 0 });
 
   const scale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -874,13 +876,37 @@ function MapV2GeographicCanvasInner(
   }, [roadPaintRev, roadChunkIds, roadFade]);
 
   useEffect(() => {
-    vw.value = viewport.width;
-    vh.value = viewport.height;
-    if (viewport.width > 0 && !fittedRef.current) {
+    const nextWidth = viewport.width;
+    const nextHeight = viewport.height;
+    vw.value = nextWidth;
+    vh.value = nextHeight;
+    if (nextWidth <= 0 || nextHeight <= 0) return;
+    const previous = prevViewportRef.current;
+    if (!fittedRef.current) {
       applyHome(false);
       fittedRef.current = true;
+      prevViewportRef.current = { width: nextWidth, height: nextHeight };
+      return;
     }
-  }, [applyHome, vh, viewport.height, viewport.width, vw]);
+    if (
+      previous.width > 0 &&
+      previous.height > 0 &&
+      (previous.width !== nextWidth || previous.height !== nextHeight)
+    ) {
+      const next = preserveGeographicCenter({
+        previousWidth: previous.width,
+        previousHeight: previous.height,
+        nextWidth,
+        nextHeight,
+        scale: scale.value,
+        translateX: translateX.value,
+        translateY: translateY.value,
+      });
+      translateX.value = next.translateX;
+      translateY.value = next.translateY;
+    }
+    prevViewportRef.current = { width: nextWidth, height: nextHeight };
+  }, [applyHome, scale, translateX, translateY, vh, viewport.height, viewport.width, vw]);
 
   const cameraTransform = useDerivedValue(() => [
     { translateX: translateX.value },

@@ -2,6 +2,7 @@
  * Map V2 Step 15 airport cargo QA + logistics eligibility.
  * Run: npx tsx scripts/map-v2-airport-cargo-qa-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -227,7 +228,7 @@ assert(assoc.trabzon.airLogisticsReadiness === 'READY', 'trabzon READY');
 assert(assoc.diyarbakir.airLogisticsReadiness === 'READY', 'diyarbakir READY');
 assert(assoc.bursa.airLogisticsReadiness === 'NOT_READY', 'bursa NOT_READY');
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(!world.includes('turkey-airport-cargo-qa'), 'dashboard does not load cargo QA dataset');
 assert(!world.includes('countryAirportLoader'), 'dashboard does not import airport loader');
 assert(!world.includes('devAirportLayer'), 'no dashboard airport markers');
@@ -235,7 +236,10 @@ assert(read('src/mapV2/screens/MapV2TransportLegend.tsx').includes("key: 'AIR'")
 assert(read('src/mapV2/generated/transport/turkey-air-network.json').includes('SOURCE_PENDING'), 'AIR graph pending');
 assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('City AIR logistics readiness'), 'DEV city readiness panel');
 assert(read('src/mapV2/screens/MapV2AirportPrototypeScreen.tsx').includes('CARGO_READY'), 'DEV cargo filter');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 
 console.log(`\nPASS: ${pass}`);

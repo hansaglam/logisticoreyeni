@@ -3,6 +3,7 @@
  * Run: npx tsx scripts/map-v2-multimodal-duration-policy-regression-test.ts
  */
 import './test-globals';
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -69,7 +70,10 @@ assert(!read('src/domain/multimodalDurationPolicy.ts').includes('DEV_SIMULATION_
 assert(read('src/mapV2/domain/multimodal.ts').includes("RAIL: 'FOUNDATION_ONLY'"), 'RAIL FOUNDATION_ONLY');
 assert(read('src/mapV2/domain/multimodal.ts').includes("SEA: 'FOUNDATION_ONLY'"), 'SEA FOUNDATION_ONLY');
 assert(read('src/mapV2/domain/multimodal.ts').includes("AIR: 'FOUNDATION_ONLY'"), 'AIR FOUNDATION_ONLY');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen unchanged');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged');
 assert(!read('src/simulation/contracts.ts').includes('estimateMultimodalShipmentDuration'), 'generator does not call duration policy');
 assert(!read('src/store/gameStore.ts').includes('estimateMultimodalShipmentDuration'), 'gameStore does not call duration policy');

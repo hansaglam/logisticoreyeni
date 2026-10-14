@@ -253,3 +253,25 @@ export function cameraToFitBounds(input: {
     contentBounds: input.contentBounds,
   });
 }
+
+/**
+ * Keep the geographic point under the viewport center when the view size changes.
+ * Scale stays. This is not a new fit-to-bounds.
+ */
+export function preserveGeographicCenter(input: {
+  previousWidth: number;
+  previousHeight: number;
+  nextWidth: number;
+  nextHeight: number;
+  scale: number;
+  translateX: number;
+  translateY: number;
+}): { translateX: number; translateY: number } {
+  const safeScale = input.scale > 0 ? input.scale : 1;
+  const centerX = (input.previousWidth / 2 - input.translateX) / safeScale;
+  const centerY = (input.previousHeight / 2 - input.translateY) / safeScale;
+  return {
+    translateX: input.nextWidth / 2 - centerX * safeScale,
+    translateY: input.nextHeight / 2 - centerY * safeScale,
+  };
+}

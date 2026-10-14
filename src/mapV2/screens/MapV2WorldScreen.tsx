@@ -7,79 +7,31 @@
  * - WORLD with no selection → close this experience (Simülasyon Testi), not the app
  * Android hardwareBackPress follows the same stack.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  AccessibilityInfo,
-  Animated,
-  BackHandler,
-  Easing,
-  Pressable,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useAppDialog } from '../../components/AppDialogProvider';
 import { IconButton, ScreenHeader } from '../../components/ui';
 import { useTabBarLayout } from '../../hooks/useTabBarLayout';
-import { useEffectiveCompanyProgression } from '../../hooks/useEffectiveCompanyProgression';
-import {
-  isCanonicalProgressionEligibilityAllowed,
-  resolveProgressionEligibilityAuthority,
-} from '../../domain/canonicalProgressionEligibility';
-import { useGameStore } from '../../store/gameStore';
 import { colors, radius, spacing, typography } from '../../theme';
-import type { CameraSnapshot } from '../geo/worldCamera';
+import MapV2ExperienceCanvas from '../experience/MapV2ExperienceCanvas';
+import { useMapV2GeographicExperience } from '../experience/useMapV2GeographicExperience';
+import { canEnterCountryMode } from '../gameplay/mapV2ExperienceNavigation';
 import {
-  COUNTRY_ENTER_FADE_MS,
-  COUNTRY_ENTER_WORLD_PADDING,
-  COUNTRY_ENTER_ZOOM_MS,
-  COUNTRY_OVERVIEW_MAX_SCALE_FACTOR,
-  COUNTRY_OVERVIEW_MIN_SCALE_FACTOR,
-  WORLD_ENTER_COUNTRY_MAX_SCALE_FACTOR,
-  WORLD_NAV_MAX_SCALE_FACTOR,
-  WORLD_MIN_SCALE_FACTOR,
-} from '../geo/worldCamera';
-import {
-  canEnterCityDetail,
-  canEnterCountryMode,
-  countryFocusBounds,
-  countryWorkingBounds,
-  mapV2BackAction,
-  type MapV2ExperienceMode,
-} from '../gameplay/mapV2ExperienceNavigation';
-import {
-  buildCityOperationViewModel,
-  cityNodeOperationHint,
   selectActiveDeliveriesByCity,
   selectOwnedTrucksByCity,
   selectWarehousesByCity,
-  type CityNodeOperationHint,
-  type CityOperationViewModel,
 } from '../gameplay/cityOperation';
 import {
-  buildPlayerProgressionSnapshot,
-  canOpenCityOperations,
-  evaluateCityProgression,
   MAP_V2_CITY_PROGRESSION_DEFAULT_MODE,
   type MapV2CityProgressionMode,
 } from '../gameplay/cityProgression';
 import { isRailPlayerVisualPreviewEnabled } from '../gameplay/railPlayerVisual';
 import { isSeaPlayerVisualPreviewEnabled } from '../gameplay/seaPlayerVisual';
 import { isAirPlayerVisualPreviewEnabled } from '../gameplay/airPlayerVisual';
-import {
-  buildLegacyAllUnlockedPolicies,
-  buildTurkeyCityProgressionPreviewPolicies,
-} from '../gameplay/cityProgression.preview.fixture';
-import { resolveCountryGameplayAvailability } from '../gameplay/mapV2CountryAvailability.fixture';
 import { resolveCityDisplayName } from '../presentation/cityDisplayName';
 import { resolveCountryDisplayName } from '../presentation/countryDisplayName';
-import { paintForCountryAvailability, paintForCountryDashboard, MAP_V2_OCEAN } from '../presentation/countryPaint';
-import { availabilityStatusLabel, mapV2ExperienceCopy } from '../presentation/mapV2ExperienceCopy';
-import MapV2GeographicCanvas, { type MapV2GeographicCanvasHandle } from '../world/MapV2GeographicCanvas';
-import { mappedGeoCityIds, gameplayIdForGeoCity, turkeyOverviewGameplayCities } from '../world/countryCityLoader';
-import { getCountryRecord } from '../world/worldBoundaryLoader';
+import { mapV2ExperienceCopy } from '../presentation/mapV2ExperienceCopy';
 import MapV2CityDetailScreen from './MapV2CityDetailScreen';
 import MapV2CityLockPanel from './MapV2CityLockPanel';
 import MapV2CitySelectionPanel from './MapV2CitySelectionPanel';
@@ -94,10 +46,6 @@ type Props = {
   cityProgressionMode?: MapV2CityProgressionMode;
 };
 
-const EMPTY_WAREHOUSES: never[] = [];
-const EMPTY_TRUCKS: never[] = [];
-const EMPTY_DELIVERIES: never[] = [];
-
 export default function MapV2WorldScreen({
   onClose,
   cityProgressionMode = MAP_V2_CITY_PROGRESSION_DEFAULT_MODE,
@@ -106,300 +54,55 @@ export default function MapV2WorldScreen({
   const { width: windowWidth } = useWindowDimensions();
   const compactPhone = windowWidth < 360;
   const { showDialog } = useAppDialog();
-  const canvasRef = useRef<MapV2GeographicCanvasHandle>(null);
-  const [mode, setMode] = useState<MapV2ExperienceMode>('WORLD');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [focusCountryId, setFocusCountryId] = useState<string | null>(null);
-  const [worldCamera, setWorldCamera] = useState<CameraSnapshot | null>(null);
-  const [reduceMotion, setReduceMotion] = useState(false);
-  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
-  const [countryTab, setCountryTab] = useState<CountryModeTab>('map');
   const [progressionMode, setProgressionMode] = useState<MapV2CityProgressionMode>(cityProgressionMode);
   const [railVisualPreview, setRailVisualPreview] = useState(() => isRailPlayerVisualPreviewEnabled());
   const [seaVisualPreview, setSeaVisualPreview] = useState(() => isSeaPlayerVisualPreviewEnabled());
   const [airVisualPreview, setAirVisualPreview] = useState(() => isAirPlayerVisualPreviewEnabled());
-  const [worldApproach, setWorldApproach] = useState(false);
-  const fade = useRef(new Animated.Value(0)).current;
-  const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const overviewCities = useMemo(() => turkeyOverviewGameplayCities(), []);
-  const homeCityId = useGameStore((state) => state.player?.homeCityId ?? null);
-  const progressionPlayer = useGameStore((state) => state.player);
-  const effectiveProgression = useEffectiveCompanyProgression(progressionPlayer);
-  const progressionEligibility = resolveProgressionEligibilityAuthority({
-    eligibilityGateEnabled: isCanonicalProgressionEligibilityAllowed(),
-    progression: effectiveProgression,
-    localLevel: Math.max(1, progressionPlayer?.level ?? progressionPlayer?.companyLevel ?? 1),
-    localReputation: progressionPlayer?.reputation ?? 0,
+  const experience = useMapV2GeographicExperience({
+    cityProgressionMode: progressionMode,
+    railVisualPreview,
+    seaVisualPreview,
+    airVisualPreview,
+    enterCountryOnSelect: false,
+    cityDetailEnabled: true,
+    handleHardwareBack: true,
+    onClose,
   });
-  const playerLevel =
-    progressionEligibility.canEvaluate && progressionEligibility.level != null
-      ? progressionEligibility.level
-      : 0;
-  const reputation =
-    progressionEligibility.canEvaluate && progressionEligibility.reputation != null
-      ? progressionEligibility.reputation
-      : 0;
-  const money = useGameStore((state) => state.player?.money ?? 0);
-  const warehouses = useGameStore((state) => state.player?.warehouses) ?? EMPTY_WAREHOUSES;
-  const trucks = useGameStore((state) => state.player?.trucks) ?? EMPTY_TRUCKS;
-  const deliveries = useGameStore((state) => state.activeDeliveries) ?? EMPTY_DELIVERIES;
-  const selectedCity = selectedCityId
-    ? overviewCities.find((city) => city.geoCityId === selectedCityId)
-    : undefined;
-  const operationsByGeoCityId = useMemo(() => {
-    const snapshot = { homeCityId, warehouses, trucks, deliveries };
-    const next: Record<string, CityOperationViewModel> = {};
-    for (const city of overviewCities) {
-      const legacyCityId = gameplayIdForGeoCity(city.geoCityId);
-      if (!legacyCityId) continue;
-      next[city.geoCityId] = buildCityOperationViewModel({
-        legacyCityId,
-        geoCityId: city.geoCityId,
-        displayName: resolveCityDisplayName(city, 'tr'),
-        snapshot,
-      });
-    }
-    return next;
-  }, [deliveries, homeCityId, overviewCities, trucks, warehouses]);
-  const operationHints = useMemo(() => {
-    const next: Record<string, CityNodeOperationHint> = {};
-    for (const [geoCityId, model] of Object.entries(operationsByGeoCityId)) {
-      next[geoCityId] = cityNodeOperationHint(model);
-    }
-    return next;
-  }, [operationsByGeoCityId]);
-  const selectedOperation = selectedCityId ? operationsByGeoCityId[selectedCityId] : undefined;
-  const progressionSnapshot = useMemo(
-    () =>
-      buildPlayerProgressionSnapshot({
-        homeCityId,
-        level: playerLevel,
-        reputation,
-        money,
-        warehouses,
-        trucks,
-        deliveries,
-      }),
-    [deliveries, homeCityId, money, playerLevel, reputation, trucks, warehouses],
-  );
-  const cityPolicies = useMemo(() => {
-    if (progressionMode === 'LEGACY_ALL_UNLOCKED') {
-      return buildLegacyAllUnlockedPolicies(homeCityId);
-    }
-    return buildTurkeyCityProgressionPreviewPolicies(homeCityId);
-  }, [homeCityId, progressionMode]);
-  const cityProgression = useMemo(
-    () =>
-      evaluateCityProgression({
-        mode: progressionMode,
-        snapshot: progressionSnapshot,
-        policies: cityPolicies,
-      }),
-    [cityPolicies, progressionMode, progressionSnapshot],
-  );
-  const availabilityByGeoCityId = useMemo(() => {
-    const next: Record<string, (typeof cityProgression.byCityId)[string]['availability']> = {};
-    for (const city of overviewCities) {
-      const gameplayId = gameplayIdForGeoCity(city.geoCityId);
-      if (!gameplayId) continue;
-      const state = cityProgression.byCityId[gameplayId];
-      if (state) next[city.geoCityId] = state.availability;
-    }
-    return next;
-  }, [cityProgression, overviewCities]);
-  const selectedGameplayId = selectedCityId ? gameplayIdForGeoCity(selectedCityId) : undefined;
-  const selectedCityProgression = selectedGameplayId ? cityProgression.byCityId[selectedGameplayId] : undefined;
-  const selectedCityLocked = selectedCityProgression
-    ? !selectedCityProgression.canOpenDetail
-    : false;
-  const turkeyCityLayer = useMemo(() => {
-    if (mode !== 'COUNTRY' || focusCountryId !== 'country.tur') return null;
-    return {
-      cities: overviewCities,
-      selectedCityId,
-      mappedGeoCityIds: mappedGeoCityIds(),
-      showLegacyHalo: false,
-      presentation: 'DASHBOARD' as const,
-      operationHints,
-      availabilityByGeoCityId,
-      onSelectCity: setSelectedCityId,
-      resolveLabel: (city: (typeof overviewCities)[number]) => resolveCityDisplayName(city, 'tr'),
-    };
-  }, [availabilityByGeoCityId, focusCountryId, mode, operationHints, overviewCities, selectedCityId]);
-
-  useEffect(() => {
-    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
-      if (typeof value === 'boolean') setReduceMotion(value);
-    });
-    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', setReduceMotion);
-    return () => {
-      sub?.remove?.();
-      if (enterTimerRef.current) clearTimeout(enterTimerRef.current);
-    };
-  }, []);
-
-  const selected = selectedId ? getCountryRecord(selectedId) : undefined;
-  const availability = selectedId ? resolveCountryGameplayAvailability(selectedId) : null;
-  const displayName = resolveCountryDisplayName(selected, 'tr');
-  const focusRecord = focusCountryId ? getCountryRecord(focusCountryId) : undefined;
-  const animate = !reduceMotion;
-
-  const countryDrawIds = useMemo(() => {
-    if (mode !== 'COUNTRY' || !focusCountryId) return null;
-    return [focusCountryId];
-  }, [focusCountryId, mode]);
-
-  const countryPanBounds = useMemo(() => {
-    if (mode !== 'COUNTRY' || !focusRecord) return null;
-    return countryWorkingBounds(focusRecord, 'COUNTRY_HIGH');
-  }, [focusRecord, mode]);
-
-  const getCountryPaint = useCallback(
-    (geoCountryId: string, isSelected: boolean) => {
-      if (mode === 'COUNTRY') {
-        return paintForCountryDashboard();
-      }
-      return paintForCountryAvailability(resolveCountryGameplayAvailability(geoCountryId), isSelected);
-    },
-    [mode],
-  );
-
-  const enterCountry = useCallback(
-    (geoCountryId: string) => {
-      const nextAvailability = resolveCountryGameplayAvailability(geoCountryId);
-      if (!canEnterCountryMode(nextAvailability)) return;
-      const snapshot = canvasRef.current?.captureCamera() ?? null;
-      setWorldCamera(snapshot ? { ...snapshot } : null);
-      setSelectedId(geoCountryId);
-      setSelectedCityId(null);
-      const commit = () => {
-        setWorldApproach(false);
-        setFocusCountryId(geoCountryId);
-        setMode('COUNTRY');
-      };
-      if (!animate) {
-        commit();
-        return;
-      }
-      setWorldApproach(true);
-      if (enterTimerRef.current) clearTimeout(enterTimerRef.current);
-      enterTimerRef.current = setTimeout(() => {
-        Animated.timing(fade, {
-          toValue: 1,
-          duration: COUNTRY_ENTER_FADE_MS,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }).start(({ finished }) => {
-          if (!finished) return;
-          commit();
-          requestAnimationFrame(() => {
-            Animated.timing(fade, {
-              toValue: 0,
-              duration: COUNTRY_ENTER_FADE_MS + 40,
-              easing: Easing.in(Easing.cubic),
-              useNativeDriver: true,
-            }).start();
-          });
-        });
-      }, COUNTRY_ENTER_ZOOM_MS);
-    },
-    [animate, fade],
-  );
-
-  const returnFromCityDetail = useCallback(() => {
-    setMode('COUNTRY');
-  }, []);
-
-  const enterCityDetail = useCallback(
-    (geoCityId: string) => {
-      if (!canEnterCityDetail(geoCityId, new Set(mappedGeoCityIds()))) return;
-      const gameplayId = gameplayIdForGeoCity(geoCityId);
-      const availability = gameplayId ? cityProgression.byCityId[gameplayId]?.availability : undefined;
-      if (!canOpenCityOperations(geoCityId, new Set(mappedGeoCityIds()), availability)) return;
-      setSelectedCityId(geoCityId);
-      setMode('CITY_DETAIL');
-    },
-    [cityProgression],
-  );
-
-  const returnToWorld = useCallback(() => {
-    if (enterTimerRef.current) {
-      clearTimeout(enterTimerRef.current);
-      enterTimerRef.current = null;
-    }
-    fade.setValue(0);
-    setWorldApproach(false);
-    setMode('WORLD');
-    setFocusCountryId(null);
-    setSelectedCityId(null);
-    setCountryTab('map');
-    requestAnimationFrame(() => {
-      if (worldCamera) {
-        canvasRef.current?.restoreCamera(worldCamera, animate);
-      } else {
-        canvasRef.current?.applyHome(animate);
-      }
-    });
-  }, [animate, fade, worldCamera]);
-
-  useEffect(() => {
-    if (!worldApproach || mode !== 'WORLD' || !selectedId || !animate) return;
-    const record = getCountryRecord(selectedId);
-    if (!record) return;
-    const frame = requestAnimationFrame(() => {
-      canvasRef.current?.applyBounds(
-        countryFocusBounds(record, 'COUNTRY_HIGH'),
-        COUNTRY_ENTER_WORLD_PADDING,
-        true,
-      );
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [animate, mode, selectedId, worldApproach]);
-
-  useEffect(() => {
-    if (mode !== 'COUNTRY' || !focusCountryId || !focusRecord) return;
-    const bounds = countryWorkingBounds(focusRecord, 'COUNTRY_HIGH');
-    const frame = requestAnimationFrame(() => {
-      canvasRef.current?.applyBounds(bounds, 0, false);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [focusCountryId, focusRecord, mode]);
-
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      const action = mapV2BackAction(mode, {
-        selectedCityId,
-        selectedCountryId: selectedId,
-      });
-      if (action === 'EXIT_CITY_DETAIL') {
-        returnFromCityDetail();
-        return true;
-      }
-      if (action === 'CLEAR_CITY_SELECTION') {
-        setSelectedCityId(null);
-        return true;
-      }
-      if (action === 'EXIT_COUNTRY') {
-        returnToWorld();
-        return true;
-      }
-      if (action === 'CLEAR_COUNTRY_SELECTION') {
-        setSelectedId(null);
-        return true;
-      }
-      onClose();
-      return true;
-    });
-    return () => sub.remove();
-  }, [mode, onClose, returnFromCityDetail, returnToWorld, selectedCityId, selectedId]);
-
-  const onSelect = useCallback(
-    (geoCountryId: string | null) => {
-      if (mode === 'COUNTRY') return;
-      setSelectedId(geoCountryId);
-    },
-    [mode],
-  );
+  const {
+    canvasRef,
+    mode,
+    selectedId,
+    setSelectedId,
+    focusCountryId,
+    focusRecord,
+    selected,
+    availability,
+    displayName,
+    reduceMotion,
+    selectedCityId,
+    setSelectedCityId,
+    countryTab,
+    setCountryTab,
+    animate,
+    overviewCities,
+    homeCityId,
+    warehouses,
+    trucks,
+    deliveries,
+    selectedCity,
+    operationsByGeoCityId,
+    selectedOperation,
+    cityProgression,
+    availabilityByGeoCityId,
+    selectedCityProgression,
+    selectedCityLocked,
+    enterCountry,
+    returnFromCityDetail,
+    enterCityDetail,
+    returnToWorld,
+    gameplayCityCount,
+    countryStatus,
+  } = experience;
 
   const onPrimary = useCallback(() => {
     if (!selectedId || !availability) return;
@@ -444,23 +147,11 @@ export default function MapV2WorldScreen({
       }
       onComingSoon();
     },
-    [onComingSoon, onCountryDetails],
+    [onComingSoon, onCountryDetails, setCountryTab],
   );
 
   const headerTitle = mapV2ExperienceCopy.worldTitle;
   const headerSubtitle = mapV2ExperienceCopy.worldSubtitle;
-  const gameplayCityCount = focusCountryId === 'country.tur' ? mappedGeoCityIds().length : 0;
-  const worldMaxScale = worldApproach ? WORLD_ENTER_COUNTRY_MAX_SCALE_FACTOR : WORLD_NAV_MAX_SCALE_FACTOR;
-  const countryStatus = availabilityStatusLabel(
-    focusCountryId ? resolveCountryGameplayAvailability(focusCountryId) : 'STARTER_AVAILABLE',
-  );
-
-  useEffect(() => {
-    if (mode !== 'CITY_DETAIL') return;
-    if (!selectedOperation || selectedCityLocked) {
-      setMode('COUNTRY');
-    }
-  }, [mode, selectedCityLocked, selectedOperation]);
 
   if (mode === 'CITY_DETAIL' && selectedOperation && !selectedCityLocked) {
     return (
@@ -526,62 +217,7 @@ export default function MapV2WorldScreen({
         ]}
         pointerEvents={mode === 'COUNTRY' && countryTab !== 'map' ? 'none' : 'auto'}
       >
-        <MapV2GeographicCanvas
-          ref={canvasRef}
-          selectedId={mode === 'COUNTRY' ? focusCountryId : selectedId}
-          lodOverride={mode === 'COUNTRY' ? 'COUNTRY_HIGH' : 'AUTO'}
-          cullEnabled={mode === 'WORLD'}
-          onSelect={onSelect}
-          getCountryPaint={getCountryPaint}
-          homePolicy="INHABITED"
-          maxScaleFactor={mode === 'COUNTRY' ? COUNTRY_OVERVIEW_MAX_SCALE_FACTOR : worldMaxScale}
-          minScaleFactor={mode === 'COUNTRY' ? COUNTRY_OVERVIEW_MIN_SCALE_FACTOR : WORLD_MIN_SCALE_FACTOR}
-          contentBounds={countryPanBounds}
-          forcedDrawIds={countryDrawIds}
-          hitTestIds={mode === 'COUNTRY' ? [] : null}
-          cityLayer={turkeyCityLayer}
-          playerCorridorLayer={
-            mode === 'COUNTRY' && focusCountryId === 'country.tur'
-              ? {
-                  enabled: true,
-                  availabilityByGeoCityId,
-                  reduceMotion,
-                }
-              : null
-          }
-          playerRailCorridorLayer={
-            mode === 'COUNTRY' && focusCountryId === 'country.tur' && railVisualPreview
-              ? {
-                  enabled: true,
-                  availabilityByGeoCityId,
-                  reduceMotion,
-                }
-              : null
-          }
-          playerSeaCorridorLayer={
-            mode === 'COUNTRY' && focusCountryId === 'country.tur' && seaVisualPreview
-              ? {
-                  enabled: true,
-                  availabilityByGeoCityId,
-                  reduceMotion,
-                }
-              : null
-          }
-          playerAirCorridorLayer={
-            mode === 'COUNTRY' && focusCountryId === 'country.tur' && airVisualPreview
-              ? {
-                  enabled: true,
-                  availabilityByGeoCityId,
-                  reduceMotion,
-                }
-              : null
-          }
-          elasticGestures={mode !== 'COUNTRY'}
-          mapGesturesEnabled={mode !== 'COUNTRY'}
-          countryVisualProfile={mode === 'COUNTRY' ? 'DASHBOARD' : 'DEFAULT'}
-          viewportClip={mode === 'WORLD' ? 'ROUNDED' : 'NONE'}
-        />
-        <Animated.View pointerEvents="none" style={[styles.fade, { opacity: fade, backgroundColor: MAP_V2_OCEAN }]} />
+        <MapV2ExperienceCanvas experience={experience} />
       </View>
       {mode === 'COUNTRY' && __DEV__ ? (
         <View style={styles.devChips}>

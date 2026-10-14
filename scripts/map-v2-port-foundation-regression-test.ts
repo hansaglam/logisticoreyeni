@@ -2,6 +2,7 @@
  * Map V2 Step 10 SEA / PORT geographic foundation.
  * Run: npx tsx scripts/map-v2-port-foundation-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -151,7 +152,7 @@ assert(assoc.istanbul?.associationType === 'DIRECT', 'istanbul DIRECT');
 assert(['DIRECT', 'REGIONAL'].includes(assoc.adana?.associationType ?? ''), 'adana coastal/regional');
 assert((assoc.istanbul?.portIds.length ?? 0) > 1, 'istanbul multi-port');
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(!world.includes('countryPortLoader'), 'player country dashboard does not import port loader');
 assert(!world.includes('turkey-ports'), 'player country dashboard does not load turkey-ports.json');
 assert(!world.includes('turkey-sea-network'), 'player country dashboard does not load turkey-sea-network.json');
@@ -173,7 +174,10 @@ assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('POR
 assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('SEA / PORT infrastructure'), 'inspector SEA section');
 assert(existsSync(resolve(root, 'docs/architecture/map-v2/MAP_V2_SEA_PORT_FOUNDATION.md')), 'architecture doc');
 
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged');
 assert(read('src/mapV2/geo/playerFacingRoadCorridor.ts').includes('country dashboard'), 'ROAD corridor module intact');
 assert(read('src/mapV2/geo/playerFacingRailCorridor.ts').includes('PLAYER_RAIL_CORRIDOR_POLICY_VERSION'), 'RAIL corridor module intact');

@@ -2,6 +2,7 @@
  * Map V2 Step 7 RAIL ingest + DEV inspection contracts.
  * Run: npx tsx scripts/map-v2-rail-ingest-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -168,10 +169,13 @@ if (existsSync(fullPath)) {
 assert(read('src/mapV2/screens/MapV2TransportLegend.tsx').includes("key: 'RAIL'") && read('src/mapV2/screens/MapV2TransportLegend.tsx').includes('active: false'), 'player legend rail inactive');
 assert(read('src/mapV2/presentation/mapV2ExperienceCopy.ts').includes('legendSoon'), 'Yakında copy remains');
 assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('RAIL Haritasını Aç'), 'DEV rail map CTA');
-assert(read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('playerCorridorLayer'), 'country dashboard still player ROAD corridors');
-assert(!read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('railDebugLayer'), 'player country dashboard has no rail debug layer');
-assert(read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('playerRailCorridorLayer'), 'rail visual is a separate preview layer');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert((read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('playerCorridorLayer'), 'country dashboard still player ROAD corridors');
+assert(!(read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('railDebugLayer'), 'player country dashboard has no rail debug layer');
+assert((read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('playerRailCorridorLayer'), 'rail visual is a separate preview layer');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged pair');
 assert(!read('scripts/map-v2/ingest-turkey-roads.ts').includes('RAIL_JUNCTION'), 'ROAD ingest not rewritten as rail');
 assert(read('src/mapV2/geo/playerFacingRoadCorridor.ts').includes('country dashboard'), 'ROAD corridor module intact');

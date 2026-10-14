@@ -2,6 +2,7 @@
  * Map V2 City Detail foundation: selectors, identity, navigation.
  * Run: npx tsx scripts/map-v2-city-detail-foundation-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -125,7 +126,7 @@ assert(mapV2BackAction('COUNTRY', { selectedCityId: null, selectedCountryId: 'c'
 assert(mapV2BackAction('WORLD', { selectedCityId: null, selectedCountryId: 'c' }) === 'CLEAR_COUNTRY_SELECTION', 'world deselect');
 assert(mapV2BackAction('WORLD', { selectedCityId: null, selectedCountryId: null }) === 'CLOSE_EXPERIENCE', 'world close');
 
-const screen = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const screen = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(screen.includes("setMode('CITY_DETAIL')"), 'experience can enter CITY_DETAIL');
 assert(screen.includes('returnFromCityDetail'), 'city detail back restores country');
 assert(screen.includes('restoreCamera'), 'world camera restore remains');
@@ -139,7 +140,10 @@ assert(read('src/mapV2/screens/MapV2CityDetailScreen.tsx').includes('cityEmptyFl
 assert(read('src/mapV2/screens/MapV2CityDetailScreen.tsx').includes('cityEmptyJobs'), 'jobs empty state');
 assert(!read('src/mapV2/screens/MapV2CityDetailScreen.tsx').includes('roadLayer'), 'city detail does not mount ROAD');
 assert(!read('src/screens/MapScreen.tsx').includes('MapV2CityDetailScreen'), 'production MapScreen unchanged');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen no mapV2');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged');
 
 console.log(`\nPASS: ${pass}`);

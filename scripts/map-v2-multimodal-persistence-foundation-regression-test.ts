@@ -3,6 +3,7 @@
  * Run: npx tsx scripts/map-v2-multimodal-persistence-foundation-regression-test.ts
  */
 import './test-globals';
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -159,7 +160,10 @@ const contractBlock = deliverySrc.slice(
 assert(!contractBlock.includes('ROAD_RAIL_ROAD'), 'Contract has no mandatory multimodal pattern');
 assert(!contractBlock.includes('shipmentSchemaVersion'), 'Contract has no shipment schema');
 
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen unchanged');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged');
 assert(!read('src/store/gameStore.ts').includes('startMultimodalShipment'), 'no startMultimodalShipment action');
 assert(!read('src/store/gameStore.ts').includes('completeMultimodalShipment'), 'no completeMultimodalShipment action');

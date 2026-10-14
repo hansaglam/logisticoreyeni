@@ -2,6 +2,7 @@
  * Country dashboard corridor interaction polish.
  * Run: npx tsx scripts/map-v2-country-corridor-interaction-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -113,7 +114,7 @@ assert(
   'locked-selected color is not the unlocked connected steel',
 );
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(world.includes('selectedCityId={selectedCityId}'), 'list uses shared selectedCityId');
 assert(world.includes('onSelect={setSelectedCityId}'), 'list writes the same selection');
 assert(world.includes('onSelectCity: setSelectedCityId'), 'map writes the same selection');
@@ -133,7 +134,10 @@ assert(cache.includes('getCachedCorridorPath'), 'per-corridor geometry is cached
 assert(canvas.includes('COUNTRY_CORRIDOR_INTERACTION_DRAW_ORDER'), 'corridors batched by visual state');
 assert(canvas.includes('COUNTRY_CORRIDOR_SELECTION_FADE_MS'), 'selection fade respects the 180–250ms budget');
 assert(read('src/mapV2/screens/MapV2CitySelectionPanel.tsx').includes('COUNTRY_CORRIDOR_CONNECTED'), 'city card shares corridor accent');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 
 console.log(`\nPASS: ${pass}`);

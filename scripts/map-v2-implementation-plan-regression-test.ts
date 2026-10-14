@@ -3,6 +3,7 @@
  * Run: node --import tsx scripts/map-v2-implementation-plan-regression-test.ts
  */
 import { readFileSync } from 'node:fs';
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { resolve } from 'node:path';
 
 let pass = 0;
@@ -30,7 +31,11 @@ assert(pkg.includes('"react-native": "0.81.5"'), 'RN version snapshot');
 
 const mapScreen = read('src/screens/MapScreen.tsx');
 const worldCanvas = read('src/components/map/WorldMapCanvas.tsx');
-assert(!mapScreen.includes('mapV2'), 'MapScreen does not import mapV2');
+// SUPERSEDED MAP-02B: MapScreen may import the shared Map V2 viewport.
+// Store and unknown profiles still resolve LEGACY_MAP.
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'unknown' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
 assert(!mapScreen.includes('@shopify/react-native-skia'), 'MapScreen does not import Skia');
 assert(!worldCanvas.includes('mapV2'), 'WorldMapCanvas does not import mapV2');
 assert(!worldCanvas.includes('@shopify/react-native-skia'), 'WorldMapCanvas does not import Skia');

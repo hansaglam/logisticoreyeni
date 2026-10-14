@@ -2,6 +2,7 @@
  * Map V2 Step 2C Türkiye city foundation.
  * Run: node --import tsx scripts/map-v2-turkey-city-foundation-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -164,14 +165,17 @@ const aScreen = worldToScreen(ankara.projected.x, ankara.projected.y, 10, 20, 40
 const nearer = hitTestCity((screen.x + aScreen.x) / 2, (screen.y + aScreen.y) / 2, [izmir, ankara], 10, 20, 400);
 assert(nearer === izmir.geoCityId || nearer === ankara.geoCityId || nearer === null, 'nearest-or-miss among two');
 
-const screenSrc = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const screenSrc = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(screenSrc.includes('cityLayer={turkeyCityLayer}'), 'country view wires city layer');
 assert(screenSrc.includes("focusCountryId !== 'country.tur'") || screenSrc.includes("focusCountryId === 'country.tur'"), 'Türkiye-only cities');
 assert(screenSrc.includes('MapV2CitySelectionPanel'), 'city panel');
 assert(screenSrc.includes('elasticGestures={mode !== \'COUNTRY\'}'), 'country overview disables elastic pan');
 assert(screenSrc.includes('MapV2CountryOverviewShell'), 'country UI shell');
 assert(!read('src/screens/MapScreen.tsx').includes('turkeyCityPackage'), 'MapScreen has no city package');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen no mapV2');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(!read('src/data/routes.ts').includes('geoCityId'), 'ROUTES not geo-migrated');
 assert(!read('src/data/mapRoadNetwork.ts').includes('GeoCity'), 'road network not GeoCity');
 assert(read('src/mapV2/domain/mapping.ts').includes("mappingStatus: 'UNRESOLVED'"), 'domain factory remains UNRESOLVED');

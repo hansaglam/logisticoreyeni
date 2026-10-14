@@ -2,6 +2,7 @@
  * Map V2 domain isolation + mapping contract (static + pure).
  * Does not load MapScreen gameplay. Run: npx tsx scripts/map-v2-domain-architecture-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -67,8 +68,10 @@ assert(validateMapDataPackage(empty).join() === 'ok', 'empty package structurall
 assert(MAP_V2_TRANSPORT_MODES.join(',') === 'ROAD,RAIL,SEA,AIR', 'canonical modes');
 
 const mapScreen = read('src/screens/MapScreen.tsx');
-assert(!mapScreen.includes("from '../mapV2"), 'MapScreen does not import mapV2');
-assert(!mapScreen.includes('from "../../mapV2'), 'MapScreen no nested mapV2 import');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 
 const worldCanvas = read('src/components/map/WorldMapCanvas.tsx');
 assert(!worldCanvas.includes('mapV2'), 'WorldMapCanvas does not import mapV2');

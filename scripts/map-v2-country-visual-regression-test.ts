@@ -2,6 +2,7 @@
  * Map V2 Türkiye country operations dashboard visual contracts.
  * Run: npx tsx scripts/map-v2-country-visual-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -54,7 +55,7 @@ for (const gameplayId of LEGACY_STABLE_GAMEPLAY_CITY_IDS) {
   assert(Boolean(row) && overview.some((city) => city.geoCityId === row!.geoCityId), `${gameplayId} present via verified mapping`);
 }
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(world.includes('turkeyOverviewGameplayCities'), 'world experience overview city helper');
 assert(world.includes('cities: overviewCities'), 'country layer is the 8-city overview set');
 assert(!world.includes('worldMapPositions'), 'no legacy PNG coordinates');
@@ -186,7 +187,10 @@ const svgBytes = statSync(resolve(root, svgRel)).size;
 assert(svgBytes > 2_000 && svgBytes < 400_000, `SVG encoded size ${svgBytes}`);
 assert(read(svgRel).includes('COUNTRY_HIGH') || read(svgRel).includes('geoBoundaries') || read(svgRel).includes('verified'), 'SVG notes verified outline');
 
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen unchanged');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 Transport Inspector'), 'transport inspector remains');
 assert(read('src/mapV2/screens/MapV2RoadPrototypeScreen.tsx').includes('ROAD_RENDER_PROFILE_DEBUG'), 'debug ROAD viewer remains');

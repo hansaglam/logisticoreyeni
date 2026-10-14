@@ -146,6 +146,12 @@ export default function ManagementPanel({
       animationType="fade"
       onRequestClose={onClose}
       statusBarTranslucent
+      supportedOrientations={[
+        'portrait',
+        'portrait-upside-down',
+        'landscape-left',
+        'landscape-right',
+      ]}
     >
       <Pressable style={styles.backdrop} onPress={onClose}>
         <View

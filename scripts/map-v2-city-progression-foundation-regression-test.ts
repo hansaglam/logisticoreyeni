@@ -2,6 +2,7 @@
  * Map V2 city progression foundation.
  * Run: npx tsx scripts/map-v2-city-progression-foundation-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -150,7 +151,7 @@ assert(labels.requiredLabel.includes('Seviye 8') && labels.currentLabel.includes
 assert(mapV2BackAction('CITY_DETAIL', { selectedCityId: 'x', selectedCountryId: 'c' }) === 'EXIT_CITY_DETAIL', 'detail back preserved');
 assert(isCityAvailabilityOpen('UNLOCKED') && !isCityAvailabilityOpen('LOCKED'), 'open helper');
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(world.includes('MapV2CityLockPanel'), 'lock panel wired');
 assert(world.includes('canOpenCityOperations'), 'City Detail gated on availability');
 assert(world.includes("setMode('CITY_DETAIL')"), 'unlocked path still enters detail');
@@ -165,7 +166,10 @@ assert(read('src/mapV2/screens/MapV2CountryOverviewShell.tsx').includes('openCit
 assert(read('src/mapV2/world/MapV2GeographicCanvas.tsx').includes('CITY_NODE_LOCKED'), 'locked node visual');
 assert(!read('src/mapV2/world/MapV2GeographicCanvas.tsx').includes('evaluateCityProgression'), 'canvas has no policy eval');
 assert(!read('src/screens/MapScreen.tsx').includes('cityProgression'), 'production MapScreen has no city progression');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen no mapV2');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(!read('src/data/routes.ts').includes('CityAvailability'), 'routes.ts not used for unlock');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 City Progression Preview'), 'DEV preview entry');
 assert(read('docs/architecture/map-v2/MAP_V2_CITY_PROGRESSION_FOUNDATION.md').includes('LEGACY_ALL_UNLOCKED'), 'docs exist');

@@ -2,6 +2,7 @@
  * Map V2 Step 13 player-facing SEA corridors.
  * Run: npx tsx scripts/map-v2-player-sea-corridors-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -136,7 +137,7 @@ const portB = { longitude: 28.9, latitude: 41 };
 assert(seaEdgeTravelCost(dummyEdge, localFar, localFar, portA, portB) > 5000, 'far local approach is expensive');
 
 assert(seaPlayerVisualMode() === 'SEA_PLAYER_VISUAL_OFF', 'preview flag default OFF');
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(world.includes('playerSeaCorridorLayer'), 'country can attach sea preview layer');
 assert(world.includes('seaVisualPreview'), 'preview gated by DEV state');
 assert(!world.includes("require('../generated/transport/turkey-sea-network.json')"), 'country dashboard does not load canonical sea');
@@ -161,7 +162,10 @@ assert(
   'Ankara selection does not invent SEA relation',
 );
 
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(!read('scripts/map-v2/build-turkey-road-corridors.ts').includes('buildTurkeySeaCorridors'), 'ROAD extraction not mixed');
 assert(!read('scripts/map-v2/build-turkey-rail-corridors.ts').includes('buildTurkeySeaCorridors'), 'RAIL extraction not mixed');

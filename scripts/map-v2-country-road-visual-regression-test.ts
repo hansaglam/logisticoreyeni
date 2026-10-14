@@ -3,6 +3,7 @@
  * Player country uses turkey-road-corridors.json, not ROAD_RENDER_PROFILE_COUNTRY_OVERVIEW.
  * Run: npx tsx scripts/map-v2-country-road-visual-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -78,7 +79,7 @@ assert(!motorwayOverview.color.includes('7DD3FC') && motorwayOverview.color !== 
 assert(paintForTransportStyle('ROAD_MOTORWAY', ROAD_RENDER_PROFILE_COUNTRY_OVERVIEW).dash.length === 0, 'roads remain solid');
 assert(paintForTransportStyle('RAIL_MAIN').dash.length > 0, 'debug RAIL_MAIN paint stays distinct from solid ROAD');
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 const canvas = read('src/mapV2/world/MapV2GeographicCanvas.tsx');
 const prototype = read('src/mapV2/screens/MapV2RoadPrototypeScreen.tsx');
 const artifactPath = resolve(root, 'src/mapV2/generated/countryOverview/turkey-road-corridors.json');
@@ -108,7 +109,10 @@ assert(canvas.includes('corridorReady'), 'debug/inspector overview still waits f
 assert(!canvas.includes('ROAD_STYLE_DRAW_ORDER.map'), 'country draw is not the full style stack by default');
 assert(canvas.includes('requestRoadChunkLoads'), 'async chunk queue still present for debug/detail');
 assert(!canvas.includes('loadRoadChunks('), 'no sync 46-chunk load');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen unchanged');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts unchanged');
 assert(!read('src/mapV2/presentation/roadRenderProfile.ts').includes('mapRoadNetwork'), 'no legacy geography');
 

@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, start
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
+import * as ScreenOrientation from 'expo-screen-orientation';
 
 import { AppSafeAreaProvider } from './src/components/AppSafeAreaProvider';
 import { AppDialogProvider } from './src/components/AppDialogProvider';
@@ -91,7 +92,12 @@ function renderActiveScreen(
     case 'dashboard':
       return <DashboardScreen onNavigate={onNavigate} onOpenWarehouse={onOpenWarehouse} />;
     case 'map':
-      return <MapScreen onOpenContracts={() => onNavigate('contracts')} />;
+      return (
+        <MapScreen
+          onOpenContracts={() => onNavigate('contracts')}
+          onExitHome={() => onNavigate('dashboard')}
+        />
+      );
     case 'contracts':
       return <ContractsScreen />;
     case 'fleet':
@@ -159,6 +165,20 @@ function ActiveScreenFrame({
 function AppShell({ isAppActive }: { isAppActive: boolean }) {
   useGameLoop(isAppActive);
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+
+  useEffect(() => {
+    const orientationLock =
+      activeTab === 'map'
+        ? ScreenOrientation.OrientationLock.LANDSCAPE
+        : ScreenOrientation.OrientationLock.PORTRAIT_UP;
+
+    void ScreenOrientation.lockAsync(orientationLock).catch((error) => {
+      console.warn('[orientation] lock failed', {
+        activeTab,
+        error,
+      });
+    });
+  }, [activeTab]);
   const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set(['dashboard']));
   const [screenRetryKeys, setScreenRetryKeys] = useState<Partial<Record<TabKey, number>>>({});
   const transitionRef = useRef<{ from: TabKey; to: TabKey; startedAt: number } | null>(null);
@@ -317,14 +337,7 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
   );
 
   return (
-    <View
-      style={styles.root}
-      onTouchStart={() => {
-        if (Platform.OS === 'android') {
-          void enableImmersiveGameMode();
-        }
-      }}
-    >
+    <View style={styles.root}>
       <StatusBar hidden />
       <ActiveScreenFrame tab={activeTab} transition={transitionRef}>
         {keepAliveTabs.map((tab) => (
@@ -362,12 +375,14 @@ function AppShell({ isAppActive }: { isAppActive: boolean }) {
         }
       />
       <VehicleRecoverySheet />
-      <GameTabBar
-        tabs={MAIN_TABS}
-        activeTab={activeTab}
-        onTabPress={handleTabPress}
-        onQuickAccess={handleQuickAccess}
-      />
+      {activeTab !== 'map' ? (
+        <GameTabBar
+          tabs={MAIN_TABS}
+          activeTab={activeTab}
+          onTabPress={handleTabPress}
+          onQuickAccess={handleQuickAccess}
+        />
+      ) : null}
     </View>
   );
 }

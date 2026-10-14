@@ -2,6 +2,7 @@
  * Map V2 Step 2B world experience: availability, selection, world↔country.
  * Run: node --import tsx scripts/map-v2-world-experience-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -115,7 +116,7 @@ assert(!neighbors.includes('country.tur'), 'neighbors exclude focus');
 assert(WORLD_INHABITED_BOUNDS.maxY < 0.75, 'world home avoids polar slab');
 assert(pkg.countries.find((c) => c.geoCountryId === 'country.ata')?.webMercatorLayer !== 'INCLUDED', 'Antarctica still omitted from render');
 
-const screen = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const screen = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(!screen.includes('neighborCountryIds'), 'COUNTRY scene omits neighbor draws');
 assert(screen.includes('countryWorkingBounds'), 'country camera uses working bounds');
 assert(screen.includes('contentBounds={countryPanBounds}'), 'country pan bounds are independent of world');
@@ -157,7 +158,10 @@ assert(!screen.includes('roadLayer='), 'player country does not mount ROAD layer
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 World Geometry'), 'geometry debug remains');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 Skia Spike'), 'spike remains');
 assert(!read('src/screens/MapScreen.tsx').includes('MapV2WorldScreen'), 'MapScreen unchanged');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen no mapV2 import');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(!read('src/mapV2/gameplay/mapV2CountryAvailability.fixture.ts').includes('getWorldBoundaryPackage'), 'fixture not baked into geography package');
 
 assert(fra.lods.COUNTRY_HIGH.polygons.length > 0, 'France still has geometry while locked');

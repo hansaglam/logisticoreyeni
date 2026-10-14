@@ -2,6 +2,7 @@
  * Map V2 Step 2D transport network foundation.
  * Run: npx tsx scripts/map-v2-transport-network-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -247,9 +248,12 @@ assert(!read('src/mapV2/geo/transportNetwork.ts').includes("from '../../data/rou
 assert(!read('src/mapV2/geo/validateTransportNetwork.ts').includes('openai'), 'no AI transport geometry path');
 assert(read('scripts/map-v2/ingest-turkey-roads.ts').includes('SOURCE_PENDING'), 'ingest fail-closed');
 
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen no mapV2');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(hashFile('src/mapV2/generated/cities/turkeyCityPackage.json').length === 64, 'city package still present');
-assert(read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('enterCountry'), 'world experience still present');
+assert((read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('enterCountry'), 'world experience still present');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 Transport Inspector'), 'DEV inspector entry');
 assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('SOURCE_PENDING') || read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('row?.status'), 'inspector shows status');
 

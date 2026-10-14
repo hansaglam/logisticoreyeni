@@ -2,6 +2,7 @@
  * Map V2 Step 16 player-facing AIR corridors.
  * Run: npx tsx scripts/map-v2-player-air-corridors-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -149,7 +150,7 @@ assert(airportById.get(assoc.adana.primaryLogisticsAirportCandidateId ?? '')?.ia
 assert(assoc.bursa.primaryLogisticsAirportCandidateId == null, 'catalog Bursa logistics null');
 
 assert(airPlayerVisualMode() === 'AIR_PLAYER_VISUAL_OFF', 'preview flag default OFF');
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(world.includes('playerAirCorridorLayer'), 'country can attach air preview layer');
 assert(world.includes('airVisualPreview'), 'preview gated by DEV state');
 assert(!world.includes('turkey-airports'), 'dashboard does not load airport catalog');
@@ -181,7 +182,10 @@ assert(
   'Bursa selection does not invent AIR relation',
 );
 
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(!read('scripts/map-v2/build-turkey-road-corridors.ts').includes('buildTurkeyAirCorridors'), 'ROAD extraction not mixed');
 assert(!read('scripts/map-v2/build-turkey-rail-corridors.ts').includes('buildTurkeyAirCorridors'), 'RAIL extraction not mixed');

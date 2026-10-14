@@ -2,6 +2,7 @@
  * Map V2 Step 17 multimodal logistics domain foundation.
  * Run: npx tsx scripts/map-v2-multimodal-foundation-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -135,11 +136,14 @@ const looping = enumerateMultimodalModeSequences({
 assert(!looping.some((row) => /RAIL.*RAIL/.test(row.sequence)), 'no ROAD→RAIL→ROAD→RAIL loop');
 assert(!looping.some((row) => row.sequence.split('→').length > MULTIMODAL_MAX_TRANSPORT_LEGS), 'sequence token cap');
 
-assert(!read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('getTurkeyMultimodalFoundation'), 'country dashboard does not load multimodal graph');
+assert(!(read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('getTurkeyMultimodalFoundation'), 'country dashboard does not load multimodal graph');
 assert(!read('src/mapV2/screens/MapV2CityDetailScreen.tsx').includes('TransferNode'), 'city detail has no transfer tab');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 Multimodal Inspector'), 'DEV inspector entry');
 assert(read('src/mapV2/screens/MapV2TransportLegend.tsx').includes("key: 'AIR'"), 'player legend unchanged pattern');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(!read('src/storage/saveGame.ts').includes('MultimodalShipmentPlan'), 'no save schema field');
 assert(!read('src/simulation/contracts.ts').includes('enumerateMultimodalModeSequences'), 'contract generation untouched');

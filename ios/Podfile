@@ -80,5 +80,15 @@ target 'LogistiCore' do
         end
       end
     end
+
+    # Xcode 27 compatibility: fmt bundled with RN 0.81 can incorrectly enable
+    # consteval and fail to compile format-inl.h. Force it off after Pods install.
+    fmt_base = File.join(installer.sandbox.root.to_s, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      File.chmod(0644, fmt_base)
+      fmt_source = File.read(fmt_base)
+      fmt_source = fmt_source.gsub(/#\s*define FMT_USE_CONSTEVAL 1/, '#  define FMT_USE_CONSTEVAL 0')
+      File.write(fmt_base, fmt_source)
+    end
   end
 end

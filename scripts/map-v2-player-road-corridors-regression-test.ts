@@ -2,6 +2,7 @@
  * Player-facing ROAD corridor extraction + artifact.
  * Run: npx tsx scripts/map-v2-player-road-corridors-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -119,7 +120,7 @@ const muted = corridorVisualState(artifact.corridors[0], {
 });
 assert(muted === 'mixed', 'progression mutes mixed corridors without deleting geometry');
 
-const world = read('src/mapV2/screens/MapV2WorldScreen.tsx');
+const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 const canvas = read('src/mapV2/world/MapV2GeographicCanvas.tsx');
 assert(world.includes('playerCorridorLayer'), 'country experience wires player corridors');
 assert(!world.includes('roadLayer='), 'player country does not mount ROAD runtime layer');
@@ -135,7 +136,10 @@ assert(
 );
 assert(canvas.includes('corridorInteractionPaint'), 'dashboard corridor paint tokens');
 assert(!canvas.includes('dijkstraShortestPath'), 'no runtime pathfinding in canvas');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(!read('src/data/routes.ts').includes('corridor.tur'), 'routes.ts has no corridor ids');
 assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('corridorInspectorTitle'), 'DEV corridor inspector');

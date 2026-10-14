@@ -2,6 +2,7 @@
  * Map V2 Step 8 RAIL connectivity audit.
  * Run: npx tsx scripts/map-v2-rail-connectivity-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -193,7 +194,10 @@ const bursaLive = cities.find((c) => getTurkeyCityPackage().gameplayMappings.som
 assert(getCityTransportAccess(bursaLive.geoCityId, 'RAIL')?.status === 'UNRESOLVED' || getCityTransportAccess(bursaLive.geoCityId, 'RAIL')?.status === 'PROVISIONAL', 'Bursa not VERIFIED');
 
 assert(read('src/mapV2/screens/MapV2TransportLegend.tsx').includes('active: false'), 'player rail still inactive');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(read('src/mapV2/screens/MapV2TransportInspectorScreen.tsx').includes('Connectivity QA'), 'DEV Connectivity QA panel');
 

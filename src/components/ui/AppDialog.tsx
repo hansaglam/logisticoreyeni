@@ -217,6 +217,12 @@ export default function AppDialog({
       animationType="fade"
       onRequestClose={dismissible ? handleDismiss : () => {}}
       statusBarTranslucent
+      supportedOrientations={[
+        'portrait',
+        'portrait-upside-down',
+        'landscape-left',
+        'landscape-right',
+      ]}
     >
       <Pressable
         style={[

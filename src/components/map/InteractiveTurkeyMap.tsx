@@ -55,6 +55,8 @@ export type MapCalibrationTapResult = ViewportToNormalizedResult;
 
 export interface InteractiveTurkeyMapProps {
   viewportHeight: number;
+  /** Stretch to the parent slot. Gesture height still comes from viewportHeight. */
+  fill?: boolean;
   contentSize: MapContentSize;
   onCityPressAtContentPoint?: (x: number, y: number) => void;
   onCalibrationTap?: (result: MapCalibrationTapResult) => void;
@@ -69,6 +71,7 @@ export type { MapDetailLevel };
 function InteractiveTurkeyMapInner(
   {
     viewportHeight,
+    fill = false,
     contentSize,
     onCityPressAtContentPoint,
     onCalibrationTap,
@@ -622,7 +625,7 @@ function InteractiveTurkeyMapInner(
   return (
     <GestureDetector gesture={mapGestures}>
       <View
-        style={[styles.viewport, { height: viewportHeight }]}
+        style={fill ? [styles.viewport, styles.viewportFill] : [styles.viewport, { height: viewportHeight }]}
         onLayout={handleViewportLayout}
       >
         {viewportWidth > 0 && contentSize.width > 0 ? (
@@ -655,6 +658,11 @@ const styles = StyleSheet.create({
     width: '100%',
     overflow: 'hidden',
     backgroundColor: MAP_VIEWPORT_BACKGROUND,
+  },
+  viewportFill: {
+    flex: 1,
+    minHeight: 0,
+    alignSelf: 'stretch',
   },
   contentLayer: {
     position: 'absolute',

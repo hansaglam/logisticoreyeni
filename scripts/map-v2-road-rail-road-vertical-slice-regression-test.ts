@@ -2,6 +2,7 @@
  * Map V2 Step 18 ROAD→RAIL→ROAD vertical slice.
  * Run: npx tsx scripts/map-v2-road-rail-road-vertical-slice-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'path';
 
@@ -176,9 +177,12 @@ assert(!read('src/mapV2/screens/MapV2MultimodalShipmentSimulatorScreen.tsx').inc
 assert(!read('src/mapV2/screens/MapV2MultimodalShipmentSimulatorScreen.tsx').includes('firebase'), 'simulator has no firebase');
 assert(!read('src/mapV2/gameplay/roadRailRoadFixture.ts').includes("require('../generated/countryOverview/turkey-rail-corridors.json')"), 'fixture does not require visual corridor json');
 assert(read('src/mapV2/world/railRouteDiagnosticsLoader.ts').includes('turkey-rail-corridors.report.json'), 'diagnostics load rail build report');
-assert(!read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('MultimodalShipmentSimulator'), 'player country map has no simulator');
+assert(!(read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('MultimodalShipmentSimulator'), 'player country map has no simulator');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Multimodal Shipment Simulator'), 'DEV entry');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'MapScreen untouched');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(read('src/data/routes.ts').includes("route('izmir', 'istanbul', 480, 0.82, 180)"), 'routes.ts untouched');
 assert(!read('src/storage/saveGame.ts').includes('MultimodalShipmentRuntime'), 'no save field');
 assert(!read('src/simulation/contracts.ts').includes('buildRoadRailRoadFixture'), 'contracts untouched');

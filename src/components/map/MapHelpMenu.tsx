@@ -10,6 +10,7 @@ interface MapHelpMenuProps {
   helpGuideAccessibilityLabel: string;
   onSyncMap: () => void;
   onInspectVehicles: () => void;
+  compact?: boolean;
 }
 
 export default function MapHelpMenu({
@@ -18,20 +19,21 @@ export default function MapHelpMenu({
   helpGuideAccessibilityLabel,
   onSyncMap,
   onInspectVehicles,
+  compact = false,
 }: MapHelpMenuProps) {
   const [visible, setVisible] = useState(false);
 
   return (
     <>
       <Pressable
-        style={[styles.button, helpGuideDisabled && styles.buttonDisabled]}
+        style={[styles.button, compact && styles.buttonCompact, helpGuideDisabled && styles.buttonDisabled]}
         onPress={() => setVisible(true)}
         disabled={helpGuideDisabled}
         accessibilityRole="button"
         accessibilityLabel="Harita yardımı"
-        hitSlop={8}
+        hitSlop={compact ? 10 : 8}
       >
-        <Text style={styles.label}>?</Text>
+        <Text style={[styles.label, compact && styles.labelCompact]}>?</Text>
       </Pressable>
       <AppDialog
         visible={visible}
@@ -78,10 +80,22 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.45,
   },
+  buttonCompact: {
+    minWidth: 26,
+    minHeight: 26,
+    width: 26,
+    height: 26,
+    borderRadius: 4,
+    paddingHorizontal: 0,
+  },
   label: {
     color: colors.info,
     fontSize: 20,
     fontWeight: '700',
     lineHeight: 24,
+  },
+  labelCompact: {
+    fontSize: 14,
+    lineHeight: 16,
   },
 });

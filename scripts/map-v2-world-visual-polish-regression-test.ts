@@ -2,6 +2,7 @@
  * Map V2 world visual polish: labels, availability paint, rounded clip.
  * Run: npx tsx scripts/map-v2-world-visual-polish-regression-test.ts
  */
+import { resolveMapExperience } from '../src/domain/mapExperienceAuthority';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -149,8 +150,11 @@ assert(canvas.includes("viewportClip === 'ROUNDED'"), 'rounded clip implemented'
 assert(canvas.includes('selectWorldCountryLabels'), 'world labels batched in canvas');
 assert(canvas.includes('pointInProjectedPolygons'), 'country selection remains polygon-based');
 assert(!canvas.includes('SceneKit') && !canvas.includes('sphere'), 'no 3D globe');
-assert(read('src/mapV2/screens/MapV2WorldScreen.tsx').includes('viewportClip={mode === \'WORLD\' ? \'ROUNDED\' : \'NONE\'}'), 'world screen enables rounded clip');
-assert(!read('src/screens/MapScreen.tsx').includes("from '../mapV2"), 'production MapScreen unchanged');
+assert((read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx')).includes('viewportClip={mode === \'WORLD\' ? \'ROUNDED\' : \'NONE\'}'), 'world screen enables rounded clip');
+assert(resolveMapExperience({ profile: 'production' }) === 'LEGACY_MAP', 'MAP-02B superseded: production profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'store' }) === 'LEGACY_MAP', 'MAP-02B superseded: store profile stays LEGACY_MAP');
+assert(resolveMapExperience({ profile: 'internal' }) === 'MAP_V2', 'MAP-02B superseded: internal Harita may use MAP_V2');
+assert(resolveMapExperience({ profile: 'beta' }) === 'LEGACY_MAP', 'MAP-02B superseded: unknown profile stays LEGACY_MAP');
 assert(!read('src/mapV2/geo/countryLabelAnchor.ts').includes('Math.random'), 'anchors deterministic');
 
 console.log(`\nPASS: ${pass}`);

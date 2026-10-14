@@ -1,261 +1,89 @@
 /**
- * LogistiCore - Türkiye Lojistik Ağı ekranı
+ * LogistiCore - Harita
  *
- * Mobil tycoon tarzı network overview — coğrafi harita yok, zoom/pan yok.
- * TODO V2: Unlock Europe/global network after company expansion
+ * Landscape operations command center around the existing geographic renderer.
+ * Legacy portrait map components remain in the project and are not deleted.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { debugConfig } from '../config/debug';
-import WorldMapCanvas, {
-  type NetworkFilterKey,
-  type WorldMapCanvasHandle,
-} from '../components/map/WorldMapCanvas';
-import MapFilterTabs from '../components/map/MapFilterTabs';
-import MapHeader from '../components/map/MapHeader';
-import MapStatsStrip from '../components/map/MapStatsStrip';
-import MapTruckTrackingSection from '../components/map/MapTruckTrackingSection';
-import RoadsideFuelSheet from '../components/RoadsideFuelSheet';
-import TurkeyNetworkCard from '../components/map/TurkeyNetworkCard';
-import { MAP_BG, MAP_HORIZONTAL_PADDING } from '../components/map/mapTheme';
-import { resolveTruckPersistentCityId } from '../components/map/mapTruckLocation';
+import { resolveActiveMapExperience } from '../domain/mapExperienceAuthority';
+import WorldMapCanvas, { type WorldMapCanvasHandle } from '../components/map/WorldMapCanvas';
+import MapV2CommandCenterViewport from '../mapV2/experience/MapV2CommandCenterViewport';
+import type {
+  MapV2CitySelection,
+  MapV2CountrySelection,
+} from '../mapV2/experience/useMapV2GeographicExperience';
+import MapCommandCenterShell from '../components/map/commandCenter/MapCommandCenterShell';
+import {
+  resolveMapCommandMode,
+  type MapCommandMode,
+} from '../components/map/commandCenter/mapCommandMode';
+import { buildMapCommandTelemetry } from '../components/map/commandCenter/mapCommandTelemetry';
+import { mapUiTheme } from '../components/map/commandCenter/mapUiTheme';
+import MapHelpMenu from '../components/map/MapHelpMenu';
+import { MAP_BG } from '../components/map/mapTheme';
+import type { NetworkFilterKey } from '../components/map/mapTypes';
 import { getVisibleFleetTrucks } from '../simulation/rentalTruckLifecycle';
 import ContextualGuideHost from '../contextualGuide/components/ContextualGuideHost';
 import { openHelpGuide } from '../contextualGuide/openHelpGuide';
-import MapHelpMenu from '../components/map/MapHelpMenu';
-import { GameIcon } from '../components/ui';
 import { useTabBarLayout } from '../hooks/useTabBarLayout';
 import { useOnboardingScreenVisit } from '../hooks/useOnboardingScreenVisit';
-import { getContractAvailability } from '../simulation/delivery';
-import { findMarketOpportunities } from '../simulation/contracts';
-import {
-  getRecommendedContractById,
-  getRecommendedMapAction,
-} from '../simulation/mapRecommendations';
 import { useScreenRenderProfiler } from '../hooks/useScreenRenderProfiler';
 import { useGameStore } from '../store/gameStore';
 import {
   selectActiveDeliveries,
   selectActiveTransfers,
   selectCities,
-  selectContracts,
-  selectProducts,
-  selectRoutes,
 } from '../store/selectors/stableCollections';
 import {
   selectHasPlayer,
-  selectPlayer,
-  selectPlayerDrivers,
-  selectPlayerHomeCityId,
-  selectPlayerLevel,
-  selectPlayerMoney,
-  selectPlayerReputation,
-  selectPlayerTrailers,
   selectPlayerTrucks,
   selectPlayerWarehouses,
 } from '../store/selectors/playerFields';
-import { commitLayoutSize } from '../utils/layoutState';
-import { getWorldMapCityPosition } from '../data/worldMapPositions';
-import { getCityName } from '../utils/entityLookup';
-import type {
-  Contract,
-  Delivery,
-  DeliveryStatus,
-  Driver,
-  Player,
-  Truck,
-} from '../types/game';
+import type { DeliveryStatus } from '../types/game';
 
 function isTruckIdle(status: string): boolean {
   return status === 'idle' || status === 'available' || status === 'BOŞTA';
 }
 
-function resolveMapTruckCityId(
-  truck: Pick<Truck, 'currentCityId' | 'homeCityId'>,
-  playerHomeCityId?: string,
-): string {
-  return resolveTruckPersistentCityId(truck, playerHomeCityId);
-}
-
-function buildIdleTruckCountByCity(
-  trucks: Player['trucks'] | undefined,
-  playerHomeCityId?: string,
-): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const truck of trucks ?? []) {
-    if (!isTruckIdle(truck.status)) continue;
-    const cityId = resolveMapTruckCityId(truck, playerHomeCityId);
-    counts[cityId] = (counts[cityId] ?? 0) + 1;
-  }
-  return counts;
-}
-
 const ACTIVE_DELIVERY_STATUSES: DeliveryStatus[] = ['preparing', 'on_route', 'paused'];
 const STATUS_MESSAGE_TIMEOUT_MS = 3000;
 
-const COLORS = {
-  background: MAP_BG,
-  card: '#0F172A',
-  card2: '#111827',
-  border: '#1E293B',
-  accent: '#F59E0B',
-  cyan: '#38BDF8',
-  green: '#22C55E',
-  red: '#EF4444',
-  muted: '#94A3B8',
-  text: '#F9FAFB',
-};
-
-
-
-function buildMapRecommendationSubtitle(params: {
-  availableContracts: Contract[];
-  trucks: Truck[];
-  drivers: Driver[];
-  trailers?: import('../types/game').Trailer[];
-  playerLevel: number;
-  playerReputation?: number;
-  homeCityId?: string;
-  runningDeliveries: Delivery[];
-  idleTruckCountByCity: Record<string, number>;
-}): string {
-  const {
-    availableContracts,
-    trucks,
-    drivers,
-    trailers,
-    playerLevel,
-    playerReputation = 0,
-    homeCityId,
-    runningDeliveries,
-    idleTruckCountByCity,
-  } = params;
-
-  const startable = availableContracts.filter((contract) =>
-    getContractAvailability(
-      contract,
-      trucks,
-      drivers,
-      playerLevel,
-      0,
-      playerReputation,
-      homeCityId,
-      trailers,
-    ).canStart,
-  );
-
-  if (startable.length === 0) {
-    return '';
-  }
-
-  for (const delivery of runningDeliveries) {
-    const destinationId = delivery.destinationCityId;
-    if (!destinationId) continue;
-
-    const linkedCount = startable.filter((contract) => contract.originCityId === destinationId).length;
-    if (linkedCount > 0) {
-      return `${getCityName(destinationId)} varışlı kamyonun için sıradaki işler hazır.`;
-    }
-  }
-
-  const idleCityIds = Object.entries(idleTruckCountByCity)
-    .filter(([, count]) => count > 0)
-    .map(([cityId]) => cityId);
-
-  const contractsFromIdleCities = startable.filter((contract) =>
-    idleCityIds.includes(contract.originCityId),
-  );
-
-  const cityCounts = new Map<string, number>();
-  for (const contract of contractsFromIdleCities) {
-    cityCounts.set(contract.originCityId, (cityCounts.get(contract.originCityId) ?? 0) + 1);
-  }
-
-  const citiesWithJobs = [...cityCounts.entries()].filter(([, count]) => count > 0);
-
-  if (citiesWithJobs.length === 1) {
-    const [cityId, count] = citiesWithJobs[0];
-    return `${getCityName(cityId)} çıkışlı ${count} uygun iş var.`;
-  }
-
-  const total = contractsFromIdleCities.length > 0 ? contractsFromIdleCities.length : startable.length;
-  return `Boştaki kamyon şehirlerinde ${total} uygun iş var.`;
+function networkFilterForMode(mode: MapCommandMode): NetworkFilterKey {
+  if (mode === 'fleet') return 'trucks';
+  if (mode === 'warehouses') return 'depots';
+  return 'all';
 }
 
-interface CompactRecommendedActionRowProps {
-  subtitle: string;
-  onPress: () => void;
-}
-
-function CompactRecommendedActionRow({ subtitle, onPress }: CompactRecommendedActionRowProps) {
-  return (
-    <TouchableOpacity style={styles.compactActionCard} onPress={onPress} activeOpacity={0.88}>
-      <View style={styles.compactActionAccent} />
-      <View style={styles.compactActionBody}>
-        <View style={styles.compactActionTextBlock}>
-          <View style={styles.compactActionTitleRow}>
-            <View style={styles.compactActionBadge}>
-              <Text style={styles.compactActionBadgeText}>Öneri</Text>
-            </View>
-            <Text style={styles.compactActionTitle} numberOfLines={1}>
-              Yeni rota hazır
-            </Text>
-          </View>
-          <Text style={styles.compactActionSubtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        </View>
-        <View style={styles.compactActionButton}>
-          <Text style={styles.compactActionButtonText} numberOfLines={1}>
-            İşleri Gör
-          </Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () => void }) {
+export default function MapScreen({
+  onExitHome,
+}: {
+  onOpenContracts?: () => void;
+  onExitHome: () => void;
+}) {
   useScreenRenderProfiler('Map');
   const hasPlayer = useGameStore(selectHasPlayer);
-  const player = useGameStore(selectPlayer);
   const playerTrucks = useGameStore(selectPlayerTrucks);
-  const drivers = useGameStore(selectPlayerDrivers);
-  const trailers = useGameStore(selectPlayerTrailers);
   const warehouses = useGameStore(selectPlayerWarehouses);
-  const playerLevel = useGameStore(selectPlayerLevel);
-  const playerReputation = useGameStore(selectPlayerReputation);
-  const playerHomeCityId = useGameStore(selectPlayerHomeCityId);
-  const playerMoney = useGameStore(selectPlayerMoney);
   const cities = useGameStore(selectCities);
-  const routes = useGameStore(selectRoutes);
-  const products = useGameStore(selectProducts);
-  const contracts = useGameStore(selectContracts);
   const activeDeliveries = useGameStore(selectActiveDeliveries);
   const activeTransfers = useGameStore(selectActiveTransfers);
-  const globalEconomy = useGameStore((state) => state.globalEconomy);
   const currentTime = useGameStore((state) => state.currentTime);
-  const openContractsForMapContract = useGameStore((state) => state.openContractsForMapContract);
-  const requestNavigationToFleet = useGameStore((state) => state.requestNavigationToFleet);
   const { contentBottomPadding, screenTopPadding } = useTabBarLayout();
 
   useOnboardingScreenVisit('Map');
+  const [commandMode, setCommandMode] = useState<MapCommandMode>('overview');
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
-  const [selectedMapFilter, setSelectedMapFilter] = useState<NetworkFilterKey>('all');
+  const [locationLabel, setLocationLabel] = useState<string | null>(null);
+  const countryLabelRef = useRef<string | null>(null);
+  const mapExperience = resolveActiveMapExperience();
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [mapGestureActive, setMapGestureActive] = useState(false);
-  const [roadsideFuelJobId, setRoadsideFuelJobId] = useState<string | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
   const mapRef = useRef<WorldMapCanvasHandle>(null);
   const didReconcileOnOpenRef = useRef(false);
+  const safeMode = resolveMapCommandMode(commandMode);
 
   useEffect(() => {
     if (!hasPlayer || didReconcileOnOpenRef.current) return;
@@ -272,13 +100,8 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     return () => clearTimeout(timeout);
   }, [statusMessage]);
 
-  const availableContracts = useMemo(
-    () => contracts.filter((c) => c.status === 'available'),
-    [contracts],
-  );
-
   const runningDeliveries = useMemo(
-    () => activeDeliveries.filter((d) => ACTIVE_DELIVERY_STATUSES.includes(d.status)),
+    () => activeDeliveries.filter((delivery) => ACTIVE_DELIVERY_STATUSES.includes(delivery.status)),
     [activeDeliveries],
   );
 
@@ -307,22 +130,6 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     });
   }, [runningDeliveriesKey, runningDeliveries.length]);
 
-  const mapCities = useMemo(
-    () => cities.filter((city) => getWorldMapCityPosition(city.id) != null),
-    [cities],
-  );
-
-  const routeCount = useMemo(() => {
-    const keys = new Set<string>();
-    for (const route of routes) {
-      if (!getWorldMapCityPosition(route.fromCityId) || !getWorldMapCityPosition(route.toCityId)) {
-        continue;
-      }
-      keys.add([route.fromCityId, route.toCityId].sort().join('|'));
-    }
-    return keys.size;
-  }, [routes]);
-
   const trucks = useMemo(
     () => getVisibleFleetTrucks(playerTrucks, currentTime, activeDeliveries),
     [playerTrucks, currentTime, activeDeliveries],
@@ -337,139 +144,24 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     [validTruckIdsKey],
   );
 
-  const idleTrucks = useMemo(
-    () => trucks.filter((truck) => isTruckIdle(truck.status)),
+  const vehiclesOnRoad = useMemo(
+    () => trucks.filter((truck) => truck.status === 'on_route').length,
     [trucks],
   );
-
-  const idleTruckCountByCity = useMemo(
-    () => buildIdleTruckCountByCity(trucks, playerHomeCityId),
-    [trucks, playerHomeCityId],
+  const availableVehicles = useMemo(
+    () => trucks.filter((truck) => isTruckIdle(truck.status)).length,
+    [trucks],
   );
-
-  const marketOpportunities = useMemo(
-    () => findMarketOpportunities(cities, routes, products, 5, playerLevel),
-    [cities, routes, products, playerLevel],
-  );
-
-  const truckStatusKey = useMemo(
+  const telemetry = useMemo(
     () =>
-      playerTrucks
-        .map((truck) => `${truck.id}:${truck.status}:${truck.capacity ?? 0}`)
-        .join('|'),
-    [playerTrucks],
-  );
-  const driverStatusKey = useMemo(
-    () => drivers.map((driver) => `${driver.id}:${driver.status}`).join('|'),
-    [drivers],
-  );
-  const warehouseInventoryKey = useMemo(
-    () =>
-      warehouses
-        .flatMap((warehouse) =>
-          (warehouse.inventory ?? []).map(
-            (item) => `${warehouse.id}:${item.productId}:${item.quantity}:${item.averageBuyPrice ?? 0}`,
-          ),
-        )
-        .join('|'),
-    [warehouses],
-  );
-  const availableContractsKey = useMemo(
-    () => availableContracts.map((contract) => `${contract.id}:${contract.status}`).join('|'),
-    [availableContracts],
-  );
-  const recommendationClock = Math.floor(currentTime);
-
-  const fuelPrice = globalEconomy?.fuelPrice ?? 0;
-
-  const hasStartableContracts = useMemo(
-    () =>
-      availableContracts.some((contract) =>
-        getContractAvailability(
-          contract,
-          trucks,
-          drivers,
-          playerLevel,
-          currentTime,
-          playerReputation,
-          playerHomeCityId,
-          trailers,
-        ).canStart,
-      ),
-    [availableContracts, trucks, drivers, trailers, playerLevel, currentTime, playerReputation, playerHomeCityId],
-  );
-
-  const recommendationSubtitle = useMemo(
-    () =>
-      buildMapRecommendationSubtitle({
-        availableContracts,
-        trucks,
-        drivers,
-        trailers,
-        playerLevel,
-        playerReputation,
-        homeCityId: playerHomeCityId,
-        runningDeliveries,
-        idleTruckCountByCity,
+      buildMapCommandTelemetry({
+        activeDeliveries: runningDeliveries.length,
+        vehiclesOnRoad,
+        availableVehicles,
+        warehouseCount: warehouses.length,
       }),
-    [
-      availableContracts,
-      trucks,
-      drivers,
-      trailers,
-      playerLevel,
-      playerReputation,
-      playerHomeCityId,
-      runningDeliveries,
-      idleTruckCountByCity,
-    ],
+    [availableVehicles, runningDeliveries.length, vehiclesOnRoad, warehouses.length],
   );
-
-  const recommendedAction = useMemo(
-    () =>
-      getRecommendedMapAction({
-        contracts,
-        player,
-        activeDeliveries,
-        marketOpportunities,
-        cities,
-        globalEconomy,
-        currentTime,
-      }),
-    [
-      availableContractsKey,
-      playerLevel,
-      playerMoney,
-      truckStatusKey,
-      driverStatusKey,
-      warehouseInventoryKey,
-      runningDeliveriesKey,
-      recommendationClock,
-      marketOpportunities,
-      cities,
-      fuelPrice,
-    ],
-  );
-
-  const recommendedContract = useMemo(() => {
-    if (recommendedAction.type !== 'contract') return undefined;
-    return getRecommendedContractById(contracts, recommendedAction.contractId);
-  }, [recommendedAction, contracts]);
-
-  const showRecommendedAction =
-    hasStartableContracts &&
-    recommendedAction.type === 'contract' &&
-    Boolean(recommendedContract) &&
-    recommendationSubtitle.length > 0;
-
-  const handleRefreshMarket = () => {
-    try {
-      useGameStore.getState().refreshMarketSnapshot();
-      setStatusMessage('Piyasa güncellendi');
-    } catch {
-      setStatusMessage('Piyasa güncellenemedi');
-    }
-  };
 
   const handleSyncMap = useCallback(() => {
     const result = useGameStore.getState().reconcileMapTracking('manual');
@@ -483,29 +175,25 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 
   const handleDeliveryPress = (deliveryId: string) => {
     setSelectedDeliveryId(deliveryId);
-    setSelectedMapFilter('trucks');
+    setCommandMode('fleet');
   };
 
-  const handleOpenFleet = () => {
-    requestNavigationToFleet('trucks');
-  };
+  const handleModeChange = useCallback((next: MapCommandMode) => {
+    setCommandMode(resolveMapCommandMode(next));
+  }, []);
 
-  const handleRecommendedActionPress = () => {
-    if (recommendedAction.type !== 'contract' || !recommendedContract) {
-      onOpenContracts?.();
-      return;
-    }
+  const handleCountrySelect = useCallback((selection: MapV2CountrySelection) => {
+    countryLabelRef.current = selection.displayName;
+    setLocationLabel(selection.displayName);
+  }, []);
 
-    if (__DEV__ && process.env.EXPO_PUBLIC_DEBUG_MAP === '1') {
-      console.log('Map recommended contract opened', recommendedContract.id);
-    }
-    openContractsForMapContract(recommendedContract);
-    onOpenContracts?.();
-  };
+  const handleCitySelect = useCallback((selection: MapV2CitySelection) => {
+    setLocationLabel(selection.displayName ?? countryLabelRef.current);
+  }, []);
 
-  if (!hasPlayer || !player) {
+  if (!hasPlayer) {
     return (
-      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
+      <View style={[styles.safeArea, { paddingTop: screenTopPadding, paddingBottom: contentBottomPadding }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Oyun yükleniyor...</Text>
         </View>
@@ -513,9 +201,9 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
     );
   }
 
-  if (cities.length === 0) {
+  if (mapExperience === 'LEGACY_MAP' && cities.length === 0) {
     return (
-      <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
+      <View style={[styles.safeArea, { paddingTop: screenTopPadding, paddingBottom: contentBottomPadding }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.emptyStateTitle}>Harita verisi yok</Text>
           <Text style={styles.emptyStateSubtitle}>Şehir verileri henüz yüklenmedi.</Text>
@@ -525,91 +213,51 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
   }
 
   return (
-    <View style={[styles.safeArea, { paddingTop: screenTopPadding }]}>
-      <ScrollView
-        ref={scrollRef}
-        scrollEnabled={!mapGestureActive}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: contentBottomPadding },
-        ]}
+    <View style={styles.safeArea}>
+      <MapCommandCenterShell
+        mode={safeMode}
+        telemetry={telemetry}
+        onModeChange={handleModeChange}
+        onExit={onExitHome}
+        locationLabel={locationLabel}
+        helpSlot={
+          <MapHelpMenu
+            compact
+            helpGuideOnPress={() => openHelpGuide('deliveries')}
+            helpGuideAccessibilityLabel="Yardım ve Rehber"
+            onSyncMap={handleSyncMap}
+            onInspectVehicles={handleInspectMapVehicles}
+          />
+        }
       >
-        <MapHeader
-          onRefresh={handleRefreshMarket}
-          helpAction={
-            <MapHelpMenu
-              helpGuideOnPress={() => openHelpGuide('deliveries')}
-              helpGuideAccessibilityLabel="Yardım ve Rehber"
-              onSyncMap={handleSyncMap}
-              onInspectVehicles={handleInspectMapVehicles}
-            />
-          }
-        />
-
-        <MapFilterTabs
-          selectedFilter={selectedMapFilter}
-          onChange={setSelectedMapFilter}
-        />
-
-        <MapStatsStrip
-          cityCount={mapCities.length}
-          routeCount={routeCount}
-          jobCount={availableContracts.length}
-          activeCount={runningDeliveries.length}
-          idleCount={idleTrucks.length}
-        />
-
-        {statusMessage ? (
-          <View style={styles.statusToast}>
-            <Text style={styles.statusToastText}>{statusMessage}</Text>
-          </View>
-        ) : null}
-
-        <TurkeyNetworkCard>
+        {mapExperience === 'MAP_V2' ? (
+          <MapV2CommandCenterViewport
+            emphasis={safeMode === 'road' ? 'road' : safeMode === 'rail' ? 'rail' : 'overview'}
+            onCountrySelect={handleCountrySelect}
+            onCitySelect={handleCitySelect}
+            onRouteSelect={() => undefined}
+            onMarkerSelect={() => undefined}
+          />
+        ) : (
           <WorldMapCanvas
             ref={mapRef}
             calibrationMode={debugConfig.mapCalibrationEnabled}
             activeDeliveries={activeDeliveries}
             activeTransfers={activeTransfers}
             validTruckIds={validTruckIds}
-            selectedFilter={selectedMapFilter}
+            selectedFilter={networkFilterForMode(safeMode)}
             selectedDeliveryId={selectedDeliveryId}
             onDeliveryPress={handleDeliveryPress}
-            onMapGestureActiveChange={setMapGestureActive}
+            fill
           />
-        </TurkeyNetworkCard>
-
-        {showRecommendedAction ? (
-          <CompactRecommendedActionRow
-            subtitle={recommendationSubtitle}
-            onPress={handleRecommendedActionPress}
-          />
+        )}
+        {statusMessage ? (
+          <View style={styles.statusToast} pointerEvents="none">
+            <Text style={styles.statusToastText}>{statusMessage}</Text>
+          </View>
         ) : null}
-
-        <MapTruckTrackingSection
-          trucks={trucks}
-          drivers={drivers}
-          deliveries={activeDeliveries}
-          transfers={activeTransfers}
-          idleTruckCountByCity={idleTruckCountByCity}
-          homeCityId={playerHomeCityId}
-          currentTime={currentTime}
-          onOpenFleet={handleOpenFleet}
-          onTruckPress={() => handleOpenFleet()}
-          onRoadsideFuel={setRoadsideFuelJobId}
-        />
-      </ScrollView>
-      <RoadsideFuelSheet
-        visible={roadsideFuelJobId != null}
-        jobId={roadsideFuelJobId}
-        onClose={() => setRoadsideFuelJobId(null)}
-        onSuccess={setStatusMessage}
-      />
-      <ContextualGuideHost
-        cardId="follow_route"
-        blockingUi={roadsideFuelJobId != null}
-      />
+      </MapCommandCenterShell>
+      <ContextualGuideHost cardId="follow_route" blockingUi={false} />
     </View>
   );
 }
@@ -617,10 +265,7 @@ export default function MapScreen({ onOpenContracts }: { onOpenContracts?: () =>
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollContent: {
-    paddingHorizontal: MAP_HORIZONTAL_PADDING,
+    backgroundColor: MAP_BG,
   },
   loadingContainer: {
     flex: 1,
@@ -629,110 +274,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   loadingText: {
-    color: COLORS.muted,
+    color: mapUiTheme.textMuted,
     fontSize: 16,
   },
   emptyStateTitle: {
-    color: COLORS.text,
+    color: mapUiTheme.textPrimary,
     fontSize: 16,
     fontWeight: '700',
     marginBottom: 6,
   },
   emptyStateSubtitle: {
-    color: COLORS.muted,
+    color: mapUiTheme.textMuted,
     fontSize: 13,
     textAlign: 'center',
   },
-
   statusToast: {
-    alignSelf: 'flex-start',
-    marginBottom: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: 'rgba(34, 197, 94, 0.14)',
-    borderWidth: 1,
-    borderColor: COLORS.green,
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: mapUiTheme.smallRadius,
+    backgroundColor: 'rgba(8, 18, 32, 0.88)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: mapUiTheme.greenSuccess,
   },
   statusToastText: {
-    color: COLORS.green,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  compactActionCard: {
-    marginTop: 10,
-    minHeight: 76,
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.16)',
-    borderRadius: 14,
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  compactActionAccent: {
-    width: 3,
-    backgroundColor: 'rgba(56, 189, 248, 0.55)',
-  },
-  compactActionBody: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
-  },
-  compactActionTextBlock: {
-    flex: 1,
-    minWidth: 0,
-  },
-  compactActionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 3,
-  },
-  compactActionBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 8,
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.35)',
-    flexShrink: 0,
-  },
-  compactActionBadgeText: {
-    color: COLORS.cyan,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  compactActionTitle: {
-    color: COLORS.text,
-    fontSize: 13,
-    fontWeight: '800',
-    flex: 1,
-    minWidth: 0,
-  },
-  compactActionSubtitle: {
-    color: COLORS.muted,
+    color: mapUiTheme.greenSuccess,
     fontSize: 11,
-    lineHeight: 15,
-  },
-  compactActionButton: {
-    minHeight: 40,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: 'rgba(56, 189, 248, 0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  compactActionButtonText: {
-    color: COLORS.cyan,
-    fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '700',
   },
 });

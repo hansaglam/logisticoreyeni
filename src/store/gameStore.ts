@@ -62,6 +62,8 @@ import {
   type ClientProgressionWriteSource,
 } from '../domain/canonicalProgressionWriteAuthority';
 import type { ReputationChangeInput } from '../simulation/reputationService';
+import { clearMapSessionCamera } from '../mapV2/experience/mapSessionCamera';
+import { clearMapFleetSession } from '../mapV2/experience/mapFleetSession';
 import { getTurkeyRoadTransferAccessArtifact } from '../mapV2/world/multimodalRoadTransferAccessLoader';
 import {
   attemptRewardClaim,
@@ -1461,6 +1463,8 @@ function createNotificationId(suffix: string): string {
 function resetTransientGameUiState(): void {
   completedDeliveryNotificationIds.clear();
   completedTransferNotificationIds.clear();
+  clearMapSessionCamera();
+  clearMapFleetSession();
 }
 
 function createFreshGameStorePatch(): Partial<GameStore> {

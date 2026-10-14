@@ -10,15 +10,19 @@ import {
   COUNTRY_OVERVIEW_MIN_SCALE_FACTOR,
   WORLD_MIN_SCALE_FACTOR,
 } from '../geo/worldCamera';
+import { WORLD_INHABITED_BOUNDS } from '../geo/worldCamera';
 import { MAP_V2_OCEAN } from '../presentation/countryPaint';
+import { lodShowsRoadNetwork, resolveMapLod } from '../presentation/mapLodPolicy';
 import MapV2GeographicCanvas from '../world/MapV2GeographicCanvas';
+import type { MapFleetLayerModel } from './useMapFleetOverlay';
 import type { MapV2GeographicExperience } from './useMapV2GeographicExperience';
 
 type Props = {
   experience: MapV2GeographicExperience;
+  fleetLayer?: MapFleetLayerModel | null;
 };
 
-export default function MapV2ExperienceCanvas({ experience }: Props) {
+export default function MapV2ExperienceCanvas({ experience, fleetLayer = null }: Props) {
   const {
     canvasRef,
     mode,
@@ -38,13 +42,16 @@ export default function MapV2ExperienceCanvas({ experience }: Props) {
     emphasizeRoad,
     showRailFoundation,
     fade,
+    initialCamera,
+    onCameraSample,
   } = experience;
-  const showTurkeyRoads =
-    (mode === 'COUNTRY' && focusCountryId === 'country.tur') ||
-    (emphasizeRoad && (mode === 'WORLD' || focusCountryId === 'country.tur'));
-  const showTurkeyRail =
-    (mode === 'COUNTRY' && focusCountryId === 'country.tur' && railVisualPreview) ||
-    (showRailFoundation && (mode === 'WORLD' || focusCountryId === 'country.tur'));
+  const lod = resolveMapLod({
+    scope: mode === 'CITY_DETAIL' ? 'CITY_DETAIL' : mode,
+    hasCitySelection: Boolean(experience.selectedCityId),
+  });
+  const countryNetwork = mode === 'COUNTRY' && focusCountryId === 'country.tur' && lodShowsRoadNetwork(lod);
+  const showTurkeyRoads = countryNetwork || (emphasizeRoad && mode === 'COUNTRY' && focusCountryId === 'country.tur');
+  const showTurkeyRail = countryNetwork && (railVisualPreview || showRailFoundation);
 
   return (
     <View style={styles.fill} pointerEvents="auto" collapsable={false}>
@@ -56,6 +63,8 @@ export default function MapV2ExperienceCanvas({ experience }: Props) {
         onSelect={onSelect}
         getCountryPaint={getCountryPaint}
         homePolicy="INHABITED"
+        initialCamera={initialCamera}
+        onCameraSample={onCameraSample}
         maxScaleFactor={mode === 'COUNTRY' ? COUNTRY_OVERVIEW_MAX_SCALE_FACTOR : worldMaxScale}
         minScaleFactor={mode === 'COUNTRY' ? COUNTRY_OVERVIEW_MIN_SCALE_FACTOR : WORLD_MIN_SCALE_FACTOR}
         contentBounds={countryPanBounds}
@@ -98,10 +107,13 @@ export default function MapV2ExperienceCanvas({ experience }: Props) {
               }
             : null
         }
+        cameraScope={mode === 'COUNTRY' ? 'COUNTRY' : 'WORLD'}
+        cameraFrameBounds={mode === 'COUNTRY' ? countryPanBounds : WORLD_INHABITED_BOUNDS}
         elasticGestures={mode !== 'COUNTRY'}
-        mapGesturesEnabled={mode !== 'COUNTRY'}
+        mapGesturesEnabled
         countryVisualProfile={mode === 'COUNTRY' ? 'DASHBOARD' : 'DEFAULT'}
         viewportClip={mode === 'WORLD' ? 'ROUNDED' : 'NONE'}
+        fleetLayer={fleetLayer}
       />
       <Animated.View pointerEvents="none" style={[styles.fade, { opacity: fade, backgroundColor: MAP_V2_OCEAN }]} />
     </View>

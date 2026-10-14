@@ -1,13 +1,15 @@
 /** Geographic city markers. Availability tokens are visual only — policy lives in cityProgression. */
 
+import { mapVisualTokens } from './mapVisualTokens';
+
 export const CITY_NODE_DEFAULT = {
   hubRadius: 4.6,
   coreRadius: 1.35,
   ringRadius: 6.35,
   ringWidth: 1.15,
-  fill: '#3ECFBE',
-  core: '#F2FFFC',
-  ring: 'rgba(186, 250, 236, 0.88)',
+  fill: mapVisualTokens.cityDefault,
+  core: '#F4FBFF',
+  ring: 'rgba(126, 231, 245, 0.62)',
 } as const;
 
 export const CITY_NODE_CAPITAL = {
@@ -28,12 +30,12 @@ export const CITY_NODE_HINT = {
 } as const;
 
 export const CITY_NODE_SELECTED = {
-  haloRadiusAdd: 6.2,
-  halo: 'rgba(186, 236, 255, 0.34)',
-  ringAdd: 4.15,
-  ring: '#F8FAFC',
-  ringWidth: 1.7,
-  stem: 'rgba(248, 250, 252, 0.38)',
+  haloRadiusAdd: 7.4,
+  halo: mapVisualTokens.cityHalo,
+  ringAdd: 3.6,
+  ring: mapVisualTokens.selectionOutline,
+  ringWidth: 1.55,
+  stem: 'rgba(232, 248, 255, 0.34)',
 } as const;
 
 export const CITY_NODE_STARTER = {
@@ -50,8 +52,8 @@ export const CITY_NODE_LOCKED = {
 } as const;
 
 export const CITY_LABEL_DEFAULT = {
-  fill: '#D5EBF6',
-  fontSize: 11,
+  fill: mapVisualTokens.labelSecondary,
+  fontSize: 12,
 } as const;
 
 export const CITY_LABEL_CAPITAL = {
@@ -60,9 +62,9 @@ export const CITY_LABEL_CAPITAL = {
 } as const;
 
 export const CITY_LABEL_SELECTED = {
-  fill: '#FFFFFF',
-  fontSize: 11,
-  backplate: 'rgba(3, 14, 26, 0.55)',
+  fill: mapVisualTokens.labelSelected,
+  fontSize: 13,
+  backplate: 'rgba(4, 12, 22, 0.72)',
 } as const;
 
 export const CITY_LABEL_LOCKED = {
@@ -95,14 +97,14 @@ export const CITY_LABEL_CONNECTOR_MIN_PX = 28;
 
 /** Screen-space only. Keys are Natural Earth NAMEASCII. Does not move GeoCity coordinates. */
 export const CITY_DASHBOARD_LABEL_OFFSETS: Record<string, { x: number; y: number }> = {
-  Istanbul: { x: 12, y: -15 },
-  Bursa: { x: 11, y: 15 },
-  Izmir: { x: 14, y: 13 },
-  Ankara: { x: 11, y: -16 },
-  Antalya: { x: 10, y: 15 },
-  Adana: { x: 12, y: 14 },
-  Diyarbakir: { x: 12, y: -14 },
-  Trabzon: { x: -38, y: 13 },
+  Istanbul: { x: 14, y: -20 },
+  Bursa: { x: 13, y: 18 },
+  Izmir: { x: 16, y: 16 },
+  Ankara: { x: 14, y: -22 },
+  Antalya: { x: 12, y: 18 },
+  Adana: { x: 14, y: 17 },
+  Diyarbakir: { x: 14, y: -18 },
+  Trabzon: { x: -46, y: 16 },
 };
 
 export function cityDashboardLabelOffset(city: {

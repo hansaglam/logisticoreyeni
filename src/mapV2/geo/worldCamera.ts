@@ -41,12 +41,16 @@ export const FULL_WORLD_CONTENT_BOUNDS: CameraContentBounds = {
   maxY: 1,
 };
 
-/** Inhabited-land framing for WORLD home. Avoids empty polar band. */
+/**
+ * Inhabited-land framing for WORLD home.
+ * Crops the polar slab and the empty pacific, and still reaches
+ * Canada, Argentina, and Australia.
+ */
 export const WORLD_INHABITED_BOUNDS = {
-  minX: 0.05,
-  minY: 0.22,
-  maxX: 0.95,
-  maxY: 0.64,
+  minX: 0.07,
+  minY: 0.18,
+  maxX: 0.94,
+  maxY: 0.72,
 };
 
 export type CameraSnapshot = {
@@ -273,5 +277,33 @@ export function preserveGeographicCenter(input: {
   return {
     translateX: input.nextWidth / 2 - centerX * safeScale,
     translateY: input.nextHeight / 2 - centerY * safeScale,
+  };
+}
+
+/**
+ * Keep the geographic center and the zoom relative to the framed content.
+ * Absolute pixel scale is not preserved: a larger viewport keeps the same composition.
+ */
+export function preserveRelativeZoom(input: {
+  previousWidth: number;
+  previousHeight: number;
+  nextWidth: number;
+  nextHeight: number;
+  scale: number;
+  translateX: number;
+  translateY: number;
+  bounds: CameraContentBounds;
+}): CameraSnapshot {
+  const previousFit = contentFitScale(input.previousWidth, input.previousHeight, input.bounds);
+  const nextFit = contentFitScale(input.nextWidth, input.nextHeight, input.bounds);
+  const relative = previousFit > 0 ? input.scale / previousFit : 1;
+  const scale = nextFit > 0 ? nextFit * relative : input.scale;
+  const safeScale = input.scale > 0 ? input.scale : 1;
+  const centerX = (input.previousWidth / 2 - input.translateX) / safeScale;
+  const centerY = (input.previousHeight / 2 - input.translateY) / safeScale;
+  return {
+    scale,
+    translateX: input.nextWidth / 2 - centerX * scale,
+    translateY: input.nextHeight / 2 - centerY * scale,
   };
 }

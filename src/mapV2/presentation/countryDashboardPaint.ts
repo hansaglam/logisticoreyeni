@@ -2,11 +2,13 @@ import { vec } from '@shopify/react-native-skia';
 
 import type { ProjectedBoundingBox } from '../geo/webMercator';
 
+import { mapVisualTokens } from './mapVisualTokens';
+
 /** Dashboard land fill. Boundary still comes from the verified country path. */
-export const COUNTRY_DASHBOARD_FILL = ['#082636', '#0E4A5C', '#17687A', '#0B3A4C'] as const;
-export const COUNTRY_DASHBOARD_COAST_UNDER = 'rgba(2, 8, 18, 0.9)';
-export const COUNTRY_DASHBOARD_COAST = '#7EC8D4';
-export const COUNTRY_DASHBOARD_INNER = 'rgba(214, 246, 238, 0.22)';
+export const COUNTRY_DASHBOARD_FILL = ['#0A2430', '#12485C', '#186878', '#0E3444'] as const;
+export const COUNTRY_DASHBOARD_COAST_UNDER = 'rgba(2, 8, 16, 0.92)';
+export const COUNTRY_DASHBOARD_COAST = mapVisualTokens.countryBorderSelected;
+export const COUNTRY_DASHBOARD_INNER = 'rgba(180, 230, 240, 0.14)';
 export const COUNTRY_DASHBOARD_COAST_UNDER_WIDTH = 0.00118;
 export const COUNTRY_DASHBOARD_COAST_WIDTH = 0.0003;
 export const COUNTRY_DASHBOARD_INNER_WIDTH = 0.00013;
@@ -17,7 +19,7 @@ export const COUNTRY_DASHBOARD_TINT_EAST = 'rgba(20, 44, 58, 0.28)';
 export const COUNTRY_DASHBOARD_HIGHLIGHT = 'rgba(196, 236, 226, 0.07)';
 export const COUNTRY_DASHBOARD_RIDGE = 'rgba(186, 214, 206, 0.11)';
 export const COUNTRY_DASHBOARD_RIDGE_WIDTH = 0.00028;
-export const COUNTRY_DASHBOARD_OCEAN = ['#01070E', '#02111C', '#031624'] as const;
+export const COUNTRY_DASHBOARD_OCEAN = [mapVisualTokens.oceanDeep, '#03101A', mapVisualTokens.ocean] as const;
 
 export {
   COUNTRY_CORRIDOR_BASE,

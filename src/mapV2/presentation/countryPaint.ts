@@ -1,5 +1,5 @@
-import { colors } from '../../theme/colors';
 import type { CountryGameplayAvailability } from '../gameplay/mapV2CountryAvailability.fixture';
+import { mapVisualTokens } from './mapVisualTokens';
 
 export type CountryPaint = {
   fill: string;
@@ -9,54 +9,54 @@ export type CountryPaint = {
 
 const PAINT: Record<CountryGameplayAvailability, CountryPaint> = {
   STARTER_AVAILABLE: {
-    fill: '#1A6F96',
-    border: '#5EC8FF',
-    strokeWidth: 0.0009,
+    fill: mapVisualTokens.countryAvailable,
+    border: mapVisualTokens.countryBorderSelected,
+    strokeWidth: 0.00072,
   },
   UNLOCKED: {
-    fill: '#155A7A',
-    border: '#3A8FBF',
-    strokeWidth: 0.00055,
+    fill: '#123044',
+    border: '#3A7C9A',
+    strokeWidth: 0.00048,
   },
   LOCKED: {
-    fill: '#0C1D2E',
-    border: '#2A4258',
-    strokeWidth: 0.00028,
+    fill: mapVisualTokens.countryLocked,
+    border: mapVisualTokens.countryBorder,
+    strokeWidth: 0.00026,
   },
   NOT_GAMEPLAY_SUPPORTED: {
-    fill: '#09141F',
-    border: '#1C2C3A',
-    strokeWidth: 0.0002,
+    fill: mapVisualTokens.countryUnsupported,
+    border: '#1A2A38',
+    strokeWidth: 0.00018,
   },
 };
 
 const SELECTED: Record<CountryGameplayAvailability, CountryPaint> = {
   STARTER_AVAILABLE: {
-    fill: '#2284B0',
-    border: colors.primaryLight,
-    strokeWidth: 0.0016,
+    fill: mapVisualTokens.countrySelected,
+    border: mapVisualTokens.selectionOutline,
+    strokeWidth: 0.00115,
   },
   UNLOCKED: {
-    fill: '#1B6A90',
-    border: colors.primaryLight,
-    strokeWidth: 0.0015,
+    fill: '#184868',
+    border: mapVisualTokens.countryBorderSelected,
+    strokeWidth: 0.00105,
   },
   LOCKED: {
-    fill: '#143044',
+    fill: '#122838',
     border: '#7A93A8',
-    strokeWidth: 0.0012,
+    strokeWidth: 0.0009,
   },
   NOT_GAMEPLAY_SUPPORTED: {
-    fill: '#102030',
+    fill: '#101C28',
     border: '#5A7184',
-    strokeWidth: 0.001,
+    strokeWidth: 0.0008,
   },
 };
 
 const CONTEXT: CountryPaint = {
-  fill: '#071018',
-  border: 'rgba(44, 66, 86, 0.35)',
-  strokeWidth: 0.00025,
+  fill: mapVisualTokens.countryInactive,
+  border: 'rgba(42, 66, 86, 0.28)',
+  strokeWidth: 0.00022,
 };
 
 /** Isolated COUNTRY scene: one primary country, not a zoomed world highlight. */
@@ -71,8 +71,8 @@ export function paintForCountryFocus(): CountryPaint {
 /** Player operations dashboard: richer fill; coastline still verified geometry. */
 export function paintForCountryDashboard(): CountryPaint {
   return {
-    fill: '#165A78',
-    border: '#8EF0DC',
+    fill: mapVisualTokens.countrySelected,
+    border: mapVisualTokens.countryBorderSelected,
     strokeWidth: 0.00034,
   };
 }
@@ -88,6 +88,6 @@ export function paintForCountryContext(): CountryPaint {
   return CONTEXT;
 }
 
-export const MAP_V2_OCEAN = '#031225';
-export const MAP_V2_OCEAN_DEEP = '#020B14';
-export const MAP_V2_STARTER_GLOW = 'rgba(94, 200, 255, 0.22)';
+export const MAP_V2_OCEAN = mapVisualTokens.ocean;
+export const MAP_V2_OCEAN_DEEP = mapVisualTokens.oceanDeep;
+export const MAP_V2_STARTER_GLOW = mapVisualTokens.selectionHalo;

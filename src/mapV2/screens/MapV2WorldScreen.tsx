@@ -97,9 +97,8 @@ export default function MapV2WorldScreen({
     selectedCityProgression,
     selectedCityLocked,
     enterCountry,
-    returnFromCityDetail,
     enterCityDetail,
-    returnToWorld,
+    goBackInMapScope,
     gameplayCityCount,
     countryStatus,
   } = experience;
@@ -162,7 +161,7 @@ export default function MapV2WorldScreen({
           warehouses={selectWarehousesByCity(warehouses, selectedOperation.legacyCityId)}
           trucks={selectOwnedTrucksByCity(trucks, selectedOperation.legacyCityId, homeCityId)}
           deliveries={selectActiveDeliveriesByCity(deliveries, selectedOperation.legacyCityId)}
-          onBack={returnFromCityDetail}
+          onBack={goBackInMapScope}
           reduceMotion={reduceMotion}
         />
       </View>
@@ -182,7 +181,7 @@ export default function MapV2WorldScreen({
         <MapV2CountryHeader
           title={resolveCountryDisplayName(focusRecord, 'tr')}
           identityLine={mapV2ExperienceCopy.countryIdentityLine}
-          onBack={returnToWorld}
+          onBack={goBackInMapScope}
         />
       ) : (
         <ScreenHeader

@@ -146,12 +146,14 @@ assert(!shellRegression.includes('production Harita does not import mapV2'), '18
 assert(planRegression.includes('SUPERSEDED MAP-02B'), '18c. implementation-plan regression records the superseded ban');
 assert(controller.includes("MAP_V2_EXPERIENCE_INITIAL_MODE = 'WORLD'"), 'startup remains WORLD');
 assert(canvasHost.includes('homePolicy="INHABITED"'), 'startup camera remains the inhabited world');
-assert(viewport.includes('MAP_V2_FLEET_OVERLAY_PENDING'), 'fleet overlay stays pending');
+assert(viewport.includes('fleetMode={safeMode === \'fleet\' ? fleet.layer : null}') || viewport.includes('fleetLayer={fleetMode ? fleetLayer : null}'), 'fleet overlay is active in Filo mode');
 assert(viewport.includes('MAP_V2_WAREHOUSE_OVERLAY_PENDING'), 'warehouse overlay stays pending');
 assert(viewport.includes('MAP_V2_DELIVERY_OVERLAY_PENDING'), 'delivery overlay stays pending');
 assert(viewport.includes("showRailFoundation: emphasis === 'rail'"), 'RAIL command mode can show the visual foundation');
 assert(viewport.includes("emphasizeRoad: emphasis === 'road'"), 'ROAD command mode emphasizes the existing road layer');
 assert(viewport.includes('cityDetailEnabled: false'), 'command center does not open the diagnostic city page');
+assert(viewport.includes('<MapScopeBackControl'), 'map-scope back control lives in the map viewport');
+assert(!shell.includes('MapScopeBackControl'), 'map-scope back is not a second shell control');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

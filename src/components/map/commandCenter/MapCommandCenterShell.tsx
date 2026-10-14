@@ -7,6 +7,8 @@ import { GameIcon } from '../../ui';
 import MapBottomKpiBar from './MapBottomKpiBar';
 import MapCommandRail from './MapCommandRail';
 import MapContextualInspector from './MapContextualInspector';
+import type { CityQuickAction, MapV2CityGameplayLink } from '../../../mapV2/gameplay/mapV2CityGameplayAdapter';
+import type { MapFleetPanelModel } from '../../../mapV2/experience/useMapFleetOverlay';
 import MapTopStatusBar from './MapTopStatusBar';
 import { resolveMapCommandMode, type MapCommandMode } from './mapCommandMode';
 import type { MapCommandTelemetry } from './mapCommandTelemetry';
@@ -19,6 +21,15 @@ interface MapCommandCenterShellProps {
   onModeChange: (mode: MapCommandMode) => void;
   onExit: () => void;
   locationLabel?: string | null;
+  cityLink?: MapV2CityGameplayLink | null;
+  mapScope?: 'WORLD' | 'COUNTRY';
+  inspectorFocusKey?: number;
+  onCityAction?: (action: CityQuickAction) => void;
+  onClearCity?: () => void;
+  fleetPanel?: MapFleetPanelModel | null;
+  currentTime?: number;
+  onShowTruckCity?: (gameplayCityId: string) => void;
+  onShowTruckRoute?: () => void;
   children: React.ReactNode;
 }
 
@@ -29,6 +40,15 @@ function MapCommandCenterShell({
   onModeChange,
   onExit,
   locationLabel,
+  cityLink,
+  mapScope = 'WORLD',
+  inspectorFocusKey = 0,
+  onCityAction,
+  onClearCity,
+  fleetPanel = null,
+  currentTime = 0,
+  onShowTruckCity,
+  onShowTruckRoute,
   children,
 }: MapCommandCenterShellProps) {
   const safeMode = resolveMapCommandMode(mode);
@@ -45,6 +65,11 @@ function MapCommandCenterShell({
     bandRef.current = band;
     setInspectorOpen(band !== 'compact');
   }, [band]);
+
+  useEffect(() => {
+    if (!inspectorFocusKey) return;
+    setInspectorOpen(true);
+  }, [inspectorFocusKey]);
 
   useEffect(() => {
     if (!__DEV__ || loggedLayoutRef.current || width < height) return;
@@ -97,6 +122,15 @@ function MapCommandCenterShell({
             width={chrome.inspectorWidth}
             overlay
             locationLabel={locationLabel}
+            cityLink={cityLink}
+            mapScope={mapScope}
+            inspectorFocusKey={inspectorFocusKey}
+            onCityAction={onCityAction}
+            onClearCity={onClearCity}
+            fleetPanel={fleetPanel}
+            currentTime={currentTime}
+            onShowTruckCity={onShowTruckCity}
+            onShowTruckRoute={onShowTruckRoute}
             onClose={() => setInspectorOpen(false)}
             />
           ) : null}
@@ -119,6 +153,15 @@ function MapCommandCenterShell({
             width={chrome.inspectorWidth}
             overlay={false}
             locationLabel={locationLabel}
+            cityLink={cityLink}
+            mapScope={mapScope}
+            inspectorFocusKey={inspectorFocusKey}
+            onCityAction={onCityAction}
+            onClearCity={onClearCity}
+            fleetPanel={fleetPanel}
+            currentTime={currentTime}
+            onShowTruckCity={onShowTruckCity}
+            onShowTruckRoute={onShowTruckRoute}
             onClose={() => setInspectorOpen(false)}
           />
         ) : null}

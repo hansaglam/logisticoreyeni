@@ -1,18 +1,24 @@
 import type { CountryCorridorInteractionState } from '../gameplay/countryCorridorInteraction';
 
-/** Curated player ROAD corridors. Not debug ROAD paint. Not city cyan. */
-export const COUNTRY_CORRIDOR_BASE = 'rgba(10, 18, 28, 0.92)';
-export const COUNTRY_CORRIDOR_MAIN = '#C9C0AE';
-export const COUNTRY_CORRIDOR_HIGHLIGHT = 'rgba(236, 228, 214, 0.28)';
-export const COUNTRY_CORRIDOR_CONNECTED = '#DDD4C2';
-export const COUNTRY_CORRIDOR_CONNECTED_TINT = 'rgba(186, 214, 222, 0.22)';
-export const COUNTRY_CORRIDOR_MIXED = '#8B93A0';
-export const COUNTRY_CORRIDOR_LOCKED = '#4A5562';
-export const COUNTRY_CORRIDOR_LOCKED_SELECTED = '#6A7684';
-export const COUNTRY_CORRIDOR_WIDTH_BASE = 0.00026;
-export const COUNTRY_CORRIDOR_WIDTH_MAIN = 0.00015;
-export const COUNTRY_CORRIDOR_WIDTH_CONNECTED = 0.000175;
-export const COUNTRY_CORRIDOR_WIDTH_HIGHLIGHT = 0.00007;
+import { resolveRoadVisualStyle } from './transportVisualStyle';
+import { mapVisualTokens } from './mapVisualTokens';
+
+/** Curated player ROAD corridors. Cyan operational network, not a beige prototype. */
+const CANONICAL_ROAD = resolveRoadVisualStyle('COUNTRY_OVERVIEW', 'CANONICAL_GAMEPLAY_ROAD');
+const SECONDARY_ROAD = resolveRoadVisualStyle('COUNTRY_OVERVIEW', 'SECONDARY');
+
+export const COUNTRY_CORRIDOR_BASE = mapVisualTokens.roadBase;
+export const COUNTRY_CORRIDOR_MAIN = CANONICAL_ROAD.core;
+export const COUNTRY_CORRIDOR_HIGHLIGHT = mapVisualTokens.roadGlow;
+export const COUNTRY_CORRIDOR_CONNECTED = mapVisualTokens.roadSelected;
+export const COUNTRY_CORRIDOR_CONNECTED_TINT = 'rgba(232, 248, 255, 0.28)';
+export const COUNTRY_CORRIDOR_MIXED = SECONDARY_ROAD.core;
+export const COUNTRY_CORRIDOR_LOCKED = '#3A4A5C';
+export const COUNTRY_CORRIDOR_LOCKED_SELECTED = '#5A6E82';
+export const COUNTRY_CORRIDOR_WIDTH_BASE = 0.0005 * CANONICAL_ROAD.widthScale;
+export const COUNTRY_CORRIDOR_WIDTH_MAIN = 0.0003 * CANONICAL_ROAD.widthScale;
+export const COUNTRY_CORRIDOR_WIDTH_CONNECTED = 0.00036 * CANONICAL_ROAD.widthScale;
+export const COUNTRY_CORRIDOR_WIDTH_HIGHLIGHT = 0.00014 * CANONICAL_ROAD.widthScale;
 export const COUNTRY_CORRIDOR_DIMMED_OPACITY = 0.45;
 
 export type CountryCorridorStrokeLayer = { color: string; width: number };

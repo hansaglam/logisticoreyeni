@@ -1,10 +1,14 @@
 import type { RailCorridorInteractionState } from '../gameplay/countryRailCorridorInteraction';
 
-/** Cool pale steel. Distinct from warm ROAD corridors. Not cyan. Not a river. */
-export const COUNTRY_RAIL_CORRIDOR_BASE = 'rgba(14, 20, 28, 0.9)';
-export const COUNTRY_RAIL_CORRIDOR_MAIN = '#B7C2CC';
-export const COUNTRY_RAIL_CORRIDOR_HIGHLIGHT = 'rgba(186, 198, 210, 0.22)';
-export const COUNTRY_RAIL_CORRIDOR_CONNECTED = '#C5D0D8';
+import { resolveRailVisualStyle } from './transportVisualStyle';
+
+/** Cool gray rail. Segmented in the style token so it is not another road. */
+const RAIL = resolveRailVisualStyle('COUNTRY_OVERVIEW', false);
+
+export const COUNTRY_RAIL_CORRIDOR_BASE = RAIL.halo;
+export const COUNTRY_RAIL_CORRIDOR_MAIN = RAIL.core;
+export const COUNTRY_RAIL_CORRIDOR_HIGHLIGHT = 'rgba(197, 208, 220, 0.28)';
+export const COUNTRY_RAIL_CORRIDOR_CONNECTED = '#E7EEF4';
 export const COUNTRY_RAIL_CORRIDOR_UNAVAILABLE = '#5A6570';
 export const COUNTRY_RAIL_CORRIDOR_WIDTH_BASE = 0.0002;
 export const COUNTRY_RAIL_CORRIDOR_WIDTH_MAIN = 0.00011;

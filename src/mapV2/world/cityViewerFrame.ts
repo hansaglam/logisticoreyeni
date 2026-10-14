@@ -2,6 +2,7 @@ import { cityVisibleAtLod, type CityPresentationLodId, type GeoCityRecord } from
 import type { ProjectedBoundingBox } from '../geo/webMercator';
 import { worldToScreen } from '../geo/worldCamera';
 import { CITY_HIT_RADIUS_PX, CITY_LABEL_MIN_DISTANCE_PX } from '../presentation/cityPaint';
+import { expandCullBounds } from '../presentation/markerCullPolicy';
 
 export const CITY_LABEL_MAX: Record<CityPresentationLodId, number> = {
   CITY_LOD_COUNTRY_OVERVIEW: 8,
@@ -52,9 +53,10 @@ export function filterVisibleCities(
   selectedCityId: string | null,
   mappedGeoIds: ReadonlySet<string> = new Set(),
 ): GeoCityRecord[] {
+  const padded = expandCullBounds(bounds);
   return cities.filter((city) => {
     if (city.geoCityId === selectedCityId) return true;
-    if (!cityInViewport(city, bounds)) return false;
+    if (!cityInViewport(city, padded)) return false;
     if (viewLod === 'CITY_LOD_COUNTRY_OVERVIEW' && mappedGeoIds.size > 0) {
       return mappedGeoIds.has(city.geoCityId);
     }

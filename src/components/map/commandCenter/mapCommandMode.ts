@@ -145,6 +145,27 @@ export function resolveMapCommandMode(value: unknown): MapCommandMode {
   return mode;
 }
 
+/**
+ * Fleet mode inside a country shows the fleet summary or the selected vehicle.
+ * A selected city still wins for every other mode.
+ * WORLD scope shows the overview inspector while the rail mode stays as it was.
+ */
+export function resolveCommandInspectorPanel(input: {
+  mode: MapCommandMode;
+  citySelected: boolean;
+  scope?: 'WORLD' | 'COUNTRY';
+}): MapInspectorPanel {
+  if (input.mode === 'fleet' && input.scope !== 'WORLD') return 'VEHICLE';
+  if (input.citySelected) return 'CITY';
+  if (input.scope === 'WORLD') return 'OVERVIEW';
+  return inspectorPanelForMode(input.mode);
+}
+
+/** Map-scope changes do not pick a new command mode. */
+export function commandModeAfterMapScopeChange(mode: MapCommandMode): MapCommandMode {
+  return resolveMapCommandMode(mode);
+}
+
 export function inspectorPanelForMode(mode: MapCommandMode): MapInspectorPanel {
   switch (resolveMapCommandMode(mode)) {
     case 'fleet':

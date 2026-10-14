@@ -117,7 +117,7 @@ assert(
 const world = (read('src/mapV2/screens/MapV2WorldScreen.tsx')+read('src/mapV2/experience/useMapV2GeographicExperience.ts')+read('src/mapV2/experience/MapV2ExperienceCanvas.tsx'));
 assert(world.includes('selectedCityId={selectedCityId}'), 'list uses shared selectedCityId');
 assert(world.includes('onSelect={setSelectedCityId}'), 'list writes the same selection');
-assert(world.includes('onSelectCity: setSelectedCityId'), 'map writes the same selection');
+assert(world.includes('setSelectedCityId(geoCityId)'), 'map writes the same selection');
 assert(world.includes('returnFromCityDetail'), 'city detail back exists');
 assert(!/const returnFromCityDetail[\s\S]{0,80}setSelectedCityId\(null\)/.test(world), 'city detail back does not clear city selection');
 assert(world.includes("setMode('COUNTRY')"), 'city detail back restores country');

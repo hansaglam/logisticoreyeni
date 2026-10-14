@@ -3,6 +3,7 @@ import type { GeometryLodId } from '../geo/geometry';
 import type { ProjectedBoundingBox } from '../geo/webMercator';
 import { dequantizePolygons, type WorldCountryRecord } from '../geo/worldBoundaryPackage';
 import { getRenderableCountries } from '../world/worldBoundaryLoader';
+import { mapV2ExperienceCopy } from '../presentation/mapV2ExperienceCopy';
 import { isCountryOpenable, type CountryGameplayAvailability } from './mapV2CountryAvailability.fixture';
 
 export type MapV2ExperienceMode = 'WORLD' | 'COUNTRY' | 'CITY_DETAIL';
@@ -31,6 +32,31 @@ export function mapV2BackAction(
   }
   if (opts.selectedCountryId) return 'CLEAR_COUNTRY_SELECTION';
   return 'CLOSE_EXPERIENCE';
+}
+
+export type MapScopeBack =
+  | { available: false }
+  | { available: true; target: 'WORLD'; label: string }
+  | { available: true; target: 'COUNTRY'; label: string };
+
+/**
+ * Scope back only. WORLD has no control.
+ * COUNTRY returns to WORLD. CITY_DETAIL returns to the open country.
+ */
+export function resolveMapScopeBack(input: {
+  mode: MapV2ExperienceMode;
+  countryDisplayName?: string | null;
+}): MapScopeBack {
+  if (input.mode === 'WORLD') return { available: false };
+  if (input.mode === 'CITY_DETAIL') {
+    const countryName = input.countryDisplayName?.trim();
+    return {
+      available: true,
+      target: 'COUNTRY',
+      label: countryName && countryName.length > 0 ? countryName : mapV2ExperienceCopy.modeCountry,
+    };
+  }
+  return { available: true, target: 'WORLD', label: mapV2ExperienceCopy.modeWorld };
 }
 
 export function expandProjectedBounds(

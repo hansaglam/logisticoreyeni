@@ -9,7 +9,7 @@ import React, {
   useState,
 } from 'react';
 import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import { Canvas, Circle, Group, Line, LinearGradient, Path, RadialGradient, RoundedRect, matchFont, rect, rrect, Text as SkiaText, vec } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, Line, LinearGradient, Path, RadialGradient, RoundedRect, Skia, matchFont, rect, rrect, Text as SkiaText, vec } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS, useAnimatedReaction, useDerivedValue, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -27,7 +27,7 @@ import {
   clampWorldCamera,
   contentFitScale,
   getVisibleWorldBounds,
-  preserveGeographicCenter,
+  preserveRelativeZoom,
   screenToWorld,
   worldToScreen,
   worldFitScale,
@@ -38,8 +38,11 @@ import {
 import type { ProjectedBoundingBox } from '../geo/webMercator';
 import { dequantizePolygons } from '../geo/worldBoundaryPackage';
 import type { GeoCityRecord } from '../geo/cityPackage';
-import type { CountryPaint } from '../presentation/countryPaint';
-import { MAP_V2_OCEAN, MAP_V2_OCEAN_DEEP, MAP_V2_STARTER_GLOW } from '../presentation/countryPaint';
+import { markerIntersectsViewport, type CullBounds } from '../presentation/markerCullPolicy';
+import { mapVisualTokens } from '../presentation/mapVisualTokens';
+import type { MapFleetLayerModel } from '../experience/useMapFleetOverlay';
+import { resolveCameraScalePlan, type CameraScalePlan } from '../presentation/mapCameraPolicy';
+import { MAP_V2_OCEAN, MAP_V2_OCEAN_DEEP, MAP_V2_STARTER_GLOW, type CountryPaint } from '../presentation/countryPaint';
 import { paintForTransportStyle } from '../presentation/transportPaint';
 import {
   ROAD_OVERVIEW_CORRIDOR_STYLES,
@@ -316,6 +319,14 @@ type Props = {
   mapGesturesEnabled?: boolean;
   countryVisualProfile?: 'DEFAULT' | 'DASHBOARD';
   viewportClip?: 'NONE' | 'ROUNDED';
+  /** First layout only. Later resizes keep the geographic center. */
+  initialCamera?: CameraSnapshot | null;
+  /** Shared-value sample. Must not set React state. */
+  onCameraSample?: (snapshot: CameraSnapshot) => void;
+  /** When set, fit / min / max come from the scope plan instead of raw factors. */
+  cameraScope?: 'WORLD' | 'COUNTRY' | 'CITY_DETAIL';
+  cameraFrameBounds?: CameraContentBounds | null;
+  fleetLayer?: MapFleetLayerModel | null;
 };
 
 function cityLabelFont(weight: 'normal' | 'bold' = 'normal') {
@@ -358,6 +369,11 @@ function MapV2GeographicCanvasInner(
     mapGesturesEnabled = true,
     countryVisualProfile = 'DEFAULT',
     viewportClip = 'NONE',
+    initialCamera = null,
+    onCameraSample,
+    cameraScope = 'WORLD',
+    cameraFrameBounds = null,
+    fleetLayer = null,
   }: Props,
   ref: React.Ref<MapV2GeographicCanvasHandle>,
 ) {
@@ -369,6 +385,17 @@ function MapV2GeographicCanvasInner(
   const [activeLod, setActiveLod] = useState<GeometryLodId>('WORLD_LOW');
   const fittedRef = useRef(false);
   const prevViewportRef = useRef({ width: 0, height: 0 });
+  const scalePlan = useMemo((): CameraScalePlan | null => {
+    if (!cameraFrameBounds || viewport.width <= 0 || viewport.height <= 0) return null;
+    return resolveCameraScalePlan({
+      scope: cameraScope,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      frameBounds: cameraFrameBounds,
+    });
+  }, [cameraFrameBounds, cameraScope, viewport.height, viewport.width]);
+  const scalePlanRef = useRef<CameraScalePlan | null>(null);
+  scalePlanRef.current = scalePlan;
 
   const scale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -401,6 +428,27 @@ function MapV2GeographicCanvasInner(
   hitRef.current = hitTestIds;
   const cityLayerRef = useRef(cityLayer);
   cityLayerRef.current = cityLayer;
+  const fleetLayerRef = useRef(fleetLayer);
+  fleetLayerRef.current = fleetLayer;
+  const [fleetViewBounds, setFleetViewBounds] = useState<CullBounds | null>(null);
+  const fleetEmphasisPaths = useMemo(() => {
+    return (fleetLayer?.emphasis ?? []).flatMap((line) => {
+      if (line.points.length < 2) return [];
+      const path = Skia.Path.Make();
+      path.moveTo(line.points[0].x, line.points[0].y);
+      for (let index = 1; index < line.points.length; index += 1) {
+        path.lineTo(line.points[index].x, line.points[index].y);
+      }
+      return [{ key: line.key, path, color: line.color, width: line.width }];
+    });
+  }, [fleetLayer?.emphasis]);
+  const visibleFleetMarkers = useMemo(() => {
+    const markers = fleetLayer?.enabled ? fleetLayer.markers : [];
+    if (!fleetViewBounds) return markers;
+    return markers.filter(
+      (marker) => marker.ring != null || markerIntersectsViewport({ x: marker.x, y: marker.y }, fleetViewBounds),
+    );
+  }, [fleetLayer, fleetViewBounds]);
   const portLayerRef = useRef(devPortLayer);
   portLayerRef.current = devPortLayer;
   const airportLayerRef = useRef(devAirportLayer);
@@ -466,10 +514,11 @@ function MapV2GeographicCanvasInner(
   }, []);
 
   useEffect(() => {
-    maxScaleSv.value = maxScaleFactor;
-    minScaleSv.value = minScaleFactor;
+    const plan = scalePlanRef.current;
+    maxScaleSv.value = plan?.maxScaleFactor ?? maxScaleFactor;
+    minScaleSv.value = plan?.minScaleFactor ?? minScaleFactor;
     elasticSv.value = elasticGestures ? 1 : 0;
-    const box = contentBounds ?? FULL_WORLD_CONTENT_BOUNDS;
+    const box = plan?.panBounds ?? contentBounds ?? FULL_WORLD_CONTENT_BOUNDS;
     boundMinX.value = box.minX;
     boundMinY.value = box.minY;
     boundMaxX.value = box.maxX;
@@ -486,11 +535,23 @@ function MapV2GeographicCanvasInner(
     minScaleSv,
     elasticGestures,
     elasticSv,
+    scalePlan,
   ]);
+
+  const commitCamera = useCallback(
+    (next: { scale: number; translateX: number; translateY: number }, animate: boolean) => {
+      const duration = animate ? CAMERA_FOCUS_MS : 0;
+      scale.value = animate ? withTiming(next.scale, { duration }) : next.scale;
+      translateX.value = animate ? withTiming(next.translateX, { duration }) : next.translateX;
+      translateY.value = animate ? withTiming(next.translateY, { duration }) : next.translateY;
+    },
+    [scale, translateX, translateY],
+  );
 
   const applyCamera = useCallback(
     (next: CameraSnapshot, animate: boolean) => {
-      const box = contentBounds ?? FULL_WORLD_CONTENT_BOUNDS;
+      const plan = scalePlanRef.current;
+      const box = plan?.panBounds ?? contentBounds ?? FULL_WORLD_CONTENT_BOUNDS;
       const clamped = clampWorldCamera({
         scale: next.scale,
         translateX: next.translateX,
@@ -498,40 +559,61 @@ function MapV2GeographicCanvasInner(
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
         elastic: false,
-        maxScaleFactor,
-        minScaleFactor,
+        maxScaleFactor: plan?.maxScaleFactor ?? maxScaleFactor,
+        minScaleFactor: plan?.minScaleFactor ?? minScaleFactor,
         contentBounds: box,
       });
-      const duration = animate ? CAMERA_FOCUS_MS : 0;
-      scale.value = animate ? withTiming(clamped.scale, { duration }) : clamped.scale;
-      translateX.value = animate ? withTiming(clamped.translateX, { duration }) : clamped.translateX;
-      translateY.value = animate ? withTiming(clamped.translateY, { duration }) : clamped.translateY;
+      commitCamera(clamped, animate);
     },
     [
+      commitCamera,
       contentBounds,
       maxScaleFactor,
       minScaleFactor,
-      scale,
-      translateX,
-      translateY,
       viewport.height,
       viewport.width,
     ],
+  );
+
+  const restoreWorldCamera = useCallback(
+    (next: CameraSnapshot, animate: boolean) => {
+      if (viewport.width <= 0 || viewport.height <= 0) return;
+      const plan = resolveCameraScalePlan({
+        scope: 'WORLD',
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+        frameBounds: WORLD_INHABITED_BOUNDS,
+      });
+      const clamped = clampWorldCamera({
+        scale: next.scale,
+        translateX: next.translateX,
+        translateY: next.translateY,
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+        elastic: false,
+        maxScaleFactor: plan.maxScaleFactor,
+        minScaleFactor: plan.minScaleFactor,
+        contentBounds: plan.panBounds,
+      });
+      commitCamera(clamped, animate);
+    },
+    [commitCamera, viewport.height, viewport.width],
   );
 
   const applyHome = useCallback(
     (animate = false) => {
       if (viewport.width <= 0 || viewport.height <= 0) return;
       if (homePolicy === 'INHABITED') {
+        const plan = scalePlanRef.current;
         applyCamera(
           cameraToFitBounds({
             ...WORLD_INHABITED_BOUNDS,
             viewportWidth: viewport.width,
             viewportHeight: viewport.height,
-            padding: 0.04,
-            maxScaleFactor,
-            minScaleFactor,
-            contentBounds: contentBounds ?? FULL_WORLD_CONTENT_BOUNDS,
+            padding: plan?.framePadding ?? 0.04,
+            maxScaleFactor: plan?.maxScaleFactor ?? maxScaleFactor,
+            minScaleFactor: plan?.minScaleFactor ?? minScaleFactor,
+            contentBounds: plan?.panBounds ?? contentBounds ?? FULL_WORLD_CONTENT_BOUNDS,
           }),
           animate,
         );
@@ -585,18 +667,20 @@ function MapV2GeographicCanvasInner(
       }),
       applyHome,
       applyBounds,
-      restoreCamera: (snapshot, animate = true) => applyCamera(snapshot, animate),
+      restoreCamera: (snapshot, animate = true) => restoreWorldCamera(snapshot, animate),
     }),
-    [applyBounds, applyCamera, applyHome, scale, translateX, translateY],
+    [applyBounds, applyCamera, applyHome, restoreWorldCamera, scale, translateX, translateY],
   );
 
   const publishHud = useCallback(
     (cam: { x: number; y: number; s: number; w: number; h: number }) => {
       if (cam.w <= 0 || cam.h <= 0) return;
+      onCameraSample?.({ scale: cam.s, translateX: cam.x, translateY: cam.y });
       const override = lodOverrideRef.current;
       const cullOn = cullRef.current;
       const lod = resolveLoadedLod(override, cam.s, cam.w, cam.h);
       const bounds = getVisibleWorldBounds(cam.x, cam.y, cam.s, cam.w, cam.h, 0.01);
+      setFleetViewBounds(bounds);
       const visible = getVisibleCountryGeometry(bounds, lod);
       const visibleIdsNext = visible.map((c) => c.geoCountryId);
       const drawn = forcedRef.current
@@ -839,7 +923,7 @@ function MapV2GeographicCanvasInner(
         timeToInteractiveMs: getRoadPerfSnapshot().timeToInteractiveMs,
       });
     },
-    [onHud, pkg.countries.length, pkg.omittedPolarFeatures, pkg.polarRenderPolicy, pkg.renderedCountryCount, pkg.sourceCountryCount, renderable],
+    [onCameraSample, onHud, pkg.countries.length, pkg.omittedPolarFeatures, pkg.polarRenderPolicy, pkg.renderedCountryCount, pkg.sourceCountryCount, renderable],
   );
 
   const syncFromCamera = useCallback(() => {
@@ -883,7 +967,8 @@ function MapV2GeographicCanvasInner(
     if (nextWidth <= 0 || nextHeight <= 0) return;
     const previous = prevViewportRef.current;
     if (!fittedRef.current) {
-      applyHome(false);
+      if (initialCamera) applyCamera(initialCamera, false);
+      else applyHome(false);
       fittedRef.current = true;
       prevViewportRef.current = { width: nextWidth, height: nextHeight };
       return;
@@ -893,7 +978,7 @@ function MapV2GeographicCanvasInner(
       previous.height > 0 &&
       (previous.width !== nextWidth || previous.height !== nextHeight)
     ) {
-      const next = preserveGeographicCenter({
+      const next = preserveRelativeZoom({
         previousWidth: previous.width,
         previousHeight: previous.height,
         nextWidth,
@@ -901,12 +986,26 @@ function MapV2GeographicCanvasInner(
         scale: scale.value,
         translateX: translateX.value,
         translateY: translateY.value,
+        bounds: scalePlanRef.current?.panBounds ?? contentBounds ?? FULL_WORLD_CONTENT_BOUNDS,
       });
-      translateX.value = next.translateX;
-      translateY.value = next.translateY;
+      const plan = scalePlanRef.current;
+      const clamped = clampWorldCamera({
+        scale: next.scale,
+        translateX: next.translateX,
+        translateY: next.translateY,
+        viewportWidth: nextWidth,
+        viewportHeight: nextHeight,
+        elastic: false,
+        maxScaleFactor: plan?.maxScaleFactor ?? maxScaleFactor,
+        minScaleFactor: plan?.minScaleFactor ?? minScaleFactor,
+        contentBounds: plan?.panBounds ?? contentBounds ?? FULL_WORLD_CONTENT_BOUNDS,
+      });
+      scale.value = clamped.scale;
+      translateX.value = clamped.translateX;
+      translateY.value = clamped.translateY;
     }
     prevViewportRef.current = { width: nextWidth, height: nextHeight };
-  }, [applyHome, scale, translateX, translateY, vh, viewport.height, viewport.width, vw]);
+  }, [applyCamera, applyHome, initialCamera, scale, translateX, translateY, vh, viewport.height, viewport.width, vw]);
 
   const cameraTransform = useDerivedValue(() => [
     { translateX: translateX.value },
@@ -933,6 +1032,23 @@ function MapV2GeographicCanvasInner(
 
   const selectAtScreen = useCallback(
     (sx: number, sy: number) => {
+      const fleet = fleetLayerRef.current;
+      if (fleet?.enabled && fleet.markers.length > 0) {
+        let bestFleetId: string | null = null;
+        let bestFleetDist = 22;
+        for (const marker of fleet.markers) {
+          const screen = worldToScreen(marker.x, marker.y, translateX.value, translateY.value, scale.value);
+          const dist = Math.hypot(screen.x - sx, screen.y + marker.screenOffsetY - sy);
+          if (dist <= bestFleetDist) {
+            bestFleetDist = dist;
+            bestFleetId = marker.id;
+          }
+        }
+        if (bestFleetId) {
+          fleet.onSelectMarker(bestFleetId);
+          return;
+        }
+      }
       const airports = airportLayerRef.current;
       if (airports?.enabled && airports.onSelect && airports.markers.length > 0) {
         let bestAirportId: string | null = null;
@@ -1075,7 +1191,7 @@ function MapV2GeographicCanvasInner(
     () =>
       Gesture.Pan()
         .minDistance(8)
-        .maxPointers(2)
+        .maxPointers(1)
         .onBegin(() => {
           'worklet';
           panConsumed.value = false;
@@ -1375,6 +1491,7 @@ function MapV2GeographicCanvasInner(
       <View style={styles.fill} onLayout={onLayout} collapsable={false}>
         {viewport.width > 0 ? (
           <Canvas style={styles.fill}>
+            {/* MAP_DRAW_ORDER: ocean, grid, country-fill, country-border, road, rail, city-halo, city-marker, label */}
             <Group clip={frameRRect}>
               {countryHero ? (
                 <>
@@ -1391,7 +1508,7 @@ function MapV2GeographicCanvasInner(
                       key={`dash-h:${index}`}
                       p1={vec(framePad, framePad + frameRect.height * t)}
                       p2={vec(viewport.width - framePad, framePad + frameRect.height * t)}
-                      color="rgba(90, 140, 180, 0.06)"
+                      color={mapVisualTokens.gridMinor}
                       strokeWidth={1}
                     />
                   ))}
@@ -1400,7 +1517,7 @@ function MapV2GeographicCanvasInner(
                       key={`dash-v:${index}`}
                       p1={vec(framePad + frameRect.width * t, framePad)}
                       p2={vec(framePad + frameRect.width * t, viewport.height - framePad)}
-                      color="rgba(90, 140, 180, 0.045)"
+                      color={mapVisualTokens.gridMinor}
                       strokeWidth={1}
                     />
                   ))}
@@ -1419,7 +1536,7 @@ function MapV2GeographicCanvasInner(
               {roundedWorld ? (
                 <Path
                   path={getWorldDecorGridPath()}
-                  color="rgba(90, 140, 180, 0.07)"
+                  color={mapVisualTokens.gridMajor}
                   style="stroke"
                   strokeWidth={0.0007}
                 />
@@ -1805,6 +1922,17 @@ function MapV2GeographicCanvasInner(
                     );
                   })
                 : null}
+              {fleetEmphasisPaths.map((line) => (
+                <Path
+                  key={`fleet-route:${line.key}`}
+                  path={line.path}
+                  color={line.color}
+                  style="stroke"
+                  strokeWidth={line.width}
+                  strokeJoin="round"
+                  strokeCap="round"
+                />
+              ))}
               {cityDrawIds.map((id) => {
                 const city = cityById.get(id);
                 if (!city) return null;
@@ -1941,13 +2069,41 @@ function MapV2GeographicCanvasInner(
                   </Group>
                 );
               })}
+              {visibleFleetMarkers.map((marker) => (
+                <Group key={`fleet:${marker.id}`} transform={[{ translateX: marker.x }, { translateY: marker.y }]}>
+                  <Group transform={markerInvScale}>
+                    <Group transform={[{ translateY: marker.screenOffsetY }]} opacity={marker.opacity}>
+                      {marker.ring ? <Circle cx={0} cy={0} r={marker.radius + 3.2} color={marker.ring} /> : null}
+                      <RoundedRect
+                        x={-marker.radius}
+                        y={-marker.radius * 0.42}
+                        width={marker.radius * 2}
+                        height={marker.radius * 0.84}
+                        r={1.1}
+                        color={marker.color}
+                      />
+                      {marker.countLabel && font ? (
+                        <SkiaText
+                          x={marker.radius + 2}
+                          y={3}
+                          text={marker.countLabel}
+                          font={font}
+                          color={mapVisualTokens.labelPrimary}
+                        />
+                      ) : null}
+                    </Group>
+                  </Group>
+                </Group>
+              ))}
               {worldLabels.map((label) => {
                 const color =
-                  label.gameplayState === 'STARTER_AVAILABLE' || label.geoCountryId === selectedId
-                    ? '#E8F7FF'
-                    : label.gameplayState === 'UNLOCKED'
-                      ? '#C5D8EA'
-                      : '#8A9BB0';
+                  label.geoCountryId === selectedId
+                    ? mapVisualTokens.labelSelected
+                    : label.gameplayState === 'STARTER_AVAILABLE'
+                      ? mapVisualTokens.labelPrimary
+                      : label.gameplayState === 'UNLOCKED'
+                        ? mapVisualTokens.labelSecondary
+                        : mapVisualTokens.labelMuted;
                 const width = Math.max(8, label.displayName.length * 6.4);
                 return (
                   <Group

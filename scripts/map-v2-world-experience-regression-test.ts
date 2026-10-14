@@ -152,7 +152,8 @@ assert(screen.includes('viewportClip={mode === \'WORLD\' ? \'ROUNDED\' : \'NONE\
 assert(screen.includes('worldLegendStarter'), 'compact availability legend');
 assert(screen.includes('cityLayer={turkeyCityLayer}'), 'city markers wired');
 assert(screen.includes('turkeyOverviewGameplayCities'), 'overview uses verified gameplay city subset');
-assert(screen.includes('mapGesturesEnabled={mode !== \'COUNTRY\'}'), 'country overview locks pan/pinch');
+assert(screen.includes('mapGesturesEnabled'), 'country and world both receive map pinch');
+assert(!screen.includes("mapGesturesEnabled={mode !== 'COUNTRY'}"), 'country pinch is not locked');
 assert(!screen.includes('ROAD_RENDER_PROFILE'), 'player country does not bind ROAD render profile');
 assert(!screen.includes('roadLayer='), 'player country does not mount ROAD layer');
 assert(read('src/screens/DebugSimulationScreen.tsx').includes('Map V2 World Geometry'), 'geometry debug remains');

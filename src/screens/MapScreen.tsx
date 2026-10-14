@@ -12,6 +12,8 @@ import { debugConfig } from '../config/debug';
 import { resolveActiveMapExperience } from '../domain/mapExperienceAuthority';
 import WorldMapCanvas, { type WorldMapCanvasHandle } from '../components/map/WorldMapCanvas';
 import MapV2CommandCenterViewport from '../mapV2/experience/MapV2CommandCenterViewport';
+import { clearMapFleetVehicleContext } from '../mapV2/experience/mapFleetSession';
+import { useMapFleetOverlay } from '../mapV2/experience/useMapFleetOverlay';
 import type {
   MapV2CitySelection,
   MapV2CountrySelection,
@@ -23,6 +25,12 @@ import {
 } from '../components/map/commandCenter/mapCommandMode';
 import { buildMapCommandTelemetry } from '../components/map/commandCenter/mapCommandTelemetry';
 import { mapUiTheme } from '../components/map/commandCenter/mapUiTheme';
+import {
+  cityQuickActionMode,
+  resolveMapV2CityGameplay,
+  type CityQuickAction,
+  type MapV2CityGameplayLink,
+} from '../mapV2/gameplay/mapV2CityGameplayAdapter';
 import MapHelpMenu from '../components/map/MapHelpMenu';
 import { MAP_BG } from '../components/map/mapTheme';
 import type { NetworkFilterKey } from '../components/map/mapTypes';
@@ -78,12 +86,31 @@ export default function MapScreen({
   const [commandMode, setCommandMode] = useState<MapCommandMode>('overview');
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [locationLabel, setLocationLabel] = useState<string | null>(null);
+  const [cityLink, setCityLink] = useState<MapV2CityGameplayLink | null>(null);
+  const [inspectorFocusKey, setInspectorFocusKey] = useState(0);
+  const [cityClearNonce, setCityClearNonce] = useState(0);
+  const [mapScope, setMapScope] = useState<'WORLD' | 'COUNTRY'>('WORLD');
   const countryLabelRef = useRef<string | null>(null);
   const mapExperience = resolveActiveMapExperience();
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const mapRef = useRef<WorldMapCanvasHandle>(null);
   const didReconcileOnOpenRef = useRef(false);
   const safeMode = resolveMapCommandMode(commandMode);
+  const seenFleetNonceRef = useRef(0);
+  const [fleetCityFocus, setFleetCityFocus] = useState<{ gameplayCityId: string; nonce: number } | null>(null);
+  const fleet = useMapFleetOverlay({
+    enabled: safeMode === 'fleet',
+    scope: mapScope,
+    selectedGameplayCityId: cityLink?.gameplayCityId ?? null,
+    hasCitySelection: Boolean(cityLink),
+  });
+
+  useEffect(() => {
+    if (fleet.selectionNonce === seenFleetNonceRef.current) return;
+    seenFleetNonceRef.current = fleet.selectionNonce;
+    if (fleet.selectionNonce === 0) return;
+    setInspectorFocusKey((value) => value + 1);
+  }, [fleet.selectionNonce]);
 
   useEffect(() => {
     if (!hasPlayer || didReconcileOnOpenRef.current) return;
@@ -179,16 +206,54 @@ export default function MapScreen({
   };
 
   const handleModeChange = useCallback((next: MapCommandMode) => {
-    setCommandMode(resolveMapCommandMode(next));
+    const resolved = resolveMapCommandMode(next);
+    if (resolved !== 'fleet') clearMapFleetVehicleContext();
+    setCommandMode(resolved);
+  }, []);
+
+  const handleCityAction = useCallback((action: CityQuickAction) => {
+    setCommandMode(resolveMapCommandMode(cityQuickActionMode(action)));
+  }, []);
+
+  const handleClearCity = useCallback(() => {
+    setCityClearNonce((value) => value + 1);
   }, []);
 
   const handleCountrySelect = useCallback((selection: MapV2CountrySelection) => {
     countryLabelRef.current = selection.displayName;
     setLocationLabel(selection.displayName);
+    if (!selection.geoCountryId) {
+      setCityLink(null);
+      setMapScope('WORLD');
+      clearMapFleetVehicleContext();
+      return;
+    }
+    setMapScope('COUNTRY');
+  }, []);
+
+  const handleShowTruckCity = useCallback((gameplayCityId: string) => {
+    setFleetCityFocus((current) => ({ gameplayCityId, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
+
+  const handleShowTruckRoute = useCallback(() => {
+    // The selected truck already emphasizes its existing corridor. No gameplay write.
   }, []);
 
   const handleCitySelect = useCallback((selection: MapV2CitySelection) => {
-    setLocationLabel(selection.displayName ?? countryLabelRef.current);
+    if (!selection.geoCityId) {
+      setCityLink(null);
+      setLocationLabel(countryLabelRef.current);
+      return;
+    }
+    const link = resolveMapV2CityGameplay({
+      geoCityId: selection.geoCityId,
+      geoDisplayName: selection.displayName,
+      countryId: 'country.tur',
+      countryName: countryLabelRef.current,
+    });
+    setCityLink(link);
+    setInspectorFocusKey((value) => value + 1);
+    setLocationLabel(link.displayName);
   }, []);
 
   if (!hasPlayer) {
@@ -219,7 +284,16 @@ export default function MapScreen({
         telemetry={telemetry}
         onModeChange={handleModeChange}
         onExit={onExitHome}
-        locationLabel={locationLabel}
+        locationLabel={cityLink ? null : locationLabel}
+        cityLink={cityLink}
+        mapScope={mapScope}
+        inspectorFocusKey={inspectorFocusKey}
+        onCityAction={handleCityAction}
+        onClearCity={handleClearCity}
+        fleetPanel={safeMode === 'fleet' ? fleet.panel : null}
+        currentTime={currentTime}
+        onShowTruckCity={handleShowTruckCity}
+        onShowTruckRoute={handleShowTruckRoute}
         helpSlot={
           <MapHelpMenu
             compact
@@ -237,6 +311,10 @@ export default function MapScreen({
             onCitySelect={handleCitySelect}
             onRouteSelect={() => undefined}
             onMarkerSelect={() => undefined}
+            cityClearNonce={cityClearNonce}
+            fleetMode={safeMode === 'fleet'}
+            fleetLayer={safeMode === 'fleet' ? fleet.layer : null}
+            fleetCityFocus={fleetCityFocus}
           />
         ) : (
           <WorldMapCanvas

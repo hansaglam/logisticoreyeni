@@ -4,7 +4,7 @@
  * Startup is WORLD with the inhabited-world camera. Türkiye is not forced.
  * Diagnostic chrome and the Harita command center both call this hook.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, BackHandler, Easing } from 'react-native';
 
 import { useEffectiveCompanyProgression } from '../../hooks/useEffectiveCompanyProgression';
@@ -14,6 +14,14 @@ import {
 } from '../../domain/canonicalProgressionEligibility';
 import { useGameStore } from '../../store/gameStore';
 import type { CameraSnapshot } from '../geo/worldCamera';
+import { MAP_COUNTRY_FRAME_PADDING } from '../presentation/mapCameraPolicy';
+import {
+  captureWorldCameraForCountryEntry,
+  readMapSessionCamera,
+  writeMapSessionCamera,
+  writeScopeCamera,
+  type ScopeCameraSlots,
+} from './mapSessionCamera';
 import {
   COUNTRY_ENTER_FADE_MS,
   COUNTRY_ENTER_WORLD_PADDING,
@@ -27,6 +35,7 @@ import {
   countryFocusBounds,
   countryWorkingBounds,
   mapV2BackAction,
+  resolveMapScopeBack,
   type MapV2ExperienceMode,
 } from '../gameplay/mapV2ExperienceNavigation';
 import {
@@ -71,6 +80,8 @@ export type MapV2CitySelection = {
   geoCityId: string | null;
   displayName: string | null;
   legacyCityId: string | null;
+  /** Increments on every city tap, including a tap on the already selected city. */
+  selectionNonce: number;
 };
 
 export type MapV2MarkerSelection = {
@@ -97,6 +108,8 @@ export type MapV2GeographicExperienceOptions = {
   onClose?: () => void;
   onCountrySelect?: (selection: MapV2CountrySelection) => void;
   onCitySelect?: (selection: MapV2CitySelection) => void;
+  /** Increment to clear the selected city without leaving the country. */
+  cityClearNonce?: number;
   onRouteSelect?: (selection: MapV2RouteSelection) => void;
   onMarkerSelect?: (selection: MapV2MarkerSelection) => void;
 };
@@ -117,15 +130,23 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
     onCitySelect,
     onRouteSelect,
     onMarkerSelect,
+    cityClearNonce = 0,
   } = options;
 
   const canvasRef = useRef<MapV2GeographicCanvasHandle>(null);
-  const [mode, setMode] = useState<MapV2ExperienceMode>(MAP_V2_EXPERIENCE_INITIAL_MODE);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [focusCountryId, setFocusCountryId] = useState<string | null>(null);
-  const [worldCamera, setWorldCamera] = useState<CameraSnapshot | null>(null);
+  const restoredSessionRef = useRef(readMapSessionCamera(null));
+  const restored = restoredSessionRef.current;
+  const [mode, setMode] = useState<MapV2ExperienceMode>(restored?.mode ?? MAP_V2_EXPERIENCE_INITIAL_MODE);
+  const [selectedId, setSelectedId] = useState<string | null>(restored?.selectedCountryId ?? null);
+  const [focusCountryId, setFocusCountryId] = useState<string | null>(restored?.focusCountryId ?? null);
+  const [worldCamera, setWorldCamera] = useState<CameraSnapshot | null>(restored?.worldCamera ?? null);
+  const [worldRestoreToken, setWorldRestoreToken] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
-  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  const [selectedCityId, setSelectedCityId] = useState<string | null>(
+    restored?.mode === 'WORLD' ? null : restored?.selectedCityId ?? null,
+  );
+  const [citySelectionNonce, setCitySelectionNonce] = useState(0);
+  const seenCityClearNonceRef = useRef(cityClearNonce);
   const [countryTab, setCountryTab] = useState<CountryModeTab>('map');
   const [worldApproach, setWorldApproach] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
@@ -138,6 +159,32 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
   onCitySelectRef.current = onCitySelect;
   onRouteSelectRef.current = onRouteSelect;
   onMarkerSelectRef.current = onMarkerSelect;
+  const liveCameraRef = useRef<CameraSnapshot | null>(restored?.camera ?? null);
+  const initialCameraRef = useRef<CameraSnapshot | null>(restored?.camera ?? null);
+  const skipCountryFitRef = useRef(Boolean(restored?.mode === 'COUNTRY' && restored.camera));
+  const modeRef = useRef(mode);
+  const selectedIdRef = useRef(selectedId);
+  const focusCountryIdRef = useRef(focusCountryId);
+  const selectedCityIdRef = useRef(selectedCityId);
+  const slotsRef = useRef<ScopeCameraSlots>({
+    world: restored?.worldCamera ?? null,
+    country: restored?.countryCamera ?? null,
+  });
+  modeRef.current = mode;
+  selectedIdRef.current = selectedId;
+  focusCountryIdRef.current = focusCountryId;
+  selectedCityIdRef.current = selectedCityId;
+
+  const onCameraSample = useCallback((snapshot: CameraSnapshot) => {
+    liveCameraRef.current = snapshot;
+    const scope = modeRef.current === 'COUNTRY' ? 'COUNTRY' : 'WORLD';
+    slotsRef.current = writeScopeCamera(slotsRef.current, scope, snapshot);
+  }, []);
+
+  const selectOverviewCity = useCallback((geoCityId: string | null) => {
+    setSelectedCityId(geoCityId);
+    setCitySelectionNonce((value) => value + 1);
+  }, []);
 
   const overviewCities = useMemo(() => turkeyOverviewGameplayCities(), []);
   const homeCityId = useGameStore((state) => state.player?.homeCityId ?? null);
@@ -238,10 +285,10 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
       presentation: 'DASHBOARD' as const,
       operationHints,
       availabilityByGeoCityId,
-      onSelectCity: setSelectedCityId,
+      onSelectCity: selectOverviewCity,
       resolveLabel: (city: (typeof overviewCities)[number]) => resolveCityDisplayName(city, 'tr'),
     };
-  }, [availabilityByGeoCityId, focusCountryId, mode, operationHints, overviewCities, selectedCityId]);
+  }, [availabilityByGeoCityId, focusCountryId, mode, operationHints, overviewCities, selectOverviewCity, selectedCityId]);
 
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
@@ -284,8 +331,9 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
     (geoCountryId: string) => {
       const nextAvailability = resolveCountryGameplayAvailability(geoCountryId);
       if (!canEnterCountryMode(nextAvailability)) return;
-      const snapshot = canvasRef.current?.captureCamera() ?? null;
+      const snapshot = canvasRef.current?.captureCamera() ?? liveCameraRef.current;
       setWorldCamera(snapshot ? { ...snapshot } : null);
+      slotsRef.current = captureWorldCameraForCountryEntry(slotsRef.current, snapshot ? { ...snapshot } : null);
       setSelectedId(geoCountryId);
       setSelectedCityId(null);
       const commit = () => {
@@ -349,18 +397,39 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
     }
     fade.setValue(0);
     setWorldApproach(false);
-    setMode('WORLD');
-    setFocusCountryId(null);
     setSelectedCityId(null);
+    setSelectedId(null);
+    setFocusCountryId(null);
     setCountryTab('map');
-    requestAnimationFrame(() => {
-      if (worldCamera) {
-        canvasRef.current?.restoreCamera(worldCamera, animate);
-      } else {
-        canvasRef.current?.applyHome(animate);
-      }
+    setMode('WORLD');
+    onRouteSelectRef.current?.(null);
+    onMarkerSelectRef.current?.(null);
+    setWorldRestoreToken((value) => value + 1);
+  }, [fade]);
+
+  useLayoutEffect(() => {
+    if (worldRestoreToken === 0) return;
+    const worldCamera = slotsRef.current.world;
+    if (worldCamera) {
+      canvasRef.current?.restoreCamera(worldCamera, false);
+      return;
+    }
+    canvasRef.current?.applyHome(false);
+  }, [worldRestoreToken]);
+
+  const goBackInMapScope = useCallback(() => {
+    const back = resolveMapScopeBack({
+      mode,
+      countryDisplayName: focusRecord ? resolveCountryDisplayName(focusRecord, 'tr') : null,
     });
-  }, [animate, fade, worldCamera]);
+    if (!back.available) return false;
+    if (back.target === 'COUNTRY') {
+      returnFromCityDetail();
+      return true;
+    }
+    returnToWorld();
+    return true;
+  }, [focusRecord, mode, returnFromCityDetail, returnToWorld]);
 
   useEffect(() => {
     if (!worldApproach || mode !== 'WORLD' || !selectedId || !animate) return;
@@ -378,9 +447,13 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
 
   useEffect(() => {
     if (mode !== 'COUNTRY' || !focusCountryId || !focusRecord) return;
+    if (skipCountryFitRef.current) {
+      skipCountryFitRef.current = false;
+      return;
+    }
     const bounds = countryWorkingBounds(focusRecord, 'COUNTRY_HIGH');
     const frame = requestAnimationFrame(() => {
-      canvasRef.current?.applyBounds(bounds, 0, false);
+      canvasRef.current?.applyBounds(bounds, MAP_COUNTRY_FRAME_PADDING, false);
     });
     return () => cancelAnimationFrame(frame);
   }, [focusCountryId, focusRecord, mode]);
@@ -399,22 +472,33 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
   );
 
   useEffect(() => {
+    return () => {
+      writeMapSessionCamera({
+        playerId: null,
+        mode: modeRef.current,
+        selectedCountryId: selectedIdRef.current,
+        focusCountryId: focusCountryIdRef.current,
+        selectedCityId: selectedCityIdRef.current,
+        camera: canvasRef.current?.captureCamera() ?? liveCameraRef.current,
+        worldCamera: slotsRef.current.world,
+        countryCamera: slotsRef.current.country,
+      });
+    };
+  }, []);
+
+  useEffect(() => {
     if (!handleHardwareBack) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       const action = mapV2BackAction(mode, {
         selectedCityId,
         selectedCountryId: selectedId,
       });
-      if (action === 'EXIT_CITY_DETAIL') {
-        returnFromCityDetail();
+      if (action === 'EXIT_CITY_DETAIL' || action === 'EXIT_COUNTRY') {
+        goBackInMapScope();
         return true;
       }
       if (action === 'CLEAR_CITY_SELECTION') {
         setSelectedCityId(null);
-        return true;
-      }
-      if (action === 'EXIT_COUNTRY') {
-        returnToWorld();
         return true;
       }
       if (action === 'CLEAR_COUNTRY_SELECTION') {
@@ -428,7 +512,7 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
       return false;
     });
     return () => sub.remove();
-  }, [handleHardwareBack, mode, onClose, returnFromCityDetail, returnToWorld, selectedCityId, selectedId]);
+  }, [goBackInMapScope, handleHardwareBack, mode, onClose, selectedCityId, selectedId]);
 
   useEffect(() => {
     if (mode !== 'CITY_DETAIL') return;
@@ -450,17 +534,37 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
   }, [selectedId]);
 
   useEffect(() => {
+    if (mode === 'WORLD' && selectedCityId) {
+      setSelectedCityId(null);
+    }
+  }, [mode, selectedCityId]);
+
+  useEffect(() => {
+    if (cityClearNonce === seenCityClearNonceRef.current) return;
+    seenCityClearNonceRef.current = cityClearNonce;
+    setSelectedCityId(null);
+  }, [cityClearNonce]);
+
+  useEffect(() => {
+    if (!selectedCityId || overviewCities.length === 0) return;
+    if (!overviewCities.some((city) => city.geoCityId === selectedCityId)) {
+      setSelectedCityId(null);
+    }
+  }, [overviewCities, selectedCityId]);
+
+  useEffect(() => {
     const city = selectedCityId ? overviewCities.find((item) => item.geoCityId === selectedCityId) : undefined;
     const name = city ? resolveCityDisplayName(city, 'tr') : null;
     onCitySelectRef.current?.({
       geoCityId: selectedCityId,
       displayName: name && name.length > 0 ? name : null,
       legacyCityId: selectedCityId ? gameplayIdForGeoCity(selectedCityId) ?? null : null,
+      selectionNonce: citySelectionNonce,
     });
     if (selectedCityId) {
       onMarkerSelectRef.current?.({ markerId: selectedCityId, kind: 'city' });
     }
-  }, [overviewCities, selectedCityId]);
+  }, [citySelectionNonce, overviewCities, selectedCityId]);
 
   const worldMaxScale = worldApproach ? WORLD_ENTER_COUNTRY_MAX_SCALE_FACTOR : WORLD_NAV_MAX_SCALE_FACTOR;
   const gameplayCityCount = focusCountryId === 'country.tur' ? mappedGeoCityIds().length : 0;
@@ -508,7 +612,11 @@ export function useMapV2GeographicExperience(options: MapV2GeographicExperienceO
     returnFromCityDetail,
     enterCityDetail,
     returnToWorld,
+    selectOverviewCity,
+    goBackInMapScope,
     onSelect,
+    onCameraSample,
+    initialCamera: initialCameraRef.current,
     worldMaxScale,
     gameplayCityCount,
     countryStatus,
